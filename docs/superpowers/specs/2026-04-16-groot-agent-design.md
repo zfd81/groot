@@ -688,24 +688,313 @@ attachment:
 
 ## 十六、完整配置文件模板
 
-详见附件：`config.yaml.example`
+首次启动生成的默认 `config.yaml`：
+
+```yaml
+# Groot Agent 配置文件
+# 生成时间: 2026-04-16
+
+# Agent 基础配置
+agent:
+  name: groot
+  version: 1.0.0
+
+# HTTP 服务配置
+server:
+  host: 0.0.0.0
+  port: 8080
+
+# LLM 配置（OpenAI兼容协议）
+llm:
+  active_model: gpt-4o
+  models:
+    gpt-4o:
+      endpoint: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4o
+      max_tokens: 4096
+      temperature: 0.7
+    claude-3.5:
+      endpoint: https://api.anthropic.com/v1
+      api_key: ${ANTHROPIC_API_KEY}
+      model: claude-3-5-sonnet-20241022
+      max_tokens: 4096
+      temperature: 0.7
+
+# Skills 配置
+skills:
+  directory: skills
+
+# MCP 配置
+mcp:
+  builtin:
+    enabled: [file_operations, http_request]
+    file_operations:
+      allowed_paths: [temp, skills, output]
+      denied_operations: [file_delete]
+    http_request:
+      denied_domains: [localhost, 127.0.0.1, 10.*, 192.168.*]
+      timeout: 30
+      max_response_size: 10
+    code_execution:
+      enabled: false
+  external: []
+
+# 意图匹配配置
+intent:
+  confidence_threshold: 0.6
+  use_llm_matching: true
+  fallback_mode: temporary_flow
+  max_nesting_depth: 3
+
+# 性能控制配置
+performance:
+  rate_limit:
+    max_concurrent_tasks: 10
+    max_requests_per_minute: 60
+    max_requests_per_hour: 1000
+  timeout:
+    task_max_duration: 300
+    llm_call_timeout: 60
+    tool_call_timeout: 30
+  llm:
+    max_concurrent_calls: 5
+    retry_on_failure: 3
+    retry_delay: 2
+  mcp:
+    max_concurrent_calls_per_server: 3
+
+# 附件处理配置
+attachment:
+  max_size: 50
+  max_total_size: 100
+  max_count: 10
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, zip]
+  temp_directory: temp
+
+# 安全配置
+security:
+  auth:
+    enabled: true
+    type: api_key
+    api_key:
+      keys:
+        - name: default
+          key: ${GROOT_API_KEY}
+          permissions: all
+
+# 日志配置
+logging:
+  level: info
+  format: json
+  output: [stdout, file]
+  file:
+    directory: logs
+    filename_pattern: groot-{date}.log
+    max_age: 7
+  categories:
+    request: {enabled: true, level: info}
+    skill: {enabled: true, level: info, log_input: true, log_output: true}
+    llm: {enabled: true, level: debug}
+    mcp: {enabled: true, level: debug}
+    error: {enabled: true, level: error}
+
+# 监控配置
+monitoring:
+  enabled: true
+  metrics_port: 9090
+  health_check:
+    enabled: true
+    endpoint: /health
+```
 
 ---
 
 ## 十七、Skill 示例
 
-详见附件：
-- `skill_pdf_analyzer.md`
-- `skill_code_generator.md`
-- `skill_data_analyzer.md`
-- `skill_web_scraper.md`
-- `skill_report_generator.md`
+### 17.1 pdf_analyzer
+
+```markdown
+# Skill: pdf_analyzer
+
+## Description
+分析PDF文档内容，提取关键信息并生成结构化摘要报告。
+
+## Triggers
+- 用户上传 PDF 文件并请求分析
+- 用户提到"分析PDF"、"PDF摘要"、"文档分析"等关键词
+
+## Instructions
+你是一个专业的PDF文档分析助手。执行以下步骤：
+1. 使用 file_operations.file_read 工具读取PDF文件
+2. 提取文档的关键内容和结构
+3. 根据文档类型生成相应的结构化摘要
+4. 输出结构化的分析结果
+
+## Output Format
+{
+  "document_type": "文档类型",
+  "title": "文档标题",
+  "key_points": ["关键要点"],
+  "summary": "详细摘要",
+  "recommendations": ["建议"]
+}
+```
+
+### 17.2 code_generator
+
+```markdown
+# Skill: code_generator
+
+## Description
+根据用户需求描述生成代码，支持多种编程语言。
+
+## Triggers
+- 用户请求"生成代码"、"写一个函数"、"实现某个功能"
+
+## Instructions
+你是一个专业的代码生成助手。执行以下步骤：
+1. 分析用户需求，明确功能目标、输入输出规格、编程语言
+2. 设计代码结构和逻辑
+3. 生成完整的代码实现，包含注释和错误处理
+4. 生成使用示例或测试代码
+
+## Output Format
+{
+  "language": "编程语言",
+  "code": "完整代码",
+  "usage_example": "使用示例",
+  "test_code": "测试代码"
+}
+```
+
+### 17.3 data_analyzer
+
+```markdown
+# Skill: data_analyzer
+
+## Description
+分析结构化数据文件（CSV、JSON等），执行统计分析和趋势识别。
+
+## Triggers
+- 用户上传数据文件并请求分析
+- 用户提到"分析数据"、"数据统计"、"数据趋势"
+
+## Instructions
+你是一个数据分析助手。执行以下步骤：
+1. 使用 file_operations.file_read 工具读取数据文件
+2. 解析数据结构，识别字段含义和数据类型
+3. 执行统计分析、趋势分析、关联分析
+4. 生成分析结果和可视化建议
+
+## Output Format
+{
+  "data_overview": {"rows": 数量, "columns": 数量},
+  "statistics": {"summary": "统计摘要"},
+  "trends": ["趋势描述"],
+  "insights": ["数据洞察"]
+}
+```
+
+### 17.4 report_generator（嵌套Skill示例）
+
+```markdown
+# Skill: report_generator
+
+## Description
+综合分析多种来源的资料，生成完整的分析报告。
+
+## Triggers
+- 用户请求"生成报告"、"综合分析"
+- 用户提供多种类型的附件
+
+## Instructions
+你是一个报告生成助手。执行以下步骤：
+1. 分析用户提供的资料类型
+2. 根据资料类型调用相应的分析Skills
+3. 整合各Skills的分析结果
+4. 生成结构化的综合报告
+5. 使用 file_operations.file_write 保存报告
+
+## Dependencies
+- pdf_analyzer
+- data_analyzer
+```
 
 ---
 
 ## 十八、API 详细示例
 
-详见附件：`api_examples.md`
+### 18.1 POST /task/execute 请求示例
+
+**Skill模式：**
+```json
+{
+  "instruction": "帮我分析这份PDF财务报告",
+  "attachments": [
+    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
+  ]
+}
+```
+
+**临时流程模式：**
+```json
+{
+  "instruction": "帮我完成以下任务",
+  "attachments": [
+    {"type": "file", "name": "report.pdf", "content": "base64..."},
+    {"type": "file", "name": "sales.csv", "content": "base64..."}
+  ],
+  "flow_definition": "1. 分析PDF报告\n2. 分析CSV数据\n3. 对比分析\n4. 生成报告"
+}
+```
+
+### 18.2 SSE 响应事件流示例
+
+```
+event: task_started
+data: {"task_id": "task-xxx"}
+
+event: intent_matched
+data: {"mode": "skill", "skill_name": "pdf_analyzer", "confidence": 0.92}
+
+event: progress
+data: {"step": 1, "message": "正在读取PDF..."}
+
+event: tool_call
+data: {"tool": "file_read", "params": {"path": "temp/Q3_Report.pdf"}}
+
+event: result
+data: {"data": {"document_type": "report", "key_points": [...]}}
+
+event: task_completed
+data: {"status": "success", "duration": "15s"}
+```
+
+### 18.3 其他 API 响应示例
+
+**GET /health：**
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "checks": {
+    "llm": {"status": "healthy", "model": "gpt-4o"},
+    "skills": {"count": 12}
+  }
+}
+```
+
+**GET /skills：**
+```json
+{
+  "skills": [
+    {"name": "pdf_analyzer", "description": "分析PDF文档"},
+    {"name": "code_generator", "description": "生成代码"}
+  ],
+  "total": 5
+}
+```
 
 ---
 
