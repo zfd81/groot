@@ -601,12 +601,154 @@ data: {"status":"cancelled","timestamp":"2026-04-17T10:30:12Z","duration":"12s",
 
 #### 其他 API 响应示例
 
+**DELETE /task/{task_id}：**
+
+请求：
+```http
+DELETE /task/task-20260417-103000523-a1b2 HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+成功响应：
+```json
+{
+  "status": "success",
+  "task_id": "task-20260417-103000523-a1b2",
+  "message": "任务已取消"
+}
+```
+
+失败响应（任务已完成）：
+```json
+{
+  "status": "task_completed",
+  "task_id": "task-20260417-103000523-a1b2",
+  "message": "任务已完成，无法取消"
+}
+```
+
+失败响应（任务不存在）：
+```json
+{
+  "status": "task_not_found",
+  "task_id": "task-20260417-103000523-a1b2",
+  "message": "任务不存在"
+}
+```
+
+**GET /task/status/{task_id}：**
+
+请求：
+```http
+GET /task/status/task-20260417-103000523-a1b2 HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+运行中响应：
+```json
+{
+  "status": "success",
+  "task_id": "task-20260417-103000523-a1b2",
+  "task_status": "running",
+  "progress": {
+    "current_step": 3,
+    "steps_completed": 2,
+    "percentage": 50
+  },
+  "started_at": "2026-04-17T10:30:00Z",
+  "elapsed_time": "8s"
+}
+```
+
+已完成响应：
+```json
+{
+  "status": "success",
+  "task_id": "task-20260417-103000523-a1b2",
+  "task_status": "completed",
+  "started_at": "2026-04-17T10:30:00Z",
+  "elapsed_time": "45s"
+}
+```
+
+失败响应（任务不存在）：
+```json
+{
+  "status": "task_not_found",
+  "task_id": "task-20260417-103000523-a1b2",
+  "message": "任务不存在"
+}
+```
+
+**GET /health：**
+
+请求：
+```http
+GET /health HTTP/1.1
+Host: localhost:8080
+```
+
+健康响应：
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime": "2h30m",
+  "checks": {
+    "llm": {"status": "healthy", "model": "gpt-4o"},
+    "mcp_servers": {"status": "healthy", "servers": ["file_operations", "http_request"]},
+    "skills": {"status": "healthy", "count": 12},
+    "memory": {"status": "healthy", "used_mb": 256}
+  },
+  "metrics": {
+    "tasks_running": 5,
+    "success_rate": 0.98
+  }
+}
+```
+
 **GET /skills：**
+
+请求：
+```http
+GET /skills HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+响应：
 ```json
 {
   "skills": [
-    {"name": "pdf_analyzer", "description": "分析PDF文档"},
-    {"name": "code_generator", "description": "生成代码"}
+    {"name": "pdf_analyzer", "description": "分析PDF文档并生成摘要"},
+    {"name": "code_generator", "description": "根据需求生成代码"},
+    {"name": "data_analyzer", "description": "分析结构化数据文件"},
+    {"name": "report_generator", "description": "综合分析生成报告"}
+  ],
+  "total": 4
+}
+```
+
+**GET /tools：**
+
+请求：
+```http
+GET /tools HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+响应：
+```json
+{
+  "tools": [
+    {"name": "file_read", "description": "读取文件内容", "mcp": "file_operations"},
+    {"name": "file_write", "description": "写入文件内容", "mcp": "file_operations"},
+    {"name": "directory_list", "description": "列出目录内容", "mcp": "file_operations"},
+    {"name": "http_get", "description": "发送HTTP GET请求", "mcp": "http_request"},
+    {"name": "http_post", "description": "发送HTTP POST请求", "mcp": "http_request"}
   ],
   "total": 5
 }
