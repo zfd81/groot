@@ -42,7 +42,7 @@ wait_for_service() {
     return 1
 }
 
-extract_task_id() { grep -o 'X-Task-ID: task-[0-9-]*' | cut -d' ' -f2 | tr -d '\r'; }
+extract_task_id() { grep -io 'X-Task-Id: task-[0-9a-z.-]*' | cut -d' ' -f2 | tr -d '\r'; }
 
 check_llm_config() {
     if [[ -z "$LLM_API_KEY" ]] || [[ -z "$LLM_MODEL" ]]; then
