@@ -237,6 +237,136 @@ Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
 
 Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
+**完整处理流程：**
+
+```
+请求到达 → 请求校验 → 生成 task_id → 返回 X-Task-ID Header →
+│
+├─ 1. 请求校验
+│   ├─ 检查 instruction 是否为空
+│   ├─ 检查 prompt 格式（可选）
+│   ├─ 检查附件数量（不超过 max_count）
+│   ├─ 检查单个附件大小（不超过 max_size）
+│   ├─ 检查附件总大小（不超过 max_total_size）
+│   ├─ 检查附件类型（必须在 allowed_types 中）
+│   ├─ 校验失败 → 返回 400 错误，终止
+│   └─ 校验通过 → 继续
+│
+├─ 2. 创建任务记录
+│   ├─ 生成 task_id（格式：task-{YYYYMMDD}-{HHMMSSmmm}-{random4}）
+│   ├─ 初始化任务状态为 running
+│   ├─ 记录开始时间、调用方信息
+│   └─ 持久化到存储（BoltDB）
+│
+├─ 3. 返回响应 Header
+│   ├─ Content-Type: text/event-stream
+│   └─ X-Task-ID: {task_id}
+│   （此时 SSE 连接已建立，开始流式返回事件）
+│
+├─ 4. SSE 推送 intent 事件
+│   └─ {"timestamp":"开始时间"}
+│
+├─ 5. 附件处理（如有附件）
+│   ├─ 创建任务临时目录：temp/{task_id}/
+│   ├─ 遍历每个附件：
+│   │   ├─ Base64 解码
+│   │   ├─ 文件名安全处理（替换 /、\、.. 等危险字符）
+│   │   ├─ 保存到临时目录：temp/{task_id}/{safe_filename}
+│   │   └─ 记录文件信息（路径、大小、类型）
+│   ├─ 构建附件信息文本：
+│   │   格式：
+│   │   ```
+│   │   附件:
+│   │   - {原始文件名} (file)
+│   │     路径: {绝对路径}
+│   │     类型: {MIME类型}
+│   │     大小: {文件大小} bytes
+│   │   ```
+│   └─ 拼接到用户消息中（instruction + 附件信息）
+│
+├─ 6. 构建 Agent 上下文
+│   ├─ 系统提示词（prompt + Skills 指令）
+│   ├─ 用户消息（instruction + 附件路径信息）
+│   ├─ 注册的工具列表（MCP 工具）
+│   └─ 执行限制配置（max_iterations、max_tokens 等）
+│
+├─ 7. ReAct 执行循环
+│   │
+│   ├─ Reasoning（思考）
+│   │   LLM 分析当前状态，决定下一步动作
+│   │
+│   ├─ Acting（执行）
+│   │   ├─ 调用 MCP 工具（如 file_read 读取附件）
+│   │   ├─ 调用 Skill
+│   │   └─ 直接生成回答
+│   │
+│   ├─ Observation（观察）
+│   │   获取执行结果，更新上下文
+│   │
+│   ├─ SSE 推送进度事件
+│   │   ├─ step_start：步骤开始
+│   │   ├─ progress：进度更新
+│   │   ├─ step_end：步骤结束
+│   │
+│   └─ 检查终止条件
+│       ├─ Agent 判断完成 → 结束循环
+│       ├─ 达到 max_iterations → 终止
+│       ├─ Token 消耗超限 → 终止
+│       ├─ 执行超时 → 终止
+│       ├─ 用户取消 → 终止
+│       └─ 继续循环
+│
+├─ 8. 任务完成处理
+│   ├─ 更新任务状态（completed/failed/cancelled）
+│   ├─ 记录结束时间、耗时
+│   ├─ 保存结果或错误信息
+│   ├─ SSE 推送 completed 事件
+│   │
+│   └─ 9. 清理临时文件
+│       ├─ 删除任务临时目录：temp/{task_id}/
+│       ├─ 清理所有附件文件
+│       └─ 关闭 SSE 连接
+│
+→ 流程结束
+```
+
+**关键节点说明：**
+
+| 步骤 | 说明 | 失败处理 |
+|------|------|---------|
+| 请求校验 | 验证参数合法性 | 返回 400，不创建任务 |
+| 附件处理 | 解码并存储附件 | 返回 400，清理已创建文件 |
+| ReAct 执行 | Agent 自主执行 | 推送 error 事件，终止 |
+| 清理临时文件 | 删除 temp/{task_id}/ | 无论成功/失败/取消都执行 |
+
+**附件存储目录结构：**
+
+```
+{GROOT_HOME}/temp/
+├── task-20260417-103000523-a1b2/     # 任务A的临时目录
+│   ├── report.pdf                    # 附件1
+│   └── data.csv                      # 附件2
+├── task-20260417-103010000-b2c3/     # 任务B的临时目录
+│   └── config.json                   # 附件（同名不冲突）
+└── ...
+```
+
+每个任务的附件存储在独立目录 `temp/{task_id}/` 下，并发请求完全隔离。
+
+**附件路径传递方式：**
+
+附件信息以结构化文本形式嵌入用户消息，Agent 解析后调用 MCP `file_read` 工具读取：
+
+```
+用户指令内容
+
+附件:
+- report.pdf (file)
+  路径: /Users/xxx/.groot/temp/task-xxx/report.pdf
+  类型: application/pdf
+  大小: 1024000 bytes
+```
+
 **SSE 响应事件类型：**
 
 | 事件类型 | 发送频率 | 说明 |
@@ -1937,161 +2067,32 @@ Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`e
 
 ---
 
-## 十三、附件处理机制
+## 十三、附件处理配置
+
+> **处理流程说明：** 附件的完整处理流程（校验、解码、存储、路径传递、清理）已在前文 **3.2 POST /task/execute** 的"完整处理流程"中详细说明，本节仅补充配置和技术细节。
 
 ### 13.1 支持的附件类型
 
-| 类型 | 格式 | 处理方式 |
-|------|------|---------|
-| 文档 | PDF、DOC、DOCX、TXT | 文本提取 |
-| 数据 | JSON、CSV、XML、YAML | 结构化解析 |
-| 代码 | 源码文件 | 内容读取 |
-| 图片 | PNG、JPG | 图片数据 |
-| 压缩 | ZIP、TAR | 解压处理 |
+| 类型 | 格式 | MIME 类型 |
+|------|------|-----------|
+| 文档 | PDF、DOC、DOCX、TXT | application/pdf, application/msword, text/plain |
+| 数据 | JSON、CSV、XML、YAML | application/json, text/csv, application/xml |
+| 代码 | 源码文件 | text/plain |
+| 图片 | PNG、JPG | image/png, image/jpeg |
+| 压缩 | ZIP、TAR | application/zip, application/x-tar |
 
 ### 13.2 传输方式
 
-| 方式 | 适用场景 |
-|------|---------|
-| Base64 编码 | 小文件（<10MB） |
-| URL 链接 | 大文件或外部资源 |
+| 方式 | 适用场景 | 说明 |
+|------|---------|------|
+| Base64 编码 | 小文件（<10MB） | 附件内容通过 `content` 字段传递 |
+| URL 链接 | 大文件或外部资源 | 通过 `url` 字段传递，不进行本地存储 |
 
-### 13.3 附件处理流程
-
-**完整处理流程：**
-
-```
-请求到达 → 附件验证 → Base64解码 → 存储到临时目录 → 路径传递给Agent → 任务完成 → 清理临时文件
-```
-
-**详细步骤说明：**
-
-1. **附件验证**
-   - 检查附件数量（不超过 `max_count`）
-   - 检查单个附件大小（不超过 `max_size`）
-   - 检查总大小（不超过 `max_total_size`）
-   - 检查文件类型（必须在 `allowed_types` 中）
-
-2. **Base64解码与存储**
-   - 将 Base64 编码内容解码为原始文件
-   - 存储到临时目录（见 13.4 存储策略）
-
-3. **路径传递给Agent**
-   - 将附件路径信息拼接成文本，嵌入用户消息
-   - Agent 从消息中获取文件路径
-   - Agent 通过 MCP `file_read` 工具读取文件内容
-
-4. **临时文件清理**
-   - 任务完成后（成功/失败/取消）自动清理
-   - 清理该任务对应的所有临时文件和目录
-
-### 13.4 附件存储策略
-
-**目录结构：**
-
-每个任务创建独立的临时目录，以 `task_id` 命名：
-
-```
-{GROOT_HOME}/temp/
-├── task-20260417-103000523-a1b2/     # 任务A的临时目录
-│   ├── Q3_Report.pdf                 # 任务A的附件1
-│   └── sales.csv                     # 任务A的附件2
-├── task-20260417-103010000-b2c3/     # 任务B的临时目录
-│   ├── Q3_Report.pdf                 # 任务B的附件（同名不冲突）
-│   └── config.json
-└── ...
-```
-
-**隔离机制：**
-
-- 每个请求的 `task_id` 是唯一的（UUID 格式）
-- 附件存储在各自任务的独立目录下：`temp/{task_id}/`
-- 不同请求的附件完全隔离，即使上传同名文件也不会冲突
-
-**文件名处理：**
-
-- 保持原始文件名，方便 Agent 知道文件名是什么
-- 仅做安全字符替换（防止路径攻击）：
-  - `/` → `_`
-  - `\` → `_`
-  - `..` → `_`
-- 文件名长度限制为 255 字符
-
-**示例：**
-- 原始文件名：`my/report.pdf`
-- 保存文件名：`my_report.pdf`（仅替换危险字符）
-
-### 13.5 附件路径传递机制
-
-**传递方式：将附件信息拼接成文本，嵌入用户消息**
-
-附件信息以结构化文本形式嵌入用户消息中，Agent 阅读消息后可以获取文件路径。
-
-**拼接格式：**
-
-```
-{用户原始指令}
-
-附件:
-- {原始文件名} ({附件类型})
-  路径: {绝对路径}
-  类型: {MIME类型}
-  大小: {文件大小} bytes
-```
-
-**实际示例：**
-
-用户请求：
-```json
-{
-  "instruction": "对比分析这份PDF报告和销售数据",
-  "attachments": [
-    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."},
-    {"type": "file", "name": "sales.csv", "content": "base64..."}
-  ]
-}
-```
-
-Agent 收到的用户消息：
-```
-对比分析这份PDF报告和销售数据
-
-附件:
-- Q3_Report.pdf (file)
-  路径: /Users/xxx/.groot/temp/task-20260417-103000523-a1b2/Q3_Report.pdf
-  类型: application/pdf
-  大小: 1024000 bytes
-- sales.csv (file)
-  路径: /Users/xxx/.groot/temp/task-20260417-103000523-a1b2/sales.csv
-  类型: text/csv
-  大小: 51200 bytes
-```
-
-**Agent 如何使用：**
-
-Agent 解析消息中的附件信息后，调用 MCP `file_read` 工具读取文件：
-
-```
-file_read(path="/Users/xxx/.groot/temp/task-20260417-103000523-a1b2/Q3_Report.pdf")
-```
-
-### 13.6 URL 类型附件处理
-
-对于 `url` 类型附件，不进行文件存储，直接在消息中显示 URL：
-
-```
-附件:
-- external_data (url)
-  URL: https://example.com/data.json
-```
-
-Agent 可通过 MCP `http_get` 工具直接访问该 URL。
-
-### 13.7 处理责任划分
+### 13.3 处理责任划分
 
 **Groot 核心负责：**
 - 接收附件并验证（大小、数量、类型）
-- Base64 解码并存储到临时目录
+- Base64 解码并存储到临时目录 `temp/{task_id}/`
 - 将附件路径信息嵌入用户消息
 - 任务完成后自动清理临时文件
 
@@ -2100,7 +2101,7 @@ Agent 可通过 MCP `http_get` 工具直接访问该 URL。
 - 解析特定格式（PDF、CSV 等）
 - 处理图片、压缩包等
 
-### 13.8 配置
+### 13.4 配置
 
 ```yaml
 attachment:
