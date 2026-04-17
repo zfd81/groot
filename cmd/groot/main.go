@@ -138,7 +138,7 @@ func main() {
 	cancelMgr := agent.NewCancelManager()
 
 	// Create API server
-	srv := api.NewServer(*cfg, log, store, skillsRegistry, mcpMgr, cancelMgr)
+	srv := api.NewServer(*cfg, homeDir, log, store, skillsRegistry, mcpMgr, cancelMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

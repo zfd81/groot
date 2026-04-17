@@ -10,6 +10,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
+	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -27,6 +28,7 @@ type Server struct {
 // NewServer creates a new API server
 func NewServer(
 	cfg config.Config,
+	homeDir string,
 	log *logger.Logger,
 	store storage.TaskStorage,
 	skills *skill.Registry,
@@ -38,8 +40,11 @@ func NewServer(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
 	)
 
+	// Create attachment handler
+	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
+
 	// Create executor
-	exec := agent.NewExecutor(store, skills, mcpMgr, cancelMgr, cfg, log)
+	exec := agent.NewExecutor(store, skills, mcpMgr, cancelMgr, attHandler, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)

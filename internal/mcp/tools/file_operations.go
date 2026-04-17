@@ -19,7 +19,13 @@ func NewFileOperations(allowedPaths []string) *FileOperations {
 }
 
 // isPathAllowed checks if path is within allowed directories
+// If allowedPaths is empty, all paths are allowed (no restriction)
 func (f *FileOperations) isPathAllowed(path string) bool {
+	// No restrictions if allowedPaths is empty
+	if len(f.allowedPaths) == 0 {
+		return true
+	}
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return false

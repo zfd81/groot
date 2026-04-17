@@ -38,6 +38,16 @@ type Attachment struct {
 	Content string `json:"content"` // Base64 or URL
 }
 
+// AttachmentPath represents processed attachment path info
+type AttachmentPath struct {
+	OriginalName string `json:"original_name"` // Original file name
+	Type         string `json:"type"`          // file, url, text
+	FullPath     string `json:"full_path"`     // Absolute path on disk
+	RelativePath string `json:"relative_path"` // Path relative to task temp dir
+	Size         int64  `json:"size"`          // File size in bytes
+	ContentType  string `json:"content_type"`  // MIME type
+}
+
 // TaskProgress represents execution progress
 type TaskProgress struct {
 	CurrentStep    int `json:"current_step"`

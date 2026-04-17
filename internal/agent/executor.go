@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -15,13 +16,14 @@ import (
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
-	storage       storage.TaskStorage
-	skillRegistry *skill.Registry
-	mcpManager    *mcp.Manager
-	cancelManager *CancelManager
-	config        config.Config
-	logger        *logger.Logger
-	runningTasks  sync.Map
+	storage         storage.TaskStorage
+	skillRegistry   *skill.Registry
+	mcpManager      *mcp.Manager
+	cancelManager   *CancelManager
+	attachmentHandler *attachment.Handler
+	config          config.Config
+	logger          *logger.Logger
+	runningTasks    sync.Map
 }
 
 // NewExecutor creates a new task executor
@@ -30,16 +32,18 @@ func NewExecutor(
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 	cancelMgr *CancelManager,
+	attHandler *attachment.Handler,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
-		storage:       store,
-		skillRegistry: skills,
-		mcpManager:    mcpMgr,
-		cancelManager: cancelMgr,
-		config:        cfg,
-		logger:        log,
+		storage:         store,
+		skillRegistry:   skills,
+		mcpManager:      mcpMgr,
+		cancelManager:   cancelMgr,
+		attachmentHandler: attHandler,
+		config:          cfg,
+		logger:          log,
 	}
 }
 
@@ -50,6 +54,54 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 
 	// Write intent event
 	sse.WriteIntent()
+
+	// Process attachments if any
+	var processedAttachments []attachment.ProcessedAttachment
+	var attachmentPaths []storage.AttachmentPath
+	if len(task.Attachments) > 0 && e.attachmentHandler != nil {
+		// Convert storage attachments to attachment.Attachment
+		attInput := make([]attachment.Attachment, len(task.Attachments))
+		for i, att := range task.Attachments {
+			attInput[i] = attachment.Attachment{
+				Type:    att.Type,
+				Name:    att.Name,
+				Content: att.Content,
+			}
+		}
+
+		// Validate attachments
+		if err := e.attachmentHandler.Validate(attInput); err != nil {
+			e.handleFailure(task, sse, err, "attachment_validation_error")
+			return
+		}
+
+		// Process attachments (decode Base64, save to temp)
+		processed, err := e.attachmentHandler.Process(task.ID, attInput)
+		if err != nil {
+			e.handleFailure(task, sse, err, "attachment_processing_error")
+			return
+		}
+		processedAttachments = processed
+
+		// Build attachment paths for engine
+		for _, pa := range processedAttachments {
+			attachmentPaths = append(attachmentPaths, storage.AttachmentPath{
+				OriginalName: pa.OriginalName,
+				Type:         pa.Type,
+				FullPath:     pa.FullPath,
+				RelativePath: pa.Path,
+				Size:         pa.Size,
+				ContentType:  pa.ContentType,
+			})
+		}
+	}
+
+	// Cleanup attachments when done
+	defer func() {
+		if e.attachmentHandler != nil && len(processedAttachments) > 0 {
+			e.attachmentHandler.Cleanup(task.ID)
+		}
+	}()
 
 	// Create engine using eino
 	engine := NewEngine(
@@ -79,7 +131,7 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 		ctx,
 		task.Instruction,
 		task.Prompt,
-		task.Attachments,
+		attachmentPaths,
 		func(stepID, eventType, message string) {
 			select {
 			case <-ctx.Done():
@@ -123,6 +175,24 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 	e.storage.Update(task.ID, updates)
 
 	// Unregister from cancel manager
+	e.cancelManager.Unregister(task.ID)
+}
+
+// handleFailure handles task failure
+func (e *Executor) handleFailure(task *storage.Task, sse *SSEWriter, err error, errorCode string) {
+	endTime := time.Now()
+	duration := endTime.Sub(task.StartTime)
+	durationStr := formatDuration(duration)
+
+	updates := map[string]interface{}{
+		"status":    storage.StatusFailed,
+		"end_time":  endTime,
+		"duration":  int(duration.Seconds()),
+		"error":     &storage.TaskError{Code: errorCode, Message: err.Error()},
+	}
+	e.storage.Update(task.ID, updates)
+
+	sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
 	e.cancelManager.Unregister(task.ID)
 }
 

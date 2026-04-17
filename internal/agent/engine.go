@@ -49,7 +49,7 @@ func (e *Engine) Run(
 	ctx context.Context,
 	instruction string,
 	prompt string,
-	attachments []storage.Attachment,
+	attachmentPaths []storage.AttachmentPath,
 	progress func(stepID, eventType, message string),
 ) (*RunResult, error) {
 	// 1. Create ChatModel
@@ -95,8 +95,8 @@ func (e *Engine) Run(
 		EnableStreaming: true,
 	})
 
-	// 7. Build user message with attachments
-	userMessage := e.buildUserMessage(instruction, attachments)
+	// 7. Build user message with attachment paths
+	userMessage := e.buildUserMessage(instruction, attachmentPaths)
 
 	// 8. Run agent and collect events
 	// Use adk.Message (alias for *schema.Message)
@@ -173,13 +173,23 @@ func (e *Engine) buildSystemInstruction(prompt string) string {
 	return sb.String()
 }
 
-// buildUserMessage builds user message with attachment info
-func (e *Engine) buildUserMessage(instruction string, attachments []storage.Attachment) string {
+// buildUserMessage builds user message with attachment paths
+func (e *Engine) buildUserMessage(instruction string, attachmentPaths []storage.AttachmentPath) string {
 	msg := instruction
-	if len(attachments) > 0 {
+	if len(attachmentPaths) > 0 {
 		msg += "\n\n附件:\n"
-		for _, att := range attachments {
-			msg += fmt.Sprintf("- %s (%s)\n", att.Name, att.Type)
+		for _, att := range attachmentPaths {
+			if att.FullPath != "" {
+				// File type - show path for tools to read
+				msg += fmt.Sprintf("- %s (%s)\n  路径: %s\n  类型: %s\n  大小: %d bytes\n",
+					att.OriginalName, att.Type, att.FullPath, att.ContentType, att.Size)
+			} else if att.Type == "url" {
+				// URL type
+				msg += fmt.Sprintf("- %s (url)\n  URL: %s\n", att.OriginalName, att.RelativePath)
+			} else {
+				// Other types
+				msg += fmt.Sprintf("- %s (%s)\n", att.OriginalName, att.Type)
+			}
 		}
 	}
 	return msg
