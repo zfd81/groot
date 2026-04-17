@@ -1160,7 +1160,64 @@ JSON 结构化日志可直接用于监控采集，通过 ELK（Elasticsearch + L
 
 ## 十一、安全性设计
 
-### 12.1 API 认证
+### 11.1 认证配置
+
+```yaml
+security:
+  auth:
+    enabled: true               # 是否开启认证，true 开启，false 关闭
+    type: api_key               # 认证类型，目前只支持 api_key
+    api_key:
+      header_name: X-API-Key    # 认证 Header 名称（可选，默认 X-API-Key）
+      keys:
+        - name: default         # Key 名称（唯一标识）
+          key: ${GROOT_API_KEY} # Key 值（支持环境变量）
+          permissions: all      # 权限范围
+```
+
+### 11.2 认证类型
+
+| 类型 | 说明 | 适用场景 |
+|------|------|---------|
+| `api_key` | API Key 认证，通过 HTTP Header 传递 | 服务间调用、简单鉴权 |
+
+`type` 字段预留扩展能力，后续可支持其他认证类型（如 JWT、OAuth2）。
+
+### 11.3 API Key 认证流程
+
+**调用方请求：**
+
+```
+POST /task/execute
+X-API-Key: your-api-key-value
+Content-Type: application/json
+
+{请求内容...}
+```
+
+**认证流程：**
+
+```
+请求到达 → Auth 中间件拦截 →
+│
+├─ enabled=false → 跳过认证，直接处理请求
+│
+├─ enabled=true → 执行认证
+│   ├─ 提取 Header 中的 API Key（Header 名称由 header_name 配置）
+│   ├─ 检查 Key 是否在 keys 列表中
+│   │   ├─ 不存在 → 返回 401 Unauthorized
+│   │   └─ 存在 → 继续检查权限
+│   ├─ 检查 Key 关联的 permissions 是否包含该 API所需权限
+│   │   ├─ 不包含 → 返回 403 Forbidden
+│   │   └─ 包含 → 认证通过
+│   └─ 认证通过 → 记录调用方 name 到日志 → 继续处理请求
+│
+└─ 处理请求
+```
+
+### 11.4 多 Key 配置示例
+
+**场景：不同调用方使用不同 Key 和权限**
 
 ```yaml
 security:
@@ -1168,29 +1225,56 @@ security:
     enabled: true
     type: api_key
     api_key:
+      header_name: X-API-Key
       keys:
-        - name: default
-          key: ${GROOT_API_KEY}
-          permissions: all
+        - name: internal_system        # 内部业务系统
+          key: ${GROOT_INTERNAL_KEY}   # Key 值：自定义字符串
+          permissions: all             # 全部权限
+        
+        - name: external_partner       # 外部合作方
+          key: partner-key-2026        # Key 值：直接写或环境变量
+          permissions: [execute, status]  # 只能执行和查询
+        
+        - name: monitor_service        # 监控服务
+          key: ${GROOT_MONITOR_KEY}
+          permissions: [status, health, skills, tools]  # 只能查询
 ```
 
-### 12.2 权限定义
+### 11.5 权限定义
 
-| 权限 | 对应 API |
-|------|---------|
-| `execute` | POST /task/execute |
-| `cancel` | POST /task/cancel |
-| `status` | GET /task/status |
-| `skills` | GET /skills |
-| `tools` | GET /tools |
-| `health` | GET /health |
-| `all` | 以上全部 |
+| 权限 | 对应 API | 说明 |
+|------|---------|------|
+| `execute` | POST /task/execute | 执行任务 |
+| `cancel` | POST /task/cancel | 取消任务 |
+| `status` | GET /task/status/{task_id} | 查询状态 |
+| `skills` | GET /skills | 查看 Skills 列表 |
+| `tools` | GET /tools | 查看 MCP 工具列表 |
+| `health` | GET /health | 健康检查 |
+| `all` | 以上全部 | 全部权限 |
 
-### 12.3 敏感信息保护
+### 11.6 认证开启/关闭场景
 
-- API Key 通过环境变量存储
-- 不记录敏感信息到日志
-- 日志脱敏处理
+| 运行模式 | enabled | 说明 |
+|----------|---------|------|
+| 单实例部署 | `true` | Groot 自身做 API Key 鉴权，保护 API 安全 |
+| 集群部署（有统一 Gateway） | `false` | Gateway 统一鉴权，Groot 不重复验证 |
+| 内网环境（可信网络） | `false` | 内网隔离，无需认证 |
+
+**集群模式架构示意：**
+
+```
+调用方 → Gateway（统一鉴权） → Groot 实例 1
+                           → Groot 实例 2
+                           → Groot 实例 3
+```
+
+Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`enabled: false`）。
+
+### 11.7 敏感信息保护
+
+- API Key 值建议通过环境变量存储，避免硬编码
+- 不记录 API Key 值到日志（只记录调用方 name）
+- 日志脱敏处理，敏感字段不输出
 
 ---
 
@@ -1366,13 +1450,14 @@ attachment:
 # 安全配置
 security:
   auth:
-    enabled: true
-    type: api_key
+    enabled: true               # 是否开启认证，集群模式可关闭
+    type: api_key               # 认证类型
     api_key:
+      header_name: X-API-Key    # 认证 Header 名称
       keys:
-        - name: default
-          key: ${GROOT_API_KEY}
-          permissions: all
+        - name: default         # Key 名称（唯一标识）
+          key: ${GROOT_API_KEY} # Key 值（环境变量或直接写）
+          permissions: all      # 权限范围
 
 # 日志配置
 logging:
