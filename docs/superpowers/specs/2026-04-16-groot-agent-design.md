@@ -2121,8 +2121,27 @@ attachment:
   max_total_size: 100             # 所有附件总大小上限（MB）
   max_count: 10                   # 单次请求最大附件数量
   allowed_types: [pdf, doc, json, csv, png, zip]  # 允许的附件类型
-  temp_directory: temp            # 附件临时存储目录（相对工作目录）
+  temp_directory: temp            # 附件临时存储目录（支持绝对路径或相对路径，见下方说明）
 ```
+
+**temp_directory 配置说明：**
+
+| 配置值 | 实际路径 | 说明 |
+|--------|---------|------|
+| `temp` | `{GROOT_HOME}/temp` | 相对路径，与工作目录拼接 |
+| `./temp` | `{GROOT_HOME}/temp` | 相对路径，等效于 `temp` |
+| `/home/zfd/temp` | `/home/zfd/temp` | 绝对路径，直接使用 |
+| `/tmp/groot` | `/tmp/groot` | 绝对路径，系统临时目录 |
+
+**配置规则：**
+- 以 `/` 开头：视为绝对路径，直接使用
+- 其他情况：视为相对路径，与 `{GROOT_HOME}` 拼接
+- `filepath.Clean` 会自动处理 `./temp` → `temp`
+
+**建议：**
+- 单实例部署：使用相对路径 `temp`（默认）
+- 需要更大磁盘空间：使用绝对路径指向独立存储盘
+- 需要系统临时目录：使用 `/tmp/groot`（注意清理策略）
 
 ---
 
@@ -2270,7 +2289,7 @@ attachment:
   max_total_size: 100             # 所有附件总大小上限（MB）
   max_count: 10                   # 单次请求最大附件数量
   allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, zip]  # 允许的附件类型
-  temp_directory: temp            # 附件临时存储目录（相对工作目录）
+  temp_directory: temp            # 附件临时存储目录（支持绝对路径或相对路径）
 
 # 安全配置
 security:
