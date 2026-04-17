@@ -280,6 +280,7 @@ Skill模式：
 
 **响应：**
 
+**成功取消：**
 ```json
 {
   "status": "cancelled",
@@ -287,6 +288,59 @@ Skill模式：
   "message": "任务已取消"
 }
 ```
+
+**取消失败：**
+
+任务已完成：
+```json
+{
+  "status": "error",
+  "task_id": "task-xxx",
+  "error": {
+    "code": "TASK_ALREADY_COMPLETED",
+    "message": "任务已完成，无法取消"
+  }
+}
+```
+
+任务已失败：
+```json
+{
+  "status": "error",
+  "task_id": "task-xxx",
+  "error": {
+    "code": "TASK_ALREADY_FAILED",
+    "message": "任务已失败，无法取消"
+  }
+}
+```
+
+任务不存在：
+```json
+{
+  "status": "error",
+  "task_id": "task-xxx",
+  "error": {
+    "code": "TASK_NOT_FOUND",
+    "message": "任务不存在"
+  }
+}
+```
+
+**响应字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 结果状态：`cancelled`（成功）/ `error`（失败） |
+| `task_id` | 任务ID |
+| `message` | 成功消息（取消成功时） |
+| `error` | 错误信息（取消失败时） |
+
+| HTTP状态码 | 说明 |
+|-----------|------|
+| 200 | 取消成功 |
+| 400 | 任务不存在 |
+| 409 | 任务已完成/失败，无法取消 |
 
 ### 3.4 GET /task/status
 
