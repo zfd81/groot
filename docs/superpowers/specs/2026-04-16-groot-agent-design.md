@@ -1494,7 +1494,7 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
   "isActive": true,
   "tools": ["file_read", "file_write", "file_search", "directory_list", "directory_create"],
   "restrictions": {
-    "allowed_paths": ["temp", "skills"],
+    "allowed_paths": ["/home/zfd/temp", "/home/zfd/workspace/groot/skills"],
     "denied_operations": ["file_delete"]
   }
 }
@@ -1554,7 +1554,7 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 | `file_info` | 获取信息 | `path` |
 
 **安全限制：**
-- 仅允许访问 temp、skills 目录
+- 仅允许访问配置中 `allowed_paths` 指定的真实目录路径
 - 默认禁止删除操作
 
 ### 8.2 http_request
