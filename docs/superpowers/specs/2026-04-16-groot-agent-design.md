@@ -283,7 +283,7 @@ Skill模式：
 成功：
 ```json
 {
-  "code": "SUCCESS",
+  "status": "success",
   "task_id": "task-xxx",
   "message": "任务已取消"
 }
@@ -292,7 +292,7 @@ Skill模式：
 失败：
 ```json
 {
-  "code": "TASK_COMPLETED",
+  "status": "task_completed",
   "task_id": "task-xxx",
   "message": "任务已完成，无法取消"
 }
@@ -300,7 +300,7 @@ Skill模式：
 
 ```json
 {
-  "code": "TASK_NOT_FOUND",
+  "status": "task_not_found",
   "task_id": "task-xxx",
   "message": "任务不存在"
 }
@@ -310,17 +310,17 @@ Skill模式：
 
 | 字段 | 说明 |
 |------|------|
-| `code` | 结果码：`SUCCESS` 或失败错误码 |
+| `status` | 结果状态：`success` 或失败状态码 |
 | `task_id` | 任务ID |
 | `message` | 结果消息 |
 
-**失败错误码：**
+**失败状态码：**
 
-| 错误码 | 说明 |
+| 状态码 | 说明 |
 |--------|------|
-| `TASK_COMPLETED` | 任务已完成 |
-| `TASK_FAILED` | 任务已失败 |
-| `TASK_NOT_FOUND` | 任务不存在 |
+| `task_completed` | 任务已完成 |
+| `task_failed` | 任务已失败 |
+| `task_not_found` | 任务不存在 |
 
 ### 3.4 GET /task/status
 
