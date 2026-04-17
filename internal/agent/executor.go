@@ -52,10 +52,7 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 	e.runningTasks.Store(task.ID, true)
 	defer e.runningTasks.Delete(task.ID)
 
-	// Write intent event
-	sse.WriteIntent()
-
-	// Process attachments if any
+	// Process attachments if any (before intent event)
 	var processedAttachments []attachment.ProcessedAttachment
 	var attachmentPaths []storage.AttachmentPath
 	if len(task.Attachments) > 0 && e.attachmentHandler != nil {
@@ -102,6 +99,9 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 			e.attachmentHandler.Cleanup(task.ID)
 		}
 	}()
+
+	// Write intent event (after all preparation is complete)
+	sse.WriteIntent()
 
 	// Create engine using eino
 	engine := NewEngine(
