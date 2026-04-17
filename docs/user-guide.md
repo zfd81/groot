@@ -241,14 +241,38 @@ go build -o bin/groot cmd/groot/main.go
 
 # 或者使用 Makefile
 make build
+
+# 编译完成后，运行方式：
+
+# 方式 A：直接运行编译后的程序
+./bin/groot
+
+# 方式 B：移动到 PATH 目录，方便全局调用
+mv bin/groot /usr/local/bin/groot
+groot
+
+# 方式 C：直接运行（无需编译）
+go run cmd/groot/main.go
 ```
 
 ### 3.4 启动服务
 
+根据安装方式选择启动方法：
+
 ```bash
-# 使用默认配置启动
+# 方式一：预编译二进制（已移动到 PATH）
 groot
 
+# 方式二：源码编译（未移动到 PATH）
+./bin/groot
+
+# 方式三：直接运行（无需编译）
+go run cmd/groot/main.go
+```
+
+**常用启动参数：**
+
+```bash
 # 指定工作目录
 groot -H /opt/groot
 
