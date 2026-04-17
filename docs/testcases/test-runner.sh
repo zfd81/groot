@@ -223,12 +223,12 @@ test_api_detail_found() {
     local tc="TC-API-018"
     log_info "测试 $tc: 查询任务详情"
 
-    local response=$(curl -s http://localhost:$GROOT_PORT/task/history?limit=1)
+    local response=$(curl -s "http://localhost:$GROOT_PORT/task/history?limit=1")
     local task_id=$(echo "$response" | jq -r '.tasks[0].id // empty')
 
     if [[ -n "$task_id" ]]; then
-        local detail_resp=$(curl -s http://localhost:$GROOT_PORT/task/$task_id)
-        local id=$(echo "$detail_resp" | jq -r '.id // empty')
+        local detail_resp=$(curl -s "http://localhost:$GROOT_PORT/task/$task_id")
+        local id=$(echo "$detail_resp" | jq -r '.task.id // empty')
         if [[ "$id" == "$task_id" ]]; then
             log_pass "$tc"
         else
