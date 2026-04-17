@@ -142,7 +142,6 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 | 事件类型 | 说明 |
 |---------|------|
-| `task_started` | 任务开始，返回 task_id |
 | `intent_matched` | 意图匹配结果 |
 | `skill_call` | Skill 调用开始 |
 | `progress` | 执行进度更新 |
@@ -155,11 +154,13 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 **响应 Header 元信息：**
 
-```
-X-Task-ID: task-xxx
-X-Task-Status: success / failed / cancelled
-X-Execution-Time: 15s
-```
+| Header | 说明 |
+|--------|------|
+| `X-Task-ID` | 任务唯一标识 |
+| `X-Task-Status` | 任务状态：success / failed / cancelled |
+| `X-Execution-Time` | 执行耗时 |
+
+`task_id` 在 Header 中返回，调用方可立即获取用于查询状态或取消任务。
 
 ### 3.3 POST /task/cancel
 
@@ -988,8 +989,7 @@ monitoring:
 
 **Skill匹配模式：**
 ```
-event: task_started
-data: {"task_id": "task-xxx"}
+HTTP Header: X-Task-ID: task-xxx
 
 event: intent_matched
 data: {"mode": "skill", "skill_name": "pdf_analyzer", "confidence": 0.92}
@@ -1012,8 +1012,7 @@ data: {"status": "success", "duration": "15s"}
 
 **自主执行模式：**
 ```
-event: task_started
-data: {"task_id": "task-xxx"}
+HTTP Header: X-Task-ID: task-xxx
 
 event: intent_matched
 data: {"mode": "autonomous", "reason": "未匹配到Skill，Agent自主执行"}
