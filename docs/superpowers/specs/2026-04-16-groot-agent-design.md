@@ -473,7 +473,7 @@ GET /task/status/task-xxx
 **请求方式：** Query 参数
 
 ```
-GET /task/history?status=completed&limit=10&offset=0
+GET /task/history?status=completed&start_time=202604010000&end_time=202604172359&limit=10&offset=0
 ```
 
 **Query 参数：**
@@ -481,8 +481,8 @@ GET /task/history?status=completed&limit=10&offset=0
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `status` | string | 否 | 按状态过滤：`running` / `completed` / `failed` / `cancelled` |
-| `start_time` | string | 否 | 开始时间（ISO格式），如 `2026-04-01T00:00:00Z` |
-| `end_time` | string | 否 | 结束时间（ISO格式） |
+| `start_time` | string | 否 | 开始时间，格式 `yyyyMMddHHmm`，如 `202604010000` |
+| `end_time` | string | 否 | 结束时间，格式 `yyyyMMddHHmm`，如 `202604172359` |
 | `limit` | int | 否 | 返回数量限制，默认 20，最大 100 |
 | `offset` | int | 否 | 分页偏移，默认 0 |
 
