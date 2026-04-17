@@ -637,40 +637,189 @@ POST /task/cancel →
 
 ## 六、MCP 配置与管理
 
-### 7.1 MCP 连接类型
+### 6.1 MCP 配置目录结构
+
+MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔：
+
+```
+{GROOT_HOME}/mcp/
+├── file_operations.json      # 内置 MCP（文件操作）
+├── http_request.json         # 内置 MCP（HTTP请求）
+├── web_parser.json           # 外部 MCP（网页解析）
+└── database_tool.json        # 外部 MCP（数据库操作）
+```
+
+### 6.2 MCP 连接类型
 
 | 类型 | 说明 | 适用场景 |
 |------|------|---------|
 | `stdio` | 标准输入输出通信 | 本地命令行工具 |
-| `sse` | HTTP SSE 连接 | 远程 HTTP 服务 |
-| `websocket` | WebSocket 连接 | 双向通信服务 |
+| `sse` | Server-Sent Events | 远程 HTTP 服务（单向推送） |
+| `streamable_http` | Streamable HTTP | 远程 HTTP 服务（双向流式） |
 
-### 7.2 配置格式
+### 6.3 MCP 配置文件格式
+
+每个 MCP 一个独立的 JSON 文件，符合官方标准格式：
+
+**stdio 类型示例（本地工具）：**
+
+```json
+{
+  "name": "database_tool",
+  "type": "stdio",
+  "description": "数据库查询和操作工具",
+  "isActive": true,
+  "command": "mcp-server-postgres",
+  "args": ["--connection", "${DB_CONNECTION}"],
+  "env": {
+    "DB_CONNECTION": "${DB_CONNECTION}"
+  }
+}
+```
+
+**sse 类型示例（远程服务）：**
+
+```json
+{
+  "name": "WebParser",
+  "type": "sse",
+  "description": "网页解析 MCP 服务，专用于网页内容解析",
+  "isActive": true,
+  "baseUrl": "https://dashscope.aliyuncs.com/api/v1/mcps/WebParser/sse",
+  "headers": {
+    "Authorization": "Bearer ${DASHSCOPE_API_KEY}"
+  }
+}
+```
+
+**streamable_http 类型示例：**
+
+```json
+{
+  "name": "web_search",
+  "type": "streamable_http",
+  "description": "网络搜索工具",
+  "isActive": true,
+  "baseUrl": "https://mcp-search.example.com/api",
+  "headers": {
+    "X-API-Key": "${SEARCH_API_KEY}"
+  }
+}
+```
+
+### 6.4 配置字段说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | MCP名称（全局唯一） |
+| `type` | string | 是 | 连接类型：`stdio` / `sse` / `streamable_http` |
+| `description` | string | 是 | MCP描述（用于Agent工具列表） |
+| `isActive` | boolean | 是 | 是否启用 |
+| `command` | string | stdio必填 | 命令行程序名 |
+| `args` | array | 否 | 命令行参数 |
+| `env` | object | 否 | 环境变量 |
+| `baseUrl` | string | sse/streamable_http必填 | 服务地址 |
+| `headers` | object | 否 | HTTP请求头 |
+
+### 6.5 MCP 热插拔机制
+
+支持运行时动态添加、修改、删除 MCP，无需重启服务。
+
+**监听机制：**
+- 使用 `fsnotify` 监听 mcp 目录变化
+- 只监听 `.json` 文件的创建、修改、删除事件
+- 防抖机制：检测到变化后延迟 2秒再执行加载
+
+**处理流程：**
+
+```
+文件变化检测 → 防抖等待（2秒） →
+│
+├─ 新增 .json → 解析并注册 MCP →建立连接 → 输出日志
+│
+├─ 修改 .json → 重新解析 → 断开旧连接 → 建立新连接 → 输出日志
+│
+└─ 删除 .json → 断开连接 → 移除 MCP 注册 → 输出日志
+```
+
+**配置项：**
 
 ```yaml
 mcp:
-  builtin:
-    enabled:
-      - file_operations
-      - http_request
-    file_operations:
-      allowed_paths: [temp, skills, output]
-      denied_operations: [file_delete]
-    http_request:
-      denied_domains: [localhost, 127.0.0.1, 10.*, 192.168.*]
-      timeout: 30
+  directory: mcp
+  hot_reload:
+    enabled: true       # 是否启用热插拔
+    debounce_delay: 2   # 防抖延迟（秒）
+```
 
-  external:
-    - name: database_tool
-      server_type: stdio
-      command: mcp-server-postgres
-      args: ["--connection", "${DB_CONNECTION}"]
-      enabled: true
-    - name: web_search
-      server_type: sse
-      endpoint: https://mcp-search.example.com/sse
-      api_key: ${SEARCH_API_KEY}
-      enabled: true
+**日志输出：**
+
+```json
+{
+  "timestamp": "2026-04-17T10:30:00Z",
+  "level": "INFO",
+  "event": "mcp_hot_reload",
+  "data": {
+    "action": "added",
+    "mcp_name": "WebParser",
+    "mcp_type": "sse",
+    "mcp_count": 5
+  }
+}
+```
+
+### 6.6 内置 MCP 工具
+
+内置 MCP 存放在 `mcp/` 目录下，默认包含以下工具：
+
+**file_operations.json（文件操作）：**
+
+```json
+{
+  "name": "file_operations",
+  "type": "builtin",
+  "description": "文件读写和目录操作",
+  "isActive": true,
+  "tools": ["file_read", "file_write", "file_search", "directory_list", "directory_create"],
+  "restrictions": {
+    "allowed_paths": ["temp", "skills", "output"],
+    "denied_operations": ["file_delete"]
+  }
+}
+```
+
+**http_request.json（HTTP请求）：**
+
+```json
+{
+  "name": "http_request",
+  "type": "builtin",
+  "description": "HTTP请求发送",
+  "isActive": true,
+  "tools": ["http_get", "http_post", "http_put", "http_delete"],
+  "restrictions": {
+    "denied_domains": ["localhost", "127.0.0.1", "10.*", "192.168.*"],
+    "timeout": 30,
+    "max_response_size": 10
+  }
+}
+```
+
+**code_execution.json（代码执行，默认禁用）：**
+
+```json
+{
+  "name": "code_execution",
+  "type": "builtin",
+  "description": "代码片段执行（高风险）",
+  "isActive": false,
+  "tools": ["execute_python", "execute_javascript", "execute_shell"],
+  "restrictions": {
+    "sandbox": true,
+    "timeout": 30,
+    "network_access": false
+  }
+}
 ```
 
 ---
@@ -928,6 +1077,8 @@ attachment:
 ├── config.yaml
 ├── skills/
 │   └── {skill-name}/skill.md
+├── mcp/
+│   └── {mcp-name}.json
 ├── logs/
 │   └── groot-{date}.log
 └── temp/（任务临时文件）
@@ -1016,18 +1167,10 @@ skills:
 
 # MCP 配置
 mcp:
-  builtin:
-    enabled: [file_operations, http_request]
-    file_operations:
-      allowed_paths: [temp, skills, output]
-      denied_operations: [file_delete]
-    http_request:
-      denied_domains: [localhost, 127.0.0.1, 10.*, 192.168.*]
-      timeout: 30
-      max_response_size: 10
-    code_execution:
-      enabled: false
-  external: []
+  directory: mcp              # MCP 配置目录（相对工作目录）
+  hot_reload:
+    enabled: true              # 是否启用热插拔
+    debounce_delay: 2          # 防抖延迟（秒）
 
 # 性能控制配置
 performance:
