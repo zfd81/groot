@@ -11,6 +11,18 @@ func DefaultConfig() *Config {
 			Host: "0.0.0.0",
 			Port: 8080,
 		},
+		LLM: LLMConfig{
+			ActiveModel: "gpt-4o",
+			Models: map[string]ModelConfig{
+				"gpt-4o": {
+					Endpoint:    "https://api.openai.com/v1",
+					APIKey:      "${OPENAI_API_KEY}",
+					Model:       "gpt-4o",
+					MaxTokens:   4096,
+					Temperature: 0.7,
+				},
+			},
+		},
 		Skills: SkillsConfig{
 			HotReload: HotReloadConfig{
 				Enabled:       true,
@@ -65,7 +77,7 @@ func DefaultConfig() *Config {
 		},
 		Security: SecurityConfig{
 			Auth: AuthConfig{
-				Enabled: true,
+				Enabled: false, // 默认关闭认证，方便测试
 				Type:    "api_key",
 				APIKey: APIKeyConfig{
 					HeaderName: "X-API-Key",

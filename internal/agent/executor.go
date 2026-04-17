@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -50,123 +51,79 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 	// Write intent event
 	sse.WriteIntent()
 
-	// Create context for tracking
-	ctx := &ExecutionContext{
-		Task:      task,
-		SSE:       sse,
-		CancelCh:  cancelCh,
-		StepCount: 0,
-		StartTime: time.Now(),
-		Logger:    e.logger,
-	}
+	// Create engine using eino
+	engine := NewEngine(
+		e.config.LLM,
+		e.skillRegistry,
+		e.mcpManager,
+		e.config.React,
+		e.logger,
+	)
 
-	// Execute in ReAct loop
-	result, err := e.reactLoop(ctx)
+	// Create context with cancellation support
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle cancellation in separate goroutine
+	go func() {
+		select {
+		case <-cancelCh:
+			cancel()
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	// Run engine with progress callback
+	result, err := engine.Run(
+		ctx,
+		task.Instruction,
+		task.Prompt,
+		task.Attachments,
+		func(stepID, eventType, message string) {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				sse.WriteProgress(stepID, message)
+			}
+		},
+	)
 
 	// Calculate duration
-	duration := time.Since(ctx.StartTime)
+	startTime := task.StartTime
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
 	durationStr := formatDuration(duration)
 
 	// Update task in storage
 	updates := map[string]interface{}{
-		"status":   result.Status,
-		"end_time": time.Now(),
+		"end_time": endTime,
 		"duration": int(duration.Seconds()),
-		"result":   result.Result,
-		"steps":    ctx.Steps,
+		"steps":    result.Steps,
 	}
+
 	if err != nil {
+		updates["status"] = storage.StatusFailed
 		updates["error"] = &storage.TaskError{
 			Code:    "execution_error",
 			Message: err.Error(),
 		}
+		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
+	} else if ctx.Err() == context.Canceled {
+		updates["status"] = storage.StatusCancelled
+		updates["error"] = nil
+		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
+	} else {
+		updates["status"] = storage.StatusCompleted
+		updates["result"] = result.Content
+		sse.WriteCompleted("success", durationStr, result.Content, nil, "")
 	}
-	e.storage.Update(task.ID, updates)
 
-	// Write completed event
-	var stepErr *StepError
-	if err != nil {
-		stepErr = &StepError{Code: "execution_error", Message: err.Error()}
-	}
-	sse.WriteCompleted(string(result.Status), durationStr, result.Result, stepErr, result.Message)
+	e.storage.Update(task.ID, updates)
 
 	// Unregister from cancel manager
 	e.cancelManager.Unregister(task.ID)
-}
-
-// reactLoop implements ReAct execution
-func (e *Executor) reactLoop(ctx *ExecutionContext) (*ExecutionResult, error) {
-	maxIterations := e.config.React.MaxIterations
-
-	for i := 0; i < maxIterations; i++ {
-		// Check for cancellation
-		select {
-		case <-ctx.CancelCh:
-			return &ExecutionResult{
-				Status:  storage.StatusCancelled,
-				Message: "用户主动取消",
-			}, nil
-		default:
-		}
-
-		// Step 1: Reasoning (LLM decides next action)
-		stepID := GenerateStepID()
-		ctx.StepCount++
-
-		// For MVP: Simple execution - just run LLM to process task
-		ctx.SSE.WriteStepStart(stepID, "llm", "reasoning", 0, nil)
-
-		// Simulate LLM processing (placeholder for actual eino integration)
-		// In production, this would call eino agent
-		progressCh := make(chan string, 10)
-		go func() {
-			progressCh <- "正在分析任务..."
-			time.Sleep(500 * time.Millisecond)
-			progressCh <- "正在生成回答..."
-			close(progressCh)
-		}()
-
-		for msg := range progressCh {
-			select {
-			case <-ctx.CancelCh:
-				ctx.SSE.WriteStepEnd(stepID, "cancelled", nil)
-				return &ExecutionResult{Status: storage.StatusCancelled, Message: "用户主动取消"}, nil
-			default:
-				ctx.SSE.WriteProgress(stepID, msg)
-			}
-		}
-
-		// Simulate completion
-		result := map[string]interface{}{
-			"analysis": "任务已完成",
-			"output":   fmt.Sprintf("处理指令: %s", ctx.Task.Instruction),
-		}
-
-		ctx.SSE.WriteStepEnd(stepID, "success", nil)
-
-		// Record step
-		ctx.Steps = append(ctx.Steps, storage.StepRecord{
-			StepID:       stepID,
-			Type:         "llm",
-			Name:         "reasoning",
-			StartTime:    time.Now().Add(-2 * time.Second),
-			EndTime:      time.Now(),
-			Status:       storage.StatusCompleted,
-			NestingLevel: 0,
-		})
-
-		// For MVP: Complete after first iteration
-		return &ExecutionResult{
-			Status: storage.StatusCompleted,
-			Result: result,
-		}, nil
-	}
-
-	// Max iterations reached
-	return &ExecutionResult{
-		Status:  storage.StatusFailed,
-		Message: "达到最大循环次数",
-	}, fmt.Errorf("max iterations reached")
 }
 
 // IsRunning checks if task is currently running
@@ -183,24 +140,6 @@ func (e *Executor) RunningCount() int {
 		return true
 	})
 	return count
-}
-
-// ExecutionContext holds execution context
-type ExecutionContext struct {
-	Task      *storage.Task
-	SSE       *SSEWriter
-	CancelCh  chan struct{}
-	StepCount int
-	StartTime time.Time
-	Steps     []storage.StepRecord
-	Logger    *logger.Logger
-}
-
-// ExecutionResult holds execution result
-type ExecutionResult struct {
-	Status  storage.TaskStatus
-	Result  interface{}
-	Message string
 }
 
 // formatDuration formats duration for display

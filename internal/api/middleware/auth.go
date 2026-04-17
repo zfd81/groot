@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -22,12 +24,16 @@ func NewAuthMiddleware(cfg config.SecurityConfig) *AuthMiddleware {
 func (m *AuthMiddleware) Serve() app.HandlerFunc {
 	return func(ctx context.Context, rc *app.RequestContext) {
 		if !m.config.Auth.Enabled {
+			rc.Set("caller", "anonymous")
 			rc.Next(ctx)
 			return
 		}
 
 		// Get API Key from header
 		headerName := m.config.Auth.APIKey.HeaderName
+		if headerName == "" {
+			headerName = "X-API-Key"
+		}
 		apiKey := string(rc.GetHeader(headerName))
 
 		if apiKey == "" {
@@ -38,9 +44,22 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			return
 		}
 
-		// Validate API Key
+		// Validate API Key and check permissions
 		for _, keyInfo := range m.config.Auth.APIKey.Keys {
 			if keyInfo.Key == apiKey {
+				// Check permission for this path
+				path := string(rc.URI().Path())
+				method := string(rc.Method())
+				requiredPerm := getRequiredPermission(path, method)
+
+				if requiredPerm != "" && !m.hasPermission(keyInfo.Permissions, requiredPerm) {
+					rc.SetContentType("application/json")
+					rc.SetStatusCode(403)
+					rc.Write([]byte(fmt.Sprintf(`{"status":"forbidden","message":"权限不足: 需要 %s 权限"}`, requiredPerm)))
+					rc.Abort()
+					return
+				}
+
 				// Store caller info in context
 				rc.Set("caller", keyInfo.Name)
 				rc.Next(ctx)
@@ -54,6 +73,67 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 		rc.Write([]byte(`{"status":"unauthorized","message":"API Key 无效或缺失"}`))
 		rc.Abort()
 	}
+}
+
+// hasPermission checks if key has required permission
+func (m *AuthMiddleware) hasPermission(perms []string, required string) bool {
+	if len(perms) == 0 {
+		return true // No permissions defined = all access
+	}
+
+	for _, perm := range perms {
+		perm = strings.TrimSpace(perm)
+		if perm == "all" || perm == required {
+			return true
+		}
+	}
+	return false
+}
+
+// getRequiredPermission maps path to required permission
+func getRequiredPermission(path, method string) string {
+	// Health check - no permission required
+	if path == "/health" {
+		return ""
+	}
+
+	// Execute endpoint
+	if path == "/task/execute" && method == "POST" {
+		return "execute"
+	}
+
+	// Cancel endpoint
+	if strings.HasPrefix(path, "/task/") && method == "DELETE" {
+		return "cancel"
+	}
+
+	// Status endpoint
+	if strings.HasPrefix(path, "/task/status/") {
+		return "status"
+	}
+
+	// History endpoint
+	if path == "/task/history" {
+		return "history"
+	}
+
+	// Detail endpoint
+	if strings.HasPrefix(path, "/task/") && !strings.Contains(path, "/status/") && method == "GET" {
+		return "detail"
+	}
+
+	// Skills endpoint
+	if path == "/skills" {
+		return "skills"
+	}
+
+	// Tools endpoint
+	if path == "/tools" {
+		return "tools"
+	}
+
+	// Default: require all
+	return "all"
 }
 
 // GetCaller extracts caller name from context
