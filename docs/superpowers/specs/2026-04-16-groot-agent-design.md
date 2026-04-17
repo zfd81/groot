@@ -184,11 +184,11 @@ Skill模式：
 **step_start（步骤开始）：**
 
 ```json
-{"type":"skill","name":"pdf_analyzer","step_id":"step-001","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+{"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
 ```
 
 ```json
-{"type":"tool","name":"file_read","step_id":"step-002","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
+{"type":"tool","name":"file_read","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -204,12 +204,12 @@ Skill模式：
 
 成功：
 ```json
-{"step_id":"step-001","timestamp":"2026-04-17T10:30:45Z","status":"success"}
+{"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:45Z","status":"success"}
 ```
 
 失败：
 ```json
-{"step_id":"step-002","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"FILE_ERROR","message":"文件不存在"}}
+{"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"FILE_ERROR","message":"文件不存在"}}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -222,7 +222,7 @@ Skill模式：
 **progress（进度更新）：**
 
 ```json
-{"step_id":"step-001","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:10Z"}
+{"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:10Z"}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -258,8 +258,10 @@ Skill模式：
 | `message` | string | 否 | 取消原因（取消时） |
 
 **step_id 生成规则：**
-- 格式：`step-{序号}`，如 `step-001`、`step-002`
-- 每个新的 step_start 递增1，全局唯一
+- 格式：`{YYYYMMDD}-{HHMMSSmmm}-{random6}`
+- 示例：`20260417-103005523-a1b2c3`
+- 时间戳精确到毫秒，random为6位随机字符
+- 全局唯一，多实例部署不冲突
 
 **nesting_level 使用场景：**
 - `0`：主Skill/主步骤
@@ -1099,22 +1101,22 @@ event: intent
 data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92,"timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"step-001","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
 
 event: progress
-data: {"step_id":"step-001","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:05Z"}
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:05Z"}
 
 event: step_start
-data: {"type":"tool","name":"file_read","step_id":"step-002","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
+data: {"type":"tool","name":"file_read","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
 
 event: step_end
-data: {"step_id":"step-002","timestamp":"2026-04-17T10:30:05.2Z","status":"success"}
+data: {"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05.2Z","status":"success"}
 
 event: progress
-data: {"step_id":"step-001","message":"正在生成摘要...","timestamp":"2026-04-17T10:30:20Z"}
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在生成摘要...","timestamp":"2026-04-17T10:30:20Z"}
 
 event: step_end
-data: {"step_id":"step-001","timestamp":"2026-04-17T10:30:45Z","status":"success"}
+data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:45Z","status":"success"}
 
 event: completed
 data: {"status":"success","timestamp":"2026-04-17T10:30:45Z","duration":"45s","result":{"document_type":"report","key_points":[...],"summary":"..."}}
@@ -1128,19 +1130,19 @@ event: intent
 data: {"mode":"autonomous","reason":"未匹配到Skill","timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
-data: {"type":"tool","name":"http_get","step_id":"step-001","timestamp":"2026-04-17T10:30:05Z","params":{"url":"https://example.com/data"}}
+data: {"type":"tool","name":"http_get","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","params":{"url":"https://example.com/data"}}
 
 event: progress
-data: {"step_id":"step-001","message":"正在请求数据...","timestamp":"2026-04-17T10:30:06Z"}
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在请求数据...","timestamp":"2026-04-17T10:30:06Z"}
 
 event: step_end
-data: {"step_id":"step-001","timestamp":"2026-04-17T10:30:06.5Z","status":"success"}
+data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:06.5Z","status":"success"}
 
 event: step_start
-data: {"type":"llm","name":"generate","step_id":"step-002","timestamp":"2026-04-17T10:30:07Z"}
+data: {"type":"llm","name":"generate","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:07Z"}
 
 event: step_end
-data: {"step_id":"step-002","timestamp":"2026-04-17T10:30:15Z","status":"success"}
+data: {"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:15Z","status":"success"}
 
 event: completed
 data: {"status":"success","timestamp":"2026-04-17T10:30:15Z","duration":"15s","result":"执行结果内容"}
@@ -1154,13 +1156,13 @@ event: intent
 data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.85,"timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"step-001","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
 
 event: progress
-data: {"step_id":"step-001","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:02Z"}
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:02Z"}
 
 event: step_end
-data: {"step_id":"step-001","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"FILE_ERROR","message":"PDF文件已损坏"}}
+data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"FILE_ERROR","message":"PDF文件已损坏"}}
 
 event: completed
 data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"SKILL_ERROR","message":"pdf_analyzer执行失败"}}
@@ -1174,10 +1176,10 @@ event: intent
 data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92,"timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"step-001","timestamp":"2026-04-17T10:30:00Z"}
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z"}
 
 event: progress
-data: {"step_id":"step-001","message":"正在处理...","timestamp":"2026-04-17T10:30:10Z"}
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在处理...","timestamp":"2026-04-17T10:30:10Z"}
 
 （用户发送取消请求）
 
