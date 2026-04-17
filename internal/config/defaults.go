@@ -15,7 +15,7 @@ func DefaultConfig() *Config {
 			ActiveModel: "gpt-4o",
 			Models: map[string]ModelConfig{
 				"gpt-4o": {
-					Endpoint:    "https://api.openai.com/v1",
+					BaseURL:     "https://api.openai.com/v1",
 					APIKey:      "${OPENAI_API_KEY}",
 					Model:       "gpt-4o",
 					MaxTokens:   4096,

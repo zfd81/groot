@@ -28,7 +28,7 @@ func NewChatModel(ctx context.Context, cfg config.LLMConfig) (model.BaseChatMode
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		Model:   modelCfg.Model,
 		APIKey:  modelCfg.APIKey,
-		BaseURL: modelCfg.Endpoint,
+		BaseURL: modelCfg.BaseURL,
 		Timeout: timeout,
 	})
 	if err != nil {

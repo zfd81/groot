@@ -40,7 +40,7 @@ type LLMConfig struct {
 
 // ModelConfig holds individual model settings
 type ModelConfig struct {
-	Endpoint    string  `yaml:"endpoint"`
+	BaseURL     string  `yaml:"base_url"`
 	APIKey      string  `yaml:"api_key"`
 	Model       string  `yaml:"model"`
 	MaxTokens   int     `yaml:"max_tokens"`

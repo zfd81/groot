@@ -42,13 +42,13 @@ llm:
   active_model: gpt-4o           # 当前激活的模型
   models:
     gpt-4o:                      # 模型名称（自定义）
-      endpoint: https://api.openai.com/v1
+      base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o              # 实际模型名称
       max_tokens: 4096
       temperature: 0.7
     claude-3.5:
-      endpoint: https://api.anthropic.com/v1
+      base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-3-5-sonnet-20241022
       max_tokens: 4096
@@ -60,7 +60,7 @@ llm:
 | 字段 | 说明 |
 |------|------|
 | `active_model` | 当前激活的模型名称，对应 models 中的某个 key |
-| `endpoint` | LLM API 地址（OpenAI 兼容协议） |
+| `base_url` | LLM API 地址（OpenAI 兼容协议） |
 | `api_key` | API 密钥，支持环境变量引用 `${VAR_NAME}` |
 | `model` | 实际调用时的模型名称 |
 | `max_tokens` | 单次调用最大 Token 数 |
@@ -1687,7 +1687,7 @@ react:
 ```json
 {
   "status": "config_error",
-  "message": "LLM 配置无效，请检查 endpoint 和 api_key"
+  "message": "LLM 配置无效，请检查 base_url 和 api_key"
 }
 ```
 
@@ -2063,13 +2063,13 @@ llm:
   active_model: gpt-4o
   models:
     gpt-4o:
-      endpoint: https://api.openai.com/v1
+      base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o
       max_tokens: 4096
       temperature: 0.7
     claude-3.5:
-      endpoint: https://api.anthropic.com/v1
+      base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-3-5-sonnet-20241022
       max_tokens: 4096
