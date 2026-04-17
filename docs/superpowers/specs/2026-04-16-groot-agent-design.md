@@ -156,11 +156,12 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 | Header | 说明 |
 |--------|------|
-| `X-Task-ID` | 任务唯一标识 |
-| `X-Task-Status` | 任务状态：success / failed / cancelled |
-| `X-Execution-Time` | 执行耗时 |
+| `X-Task-ID` | 任务唯一标识（请求发起时立即返回） |
+| `Content-Type` | `text/event-stream` |
 
-`task_id` 在 Header 中返回，调用方可立即获取用于查询状态或取消任务。
+**说明：**
+- `X-Task-ID` 在 Header 中立即返回，调用方可用于查询状态或取消任务
+- `X-Task-Status` 和执行耗时在 `task_completed` 事件中返回（任务结束时才能确定）
 
 ### 3.3 POST /task/cancel
 
