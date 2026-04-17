@@ -112,6 +112,7 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 ```json
 {
   "instruction": "自然语言指令",
+  "prompt": "系统提示词，设定Agent角色和行为约束（可选）",
   "attachments": [
     {
       "type": "file",
@@ -127,9 +128,13 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 }
 ```
 
-**说明：**
-- `instruction`：必填，用户的自然语言指令
-- `attachments`：可选，附件列表（Base64编码或URL）
+**参数说明：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `instruction` | 是 | 用户任务指令 |
+| `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
+| `attachments` | 否 | 附件列表（Base64编码或URL）|
 
 Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
@@ -944,6 +949,17 @@ monitoring:
 ```json
 {
   "instruction": "帮我分析这份PDF财务报告",
+  "attachments": [
+    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
+  ]
+}
+```
+
+**带 prompt 的请求：**
+```json
+{
+  "instruction": "帮我分析这份PDF财务报告",
+  "prompt": "你是一个财务分析师，重点关注利润增长率和潜在风险点。输出JSON格式。",
   "attachments": [
     {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
   ]
