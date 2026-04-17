@@ -17,7 +17,6 @@ import (
 type Logger struct {
 	zap    *zap.Logger
 	config config.LoggingConfig
-	mu     sync.Mutex
 }
 
 // New creates a new logger instance
@@ -91,8 +90,8 @@ func getFileWriter(cfg config.LogFileConfig) *rotatingWriter {
 	return &rotatingWriter{
 		directory:       cfg.Directory,
 		filenamePattern: cfg.FilenamePattern,
-		maxAge:          cfg.MaxAge,
-		currentDate:     time.Now().Format("2006-01-02"),
+		maxAge:          cfg.MaxAge, // reserved for future log cleanup
+		currentDate:     "",         // force first write to create file
 	}
 }
 
@@ -110,7 +109,7 @@ func contains(slice []string, item string) bool {
 type rotatingWriter struct {
 	directory       string
 	filenamePattern string
-	maxAge          int
+	maxAge          int // reserved for future log cleanup
 	currentDate     string
 	currentFile     *os.File
 	mu              sync.Mutex
@@ -128,6 +127,10 @@ func (w *rotatingWriter) Write(p []byte) (n int, err error) {
 		}
 		w.currentDate = today
 		filename := strings.Replace(w.filenamePattern, "{date}", today, 1)
+		// ensure directory exists
+		if err := os.MkdirAll(w.directory, 0755); err != nil {
+			return 0, err
+		}
 		path := filepath.Join(w.directory, filename)
 		w.currentFile, err = os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
