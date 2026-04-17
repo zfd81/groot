@@ -1185,14 +1185,27 @@ security:
 
 ### 11.3 API Key 认证流程
 
-**调用方请求：**
+**调用方请求示例：**
 
-```
-POST /task/execute
-X-API-Key: your-api-key-value
+```http
+POST /task/execute HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
 Content-Type: application/json
 
-{请求内容...}
+{
+  "instruction": "帮我分析这份PDF报告",
+  "attachments": [...]
+}
+```
+
+**cURL 示例：**
+
+```bash
+curl -X POST http://localhost:8080/task/execute \
+  -H "X-API-Key: groot-api-key-2026abc" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "帮我分析这份PDF报告"}'
 ```
 
 **认证流程：**
@@ -1213,6 +1226,24 @@ Content-Type: application/json
 │   └─ 认证通过 → 记录调用方 name 到日志 → 继续处理请求
 │
 └─ 处理请求
+```
+
+**认证失败响应示例：**
+
+401 Unauthorized（Key 无效或缺失）：
+```json
+{
+  "status": "unauthorized",
+  "message": "API Key 无效或缺失"
+}
+```
+
+403 Forbidden（Key 有效但权限不足）：
+```json
+{
+  "status": "forbidden",
+  "message": "权限不足，无法访问该 API"
+}
 ```
 
 ### 11.4 多 Key 配置示例
