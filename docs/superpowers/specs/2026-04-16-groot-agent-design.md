@@ -324,24 +324,58 @@ Skill模式：
 
 ### 3.4 GET /task/status
 
-**请求参数：** `task_id`
+**请求方式：** Query参数
+
+```
+GET /task/status?task_id=task-xxx
+```
 
 **响应：**
 
+成功：
 ```json
 {
+  "status": "success",
   "task_id": "task-xxx",
-  "status": "running / completed / failed / cancelled",
+  "task_status": "running",
   "progress": {
     "current_step": 3,
     "steps_completed": 2,
-    "steps_total": 4,
     "percentage": 50
   },
-  "started_at": "2026-04-16T10:30:00Z",
+  "started_at": "2026-04-17T10:30:00Z",
   "elapsed_time": "8s"
 }
 ```
+
+失败（任务不存在）：
+```json
+{
+  "status": "task_not_found",
+  "task_id": "task-xxx",
+  "message": "任务不存在"
+}
+```
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 查询结果：`success` 或 `task_not_found` |
+| `task_id` | 任务ID |
+| `task_status` | 任务状态：`running` / `completed` / `failed` / `cancelled` |
+| `progress` | 进度信息（运行中时） |
+| `started_at` | 开始时间 |
+| `elapsed_time` | 已耗时 |
+
+**task_status 状态说明：**
+
+| 状态 | 说明 |
+|------|------|
+| `running` | 正在执行 |
+| `completed` | 已完成 |
+| `failed` | 已失败 |
+| `cancelled` | 已取消 |
 
 ### 3.5 GET /health
 
