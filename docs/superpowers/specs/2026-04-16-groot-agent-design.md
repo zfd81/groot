@@ -100,7 +100,7 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 |-----|------|------|
 | `/task/execute` | POST | 执行任务，SSE 流式返回 |
 | `/task/cancel` | POST | 取消正在执行的任务 |
-| `/task/status` | GET | 查询任务状态 |
+| `/task/status/{task_id}` | GET | 查询任务状态 |
 | `/health` | GET | 健康检查 |
 | `/skills` | GET | 列出可用 Skills |
 | `/tools` | GET | 列出可用 MCP 工具 |
@@ -322,12 +322,12 @@ Skill模式：
 | `task_failed` | 任务已失败 |
 | `task_not_found` | 任务不存在 |
 
-### 3.4 GET /task/status
+### 3.4 GET /task/status/{task_id}
 
-**请求方式：** Query参数
+**请求方式：** 路径参数
 
 ```
-GET /task/status?task_id=task-xxx
+GET /task/status/task-xxx
 ```
 
 **响应：**
