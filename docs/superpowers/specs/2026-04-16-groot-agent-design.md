@@ -254,7 +254,7 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 失败：
 ```json
-{"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"FILE_ERROR","message":"文件不存在"}}
+{"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"file_error","message":"文件不存在"}}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -285,7 +285,7 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 失败：
 ```json
-{"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"SKILL_ERROR","message":"执行失败"}}
+{"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"skill_error","message":"执行失败"}}
 ```
 
 取消：
@@ -948,15 +948,15 @@ react:
 
 | 错误码 | 说明 | 可恢复 |
 |--------|------|--------|
-| `INVALID_REQUEST` | 请求参数错误 | 否 |
-| `RATE_LIMITED` | 请求被限流 | 否 |
-| `LLM_CONNECTION_ERROR` | LLM 连接失败 | 可重试 |
-| `LLM_RATE_LIMITED` | LLM API 限流 | 可重试 |
-| `LLM_TIMEOUT` | LLM 调用超时 | 可重试 |
-| `TOOL_CALL_ERROR` | 工具调用失败 | 可重试 |
-| `SKILL_NOT_FOUND` | Skill 不存在 | 否 |
-| `TASK_TIMEOUT` | 任务执行超时 | 否 |
-| `TASK_CANCELLED` | 用户取消 | 否 |
+| `invalid_request` | 请求参数错误 | 否 |
+| `rate_limited` | 请求被限流 | 否 |
+| `llm_connection_error` | LLM 连接失败 | 可重试 |
+| `llm_rate_limited` | LLM API 限流 | 可重试 |
+| `llm_timeout` | LLM 调用超时 | 可重试 |
+| `tool_call_error` | 工具调用失败 | 可重试 |
+| `skill_not_found` | Skill 不存在 | 否 |
+| `task_timeout` | 任务执行超时 | 否 |
+| `task_cancelled` | 用户取消 | 否 |
 
 ### 9.2 重试策略
 
@@ -1444,10 +1444,10 @@ event: progress
 data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:02Z"}
 
 event: step_end
-data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"FILE_ERROR","message":"PDF文件已损坏"}}
+data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"file_error","message":"PDF文件已损坏"}}
 
 event: completed
-data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"SKILL_ERROR","message":"pdf_analyzer执行失败"}}
+data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"skill_error","message":"pdf_analyzer执行失败"}}
 ```
 
 **取消执行：**
