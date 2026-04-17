@@ -143,14 +143,9 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 | 事件类型 | 说明 |
 |---------|------|
 | `intent_matched` | 意图匹配结果 |
-| `skill_call` | Skill 调用开始 |
-| `progress` | 执行进度更新 |
-| `tool_call` | MCP 工具调用 |
-| `tool_result` | 工具调用结果 |
-| `skill_result` | Skill 执行结果 |
-| `result` | 最终结果 |
-| `error` | 执行出错 |
-| `task_completed` | 任务完成 |
+| `step_execution` | 执行步骤（Skill或工具调用，含开始时间、耗时） |
+| `progress` | 进度更新（中间状态） |
+| `task_completed` | 任务完成（含最终状态、耗时、结果） |
 
 **响应 Header 元信息：**
 
@@ -161,7 +156,60 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 **说明：**
 - `X-Task-ID` 在 Header 中立即返回，调用方可用于查询状态或取消任务
-- `X-Task-Status` 和执行耗时在 `task_completed` 事件中返回（任务结束时才能确定）
+- 每个执行步骤包含 `start_time` 和 `duration_ms`，便于追踪执行时间线
+
+**SSE 事件返回值结构：**
+
+**intent_matched（意图匹配）：**
+
+Skill模式：
+```json
+{"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92,"reason":"附件为PDF类型"}
+```
+
+自主模式：
+```json
+{"mode":"autonomous","reason":"未匹配到Skill"}
+```
+
+**step_execution（执行步骤）：**
+
+Skill执行：
+```json
+{"type":"skill","name":"pdf_analyzer","nesting_level":0,"start_time":"2026-04-17T10:30:00Z","duration_ms":45200,"status":"success"}
+```
+
+工具执行：
+```json
+{"type":"tool","name":"file_read","start_time":"2026-04-17T10:30:05Z","duration_ms":200,"status":"success","params":{"path":"..."}}
+```
+
+LLM推理：
+```json
+{"type":"llm","name":"generate","start_time":"2026-04-17T10:30:10Z","duration_ms":8000,"status":"success"}
+```
+
+**progress（进度更新）：**
+```json
+{"message":"正在处理...","timestamp":"2026-04-17T10:30:10Z"}
+```
+
+**task_completed（任务完成）：**
+
+成功：
+```json
+{"status":"success","start_time":"2026-04-17T10:30:00Z","duration":"45s","result":{...}}
+```
+
+失败：
+```json
+{"status":"failed","start_time":"2026-04-17T10:30:00Z","duration":"5s","error":{"code":"ERROR","message":"..."}}
+```
+
+取消：
+```json
+{"status":"cancelled","start_time":"2026-04-17T10:30:00Z","duration":"3s","message":"用户主动取消"}
+```
 
 ### 3.3 POST /task/cancel
 
@@ -993,22 +1041,25 @@ monitoring:
 HTTP Header: X-Task-ID: task-xxx
 
 event: intent_matched
-data: {"mode": "skill", "skill_name": "pdf_analyzer", "confidence": 0.92}
-
-event: skill_call
-data: {"skill": "pdf_analyzer", "message": "开始执行 pdf_analyzer"}
+data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92}
 
 event: progress
-data: {"step": 1, "message": "正在读取PDF..."}
+data: {"message":"开始执行任务...","timestamp":"2026-04-17T10:30:00.000Z"}
 
-event: tool_call
-data: {"tool": "file_read", "params": {"path": "temp/Q3_Report.pdf"}}
+event: step_execution
+data: {"type":"skill","name":"pdf_analyzer","nesting_level":0,"start_time":"2026-04-17T10:30:00.000Z","duration_ms":45200,"status":"success"}
 
-event: result
-data: {"data": {"document_type": "report", "key_points": [...]}}
+event: step_execution
+data: {"type":"tool","name":"file_read","start_time":"2026-04-17T10:30:05.000Z","duration_ms":200,"status":"success","params":{"path":"temp/Q3_Report.pdf"}}
+
+event: step_execution
+data: {"type":"tool","name":"text_extractor","start_time":"2026-04-17T10:30:10.000Z","duration_ms":5500,"status":"success"}
+
+event: progress
+data: {"message":"正在生成摘要...","timestamp":"2026-04-17T10:30:20.000Z"}
 
 event: task_completed
-data: {"status": "success", "duration": "15s"}
+data: {"status":"success","start_time":"2026-04-17T10:30:00.000Z","duration":"45s","result":{"document_type":"report","key_points":[...],"summary":"..."}}
 ```
 
 **自主执行模式：**
@@ -1016,19 +1067,33 @@ data: {"status": "success", "duration": "15s"}
 HTTP Header: X-Task-ID: task-xxx
 
 event: intent_matched
-data: {"mode": "autonomous", "reason": "未匹配到Skill，Agent自主执行"}
+data: {"mode":"autonomous","reason":"未匹配到Skill，Agent自主执行"}
 
 event: progress
-data: {"step": 1, "message": "正在分析任务需求..."}
+data: {"message":"正在分析任务需求...","timestamp":"2026-04-17T10:30:00.000Z"}
 
-event: tool_call
-data: {"tool": "http_get", "params": {"url": "..."}}
+event: step_execution
+data: {"type":"tool","name":"http_get","start_time":"2026-04-17T10:30:05.000Z","duration_ms":1500,"status":"success","params":{"url":"https://example.com/data"}}
 
-event: result
-data: {"data": "执行结果"}
+event: step_execution
+data: {"type":"llm","name":"generate_response","start_time":"2026-04-17T10:30:07.000Z","duration_ms":8000,"status":"success"}
 
 event: task_completed
-data: {"status": "success", "duration": "10s"}
+data: {"status":"success","start_time":"2026-04-17T10:30:00.000Z","duration":"10s","result":"执行结果内容"}
+```
+
+**失败模式：**
+```
+HTTP Header: X-Task-ID: task-xxx
+
+event: intent_matched
+data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.85}
+
+event: step_execution
+data: {"type":"skill","name":"pdf_analyzer","start_time":"2026-04-17T10:30:00.000Z","duration_ms":5000,"status":"failed","error":{"code":"FILE_ERROR","message":"PDF文件已损坏"}}
+
+event: task_completed
+data: {"status":"failed","start_time":"2026-04-17T10:30:00.000Z","duration":"5s","error":{"code":"SKILL_ERROR","message":"pdf_analyzer执行失败"}}
 ```
 
 ### 18.3 其他 API 响应示例
