@@ -123,25 +123,56 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 
 ### 3.2 环境准备
 
-**必需的环境变量：**
+**配置 LLM API 密钥：**
+
+Groot 需要配置 LLM API 密钥才能正常工作。有两种配置方式：
+
+**方式一：配置文件中直接写入（简单但不够安全）**
+
+```yaml
+llm:
+  models:
+    gpt-4o:
+      api_key: sk-xxxxxxxxxxxx    # 直接写密钥
+```
+
+**方式二：配置文件引用环境变量（推荐，更安全）**
+
+```yaml
+llm:
+  models:
+    gpt-4o:
+      api_key: ${OPENAI_API_KEY}   # 引用环境变量
+```
+
+然后设置环境变量：
 
 ```bash
-# LLM API 密钥（必须配置）
+# LLM API 密钥（配置文件引用时需要）
 export OPENAI_API_KEY="sk-xxxxxxxxxxxx"
 
-# Groot 认证密钥（启用认证时需要）
+# 其他 LLM 服务密钥（如使用多模型配置）
+export ANTHROPIC_API_KEY="sk-ant-xxxx"
+export DASHSCOPE_API_KEY="sk-xxxx"
+```
+
+> **说明：** 
+> - 环境变量不是必须配置的，取决于配置文件中的写法
+> - 使用 `${VAR_NAME}` 格式引用环境变量，避免密钥硬编码
+> - 配置文件中可以配置多个模型的 API Key，见第四章配置详解
+
+**认证密钥（启用认证时需要）：**
+
+```bash
+# Groot API Key（启用认证时需要，配置文件引用）
 export GROOT_API_KEY="your-secret-key"
 ```
 
-**可选的环境变量：**
+**其他可选环境变量：**
 
 ```bash
 # 工作目录（可选，默认 ~/.groot）
 export GROOT_HOME="/opt/groot"
-
-# 其他 LLM 服务密钥
-export ANTHROPIC_API_KEY="sk-ant-xxxx"
-export DASHSCOPE_API_KEY="sk-xxxx"
 ```
 
 ### 3.3 安装方式
@@ -1693,12 +1724,16 @@ X-API-Key: your-secret-key
 
 ### B. 环境变量列表
 
-| 变量 | 说明 | 必需 |
-|------|------|------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 | 是（使用 OpenAI 时） |
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 否 |
-| `GROOT_API_KEY` | Groot 认证密钥 | 启用认证时 |
-| `GROOT_HOME` | 工作目录 | 否 |
+| 变量 | 说明 | 必需性 |
+|------|------|--------|
+| `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件使用 `${OPENAI_API_KEY}` 时必需，直接写密钥则不需要 |
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 配置文件引用时需要 |
+| `GROOT_API_KEY` | Groot 认证密钥 | 启用认证且配置文件引用时需要 |
+| `GROOT_HOME` | 工作目录 | 否（默认 ~/.groot） |
+
+> **说明：** 环境变量是否必需取决于配置文件中的写法：
+> - `api_key: ${OPENAI_API_KEY}` → 需要设置环境变量
+> - `api_key: sk-xxxxx` → 不需要设置环境变量（密钥直接写在配置文件中）
 
 ### C. 联系与支持
 
