@@ -29,6 +29,45 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | 配置格式 | YAML |
 | 日志格式 | JSON 结构化（支持日志采集监控） |
 
+### 1.3 LLM 配置
+
+支持多模型配置，通过 `active_model` 指定当前使用的模型。
+
+**配置示例：**
+
+```yaml
+llm:
+  active_model: gpt-4o           # 当前激活的模型
+  models:
+    gpt-4o:                      # 模型名称（自定义）
+      endpoint: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4o              # 实际模型名称
+      max_tokens: 4096
+      temperature: 0.7
+    claude-3.5:
+      endpoint: https://api.anthropic.com/v1
+      api_key: ${ANTHROPIC_API_KEY}
+      model: claude-3-5-sonnet-20241022
+      max_tokens: 4096
+      temperature: 0.7
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `active_model` | 当前激活的模型名称，对应 models 中的某个 key |
+| `endpoint` | LLM API 地址（OpenAI 兼容协议） |
+| `api_key` | API 密钥，支持环境变量引用 `${VAR_NAME}` |
+| `model` | 实际调用时的模型名称 |
+| `max_tokens` | 单次调用最大 Token 数 |
+| `temperature` | 输出随机性（0-1，越高越随机） |
+
+**模型切换：**
+
+修改 `active_model` 值即可切换模型，无需重启服务（支持热切换）。
+
 ---
 
 ## 二、整体架构
@@ -116,8 +155,8 @@ Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
 ### 2.4 工具注册机制
 
 **Skills 注册给 Agent：**
-- 启动时扫描 skills 目录，解析每个 skill.md
-- 将 Skill 的 Instructions 作为工具描述注册给 eino Agent
+- 启动时扫描 skills 目录，解析每个 SKILL.md
+- 将 Skill 的 Instructions 作为工具描述注册给 Agent
 - Skill 中的 Dependencies 在执行时递归加载
 
 **MCP 工具注册给 Agent：**
@@ -1057,6 +1096,8 @@ react:
 
 ### 8.3 错误响应
 
+**HTTP 状态码：**
+
 | 场景 | HTTP 状态码 |
 |------|------------|
 | 请求限流触发 | 429 |
@@ -1064,6 +1105,43 @@ react:
 | 未认证 | 401 |
 | 权限不足 | 403 |
 | 配置错误 | 500 |
+
+**JSON 响应格式：**
+
+所有错误响应均返回统一 JSON 格式：
+
+```json
+{
+  "status": "error_code",
+  "message": "错误描述信息"
+}
+```
+
+**示例：**
+
+400 参数错误：
+```json
+{
+  "status": "invalid_request",
+  "message": "instruction 字段不能为空"
+}
+```
+
+429 限流：
+```json
+{
+  "status": "rate_limited",
+  "message": "请求频率超限，请稍后重试"
+}
+```
+
+500 配置错误：
+```json
+{
+  "status": "config_error",
+  "message": "LLM 配置无效，请检查 endpoint 和 api_key"
+}
+```
 
 ---
 
@@ -1656,6 +1734,7 @@ description: "综合分析多种来源的资料，生成完整的分析报告"
 |------|------|
 | `{home}/config.yaml` | 配置文件 |
 | `{home}/skills/` | Skills 目录 |
+| `{home}/mcp/` | MCP 配置目录 |
 | `{home}/logs/` | 日志目录 |
 | `{home}/temp/` | 临时文件 |
 | `{home}/output/` | 任务输出 |
