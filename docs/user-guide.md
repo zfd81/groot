@@ -163,10 +163,46 @@ export DASHSCOPE_API_KEY="sk-xxxx"
 
 **认证密钥（启用认证时需要）：**
 
-```bash
-# Groot API Key（启用认证时需要，配置文件引用）
-export GROOT_API_KEY="your-secret-key"
+Groot 支持配置多个 API Key，每个 Key 可以设置不同的权限范围。
+
+**配置示例：**
+
+```yaml
+security:
+  auth:
+    enabled: true
+    api_key:
+      keys:
+        # Key 1：管理员，全部权限
+        - name: admin
+          key: ${GROOT_ADMIN_KEY}
+          permissions: [all]
+        
+        # Key 2：业务系统，执行权限
+        - name: business_system
+          key: biz-key-2026-secret
+          permissions: [execute, status, cancel]
+        
+        # Key 3：监控服务，只读权限
+        - name: monitor
+          key: ${GROOT_MONITOR_KEY}
+          permissions: [status, health, skills, tools, history]
 ```
+
+**对应的环境变量（配置文件引用时需要）：**
+
+```bash
+# 管理员 API Key
+export GROOT_ADMIN_KEY="admin-secret-key"
+
+# 监控服务 API Key
+export GROOT_MONITOR_KEY="monitor-secret-key"
+```
+
+> **说明：**
+> - 可以配置多个 API Key，每个 Key 有独立的名称和权限
+> - 权限包括：`execute`、`cancel`、`status`、`history`、`detail`、`skills`、`tools`、`health`、`all`
+> - 完整权限配置说明见第四章配置详解
 
 **其他可选环境变量：**
 
@@ -1726,14 +1762,17 @@ X-API-Key: your-secret-key
 
 | 变量 | 说明 | 必需性 |
 |------|------|--------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件使用 `${OPENAI_API_KEY}` 时必需，直接写密钥则不需要 |
+| `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件使用 `${OPENAI_API_KEY}` 时必需 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 配置文件引用时需要 |
-| `GROOT_API_KEY` | Groot 认证密钥 | 启用认证且配置文件引用时需要 |
+| `GROOT_ADMIN_KEY` | 管理员 API Key | 配置文件引用时需要（可自定义变量名） |
+| `GROOT_MONITOR_KEY` | 监控服务 API Key | 配置文件引用时需要（可自定义变量名） |
 | `GROOT_HOME` | 工作目录 | 否（默认 ~/.groot） |
 
-> **说明：** 环境变量是否必需取决于配置文件中的写法：
-> - `api_key: ${OPENAI_API_KEY}` → 需要设置环境变量
-> - `api_key: sk-xxxxx` → 不需要设置环境变量（密钥直接写在配置文件中）
+> **说明：**
+> - 环境变量是否必需取决于配置文件中的写法
+> - LLM API Key 和认证 API Key 都可以配置多个
+> - 环境变量名可以自定义，配置文件中用 `${变量名}` 引用即可
+> - 例如：`key: ${MY_CUSTOM_KEY}` → 对应环境变量 `MY_CUSTOM_KEY`
 
 ### C. 联系与支持
 
