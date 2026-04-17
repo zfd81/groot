@@ -39,10 +39,6 @@ func (h *HTTPRequest) isDomainDenied(rawURL string) bool {
 		if host == denied || strings.HasPrefix(host, denied+".") {
 			return true
 		}
-		// Check for IP patterns
-		if strings.HasPrefix(denied, host[:strings.Index(host, ".")+1]) {
-			return true
-		}
 	}
 	return false
 }
