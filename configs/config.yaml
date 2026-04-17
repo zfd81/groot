@@ -1,0 +1,105 @@
+# Groot Agent 配置文件
+# 生成时间: 2026-04-17
+
+# Agent 基础配置
+agent:
+  name: groot
+  version: 1.0.0
+
+# HTTP 服务配置
+server:
+  host: 0.0.0.0
+  port: 8080
+
+# LLM 配置（OpenAI兼容协议）
+llm:
+  active_model: gpt-4o
+  models:
+    gpt-4o:
+      endpoint: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4o
+      max_tokens: 4096
+      temperature: 0.7
+
+# Skills 热插拔配置
+skills:
+  hot_reload:
+    enabled: true
+    debounce_delay: 2
+
+# MCP 热插拔配置
+mcp:
+  hot_reload:
+    enabled: true
+    debounce_delay: 2
+
+# 存储配置
+storage:
+  engine: boltdb
+  boltdb:
+    file: groot.db
+    bucket: tasks
+  retention_days: 7
+  cleanup_interval: 24h
+
+# 性能控制配置
+performance:
+  rate_limit:
+    max_concurrent_tasks: 10
+    max_requests_per_minute: 60
+    max_requests_per_hour: 1000
+  timeout:
+    task_max_duration: 300
+    llm_call_timeout: 60
+    tool_call_timeout: 30
+  llm:
+    max_concurrent_calls: 5
+    retry_on_failure: 3
+    retry_delay: 2
+  mcp:
+    max_concurrent_calls_per_server: 3
+
+# ReAct 执行配置
+react:
+  max_iterations: 20
+  max_tokens: 100000
+  step_timeout: 60
+  error_retry: 2
+  nesting_max_depth: 3
+
+# 附件处理配置
+attachment:
+  max_size: 50
+  max_total_size: 100
+  max_count: 10
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, zip]
+  temp_directory: temp
+
+# 安全配置
+security:
+  auth:
+    enabled: true
+    type: api_key
+    api_key:
+      header_name: X-API-Key
+      keys:
+        - name: default
+          key: ${GROOT_API_KEY}
+          permissions: [all]
+
+# 日志配置
+logging:
+  level: info
+  format: json
+  output: [stdout, file]
+  file:
+    directory: logs
+    filename_pattern: groot-{date}.log
+    max_age: 7
+  categories:
+    request: {enabled: true, level: info}
+    skill: {enabled: true, level: info, log_input: true, log_output: true}
+    llm: {enabled: true, level: debug}
+    mcp: {enabled: true, level: debug}
+    error: {enabled: true, level: error}
