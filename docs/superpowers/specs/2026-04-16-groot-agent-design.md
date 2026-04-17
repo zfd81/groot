@@ -192,7 +192,7 @@ Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
 | API | 方法 | 用途 |
 |-----|------|------|
 | `/task/execute` | POST | 执行任务，SSE 流式返回 |
-| `/task/cancel` | POST | 取消正在执行的任务 |
+| `/task/{task_id}` | DELETE | 取消正在执行的任务 |
 | `/task/status/{task_id}` | GET | 查询任务状态 |
 | `/health` | GET | 健康检查 |
 | `/skills` | GET | 列出可用 Skills |
@@ -357,14 +357,12 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 - `1`：子Skill/子步骤（主步骤内部调用）
 - `2+`：更深层嵌套
 
-### 3.3 POST /task/cancel
+### 3.3 DELETE /task/{task_id}
 
-**请求 Body：**
+**请求方式：** 路径参数
 
-```json
-{
-  "task_id": "task-xxx"
-}
+```
+DELETE /task/task-xxx
 ```
 
 **响应：**
@@ -788,7 +786,7 @@ report_generator (主Skill)
 ### 5.3 取消任务机制
 
 ```
-POST /task/cancel →
+DELETE /task/{task_id} →
 │
 ├─ 根据 task_id 查找执行状态
 │
@@ -1107,7 +1105,7 @@ react:
 | 达到最大循环次数 | iteration > max_iterations | `completed` (failed) |
 | Token消耗超限 | tokens_used > max_tokens | `completed` (failed) |
 | 单步执行超时 | step_duration > step_timeout | `completed` (failed) |
-| 用户取消 | 调用 /task/cancel | `completed` (cancelled) |
+| 用户取消 | 调用 DELETE /task/{task_id} | `completed` (cancelled) |
 
 ### 8.3 错误响应
 
@@ -1369,7 +1367,7 @@ security:
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
 | `execute` | POST /task/execute | 执行任务 |
-| `cancel` | POST /task/cancel | 取消任务 |
+| `cancel` | DELETE /task/{task_id} | 取消任务 |
 | `status` | GET /task/status/{task_id} | 查询状态 |
 | `skills` | GET /skills | 查看 Skills 列表 |
 | `tools` | GET /tools | 查看 MCP 工具列表 |
