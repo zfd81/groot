@@ -115,19 +115,14 @@ func (e *Engine) Run(
 
 		// Process event and send progress
 		stepID := stepIDGen.Next()
-		e.processEvent(event, stepID, progress, &steps)
+		content := e.processEvent(event, stepID, progress, &steps)
+		if content != "" {
+			finalResult = content
+		}
 	}
 
 	if finalResult == "" {
-		// Extract result from last message
-		if len(steps) > 0 {
-			lastStep := steps[len(steps)-1]
-			if lastStep.Type == "llm" && lastStep.Status == storage.StatusCompleted {
-				finalResult = "任务执行完成"
-			}
-		} else {
-			finalResult = "任务执行完成，但未获得明确结果"
-		}
+		finalResult = "任务执行完成，但未获得明确结果"
 	}
 
 	return &RunResult{Content: finalResult, Steps: steps}, nil
@@ -191,11 +186,12 @@ func (e *Engine) buildUserMessage(instruction string, attachments []storage.Atta
 }
 
 // processEvent handles agent events and sends progress
-func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress func(string, string, string), steps *[]storage.StepRecord) {
+// Returns the message content if it's an assistant response
+func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress func(string, string, string), steps *[]storage.StepRecord) string {
 	// Check for errors
 	if event.Err != nil {
 		progress(stepID, "error", event.Err.Error())
-		return
+		return ""
 	}
 
 	// Process output
@@ -214,6 +210,7 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 				Status:       storage.StatusCompleted,
 				NestingLevel: 0,
 			})
+			return msg.Content
 		}
 	}
 
@@ -224,6 +221,8 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 			progress(stepID, "exit", "任务完成")
 		}
 	}
+
+	return ""
 }
 
 // truncate truncates a string to max length
