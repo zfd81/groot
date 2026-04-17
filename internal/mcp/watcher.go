@@ -84,19 +84,27 @@ func (w *Watcher) handleEvent(event fsnotify.Event, debounceDelay time.Duration)
 		return
 	}
 
-	// Debounce
+	// Record the time when this event arrived
 	w.mu.Lock()
-	w.debounce[event.Name] = time.Now()
+	eventTime := time.Now()
+	w.debounce[event.Name] = eventTime
 	w.mu.Unlock()
 
+	// Wait for debounce period
 	time.Sleep(debounceDelay)
 
+	// Check if a newer event arrived during the debounce period
 	w.mu.Lock()
-	lastTime := w.debounce[event.Name]
-	delete(w.debounce, event.Name)
+	currentTime := w.debounce[event.Name]
+	// Only process if this event's timestamp is still the latest
+	shouldProcess := currentTime.Equal(eventTime)
+	if shouldProcess {
+		delete(w.debounce, event.Name)
+	}
 	w.mu.Unlock()
 
-	if time.Since(lastTime) < debounceDelay {
+	if !shouldProcess {
+		// A newer event arrived, skip this one
 		return
 	}
 
