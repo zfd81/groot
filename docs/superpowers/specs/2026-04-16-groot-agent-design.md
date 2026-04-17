@@ -444,6 +444,132 @@ GET /task/status/task-xxx
 }
 ```
 
+### 3.6 API 详细示例
+
+#### POST /task/execute 请求示例
+
+**基本请求：**
+```json
+{
+  "instruction": "帮我分析这份PDF财务报告",
+  "attachments": [
+    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
+  ]
+}
+```
+
+**带 prompt 的请求：**
+```json
+{
+  "instruction": "帮我分析这份PDF财务报告",
+  "prompt": "你是一个财务分析师，重点关注利润增长率和潜在风险点。输出JSON格式。",
+  "attachments": [
+    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
+  ]
+}
+```
+
+**多附件请求：**
+```json
+{
+  "instruction": "对比分析这份PDF报告和销售数据",
+  "attachments": [
+    {"type": "file", "name": "report.pdf", "content": "base64..."},
+    {"type": "file", "name": "sales.csv", "content": "base64..."}
+  ]
+}
+```
+
+**无附件请求（纯 LLM 执行）：**
+```json
+{
+  "instruction": "帮我写一个 Python 快速排序函数"
+}
+```
+
+#### SSE 响应事件流示例
+
+**成功执行：**
+```
+HTTP Header: X-Task-ID: task-xxx
+
+event: intent
+data: {"timestamp":"2026-04-17T10:30:00Z"}
+
+event: step_start
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+
+event: progress
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:05Z"}
+
+event: step_start
+data: {"type":"tool","name":"file_read","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
+
+event: step_end
+data: {"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05.2Z","status":"success"}
+
+event: progress
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在生成摘要...","timestamp":"2026-04-17T10:30:20Z"}
+
+event: step_end
+data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:45Z","status":"success"}
+
+event: completed
+data: {"status":"success","timestamp":"2026-04-17T10:30:45Z","duration":"45s","result":{"document_type":"report","key_points":[...],"summary":"..."}}
+```
+
+**失败执行：**
+```
+HTTP Header: X-Task-ID: task-xxx
+
+event: intent
+data: {"timestamp":"2026-04-17T10:30:00Z"}
+
+event: step_start
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+
+event: progress
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:02Z"}
+
+event: step_end
+data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"file_error","message":"PDF文件已损坏"}}
+
+event: completed
+data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"skill_error","message":"pdf_analyzer执行失败"}}
+```
+
+**取消执行：**
+```
+HTTP Header: X-Task-ID: task-xxx
+
+event: intent
+data: {"timestamp":"2026-04-17T10:30:00Z"}
+
+event: step_start
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z"}
+
+event: progress
+data: {"step_id":"20260417-103000000-a1b2c3","message":"正在处理...","timestamp":"2026-04-17T10:30:10Z"}
+
+（用户发送取消请求）
+
+event: completed
+data: {"status":"cancelled","timestamp":"2026-04-17T10:30:12Z","duration":"12s","message":"用户主动取消"}
+```
+
+#### 其他 API 响应示例
+
+**GET /skills：**
+```json
+{
+  "skills": [
+    {"name": "pdf_analyzer", "description": "分析PDF文档"},
+    {"name": "code_generator", "description": "生成代码"}
+  ],
+  "total": 5
+}
+```
+
 ---
 
 ## 四、Skills 注册机制
@@ -453,51 +579,51 @@ GET /task/status/task-xxx
 ```
 {GROOT_HOME}/skills/
 ├── pdf_analyzer/
-│   └── skill.md
+│   └── SKILL.md
 ├── code_generator/
-│   └── skill.md
+│   └── SKILL.md
 ├── data_analyzer/
-│   └── skill.md
+│   └── SKILL.md
 └── report_generator/
-    └── skill.md
+    └── SKILL.md
 ```
 
 ### 4.2 Skill 定义格式
 
-遵循 Claude Code 标准，兼容 skills.sh 和 skillstore.io。
+遵循 Claude Code 官方标准（YAML frontmatter + Markdown），兼容 skills.sh 和 skillstore.io。
 
-**skill.md 结构：**
+**SKILL.md 结构：**
 
 ```markdown
-# Skill: skill_name
+---
+name: skill_name
+description: "技能描述，用于 Agent 工具列表展示"
+---
 
-## Description
-技能描述
+# Skill 标题
 
-## Triggers
-- 触发条件1
-- 触发条件2
-
-## Instructions
-执行指令的自然语言描述
-
-## Dependencies
-- dependent_skill_1
-- dependent_skill_2
-
-## Output Format
-输出格式定义（可选）
-
-## Examples
-使用示例（可选）
+技能的详细指令和说明内容...
 ```
+
+**Frontmatter 字段说明：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | Skill 名称（全局唯一） |
+| `description` | string | 是 | Skill 描述，用于 Agent 工具列表 |
+
+Markdown 正文部分可自由组织，通常包含：
+- 执行步骤说明
+- 使用工具说明
+- 输出格式定义
+- 示例（可选）
 
 ### 4.3 注册流程
 
 ```
-程序启动 → 扫描 skills 目录 → 解析每个 skill.md →
-提取 name/description/triggers/instructions/dependencies →
-注册到内存索引
+程序启动 → 扫描 skills 目录 → 解析每个 SKILL.md →
+提取 frontmatter 中的 name/description →
+解析 Markdown 正文内容 → 注册到内存索引
 ```
 
 ### 4.4 Skills 热插拔机制
@@ -506,19 +632,19 @@ GET /task/status/task-xxx
 
 **监听机制：**
 - 使用 `fsnotify` 监听 skills 目录变化
-- 只监听 `skill.md` 文件的创建、修改、删除事件
+- 只监听 `SKILL.md` 文件的创建、修改、删除事件
 - 防抖机制：检测到变化后延迟 2秒再执行加载，避免编辑过程中频繁触发
 
 **处理流程：**
 
 ```
-文件变化检测 →防抖等待（2秒） →
+文件变化检测 → 防抖等待（2秒） →
 │
-├─ 新增 skill.md → 解析并注册 → 输出日志
+├─ 新增 SKILL.md → 解析并注册 → 输出日志
 │
-├─ 修改 skill.md → 重新解析并更新 → 输出日志
+├─ 修改 SKILL.md → 重新解析并更新 → 输出日志
 │
-└─ 删除 skill.md → 移除对应 Skill → 输出日志
+└─ 删除 SKILL.md → 移除对应 Skill → 输出日志
 ```
 
 **配置项：**
@@ -1078,7 +1204,7 @@ attachment:
 {GROOT_HOME}/
 ├── config.yaml
 ├── skills/
-│   └── {skill-name}/skill.md
+│   └── {skill-name}/SKILL.md
 ├── mcp/
 │   └── {mcp-name}.json
 ├── logs/
@@ -1245,26 +1371,29 @@ monitoring:
 
 ## 十六、Skill 示例
 
-### 17.1 pdf_analyzer
+### 16.1 pdf_analyzer
+
+**文件路径：** `{GROOT_HOME}/skills/pdf_analyzer/SKILL.md`
 
 ```markdown
-# Skill: pdf_analyzer
+---
+name: pdf_analyzer
+description: "分析PDF文档内容，提取关键信息并生成结构化摘要报告"
+---
 
-## Description
-分析PDF文档内容，提取关键信息并生成结构化摘要报告。
+# PDF 文档分析
 
-## Triggers
-- 用户上传 PDF 文件并请求分析
-- 用户提到"分析PDF"、"PDF摘要"、"文档分析"等关键词
+你是一个专业的PDF文档分析助手。
 
-## Instructions
-你是一个专业的PDF文档分析助手。执行以下步骤：
+## 执行步骤
+
 1. 使用 file_operations.file_read 工具读取PDF文件
 2. 提取文档的关键内容和结构
 3. 根据文档类型生成相应的结构化摘要
 4. 输出结构化的分析结果
 
-## Output Format
+## 输出格式
+
 {
   "document_type": "文档类型",
   "title": "文档标题",
@@ -1274,25 +1403,29 @@ monitoring:
 }
 ```
 
-### 17.2 code_generator
+### 16.2 code_generator
+
+**文件路径：** `{GROOT_HOME}/skills/code_generator/SKILL.md`
 
 ```markdown
-# Skill: code_generator
+---
+name: code_generator
+description: "根据用户需求描述生成代码，支持多种编程语言"
+---
 
-## Description
-根据用户需求描述生成代码，支持多种编程语言。
+# 代码生成
 
-## Triggers
-- 用户请求"生成代码"、"写一个函数"、"实现某个功能"
+你是一个专业的代码生成助手。
 
-## Instructions
-你是一个专业的代码生成助手。执行以下步骤：
+## 执行步骤
+
 1. 分析用户需求，明确功能目标、输入输出规格、编程语言
 2. 设计代码结构和逻辑
 3. 生成完整的代码实现，包含注释和错误处理
 4. 生成使用示例或测试代码
 
-## Output Format
+## 输出格式
+
 {
   "language": "编程语言",
   "code": "完整代码",
@@ -1301,26 +1434,29 @@ monitoring:
 }
 ```
 
-### 17.3 data_analyzer
+### 16.3 data_analyzer
+
+**文件路径：** `{GROOT_HOME}/skills/data_analyzer/SKILL.md`
 
 ```markdown
-# Skill: data_analyzer
+---
+name: data_analyzer
+description: "分析结构化数据文件（CSV、JSON等），执行统计分析和趋势识别"
+---
 
-## Description
-分析结构化数据文件（CSV、JSON等），执行统计分析和趋势识别。
+# 数据分析
 
-## Triggers
-- 用户上传数据文件并请求分析
-- 用户提到"分析数据"、"数据统计"、"数据趋势"
+你是一个数据分析助手。
 
-## Instructions
-你是一个数据分析助手。执行以下步骤：
+## 执行步骤
+
 1. 使用 file_operations.file_read 工具读取数据文件
 2. 解析数据结构，识别字段含义和数据类型
 3. 执行统计分析、趋势分析、关联分析
 4. 生成分析结果和可视化建议
 
-## Output Format
+## 输出格式
+
 {
   "data_overview": {"rows": 数量, "columns": 数量},
   "statistics": {"summary": "统计摘要"},
@@ -1329,169 +1465,29 @@ monitoring:
 }
 ```
 
-### 17.4 report_generator（嵌套Skill示例）
+### 16.4 report_generator（嵌套Skill示例）
+
+**文件路径：** `{GROOT_HOME}/skills/report_generator/SKILL.md`
 
 ```markdown
-# Skill: report_generator
-
-## Description
-综合分析多种来源的资料，生成完整的分析报告。
-
-## Triggers
-- 用户请求"生成报告"、"综合分析"
-- 用户提供多种类型的附件
-
-## Instructions
-你是一个报告生成助手。执行以下步骤：
-1. 分析用户提供的资料类型
-2. 根据资料类型调用相应的分析Skills
-3. 整合各Skills的分析结果
-4. 生成结构化的综合报告
-5. 使用 file_operations.file_write 保存报告
-
-## Dependencies
-- pdf_analyzer
-- data_analyzer
-```
-
+---
+name: report_generator
+description: "综合分析多种来源的资料，生成完整的分析报告"
 ---
 
-## 十七、API 详细示例
+# 报告生成
 
-### 18.1 POST /task/execute 请求示例
+你是一个报告生成助手，可调用其他 Skills 完成综合分析。
 
-**基本请求：**
-```json
-{
-  "instruction": "帮我分析这份PDF财务报告",
-  "attachments": [
-    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
-  ]
-}
-```
+## 执行步骤
 
-**带 prompt 的请求：**
-```json
-{
-  "instruction": "帮我分析这份PDF财务报告",
-  "prompt": "你是一个财务分析师，重点关注利润增长率和潜在风险点。输出JSON格式。",
-  "attachments": [
-    {"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}
-  ]
-}
-```
-
-**多附件请求：**
-```json
-{
-  "instruction": "对比分析这份PDF报告和销售数据",
-  "attachments": [
-    {"type": "file", "name": "report.pdf", "content": "base64..."},
-    {"type": "file", "name": "sales.csv", "content": "base64..."}
-  ]
-}
-```
-
-**无附件请求（纯 LLM 执行）：**
-```json
-{
-  "instruction": "帮我写一个 Python 快速排序函数"
-}
-```
-
-### 18.2 SSE 响应事件流示例
-
-**成功执行：**
-```
-HTTP Header: X-Task-ID: task-xxx
-
-event: intent
-data: {"timestamp":"2026-04-17T10:30:00Z"}
-
-event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
-
-event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:05Z"}
-
-event: step_start
-data: {"type":"tool","name":"file_read","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
-
-event: step_end
-data: {"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05.2Z","status":"success"}
-
-event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在生成摘要...","timestamp":"2026-04-17T10:30:20Z"}
-
-event: step_end
-data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:45Z","status":"success"}
-
-event: completed
-data: {"status":"success","timestamp":"2026-04-17T10:30:45Z","duration":"45s","result":{"document_type":"report","key_points":[...],"summary":"..."}}
-```
-
-**失败执行：**
-```
-HTTP Header: X-Task-ID: task-xxx
-
-event: intent
-data: {"timestamp":"2026-04-17T10:30:00Z"}
-
-event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
-
-event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:02Z"}
-
-event: step_end
-data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"file_error","message":"PDF文件已损坏"}}
-
-event: completed
-data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"skill_error","message":"pdf_analyzer执行失败"}}
-```
-
-**取消执行：**
-```
-HTTP Header: X-Task-ID: task-xxx
-
-event: intent
-data: {"timestamp":"2026-04-17T10:30:00Z"}
-
-event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z"}
-
-event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在处理...","timestamp":"2026-04-17T10:30:10Z"}
-
-（用户发送取消请求）
-
-event: completed
-data: {"status":"cancelled","timestamp":"2026-04-17T10:30:12Z","duration":"12s","message":"用户主动取消"}
-```
-
-### 18.3 其他 API 响应示例
-
-**GET /health：**
-```json
-{
-  "status": "healthy",
-  "version": "1.0.0",
-  "checks": {
-    "llm": {"status": "healthy", "model": "gpt-4o"},
-    "skills": {"count": 12}
-  }
-}
-```
-
-**GET /skills：**
-```json
-{
-  "skills": [
-    {"name": "pdf_analyzer", "description": "分析PDF文档"},
-    {"name": "code_generator", "description": "生成代码"}
-  ],
-  "total": 5
-}
+1. 分析用户提供的资料类型
+2. 根据资料类型调用相应的分析 Skills：
+   - PDF 文件 → 调用 pdf_analyzer
+   - 数据文件 → 调用 data_analyzer
+3. 整合各 Skills 的分析结果
+4. 生成结构化的综合报告
+5. 使用 file_operations.file_write 保存报告
 ```
 
 ---
