@@ -881,22 +881,22 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 ```yaml
 performance:
   rate_limit:
-    max_concurrent_tasks: 10
-    max_requests_per_minute: 60
-    max_requests_per_hour: 1000
+    max_concurrent_tasks: 10       # 最大并发任务数，超过则返回 429
+    max_requests_per_minute: 60    # 每分钟最大请求数，超过则返回 429
+    max_requests_per_hour: 1000    # 每小时最大请求数，超过则返回 429
   
   timeout:
-    task_max_duration: 300
-    llm_call_timeout: 60
-    tool_call_timeout: 30
+    task_max_duration: 300        # 单任务最大执行时长（秒），超过则终止
+    llm_call_timeout: 60          # 单次 LLM 调用超时（秒）
+    tool_call_timeout: 30         # 单次工具调用超时（秒）
   
   llm:
-    max_concurrent_calls: 5
-    retry_on_failure: 3
-    retry_delay: 2
+    max_concurrent_calls: 5       # LLM 并发调用数限制
+    retry_on_failure: 3           # LLM 调用失败重试次数
+    retry_delay: 2                # 重试间隔（秒）
   
   mcp:
-    max_concurrent_calls_per_server: 3
+    max_concurrent_calls_per_server: 3  # 每个 MCP 服务并发调用数限制
 ```
 
 ### 8.2 ReAct 执行限制
