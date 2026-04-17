@@ -1059,11 +1059,11 @@ security:
 
 ```yaml
 attachment:
-  max_size: 50
-  max_total_size: 100
-  max_count: 10
-  allowed_types: [pdf, doc, json, csv, png, zip]
-  temp_directory: temp
+  max_size: 50                    # 单个附件最大大小（MB）
+  max_total_size: 100             # 所有附件总大小上限（MB）
+  max_count: 10                   # 单次请求最大附件数量
+  allowed_types: [pdf, doc, json, csv, png, zip]  # 允许的附件类型
+  temp_directory: temp            # 附件临时存储目录（相对工作目录）
 ```
 
 ---
@@ -1199,11 +1199,11 @@ react:
 
 # 附件处理配置
 attachment:
-  max_size: 50
-  max_total_size: 100
-  max_count: 10
-  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, zip]
-  temp_directory: temp
+  max_size: 50                    # 单个附件最大大小（MB）
+  max_total_size: 100             # 所有附件总大小上限（MB）
+  max_count: 10                   # 单次请求最大附件数量
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, zip]  # 允许的附件类型
+  temp_directory: temp            # 附件临时存储目录（相对工作目录）
 
 # 安全配置
 security:
