@@ -158,6 +158,9 @@ func main() {
 		skillWatcher.Stop()
 		mcpWatcher.Stop()
 
+		// Close MCP executor (terminate running processes)
+		mcpMgr.GetExecutor().Close()
+
 		log.Info("Groot Agent 已关闭")
 	}()
 

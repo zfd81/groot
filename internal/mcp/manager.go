@@ -12,19 +12,26 @@ import (
 
 // Manager manages all MCP configurations and tool registry
 type Manager struct {
-	mcps   map[string]*MCPConfig
-	tools  map[string]*ToolInfo
-	logger *logger.Logger
-	mu     sync.RWMutex
+	mcps     map[string]*MCPConfig
+	tools    map[string]*ToolInfo
+	executor *ToolExecutor
+	logger   *logger.Logger
+	mu       sync.RWMutex
 }
 
 // NewManager creates a new MCP manager
 func NewManager(log *logger.Logger) *Manager {
 	return &Manager{
-		mcps:   make(map[string]*MCPConfig),
-		tools:  make(map[string]*ToolInfo),
-		logger: log,
+		mcps:     make(map[string]*MCPConfig),
+		tools:    make(map[string]*ToolInfo),
+		executor: NewToolExecutor(log),
+		logger:   log,
 	}
+}
+
+// GetExecutor returns the tool executor
+func (m *Manager) GetExecutor() *ToolExecutor {
+	return m.executor
 }
 
 // Register adds an MCP configuration

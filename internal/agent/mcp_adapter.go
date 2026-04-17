@@ -383,22 +383,22 @@ func (t *MCPToolAdapter) executeBuiltin(ctx context.Context, cfg *mcp.MCPConfig,
 	}
 }
 
-// executeStdio runs stdio MCP tools (placeholder)
+// executeStdio runs stdio MCP tools via ToolExecutor
 func (t *MCPToolAdapter) executeStdio(ctx context.Context, cfg *mcp.MCPConfig, argsJSON string) (string, error) {
-	// Phase 13 will implement full stdio support
-	return fmt.Sprintf("Stdio MCP %s 执行: %s", cfg.Name, argsJSON), nil
+	executor := t.mcpManager.GetExecutor()
+	return executor.ExecuteStdio(ctx, cfg, t.toolInfo.Name, argsJSON)
 }
 
-// executeSSE runs SSE MCP tools (placeholder)
+// executeSSE runs SSE MCP tools via ToolExecutor
 func (t *MCPToolAdapter) executeSSE(ctx context.Context, cfg *mcp.MCPConfig, argsJSON string) (string, error) {
-	// Phase 13 will implement full SSE support
-	return fmt.Sprintf("SSE MCP %s 执行: %s", cfg.Name, argsJSON), nil
+	executor := t.mcpManager.GetExecutor()
+	return executor.ExecuteSSE(ctx, cfg, t.toolInfo.Name, argsJSON)
 }
 
-// executeHTTP runs streamable_http MCP tools (placeholder)
+// executeHTTP runs streamable_http MCP tools via ToolExecutor
 func (t *MCPToolAdapter) executeHTTP(ctx context.Context, cfg *mcp.MCPConfig, argsJSON string) (string, error) {
-	// Phase 13 will implement full HTTP support
-	return fmt.Sprintf("HTTP MCP %s 执行: %s", cfg.Name, argsJSON), nil
+	executor := t.mcpManager.GetExecutor()
+	return executor.ExecuteHTTP(ctx, cfg, t.toolInfo.Name, argsJSON)
 }
 
 // convertHeaders converts map[string]interface{} to map[string]string
