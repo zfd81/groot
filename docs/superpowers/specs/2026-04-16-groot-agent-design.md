@@ -14,7 +14,7 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 
 **核心特性：**
 - 接收自然语言指令和附件
-- 自动判断意图，调用预置 Skills 或临时执行流程
+- 自动判断意图，调用预置 Skills 或自主决策执行
 - 基于 eino 框架构建 Agent，自主决策调用 MCP 工具
 - SSE 流式返回执行进度和结果
 - 支持 Skills 嵌套调用
@@ -39,7 +39,7 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      REST API Layer (Hertz)                  │
-│  - 接收请求（指令 + 附件 + 可选临时流程）                       │
+│  - 接收请求（指令 + 附件）                                     │
 │  - SSE 流式返回进度和结果                                      │
 │  - 限流、超时控制                                              │
 └─────────────────────────────────────────────────────────────┘
@@ -48,14 +48,14 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 ┌─────────────────────────────────────────────────────────────┐
 │                    Intent Classifier                         │
 │  - 扫描已注册 Skills，计算匹配度                               │
-│  - 决策：调用最匹配 Skill 或按临时流程执行                      │
+│  - 决策：调用最匹配 Skill 或 Agent 自主执行                    │
 │  - 支持 Skills 嵌套依赖解析                                    │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      Agent Engine (eino)                     │
-│  - 解析执行流程定义（Skill Instructions 或临时流程）           │
+│  - 解析 Skill Instructions 或自主决策执行                      │
 │  - 自主决策调用 MCP 工具、执行步骤                              │
 │  - 循环执行直到任务完成                                        │
 │  - 处理 Skills 嵌套调用                                        │
@@ -123,10 +123,15 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
       "name": "filename.ext",
       "url": "https://example.com/file"
     }
-  ],
-  "flow_definition": "可选，临时执行流程描述"
+  ]
 }
 ```
+
+**说明：**
+- `instruction`：必填，用户的自然语言指令
+- `attachments`：可选，附件列表（Base64编码或URL）
+
+Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 **SSE 响应事件类型：**
 
@@ -277,34 +282,43 @@ X-Execution-Time: 15s
 ### 5.1 匹配流程
 
 ```
-用户请求到达 →
+用户请求（指令 + 附件）到达 →
+│
 ├─ 提取请求特征（关键词、附件类型、语义意图）
 │
-├─ 计算匹配分数
+├─ 计算与所有 Skills 的匹配分数
 │   ├─ 关键词匹配（30%权重）
 │   ├─ 附件类型匹配（25%权重）
 │   ├─ 触发条件匹配（20%权重）
 │   └─ 语义相似度（25%权重，LLM辅助）
 │
 ├─ 选择最高匹配分数的 Skill
-│   ├─ 分数 ≥ 0.6置信阈值 → 调用该 Skill
-│   └─ 分数 < 0.6 → 按临时流程执行
-│
-├─ 解析 Skill 的 Dependencies
-│   ├─ 有嵌套 → 递归加载子 Skills
-│   └─ 构建执行依赖树
+│   │
+│   ├─ 分数 ≥ 置信阈值（0.6）→ 调用该 Skill
+│   │   ├─ 解析 Skill 的 Dependencies
+│   │   ├─ 有嵌套 → 递归加载子 Skills
+│   │   └─ 构建执行依赖树
+│   │
+│   └─ 分数 < 置信阈值 → Agent 自主决策执行
+│       ├─ LLM 分析任务需求
+│       ├─ 决定执行方式：
+│       │   ├─ 直接 LLM 推理生成结果
+│       │   ├─ 调用 MCP 工具完成任务
+│       │   └─ 组合调用多个 MCP 工具
+│       └─ 自主循环执行直到完成
 │
 → 将执行计划传给 Agent Engine
 ```
 
 ### 5.2 Skills 嵌套支持
 
-**两种嵌套场景：**
+**嵌套场景：**
 
 | 场景 | 说明 |
 |------|------|
-| 临时流程包含 Skills | 用户在 flow_definition 中指定调用某个 Skill |
-| Skill 包含 Skills | Skill 的 Instructions 中声明调用其他 Skill |
+| Skill 包含 Skills | Skill 的 Instructions 中声明调用其他 Skill，通过 Dependencies 字段定义 |
+
+Agent 在执行 Skill 时，会自动识别并递归调用依赖的子 Skills。
 
 **执行依赖树示例：**
 
@@ -331,9 +345,9 @@ report_generator (主Skill)
 │
 ├─ 构建 Agent 上下文
 │   ├─ 用户指令 + 附件
-│   ├─ 执行流程定义
+│   ├─ Skill Instructions（如有匹配）
 │   ├─ 可用 MCP 工具列表
-│   ├─ 嵌套 Skills
+│   ├─ 嵌套 Skills（如有）
 │   └─ 输出格式要求
 │
 ├─ Agent 执行循环
@@ -744,7 +758,6 @@ mcp:
 intent:
   confidence_threshold: 0.6
   use_llm_matching: true
-  fallback_mode: temporary_flow
   max_nesting_depth: 3
 
 # 性能控制配置
@@ -927,7 +940,7 @@ monitoring:
 
 ### 18.1 POST /task/execute 请求示例
 
-**Skill模式：**
+**基本请求：**
 ```json
 {
   "instruction": "帮我分析这份PDF财务报告",
@@ -937,26 +950,36 @@ monitoring:
 }
 ```
 
-**临时流程模式：**
+**多附件请求：**
 ```json
 {
-  "instruction": "帮我完成以下任务",
+  "instruction": "对比分析这份PDF报告和销售数据",
   "attachments": [
     {"type": "file", "name": "report.pdf", "content": "base64..."},
     {"type": "file", "name": "sales.csv", "content": "base64..."}
-  ],
-  "flow_definition": "1. 分析PDF报告\n2. 分析CSV数据\n3. 对比分析\n4. 生成报告"
+  ]
+}
+```
+
+**无附件请求（纯 LLM 执行）：**
+```json
+{
+  "instruction": "帮我写一个 Python 快速排序函数"
 }
 ```
 
 ### 18.2 SSE 响应事件流示例
 
+**Skill匹配模式：**
 ```
 event: task_started
 data: {"task_id": "task-xxx"}
 
 event: intent_matched
 data: {"mode": "skill", "skill_name": "pdf_analyzer", "confidence": 0.92}
+
+event: skill_call
+data: {"skill": "pdf_analyzer", "message": "开始执行 pdf_analyzer"}
 
 event: progress
 data: {"step": 1, "message": "正在读取PDF..."}
@@ -969,6 +992,27 @@ data: {"data": {"document_type": "report", "key_points": [...]}}
 
 event: task_completed
 data: {"status": "success", "duration": "15s"}
+```
+
+**自主执行模式：**
+```
+event: task_started
+data: {"task_id": "task-xxx"}
+
+event: intent_matched
+data: {"mode": "autonomous", "reason": "未匹配到Skill，Agent自主执行"}
+
+event: progress
+data: {"step": 1, "message": "正在分析任务需求..."}
+
+event: tool_call
+data: {"tool": "http_get", "params": {"url": "..."}}
+
+event: result
+data: {"data": "执行结果"}
+
+event: task_completed
+data: {"status": "success", "duration": "10s"}
 ```
 
 ### 18.3 其他 API 响应示例
