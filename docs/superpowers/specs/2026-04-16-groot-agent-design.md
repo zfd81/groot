@@ -905,20 +905,20 @@ performance:
 
 ```yaml
 react:
-  max_iterations: 20          # 最大循环次数
-  max_tokens: 100000          # 最大Token消耗
-  step_timeout: 60            # 单步执行超时（秒）
+  max_iterations: 20          # 最大循环次数，-1 表示不限制
+  max_tokens: 100000          # 最大Token消耗，-1 表示不限制
+  step_timeout: 60            # 单步执行超时（秒），-1 表示不限制
   error_retry: 2              # 单步失败重试次数
-  nesting_max_depth: 3        # Skills嵌套最大深度
+  nesting_max_depth: 3        # Skills嵌套最大深度，-1 表示不限制
 ```
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `max_iterations` | ReAct 最大循环次数，防止无限循环 | 20 |
-| `max_tokens` | 单任务最大Token消耗，防止成本失控 | 100000 |
-| `step_timeout` | 单步执行超时时间（秒） | 60 |
+| `max_iterations` | ReAct 最大循环次数，防止无限循环。`-1` 表示不限制 | 20 |
+| `max_tokens` | 单任务最大Token消耗，防止成本失控。`-1` 表示不限制 | 100000 |
+| `step_timeout` | 单步执行超时时间（秒）。`-1` 表示不限制 | 60 |
 | `error_retry` | 单步失败后重试次数 | 2 |
-| `nesting_max_depth` | Skills 嵌套最大深度 | 3 |
+| `nesting_max_depth` | Skills 嵌套最大深度。`-1` 表示不限制 | 3 |
 
 **终止条件说明：**
 
@@ -1191,11 +1191,11 @@ performance:
 
 # ReAct 执行配置
 react:
-  max_iterations: 20          # 最大循环次数，防止无限循环
-  max_tokens: 100000          # 最大Token消耗，防止成本失控
-  step_timeout: 60            # 单步执行超时（秒）
+  max_iterations: 20          # 最大循环次数，防止无限循环，-1 表示不限制
+  max_tokens: 100000          # 最大Token消耗，防止成本失控，-1 表示不限制
+  step_timeout: 60            # 单步执行超时（秒），-1 表示不限制
   error_retry: 2              # 单步失败重试次数
-  nesting_max_depth: 3        # Skills 嵌套最大深度
+  nesting_max_depth: 3        # Skills 嵌套最大深度，-1 表示不限制
 
 # 附件处理配置
 attachment:
