@@ -195,22 +195,53 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 	}
 
 	// Process output
-	if event.Output != nil && event.Output.MessageOutput != nil {
+	if event.Output != nil {
 		msgOutput := event.Output.MessageOutput
 
-		// Get message content
-		msg := msgOutput.Message
-		if msg != nil && msgOutput.Role == schema.Assistant {
-			// Model response
-			progress(stepID, "progress", msg.Content)
-			*steps = append(*steps, storage.StepRecord{
-				StepID:       stepID,
-				Type:         "llm",
-				Name:         "model_response",
-				Status:       storage.StatusCompleted,
-				NestingLevel: 0,
-			})
-			return msg.Content
+		if msgOutput != nil && msgOutput.Role == schema.Assistant {
+			// Handle streaming response
+			if msgOutput.IsStreaming && msgOutput.MessageStream != nil {
+				// Read from stream using Recv()
+				var content string
+				stream := msgOutput.MessageStream
+				for {
+					msg, err := stream.Recv()
+					if err != nil {
+						break // EOF or error
+					}
+					if msg != nil && msg.Content != "" {
+						content += msg.Content
+						progress(stepID, "progress", msg.Content)
+					}
+				}
+				stream.Close()
+				if content != "" {
+					*steps = append(*steps, storage.StepRecord{
+						StepID:       stepID,
+						Type:         "llm",
+						Name:         "model_response",
+						Status:       storage.StatusCompleted,
+						NestingLevel: 0,
+					})
+					return content
+				}
+			}
+
+			// Handle non-streaming response
+			if msgOutput.Message != nil {
+				msg := msgOutput.Message
+				if msg.Content != "" {
+					progress(stepID, "progress", msg.Content)
+					*steps = append(*steps, storage.StepRecord{
+						StepID:       stepID,
+						Type:         "llm",
+						Name:         "model_response",
+						Status:       storage.StatusCompleted,
+						NestingLevel: 0,
+					})
+					return msg.Content
+				}
+			}
 		}
 	}
 
