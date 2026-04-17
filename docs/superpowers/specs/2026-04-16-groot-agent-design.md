@@ -525,11 +525,12 @@ GET /task/status/task-xxx
 
 ```yaml
 skills:
-  directory: skills
   hot_reload:
     enabled: true       # 是否启用热插拔
     debounce_delay: 2   # 防抖延迟（秒）
 ```
+
+Skills 目录为工作目录下的固定结构 `{GROOT_HOME}/skills/`，无需配置路径。
 
 **日志输出：**
 
@@ -746,11 +747,12 @@ MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔�
 
 ```yaml
 mcp:
-  directory: mcp
   hot_reload:
     enabled: true       # 是否启用热插拔
     debounce_delay: 2   # 防抖延迟（秒）
 ```
+
+MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置路径。
 
 **日志输出：**
 
@@ -1158,19 +1160,17 @@ llm:
       max_tokens: 4096
       temperature: 0.7
 
-# Skills 配置
+# Skills 热插拔配置
 skills:
-  directory: skills
   hot_reload:
     enabled: true       # 是否启用热插拔
     debounce_delay: 2   # 防抖延迟（秒）
 
-# MCP 配置
+# MCP 热插拔配置
 mcp:
-  directory: mcp              # MCP 配置目录（相对工作目录）
   hot_reload:
-    enabled: true              # 是否启用热插拔
-    debounce_delay: 2          # 防抖延迟（秒）
+    enabled: true       # 是否启用热插拔
+    debounce_delay: 2   # 防抖延迟（秒）
 
 # 性能控制配置
 performance:
