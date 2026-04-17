@@ -66,7 +66,7 @@ llm:
 
 **模型切换：**
 
-修改 `active_model` 值即可切换模型，无需重启服务（支持热切换）。
+修改 `active_model` 值后，通过热插拔机制自动生效，无需重启服务。修改 `config.yaml` 文件后，Groot 会自动检测并重新加载 LLM 配置。
 
 ---
 
@@ -251,6 +251,12 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 **说明：**
 - `X-Task-ID` 在 Header 中立即返回，调用方可用于查询状态或取消任务
 - `step_start` 和 `step_end` 通过 `step_id` 关联，调用方可计算耗时
+
+**task_id 生成规则：**
+- 格式：`task-{YYYYMMDD}-{HHMMSSmmm}-{random4}`
+- 示例：`task-20260417-103000523-a1b2`
+- 时间戳精确到毫秒，random 为 4 位随机字符
+- 全局唯一，多实例部署不冲突
 
 **SSE 事件返回值结构：**
 
@@ -936,9 +942,16 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 
 ### 6.6 内置 MCP 工具
 
-内置 MCP 存放在 `mcp/` 目录下，默认包含以下工具：
+内置 MCP 工具是 Groot 自带的工具集，与外部 MCP 配置方式不同：
 
-**file_operations.json（文件操作）：**
+**内置 MCP 特点：**
+- 无需配置连接参数，直接可用
+- 有独立的安全限制配置
+- 配置文件中 `type: "builtin"` 表示内置工具
+
+**内置 MCP 配置示例：**
+
+**file_operations（文件操作）：**
 
 ```json
 {
@@ -953,6 +966,8 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
   }
 }
 ```
+
+**说明：** `type: "builtin"` 表示这是内置工具，不是 MCP 连接类型。内置工具直接由 Groot 执行，无需通过 MCP 协议连接。
 
 **http_request.json（HTTP请求）：**
 
@@ -1732,9 +1747,9 @@ description: "综合分析多种来源的资料，生成完整的分析报告"
 
 | 路径 | 说明 |
 |------|------|
-| `{home}/config.yaml` | 配置文件 |
-| `{home}/skills/` | Skills 目录 |
-| `{home}/mcp/` | MCP 配置目录 |
-| `{home}/logs/` | 日志目录 |
-| `{home}/temp/` | 临时文件 |
-| `{home}/output/` | 任务输出 |
+| `{GROOT_HOME}/config.yaml` | 配置文件 |
+| `{GROOT_HOME}/skills/` | Skills 目录 |
+| `{GROOT_HOME}/mcp/` | MCP 配置目录 |
+| `{GROOT_HOME}/logs/` | 日志目录 |
+| `{GROOT_HOME}/temp/` | 临时文件 |
+| `{GROOT_HOME}/output/` | 任务输出 |
