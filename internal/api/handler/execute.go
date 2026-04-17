@@ -8,8 +8,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/zfd81/groot/internal/agent"
-	"github.com/zfd81/groot/internal/api"
 	"github.com/zfd81/groot/internal/api/middleware"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/storage"
 )
 
@@ -35,7 +35,7 @@ func NewExecuteHandler(
 
 // Serve handles the execute request
 func (h *ExecuteHandler) Serve(ctx context.Context, rc *app.RequestContext) {
-	var req api.ExecuteRequest
+	var req types.ExecuteRequest
 	if err := rc.BindJSON(&req); err != nil {
 		rc.SetContentType("application/json")
 		rc.SetStatusCode(400)
@@ -90,7 +90,7 @@ func (h *ExecuteHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 }
 
 // convertAttachments converts API attachments to storage attachments
-func convertAttachments(att []api.Attachment) []storage.Attachment {
+func convertAttachments(att []types.Attachment) []storage.Attachment {
 	if att == nil {
 		return nil
 	}

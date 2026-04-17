@@ -8,7 +8,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/zfd81/groot/internal/agent"
-	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/skill"
@@ -44,11 +44,11 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	uptime := time.Since(h.startTime)
 	uptimeStr := formatUptime(uptime)
 
-	resp := api.HealthResponse{
+	resp := types.HealthResponse{
 		Status:  "healthy",
 		Version: h.config.Agent.Version,
 		Uptime:  uptimeStr,
-		Checks: map[string]api.CheckInfo{
+		Checks: map[string]types.CheckInfo{
 			"llm": {
 				Status: "healthy",
 				Info:   map[string]string{"model": h.config.LLM.ActiveModel},

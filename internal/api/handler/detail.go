@@ -6,7 +6,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/storage"
 )
 
@@ -39,7 +39,7 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	// Build task detail
-	detail := api.TaskDetail{
+	detail := types.TaskDetail{
 		ID:          task.ID,
 		Instruction: task.Instruction,
 		Prompt:      task.Prompt,
@@ -52,7 +52,7 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	if task.Error != nil {
-		detail.Error = &api.ErrorInfo{
+		detail.Error = &types.ErrorInfo{
 			Code:    task.Error.Code,
 			Message: task.Error.Message,
 		}
@@ -60,9 +60,9 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 
 	// Convert steps
 	if task.Steps != nil {
-		steps := make([]api.StepDetail, len(task.Steps))
+		steps := make([]types.StepDetail, len(task.Steps))
 		for i, s := range task.Steps {
-			steps[i] = api.StepDetail{
+			steps[i] = types.StepDetail{
 				StepID:       s.StepID,
 				Type:         s.Type,
 				Name:         s.Name,
@@ -72,7 +72,7 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 				NestingLevel: s.NestingLevel,
 			}
 			if s.Error != nil {
-				steps[i].Error = &api.ErrorInfo{
+				steps[i].Error = &types.ErrorInfo{
 					Code:    s.Error.Code,
 					Message: s.Error.Message,
 				}
@@ -81,7 +81,7 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		detail.Steps = steps
 	}
 
-	resp := api.DetailResponse{
+	resp := types.DetailResponse{
 		Status: "success",
 		Task:   &detail,
 	}

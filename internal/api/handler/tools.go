@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/mcp"
 )
 
@@ -23,16 +23,16 @@ func NewToolsHandler(mcpMgr *mcp.Manager) *ToolsHandler {
 func (h *ToolsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	tools := h.mcpManager.ListTools()
 
-	toolInfos := make([]api.ToolInfo, len(tools))
+	toolInfos := make([]types.ToolInfo, len(tools))
 	for i, t := range tools {
-		toolInfos[i] = api.ToolInfo{
+		toolInfos[i] = types.ToolInfo{
 			Name:        t.Name,
 			Description: t.Description,
 			MCP:         t.MCP,
 		}
 	}
 
-	resp := api.ToolsResponse{
+	resp := types.ToolsResponse{
 		Tools: toolInfos,
 		Total: len(toolInfos),
 	}

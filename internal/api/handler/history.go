@@ -6,7 +6,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/storage"
 	"github.com/zfd81/groot/pkg/utils"
 )
@@ -78,9 +78,9 @@ func (h *HistoryHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	// Build response
-	summaries := make([]api.TaskSummary, len(tasks))
+	summaries := make([]types.TaskSummary, len(tasks))
 	for i, task := range tasks {
-		summaries[i] = api.TaskSummary{
+		summaries[i] = types.TaskSummary{
 			ID:          task.ID,
 			Instruction: task.Instruction,
 			Status:      string(task.Status),
@@ -91,7 +91,7 @@ func (h *HistoryHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		}
 	}
 
-	resp := api.HistoryResponse{
+	resp := types.HistoryResponse{
 		Status: "success",
 		Total:  total,
 		Limit:  query.Limit,

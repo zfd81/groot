@@ -7,7 +7,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/storage"
 )
 
@@ -43,7 +43,7 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	elapsed := time.Since(task.StartTime)
 	elapsedStr := formatElapsed(elapsed)
 
-	resp := api.StatusResponse{
+	resp := types.StatusResponse{
 		Status:      "success",
 		TaskID:      taskID,
 		TaskStatus:  string(task.Status),
@@ -52,7 +52,7 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	if task.Status == storage.StatusRunning && task.Progress != nil {
-		resp.Progress = &api.ProgressInfo{
+		resp.Progress = &types.ProgressInfo{
 			CurrentStep:    task.Progress.CurrentStep,
 			StepsCompleted: task.Progress.StepsCompleted,
 			Percentage:     task.Progress.Percentage,

@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/skill"
 )
 
@@ -23,15 +23,15 @@ func NewSkillsHandler(skills *skill.Registry) *SkillsHandler {
 func (h *SkillsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	skills := h.skillRegistry.List()
 
-	skillInfos := make([]api.SkillInfo, len(skills))
+	skillInfos := make([]types.SkillInfo, len(skills))
 	for i, s := range skills {
-		skillInfos[i] = api.SkillInfo{
+		skillInfos[i] = types.SkillInfo{
 			Name:        s.Name,
 			Description: s.Description,
 		}
 	}
 
-	resp := api.SkillsResponse{
+	resp := types.SkillsResponse{
 		Skills: skillInfos,
 		Total:  len(skillInfos),
 	}

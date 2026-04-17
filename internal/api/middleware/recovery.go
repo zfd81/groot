@@ -21,22 +21,25 @@ func NewRecoveryMiddleware(log *logger.Logger) *RecoveryMiddleware {
 	return &RecoveryMiddleware{logger: log}
 }
 
-// Serve implements middleware handler
-func (m *RecoveryMiddleware) Serve(ctx context.Context, rc *app.RequestContext, next app.HandlerFunc) {
-	defer func() {
-		if err := recover(); err != nil {
-			stack := debug.Stack()
-			m.logger.Error("panic recovered",
-				zap.Any("error", err),
-				zap.String("stack", string(stack)),
-				zap.String("path", string(rc.URI().Path())),
-			)
+// Serve returns a Hertz middleware handler
+func (m *RecoveryMiddleware) Serve() app.HandlerFunc {
+	return func(ctx context.Context, rc *app.RequestContext) {
+		defer func() {
+			if err := recover(); err != nil {
+				stack := debug.Stack()
+				m.logger.Error("panic recovered",
+					zap.Any("error", err),
+					zap.String("stack", string(stack)),
+					zap.String("path", string(rc.URI().Path())),
+				)
 
-			rc.SetContentType("application/json")
-			rc.SetStatusCode(500)
-			rc.Write([]byte(fmt.Sprintf(`{"status":"internal_error","message":"%s"}`, err)))
-		}
-	}()
+				rc.SetContentType("application/json")
+				rc.SetStatusCode(500)
+				rc.Write([]byte(fmt.Sprintf(`{"status":"internal_error","message":"%s"}`, err)))
+				rc.Abort()
+			}
+		}()
 
-	next(ctx, rc)
+		rc.Next(ctx)
+	}
 }
