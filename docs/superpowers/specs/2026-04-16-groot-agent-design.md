@@ -455,7 +455,53 @@ GET /task/status/task-xxx
 注册到内存索引
 ```
 
----
+### 4.4 Skills 热插拔机制
+
+支持运行时动态添加、修改、删除 Skills，无需重启服务。
+
+**监听机制：**
+- 使用 `fsnotify` 监听 skills 目录变化
+- 只监听 `skill.md` 文件的创建、修改、删除事件
+- 防抖机制：检测到变化后延迟 2秒再执行加载，避免编辑过程中频繁触发
+
+**处理流程：**
+
+```
+文件变化检测 →防抖等待（2秒） →
+│
+├─ 新增 skill.md → 解析并注册 → 输出日志
+│
+├─ 修改 skill.md → 重新解析并更新 → 输出日志
+│
+└─ 删除 skill.md → 移除对应 Skill → 输出日志
+```
+
+**配置项：**
+
+```yaml
+skills:
+  directory: skills
+  hot_reload:
+    enabled: true       # 是否启用热插拔
+    debounce_delay: 2   # 防抖延迟（秒）
+```
+
+**日志输出：**
+
+热插拔事件会记录到日志：
+
+```json
+{
+  "timestamp": "2026-04-17T10:30:00Z",
+  "level": "INFO",
+  "event": "skill_hot_reload",
+  "data": {
+    "action": "added",
+    "skill_name": "new_skill",
+    "skills_count": 13
+  }
+}
+```
 
 ## 五、意图匹配与 Skills 嵌套机制
 
@@ -918,6 +964,9 @@ llm:
 # Skills 配置
 skills:
   directory: skills
+  hot_reload:
+    enabled: true       # 是否启用热插拔
+    debounce_delay: 2   # 防抖延迟（秒）
 
 # MCP 配置
 mcp:
