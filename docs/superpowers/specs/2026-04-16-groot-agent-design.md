@@ -66,7 +66,9 @@ llm:
 
 **模型切换：**
 
-修改 `active_model` 值后，通过热插拔机制自动生效，无需重启服务。修改 `config.yaml` 文件后，Groot 会自动检测并重新加载 LLM 配置。
+修改 `active_model` 值后，需要重启服务才能生效。
+
+> **说明：** Groot 仅支持 Skills 和 MCP 的热插拔，LLM 配置修改需重启服务。
 
 ---
 
@@ -194,6 +196,8 @@ Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
 | `/task/execute` | POST | 执行任务，SSE 流式返回 |
 | `/task/{task_id}` | DELETE | 取消正在执行的任务 |
 | `/task/status/{task_id}` | GET | 查询任务状态 |
+| `/task/history` | GET | 查询历史任务列表 |
+| `/task/{task_id}` | GET | 查询任务详情（含完整步骤记录） |
 | `/health` | GET | 健康检查 |
 | `/skills` | GET | 列出可用 Skills |
 | `/tools` | GET | 列出可用 MCP 工具 |
@@ -464,7 +468,118 @@ GET /task/status/task-xxx
 | `failed` | 已失败 |
 | `cancelled` | 已取消 |
 
-### 3.5 GET /health
+### 3.5 GET /task/history
+
+**请求方式：** Query 参数
+
+```
+GET /task/history?status=completed&limit=10&offset=0
+```
+
+**Query 参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `status` | string | 否 | 按状态过滤：`running` / `completed` / `failed` / `cancelled` |
+| `start_time` | string | 否 | 开始时间（ISO格式），如 `2026-04-01T00:00:00Z` |
+| `end_time` | string | 否 | 结束时间（ISO格式） |
+| `limit` | int | 否 | 返回数量限制，默认 20，最大 100 |
+| `offset` | int | 否 | 分页偏移，默认 0 |
+
+**响应：**
+
+成功：
+```json
+{
+  "status": "success",
+  "total": 50,
+  "limit": 10,
+  "offset": 0,
+  "tasks": [
+    {
+      "id": "task-xxx",
+      "instruction": "分析PDF报告",
+      "status": "completed",
+      "start_time": "2026-04-17T10:30:00Z",
+      "end_time": "2026-04-17T10:30:45Z",
+      "duration": 45,
+      "caller": "internal_system"
+    },
+    ...
+  ]
+}
+```
+
+失败（无匹配）：
+```json
+{
+  "status": "success",
+  "total": 0,
+  "tasks": []
+}
+```
+
+### 3.6 GET /task/{task_id}
+
+**请求方式：** 路径参数
+
+```
+GET /task/task-xxx
+```
+
+**响应：**
+
+成功（包含完整步骤记录）：
+```json
+{
+  "status": "success",
+  "task": {
+    "id": "task-xxx",
+    "instruction": "分析PDF报告",
+    "prompt": "你是一个财务分析师...",
+    "status": "completed",
+    "start_time": "2026-04-17T10:30:00Z",
+    "end_time": "2026-04-17T10:30:45Z",
+    "duration": 45,
+    "caller": "internal_system",
+    "result": {
+      "document_type": "report",
+      "summary": "..."
+    },
+    "steps": [
+      {
+        "step_id": "20260417-103000000-a1b2c3",
+        "type": "skill",
+        "name": "pdf_analyzer",
+        "start_time": "2026-04-17T10:30:00Z",
+        "end_time": "2026-04-17T10:30:30Z",
+        "status": "success",
+        "nesting_level": 0
+      },
+      {
+        "step_id": "20260417-103005000-x9y8z7",
+        "type": "tool",
+        "name": "file_read",
+        "start_time": "2026-04-17T10:30:05Z",
+        "end_time": "2026-04-17T10:30:10Z",
+        "status": "success",
+        "nesting_level": 1
+      }
+    ]
+  }
+}
+```
+
+失败（任务不存在）：
+```json
+{
+  "status": "task_not_found",
+  "task_id": "task-xxx",
+  "message": "任务不存在"
+}
+```
+
+### 3.7 GET /health
 
 **响应：**
 
@@ -486,7 +601,7 @@ GET /task/status/task-xxx
 }
 ```
 
-### 3.6 API 详细示例
+### 3.8 API 详细示例
 
 #### POST /task/execute 请求示例
 
@@ -756,9 +871,270 @@ X-API-Key: groot-api-key-2026abc
 
 ---
 
-## 四、Skills 注册机制
+## 四、存储架构设计
 
-### 4.1 目录结构
+### 4.1 存储抽象层
+
+Groot 采用存储抽象层设计，支持多种存储引擎，通过配置文件指定。
+
+**架构示意：**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     TaskStorage Interface                    │
+│  - Create(task) → task_id                                   │
+│  - Get(task_id) → Task                                      │
+│  - Update(task_id, updates) → bool                          │
+│  - Delete(task_id) → bool                                   │
+│  - List(query) → []Task                                     │
+│  - Exists(task_id) → bool                                   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+          ┌──────────────────┼──────────────────┐
+          ▼                  ▼                  ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ BoltDB Storage  │  │  Redis Storage  │  │   etcd Storage  │
+│   (单机版)       │  │  (集群预留)      │  │   (集群预留)     │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+### 4.2 存储引擎配置
+
+```yaml
+storage:
+  engine: boltdb          # 存储引擎：boltdb（单机）、redis（集群）、etcd（集群）
+  
+  boltdb:                 # BoltDB 配置（单机版）
+    file: groot.db        # 数据库文件路径（相对工作目录）
+    bucket: tasks         # 存储桶名称
+    
+  redis:                  # Redis 配置（集群版预留）
+    endpoint: ${REDIS_ENDPOINT}
+    password: ${REDIS_PASSWORD}
+    key_prefix: groot:task:
+    
+  etcd:                   # etcd 配置（集群版预留）
+    endpoints: [${ETCD_ENDPOINT_1}, ${ETCD_ENDPOINT_2}]
+    key_prefix: /groot/tasks/
+```
+
+### 4.3 TaskStorage 接口定义
+
+```go
+// TaskStorage 存储接口
+type TaskStorage interface {
+    // Create 创建新任务记录
+    Create(task *Task) (taskID string, err error)
+    
+    // Get 根据ID获取任务
+    Get(taskID string) (*Task, error)
+    
+    // Update 更新任务状态/进度
+    Update(taskID string, updates map[string]interface{}) error
+    
+    // Delete 删除任务记录
+    Delete(taskID string) error
+    
+    // List 查询任务列表（支持过滤）
+    List(query *TaskQuery) ([]*Task, error)
+    
+    // Exists 检查任务是否存在
+    Exists(taskID string) bool
+    
+    // Close 关闭存储连接
+    Close() error
+}
+
+// TaskQuery 查询条件
+type TaskQuery struct {
+    Status    []string  // 按状态过滤：running, completed, failed, cancelled
+    StartTime *TimeRange // 时间范围
+    Limit     int       // 返回数量限制
+    Offset    int       // 分页偏移
+}
+
+// TimeRange 时间范围
+type TimeRange struct {
+    Start time.Time
+    End   time.Time
+}
+```
+
+### 4.4 BoltDB 实现（单机版）
+
+BoltDB 是嵌入式键值数据库，无需额外部署，适合单机运行场景。
+
+**实现要点：**
+
+- 数据存储在本地文件 `{GROOT_HOME}/groot.db`
+- 使用 Bucket 按任务状态分区
+- 支持 TTL 自动清理过期任务记录（默认保留7天）
+
+**存储结构：**
+
+```
+Bucket: tasks
+├── {task_id} → Task JSON
+├── {task_id} → Task JSON
+└── ...
+
+Bucket: tasks_by_status
+├── running → [{task_id_1}, {task_id_2}, ...]
+├── completed → [{task_id_3}, {task_id_4}, ...]
+├── failed → [...]
+└── cancelled → [...]
+```
+
+### 4.5 Redis 实现（集群版预留）
+
+用于多实例部署场景，提供：
+- 任务状态共享（所有实例可查询）
+- 任务取消广播（Pub/Sub 消息通知）
+- 分布式锁（防止多实例重复处理）
+
+**预留接口：**
+
+```go
+// RedisStorage 扩展接口（预留）
+type RedisStorage interface {
+    TaskStorage
+    
+    // Subscribe 订阅任务取消消息
+    Subscribe(cancelChan chan string) error
+    
+    // Publish 发布任务取消消息
+    Publish(taskID string) error
+    
+    // AcquireLock 获取任务处理锁
+    AcquireLock(taskID string, ttl int) bool
+    
+    // ReleaseLock 释放任务处理锁
+    ReleaseLock(taskID string) error
+}
+```
+
+### 4.6 etcd 实现（集群版预留）
+
+用于多实例部署场景，提供：
+- 任务状态共享（强一致性）
+- 任务取消广播（Watch 监听）
+- 分布式锁
+
+**预留接口：**
+
+```go
+// EtcdStorage 扩展接口（预留）
+type EtcdStorage interface {
+    TaskStorage
+    
+    // Watch 监听任务状态变更
+    Watch(taskID string) (<-chan TaskEvent, error)
+    
+    // Broadcast 广播任务取消
+    Broadcast(taskID string, event string) error
+    
+    // AcquireLock 分布式锁
+    AcquireLock(taskID string, ttl int) bool
+    
+    // ReleaseLock 释放锁
+    ReleaseLock(taskID string) error
+}
+
+// TaskEvent 任务事件
+type TaskEvent struct {
+    TaskID    string
+    EventType string  // cancelled, status_changed
+    Timestamp time.Time
+}
+```
+
+### 4.7 任务数据结构
+
+```go
+// Task 任务记录
+type Task struct {
+    ID           string        `json:"id"`             // task_id
+    Instruction  string        `json:"instruction"`    // 用户指令
+    Prompt       string        `json:"prompt"`         // 系统提示词
+    Attachments  []Attachment  `json:"attachments"`    // 附件列表
+    Status       string        `json:"status"`         // running, completed, failed, cancelled
+    Progress     *TaskProgress `json:"progress"`       // 执行进度
+    Result       interface{}   `json:"result"`         // 最终结果
+    Error        *TaskError    `json:"error"`          // 错误信息
+    StartTime    time.Time     `json:"start_time"`     // 开始时间
+    EndTime      time.Time     `json:"end_time"`       // 结束时间
+    Duration     int           `json:"duration"`       // 耗时（秒）
+    Caller       string        `json:"caller"`         // 调用方（API Key name）
+    Steps        []StepRecord  `json:"steps"`          // 步骤记录
+}
+
+// Attachment 附件信息
+type Attachment struct {
+    Type    string `json:"type"`    // file, url
+    Name    string `json:"name"`    // 文件名
+    Content string `json:"content"` // Base64内容或URL
+}
+
+// TaskProgress 任务进度
+type TaskProgress struct {
+    CurrentStep    int `json:"current_step"`
+    StepsCompleted int `json:"steps_completed"`
+    Percentage     int `json:"percentage"`
+}
+
+// TaskError 错误信息
+type TaskError struct {
+    Code    string `json:"code"`
+    Message string `json:"message"`
+}
+
+// StepRecord 步骤记录
+type StepRecord struct {
+    StepID        string    `json:"step_id"`
+    Type          string    `json:"type"`        // skill, tool, llm
+    Name          string    `json:"name"`
+    StartTime     time.Time `json:"start_time"`
+    EndTime       time.Time `json:"end_time"`
+    Status        string    `json:"status"`
+    NestingLevel  int       `json:"nesting_level"`
+    Error         *TaskError `json:"error,omitempty"`
+}
+```
+
+### 4.8 任务生命周期管理
+
+**任务状态流转：**
+
+```
+创建 → running → completed（成功）
+                → failed（失败）
+                → cancelled（取消）
+```
+
+**任务清理策略：**
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `retention_days` | 任务记录保留天数 | 7 |
+| `cleanup_interval` | 清理任务执行间隔 | 24h |
+
+配置示例：
+
+```yaml
+storage:
+  engine: boltdb
+  boltdb:
+    file: groot.db
+    bucket: tasks
+  retention_days: 7           # 任务记录保留天数
+  cleanup_interval: 24h       # 清理任务执行间隔
+```
+
+---
+
+## 五、Skills 注册机制
+
+### 5.1 目录结构
 
 ```
 {GROOT_HOME}/skills/
@@ -772,7 +1148,7 @@ X-API-Key: groot-api-key-2026abc
     └── SKILL.md
 ```
 
-### 4.2 Skill 定义格式
+### 5.2 Skill 定义格式
 
 遵循 Claude Code 官方标准（YAML frontmatter + Markdown），兼容 skills.sh 和 skillstore.io。
 
@@ -802,7 +1178,7 @@ Markdown 正文部分可自由组织，通常包含：
 - 输出格式定义
 - 示例（可选）
 
-### 4.3 注册流程
+### 5.3 注册流程
 
 ```
 程序启动 → 扫描 skills 目录 → 解析每个 SKILL.md →
@@ -810,7 +1186,7 @@ Markdown 正文部分可自由组织，通常包含：
 解析 Markdown 正文内容 → 注册到内存索引
 ```
 
-### 4.4 Skills 热插拔机制
+### 5.4 Skills 热插拔机制
 
 支持运行时动态添加、修改、删除 Skills，无需重启服务。
 
@@ -859,9 +1235,9 @@ Skills 目录为工作目录下的固定结构 `{GROOT_HOME}/skills/`，无需�
 }
 ```
 
-## 五、Agent 执行流程
+## 六、Agent 执行流程
 
-### 5.1 ReAct 执行循环
+### 6.1 ReAct 执行循环
 
 Agent 使用 ReAct 模式自主执行任务，框架自动决策调用 Skills 或 MCP 工具：
 
@@ -901,7 +1277,7 @@ Agent 使用 ReAct 模式自主执行任务，框架自动决策调用 Skills �
 └─ 输出最终结果，SSE 推送 completed 事件
 ```
 
-### 5.2 Skills 嵌套支持
+### 6.2 Skills 嵌套支持
 
 **嵌套场景：**
 
@@ -925,7 +1301,7 @@ report_generator (主Skill)
 └─ 工具: file_write
 ```
 
-### 5.3 取消任务机制
+### 6.3 取消任务机制
 
 ```
 DELETE /task/{task_id} →
@@ -946,9 +1322,9 @@ DELETE /task/{task_id} →
 
 ---
 
-## 六、MCP 配置与管理
+## 七、MCP 配置与管理
 
-### 6.1 MCP 配置目录结构
+### 7.1 MCP 配置目录结构
 
 MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔：
 
@@ -960,7 +1336,7 @@ MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔�
 └── database_tool.json        # 外部 MCP（数据库操作）
 ```
 
-### 6.2 MCP 连接类型
+### 7.2 MCP 连接类型
 
 | 类型 | 说明 | 适用场景 |
 |------|------|---------|
@@ -968,7 +1344,7 @@ MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔�
 | `sse` | Server-Sent Events | 远程 HTTP 服务（单向推送） |
 | `streamable_http` | Streamable HTTP | 远程 HTTP 服务（双向流式） |
 
-### 6.3 MCP 配置文件格式
+### 7.3 MCP 配置文件格式
 
 每个 MCP 一个独立的 JSON 文件，符合官方标准格式：
 
@@ -1018,7 +1394,7 @@ MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔�
 }
 ```
 
-### 6.4 配置字段说明
+### 7.4 配置字段说明
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -1032,7 +1408,7 @@ MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔�
 | `baseUrl` | string | sse/streamable_http必填 | 服务地址 |
 | `headers` | object | 否 | HTTP请求头 |
 
-### 6.5 MCP 热插拔机制
+### 7.5 MCP 热插拔机制
 
 支持运行时动态添加、修改、删除 MCP，无需重启服务。
 
@@ -1052,6 +1428,8 @@ MCP 配置采用独立目录，每个 MCP 一个 JSON 文件，支持热插拔�
 │
 └─ 删除 .json → 断开连接 → 移除 MCP 注册 → 输出日志
 ```
+
+**说明：** MCP 连接的健康检查、重连机制等由 eino 框架内部处理，无需额外设计。
 
 **配置项：**
 
@@ -1080,7 +1458,7 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 }
 ```
 
-### 6.6 内置 MCP 工具
+### 7.6 内置 MCP 工具
 
 内置 MCP 工具是 Groot 自带的工具集，与外部 MCP 配置方式不同：
 
@@ -1145,9 +1523,9 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 
 ---
 
-## 七、内置 MCP 工具定义
+## 八、内置 MCP 工具定义
 
-### 7.1 file_operations
+### 8.1 file_operations
 
 | 操作 | 说明 | 参数 |
 |------|------|------|
@@ -1161,10 +1539,10 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 | `file_info` | 获取信息 | `path` |
 
 **安全限制：**
-- 仅允许访问 temp、skills、output 目录
+- 仅允许访问 temp、skills 目录
 - 默认禁止删除操作
 
-### 7.2 http_request
+### 8.2 http_request
 
 | 操作 | 说明 | 参数 |
 |------|------|------|
@@ -1178,7 +1556,7 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 - 超时 30秒
 - 最大响应 10MB
 
-### 7.3 code_execution（默认禁用）
+### 8.3 code_execution（默认禁用）
 
 | 操作 | 说明 | 参数 |
 |------|------|------|
@@ -1193,9 +1571,9 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
 
 ---
 
-## 八、并发与性能控制
+## 九、并发与性能控制
 
-### 8.1 限流配置
+### 9.1 限流配置
 
 ```yaml
 performance:
@@ -1218,7 +1596,7 @@ performance:
     max_concurrent_calls_per_server: 3  # 每个 MCP 服务并发调用数限制
 ```
 
-### 8.2 ReAct 执行限制
+### 9.2 ReAct 执行限制
 
 防止 Agent 无限循环或成本失控：
 
@@ -1249,7 +1627,7 @@ react:
 | 单步执行超时 | step_duration > step_timeout | `completed` (failed) |
 | 用户取消 | 调用 DELETE /task/{task_id} | `completed` (cancelled) |
 
-### 8.3 错误响应
+### 9.3 错误响应
 
 **HTTP 状态码：**
 
@@ -1300,9 +1678,9 @@ react:
 
 ---
 
-## 九、错误处理机制
+## 十、错误处理机制
 
-### 9.1 错误码定义
+### 10.1 错误码定义
 
 | 错误码 | 说明 | 可恢复 |
 |--------|------|--------|
@@ -1316,7 +1694,7 @@ react:
 | `task_timeout` | 任务执行超时 | 否 |
 | `task_cancelled` | 用户取消 | 否 |
 
-### 9.2 重试策略
+### 10.2 重试策略
 
 | 场景 | 重试次数 | 重试间隔 |
 |------|---------|---------|
@@ -1326,9 +1704,9 @@ react:
 
 ---
 
-## 十、日志机制
+## 十一、日志机制
 
-### 10.1 日志类型
+### 11.1 日志类型
 
 | 类型 | 用途 | 级别 |
 |------|------|------|
@@ -1340,13 +1718,13 @@ react:
 | 错误日志 | 所有错误 | ERROR |
 | 性能日志 | 耗时指标 | INFO |
 
-### 10.2 日志存储
+### 11.2 日志存储
 
 - 目录：`{GROOT_HOME}/logs/`
 - 格式：`groot-{date}.log`
 - 保留：7天，自动删除过期日志
 
-### 10.3 日志监控采集
+### 11.3 日志监控采集
 
 JSON 结构化日志可直接用于监控采集，通过 ELK（Elasticsearch + Logstash + Kibana）或类似日志系统分析。
 
@@ -1391,9 +1769,9 @@ JSON 结构化日志可直接用于监控采集，通过 ELK（Elasticsearch + L
 
 ---
 
-## 十一、安全性设计
+## 十二、安全性设计
 
-### 11.1 认证配置
+### 12.1 认证配置
 
 ```yaml
 security:
@@ -1408,7 +1786,7 @@ security:
           permissions: all      # 权限范围
 ```
 
-### 11.2 认证类型
+### 12.2 认证类型
 
 | 类型 | 说明 | 适用场景 |
 |------|------|---------|
@@ -1416,7 +1794,7 @@ security:
 
 `type` 字段预留扩展能力，后续可支持其他认证类型（如 JWT、OAuth2）。
 
-### 11.3 API Key 认证流程
+### 12.3 API Key 认证流程
 
 **调用方请求示例：**
 
@@ -1479,7 +1857,7 @@ curl -X POST http://localhost:8080/task/execute \
 }
 ```
 
-### 11.4 多 Key 配置示例
+### 12.4 多 Key 配置示例
 
 **场景：不同调用方使用不同 Key 和权限**
 
@@ -1504,19 +1882,21 @@ security:
           permissions: [status, health, skills, tools]  # 只能查询
 ```
 
-### 11.5 权限定义
+### 12.5 权限定义
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
 | `execute` | POST /task/execute | 执行任务 |
 | `cancel` | DELETE /task/{task_id} | 取消任务 |
 | `status` | GET /task/status/{task_id} | 查询状态 |
+| `history` | GET /task/history | 查询历史任务列表 |
+| `detail` | GET /task/{task_id} | 查询任务详情 |
 | `skills` | GET /skills | 查看 Skills 列表 |
 | `tools` | GET /tools | 查看 MCP 工具列表 |
 | `health` | GET /health | 健康检查 |
 | `all` | 以上全部 | 全部权限 |
 
-### 11.6 认证开启/关闭场景
+### 12.6 认证开启/关闭场景
 
 | 运行模式 | enabled | 说明 |
 |----------|---------|------|
@@ -1534,7 +1914,7 @@ security:
 
 Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`enabled: false`）。
 
-### 11.7 敏感信息保护
+### 12.7 敏感信息保护
 
 - API Key 值建议通过环境变量存储，避免硬编码
 - 不记录 API Key 值到日志（只记录调用方 name）
@@ -1542,9 +1922,9 @@ Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`e
 
 ---
 
-## 十二、附件处理机制
+## 十三、附件处理机制
 
-### 12.1 支持的附件类型
+### 13.1 支持的附件类型
 
 | 类型 | 格式 | 处理方式 |
 |------|------|---------|
@@ -1554,14 +1934,28 @@ Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`e
 | 图片 | PNG、JPG | 图片数据 |
 | 压缩 | ZIP、TAR | 解压处理 |
 
-### 12.2 传输方式
+### 13.2 传输方式
 
 | 方式 | 适用场景 |
 |------|---------|
 | Base64 编码 | 小文件（<10MB） |
 | URL 链接 | 大文件或外部资源 |
 
-### 12.3 配置
+### 13.3 附件处理说明
+
+**处理责任：** 附件的处理由配套的 MCP 工具负责，而非 Groot 核心代码。Groot 只负责：
+- 接收附件并临时存储到 `temp/` 目录
+- 将附件路径传递给 Agent 上下文
+- 任务完成后自动清理临时文件
+
+**配套 MCP：** 可根据业务需要部署专门的附件处理 MCP，如：
+- `file_reader`：读取各类文件格式
+- `image_processor`：图片处理和分析
+- `document_parser`：文档解析和提取
+
+这些 MCP 由用户按需配置，Groot 不内置附件处理逻辑。
+
+### 13.4 配置
 
 ```yaml
 attachment:
@@ -1574,9 +1968,9 @@ attachment:
 
 ---
 
-## 十三、目录结构与配置
+## 十四、目录结构与配置
 
-### 13.1 工作目录
+### 14.1 工作目录
 
 默认：`~/.groot`，可通过命令行或环境变量更改。
 
@@ -1592,7 +1986,7 @@ attachment:
 └── temp/（任务临时文件）
 ```
 
-### 13.2 配置优先级
+### 14.2 配置优先级
 
 | 配置项 | 来源 |
 |------|------|
@@ -1602,9 +1996,9 @@ attachment:
 
 ---
 
-## 十四、启动与部署
+## 十五、启动与部署
 
-### 14.1 命令行参数
+### 15.1 命令行参数
 
 | 参数 | 缩写 | 说明 | 默认值 |
 |------|------|------|--------|
@@ -1613,7 +2007,7 @@ attachment:
 | `--help` | `-h` | 显示帮助 | - |
 | `--version` | `-v` | 显示版本 | - |
 
-### 14.2 启动流程
+### 15.2 启动流程
 
 ```
 解析参数 → 确定工作目录 → 检查/创建目录结构 →
@@ -1621,7 +2015,7 @@ attachment:
 初始化 LLM → 启动 HTTP 服务 → 等待请求
 ```
 
-### 14.3 优雅关闭
+### 15.3 优雅关闭
 
 - 停止接受新请求
 - 等待当前任务完成（超时30秒）
@@ -1631,7 +2025,7 @@ attachment:
 
 ---
 
-## 十五、完整配置文件模板
+## 十六、完整配置文件模板
 
 首次启动生成的默认 `config.yaml`：
 
@@ -1677,6 +2071,15 @@ mcp:
   hot_reload:
     enabled: true       # 是否启用热插拔
     debounce_delay: 2   # 防抖延迟（秒）
+
+# 存储配置
+storage:
+  engine: boltdb                # 存储引擎：boltdb（单机）、redis（集群预留）、etcd（集群预留）
+  boltdb:
+    file: groot.db              # 数据库文件路径（相对工作目录）
+    bucket: tasks               # 存储桶名称
+  retention_days: 7             # 任务记录保留天数
+  cleanup_interval: 24h         # 清理任务执行间隔
 
 # 性能控制配置
 performance:
@@ -1742,9 +2145,9 @@ logging:
 
 ---
 
-## 十六、Skill 示例
+## 十七、Skill 示例
 
-### 16.1 pdf_analyzer
+### 17.1 pdf_analyzer
 
 **文件路径：** `{GROOT_HOME}/skills/pdf_analyzer/SKILL.md`
 
@@ -1776,7 +2179,7 @@ description: "分析PDF文档内容，提取关键信息并生成结构化摘要
 }
 ```
 
-### 16.2 code_generator
+### 17.2 code_generator
 
 **文件路径：** `{GROOT_HOME}/skills/code_generator/SKILL.md`
 
@@ -1807,7 +2210,7 @@ description: "根据用户需求描述生成代码，支持多种编程语言"
 }
 ```
 
-### 16.3 data_analyzer
+### 17.3 data_analyzer
 
 **文件路径：** `{GROOT_HOME}/skills/data_analyzer/SKILL.md`
 
@@ -1838,7 +2241,7 @@ description: "分析结构化数据文件（CSV、JSON等），执行统计分�
 }
 ```
 
-### 16.4 report_generator（嵌套Skill示例）
+### 17.4 report_generator（嵌套Skill示例）
 
 **文件路径：** `{GROOT_HOME}/skills/report_generator/SKILL.md`
 
@@ -1892,4 +2295,4 @@ description: "综合分析多种来源的资料，生成完整的分析报告"
 | `{GROOT_HOME}/mcp/` | MCP 配置目录 |
 | `{GROOT_HOME}/logs/` | 日志目录 |
 | `{GROOT_HOME}/temp/` | 临时文件 |
-| `{GROOT_HOME}/output/` | 任务输出 |
+| `{GROOT_HOME}/groot.db` | BoltDB 数据库文件（单机版） |
