@@ -26,6 +26,8 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | HTTP 框架 | Hertz（字节开源） |
 | Agent 框架 | eino（字节开源） |
 | LLM 调用 | OpenAI 兼容协议 |
+| 存储（单机） | BoltDB（嵌入式键值数据库） |
+| 存储（集群预留） | Redis / etcd |
 | 配置格式 | YAML |
 | 日志格式 | JSON 结构化（支持日志采集监控） |
 
@@ -93,24 +95,23 @@ llm:
 │  - 循环执行直到任务完成或达到限制                               │
 └─────────────────────────────────────────────────────────────┘
                               │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      MCP Manager                             │
-│  - 加载内置 MCP（file_operations、http_request）              │
-│  - 从配置文件加载外部 MCP                                      │
-│  - 提供 MCP 工具列表给 Agent                                   │
-│  - 执行 MCP 工具调用、权限检查                                  │
-└─────────────────────────────────────────────────────────────┘
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   MCP Manager   │  │ Task Storage    │  │ Config & Registry│
+│  - 加载内置 MCP  │  │  - 任务持久化    │  │  - 配置管理      │
+│  - 加载外部 MCP  │  │  - 状态查询      │  │  - Skills 注册   │
+│  - 工具调用执行  │  │  - 历史记录      │  │  - MCP 配置解析  │
+│  - 权限检查      │  │  - 清理过期数据  │  │  - 热插拔管理    │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
                               │
                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Config & Registry                         │
-│  - LLM 配置（多模型，OpenAI 协议）                              │
-│  - Skills 目录扫描注册、热插拔                                  │
-│  - MCP 配置文件解析                                            │
-│  - ReAct 执行限制配置                                          │
-│  - 日志配置                                                    │
-└─────────────────────────────────────────────────────────────┘
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+        ┌───────────┐   ┌───────────┐   ┌───────────┐
+        │  BoltDB   │   │   Redis   │   │   etcd    │
+        │ （单机版） │   │（集群预留）│   │（集群预留）│
+        └───────────┘   └───────────┘   └───────────┘
 ```
 
 ### 2.2 模块职责
@@ -120,6 +121,7 @@ llm:
 | REST API Layer | 请求解析、响应封装、限流、超时控制 | 可拆分为独立 Gateway |
 | Agent Engine | ReAct 执行、工具注册、自主决策 | 支持多 Agent 协作扩展 |
 | MCP Manager | MCP 加载、工具调用、权限检查 | 支持动态 MCP 加载/卸载 |
+| Task Storage | 任务持久化、状态查询、历史记录、过期清理 | 支持 Redis/etcd 集群扩展 |
 | Config & Registry | 配置管理、Skills 注册、热插拔 | 支持分布式配置中心 |
 
 ### 2.3 ReAct 执行模式
@@ -1171,6 +1173,19 @@ description: "技能描述，用于 Agent 工具列表展示"
 |------|------|------|------|
 | `name` | string | 是 | Skill 名称（全局唯一） |
 | `description` | string | 是 | Skill 描述，用于 Agent 工具列表 |
+| `dependencies` | array | 否 | 依赖的其他 Skill 名称列表（可选） |
+
+**dependencies 字段示例：**
+
+```markdown
+---
+name: report_generator
+description: "综合分析多种来源的资料，生成完整的分析报告"
+dependencies: [pdf_analyzer, data_analyzer]
+---
+```
+
+当 Skill 声明了 dependencies，Agent 在执行时会自动识别并递归调用依赖的子 Skills。依赖处理由 eino 框架内部完成。
 
 Markdown 正文部分可自由组织，通常包含：
 - 执行步骤说明
@@ -1479,7 +1494,7 @@ MCP 目录为工作目录下的固定结构 `{GROOT_HOME}/mcp/`，无需配置�
   "isActive": true,
   "tools": ["file_read", "file_write", "file_search", "directory_list", "directory_create"],
   "restrictions": {
-    "allowed_paths": ["temp", "skills", "output"],
+    "allowed_paths": ["temp", "skills"],
     "denied_operations": ["file_delete"]
   }
 }
@@ -2011,7 +2026,7 @@ attachment:
 
 ```
 解析参数 → 确定工作目录 → 检查/创建目录结构 →
-加载配置 → 初始化日志 → 注册 Skills → 加载 MCP →
+加载配置 → 初始化日志 → 初始化存储引擎 → 注册 Skills → 加载 MCP →
 初始化 LLM → 启动 HTTP 服务 → 等待请求
 ```
 
@@ -2279,6 +2294,9 @@ description: "综合分析多种来源的资料，生成完整的分析报告"
 | `GROOT_HOME` | 工作目录 | 否 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 否 |
 | `DB_CONNECTION` | 数据库连接 | 否 |
+| `REDIS_ENDPOINT` | Redis 服务地址 | 否（集群版时需要） |
+| `REDIS_PASSWORD` | Redis 密码 | 否（集群版时需要） |
+| `ETCD_ENDPOINT_*` | etcd 服务地址 | 否（集群版时需要） |
 
 ### B. 默认端口
 
