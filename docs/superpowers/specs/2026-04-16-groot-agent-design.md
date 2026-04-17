@@ -27,8 +27,7 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 | Agent 框架 | eino（字节开源） |
 | LLM 调用 | OpenAI 兼容协议 |
 | 配置格式 | YAML |
-| 日志格式 | JSON 结构化 |
-| 监控 | Prometheus Metrics |
+| 日志格式 | JSON 结构化（支持日志采集监控） |
 
 ---
 
@@ -1094,9 +1093,9 @@ react:
 
 ---
 
-## 十、日志与监控机制
+## 十、日志机制
 
-### 11.1 日志类型
+### 10.1 日志类型
 
 | 类型 | 用途 | 级别 |
 |------|------|------|
@@ -1108,21 +1107,54 @@ react:
 | 错误日志 | 所有错误 | ERROR |
 | 性能日志 | 耗时指标 | INFO |
 
-### 11.2 日志存储
+### 10.2 日志存储
 
 - 目录：`{GROOT_HOME}/logs/`
 - 格式：`groot-{date}.log`
 - 保留：7天，自动删除过期日志
 
-### 11.3 监控指标
+### 10.3 日志监控采集
 
-| 类别 | 指标 |
+JSON 结构化日志可直接用于监控采集，通过 ELK（Elasticsearch + Logstash + Kibana）或类似日志系统分析。
+
+**日志事件字段：**
+
+| 字段 | 说明 |
 |------|------|
-| 请求 | `requests_total`、`requests_success`、`requests_failed` |
-| 任务 | `tasks_running`、`tasks_completed`、`tasks_duration` |
-| Skills | `skill_calls_total`、`skill_calls_by_name`、`skill_duration` |
-| LLM | `llm_calls_total`、`llm_tokens_used`、`llm_latency` |
-| MCP | `mcp_calls_total`、`mcp_calls_by_server` |
+| `event` | 事件类型（如 `task_completed`、`skill_call`） |
+| `timestamp` | 时间戳（ISO格式） |
+| `level` | 日志级别 |
+| `data` | 事件详情（含耗时、计数等） |
+
+**监控日志示例：**
+
+```json
+{
+  "timestamp": "2026-04-17T10:30:00Z",
+  "level": "INFO",
+  "event": "task_completed",
+  "data": {
+    "task_id": "task-xxx",
+    "duration": 45,
+    "skill_calls": 3,
+    "llm_tokens": 5000,
+    "status": "success"
+  }
+}
+```
+
+```json
+{
+  "timestamp": "2026-04-17T10:30:05Z",
+  "level": "INFO",
+  "event": "skill_call",
+  "data": {
+    "skill_name": "pdf_analyzer",
+    "duration": 30,
+    "nesting_level": 0
+  }
+}
+```
 
 ---
 
@@ -1357,14 +1389,6 @@ logging:
     llm: {enabled: true, level: debug}
     mcp: {enabled: true, level: debug}
     error: {enabled: true, level: error}
-
-# 监控配置
-monitoring:
-  enabled: true
-  metrics_port: 9090
-  health_check:
-    enabled: true
-    endpoint: /health
 ```
 
 ---
@@ -1509,7 +1533,6 @@ description: "综合分析多种来源的资料，生成完整的分析报告"
 | 服务 | 端口 |
 |------|------|
 | HTTP API | 8080 |
-| Metrics | 9090（可选） |
 
 ### C. 文件路径约定
 
