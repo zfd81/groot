@@ -39,26 +39,18 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      REST API Layer (Hertz)                  │
-│  - 接收请求（指令 + 附件）                                     │
+│  - 接收请求（指令 + prompt + 附件）                            │
 │  - SSE 流式返回进度和结果                                      │
 │  - 限流、超时控制                                              │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Intent Classifier                         │
-│  - 扫描已注册 Skills，计算匹配度                               │
-│  - 决策：调用最匹配 Skill 或 Agent 自主执行                    │
-│  - 支持 Skills 嵌套依赖解析                                    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
 │                      Agent Engine (eino)                     │
-│  - 解析 Skill Instructions 或自主决策执行                      │
-│  - 自主决策调用 MCP 工具、执行步骤                              │
-│  - 循环执行直到任务完成                                        │
-│  - 处理 Skills 嵌套调用                                        │
+│  - ReAct 执行模式（Reasoning + Acting + Observation）        │
+│  - 注册 Skills 和 MCP 工具列表                                 │
+│  - Agent 自主决策调用工具或直接生成回答                        │
+│  - 循环执行直到任务完成或达到限制                               │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -74,8 +66,9 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 ┌─────────────────────────────────────────────────────────────┐
 │                    Config & Registry                         │
 │  - LLM 配置（多模型，OpenAI 协议）                              │
-│  - Skills 目录扫描注册                                         │
+│  - Skills 目录扫描注册、热插拔                                  │
 │  - MCP 配置文件解析                                            │
+│  - ReAct 执行限制配置                                          │
 │  - 日志配置                                                    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -85,10 +78,72 @@ Groot 是一个通过 REST API 提供服务的 AI Agent，作为"AI 能力中间
 | 模块 | 职责 | 扩展预留点 |
 |------|------|-----------|
 | REST API Layer | 请求解析、响应封装、限流、超时控制 | 可拆分为独立 Gateway |
-| Intent Classifier | Skills 匹配、意图决策 | 可引入更复杂的匹配算法/模型 |
-| Agent Engine | 核心执行逻辑、工具编排 | 支持多 Agent 协作扩展 |
-| MCP Manager | MCP 加载、工具调用 | 支持动态 MCP 加载/卸载 |
-| Config & Registry | 配置管理、Skills 注册 | 支持分布式配置中心 |
+| Agent Engine | ReAct 执行、工具注册、自主决策 | 支持多 Agent 协作扩展 |
+| MCP Manager | MCP 加载、工具调用、权限检查 | 支持动态 MCP 加载/卸载 |
+| Config & Registry | 配置管理、Skills 注册、热插拔 | 支持分布式配置中心 |
+
+### 2.3 ReAct 执行模式
+
+Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
+
+```
+用户指令 → Agent 开始 →
+│
+循环：│
+      ├─ Reasoning（思考）：LLM 分析当前状态，决定下一步动作
+      │   ├─ 调用某个 Skill（如指令中提及或Agent判断需要）
+      │   ├─ 调用某个 MCP 工具
+      │   └─ 直接生成回答（任务完成）
+      │
+      ├─ Acting（执行）：执行决定的动作
+      │   ├─ Skill 调用 → 递归执行
+      │   ├─ MCP 工具调用 → MCP Manager 执行
+      │   └─ LLM 生成 → 直接输出
+      │
+      ├─ Observation（观察）：获取执行结果，更新上下文
+      │
+      ├─ SSE 推送进度事件
+      │
+      └─ 检查终止条件
+          ├─ 任务完成 → 推送 completed 事件，结束
+          ├─ 达到最大循环次数 → 推送 error 事件，终止
+          ├─ Token 消耗超限 → 推送 error 事件，终止
+          ├─ 单步失败 → Agent 判断是否重试或终止
+          └─ 继续循环
+│
+→ 循环结束，返回最终结果
+```
+
+### 2.4 工具注册机制
+
+**Skills 注册给 Agent：**
+- 启动时扫描 skills 目录，解析每个 skill.md
+- 将 Skill 的 Instructions 作为工具描述注册给 eino Agent
+- Skill 中的 Dependencies 在执行时递归加载
+
+**MCP 工具注册给 Agent：**
+- 内置 MCP 工具自动注册
+- 外部 MCP 工具从配置加载并注册
+- 每个工具包含：名称、描述、参数定义
+
+**Agent 工具列表示例：**
+
+| 工具类型 | 名称 | 描述 |
+|---------|------|------|
+| Skill | pdf_analyzer | 分析PDF文档并生成摘要 |
+| Skill | code_generator | 根据需求生成代码 |
+| MCP | file_read | 读取文件内容 |
+| MCP | http_get | 发送HTTP GET请求 |
+
+### 2.5 循环终止条件
+
+| 条件 | 说明 |
+|------|------|
+| Agent 判断完成 | LLM 输出"任务完成"或最终答案 |
+| 达到最大循环次数 | 防止无限循环，配置限制 |
+| Token 消耗超限 | 防止成本失控，配置限制 |
+| 单步执行超时 | 单个动作执行超时 |
+| 用户取消 | 通过 API 主动取消任务 |
 
 ---
 
@@ -142,7 +197,7 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 | 事件类型 | 发送频率 | 说明 |
 |---------|---------|------|
-| `intent` | 1次 | 意图匹配，确定执行模式 |
+| `intent` | 1次 | 任务开始，标记执行起点 |
 | `step_start` | 多次 | 步骤开始（Skill/工具/LLM调用） |
 | `progress` | 多次 | 中间进度更新 |
 | `step_end` | 多次 | 步骤结束（含状态、时间戳） |
@@ -161,25 +216,15 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 **SSE 事件返回值结构：**
 
-**intent（意图匹配）：**
+**intent（任务开始）：**
 
-Skill模式：
 ```json
-{"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92,"reason":"附件为PDF类型","timestamp":"2026-04-17T10:30:00Z"}
-```
-
-自主模式：
-```json
-{"mode":"autonomous","reason":"未匹配到Skill","timestamp":"2026-04-17T10:30:00Z"}
+{"timestamp":"2026-04-17T10:30:00Z"}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `mode` | string | 是 | 执行模式：`skill` / `autonomous` |
-| `skill_name` | string | Skill模式必填 | 匹配的Skill名称 |
-| `confidence` | float | Skill模式必填 | 匹配置信度（0-1） |
-| `reason` | string | 否 | 匹配或未匹配原因 |
-| `timestamp` | string | 是 | 时间戳（ISO格式） |
+| `timestamp` | string | 是 | 任务开始时间戳（ISO格式） |
 
 **step_start（步骤开始）：**
 
@@ -503,37 +548,46 @@ skills:
 }
 ```
 
-## 五、意图匹配与 Skills 嵌套机制
+## 五、Agent 执行流程
 
-### 5.1 匹配流程
+### 5.1 ReAct 执行循环
+
+Agent 使用 ReAct 模式自主执行任务，框架自动决策调用 Skills 或 MCP 工具：
 
 ```
-用户请求（指令 + 附件）到达 →
+用户请求到达 → 构建 Agent 上下文 →
 │
-├─ 提取请求特征（关键词、附件类型、语义意图）
+├─ 上下文内容
+│   ├─ 用户指令 + prompt + 附件
+│   ├─ 已注册的 Skills 列表（含 Instructions）
+│   ├─ 已注册的 MCP 工具列表
+│   └─ 执行限制配置（最大循环次数、Token限制等）
 │
-├─ 计算与所有 Skills 的匹配分数
-│   ├─ 关键词匹配（30%权重）
-│   ├─ 附件类型匹配（25%权重）
-│   ├─ 触发条件匹配（20%权重）
-│   └─ 语义相似度（25%权重，LLM辅助）
-│
-├─ 选择最高匹配分数的 Skill
+├─ ReAct 执行循环
 │   │
-│   ├─ 分数 ≥ 置信阈值（0.6）→ 调用该 Skill
-│   │   ├─ 解析 Skill 的 Dependencies
-│   │   ├─ 有嵌套 → 递归加载子 Skills
-│   │   └─ 构建执行依赖树
+│   ├─ Reasoning（思考）
+│   │   LLM 分析当前状态，决定下一步动作：
+│   │   ├─ 调用 Skill（如指令提及或 Agent 判断需要）
+│   │   ├─ 调用 MCP 工具
+│   │   └─ 直接生成回答（任务完成）
 │   │
-│   └─ 分数 < 置信阈值 → Agent 自主决策执行
-│       ├─ LLM 分析任务需求
-│       ├─ 决定执行方式：
-│       │   ├─ 直接 LLM 推理生成结果
-│       │   ├─ 调用 MCP 工具完成任务
-│       │   └─ 组合调用多个 MCP 工具
-│       └─ 自主循环执行直到完成
+│   ├─ Acting（执行）
+│   │   ├─ Skill 调用 → 递归执行子 Skill
+│   │   ├─ MCP 工具调用 → MCP Manager 执行
+│   │   └─ LLM 生成 → 输出结果
+│   │
+│   ├─ Observation（观察）
+│   │   获取执行结果，更新上下文，SSE 推送进度事件
+│   │
+│   └─ 检查终止条件
+│       ├─ Agent 判断完成 → 结束循环
+│       ├─ 达到最大循环次数 → 终止
+│       ├─ Token 消耗超限 → 终止
+│       ├─ 单步执行超时 → 终止
+│       ├─ 用户取消 → 终止
+│       └─ 继续循环
 │
-→ 将执行计划传给 Agent Engine
+└─ 输出最终结果，SSE 推送 completed 事件
 ```
 
 ### 5.2 Skills 嵌套支持
@@ -560,46 +614,7 @@ report_generator (主Skill)
 └─ 工具: file_write
 ```
 
----
-
-## 六、Agent Engine 执行流程
-
-### 6.1 执行流程
-
-```
-接收执行计划 →
-│
-├─ 构建 Agent 上下文
-│   ├─ 用户指令 + 附件
-│   ├─ Skill Instructions（如有匹配）
-│   ├─ 可用 MCP 工具列表
-│   ├─ 嵌套 Skills（如有）
-│   └─ 输出格式要求
-│
-├─ Agent 执行循环
-│   │
-│   ├─ LLM 分析当前状态，决定下一步动作
-│   │   ├─ 动作类型：skill_call / tool_call / reasoning / output
-│   │
-│   ├─ 执行动作
-│   │   ├─ skill_call → 递归调用子 Skill
-│   │   ├─ tool_call → 调用 MCP Manager
-│   │   ├─ reasoning → LLM 直接生成
-│   │   └─ output → 生成最终结果
-│   │
-│   ├─ SSE 推送进度事件
-│   │
-│   ├─ 检查是否完成
-│   │   ├─ 完成 → 推送 result 事件
-│   │   ├─ 未完成 → 继续循环
-│   │   └─ 出错 → 推送 error 事件
-│   │
-│   └─ 循环直到完成
-│
-└─ 关闭 SSE 连接
-```
-
-### 6.2 取消任务机制
+### 5.3 取消任务机制
 
 ```
 POST /task/cancel →
@@ -620,7 +635,7 @@ POST /task/cancel →
 
 ---
 
-## 七、MCP 配置与管理
+## 六、MCP 配置与管理
 
 ### 7.1 MCP 连接类型
 
@@ -660,7 +675,7 @@ mcp:
 
 ---
 
-## 八、内置 MCP 工具定义
+## 七、内置 MCP 工具定义
 
 ### 8.1 file_operations
 
@@ -708,9 +723,9 @@ mcp:
 
 ---
 
-## 九、并发与性能控制
+## 八、并发与性能控制
 
-### 9.1 限流配置
+### 8.1 限流配置
 
 ```yaml
 performance:
@@ -733,7 +748,38 @@ performance:
     max_concurrent_calls_per_server: 3
 ```
 
-### 9.2 错误响应
+### 8.2 ReAct 执行限制
+
+防止 Agent 无限循环或成本失控：
+
+```yaml
+react:
+  max_iterations: 20          # 最大循环次数
+  max_tokens: 100000          # 最大Token消耗
+  step_timeout: 60            # 单步执行超时（秒）
+  error_retry: 2              # 单步失败重试次数
+  nesting_max_depth: 3        # Skills嵌套最大深度
+```
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `max_iterations` | ReAct 最大循环次数，防止无限循环 | 20 |
+| `max_tokens` | 单任务最大Token消耗，防止成本失控 | 100000 |
+| `step_timeout` | 单步执行超时时间（秒） | 60 |
+| `error_retry` | 单步失败后重试次数 | 2 |
+| `nesting_max_depth` | Skills 嵌套最大深度 | 3 |
+
+**终止条件说明：**
+
+| 条件 | 触发时机 | SSE 事件 |
+|------|---------|---------|
+| Agent判断完成 | LLM输出最终答案 | `completed` (success) |
+| 达到最大循环次数 | iteration > max_iterations | `completed` (failed) |
+| Token消耗超限 | tokens_used > max_tokens | `completed` (failed) |
+| 单步执行超时 | step_duration > step_timeout | `completed` (failed) |
+| 用户取消 | 调用 /task/cancel | `completed` (cancelled) |
+
+### 8.3 错误响应
 
 | 场景 | HTTP 状态码 |
 |------|------------|
@@ -745,9 +791,9 @@ performance:
 
 ---
 
-## 十、错误处理机制
+## 九、错误处理机制
 
-### 10.1 错误码定义
+### 9.1 错误码定义
 
 | 错误码 | 说明 | 可恢复 |
 |--------|------|--------|
@@ -761,7 +807,7 @@ performance:
 | `TASK_TIMEOUT` | 任务执行超时 | 否 |
 | `TASK_CANCELLED` | 用户取消 | 否 |
 
-### 10.2 重试策略
+### 9.2 重试策略
 
 | 场景 | 重试次数 | 重试间隔 |
 |------|---------|---------|
@@ -771,7 +817,7 @@ performance:
 
 ---
 
-## 十一、日志与监控机制
+## 十、日志与监控机制
 
 ### 11.1 日志类型
 
@@ -803,7 +849,7 @@ performance:
 
 ---
 
-## 十二、安全性设计
+## 十一、安全性设计
 
 ### 12.1 API 认证
 
@@ -839,7 +885,7 @@ security:
 
 ---
 
-## 十三、附件处理机制
+## 十二、附件处理机制
 
 ### 13.1 支持的附件类型
 
@@ -871,7 +917,7 @@ attachment:
 
 ---
 
-## 十四、目录结构与配置
+## 十三、目录结构与配置
 
 ### 14.1 工作目录
 
@@ -897,7 +943,7 @@ attachment:
 
 ---
 
-## 十五、启动与部署
+## 十四、启动与部署
 
 ### 15.1 命令行参数
 
@@ -926,7 +972,7 @@ attachment:
 
 ---
 
-## 十六、完整配置文件模板
+## 十五、完整配置文件模板
 
 首次启动生成的默认 `config.yaml`：
 
@@ -983,12 +1029,6 @@ mcp:
       enabled: false
   external: []
 
-# 意图匹配配置
-intent:
-  confidence_threshold: 0.6
-  use_llm_matching: true
-  max_nesting_depth: 3
-
 # 性能控制配置
 performance:
   rate_limit:
@@ -1005,6 +1045,14 @@ performance:
     retry_delay: 2
   mcp:
     max_concurrent_calls_per_server: 3
+
+# ReAct 执行配置
+react:
+  max_iterations: 20          # 最大循环次数，防止无限循环
+  max_tokens: 100000          # 最大Token消耗，防止成本失控
+  step_timeout: 60            # 单步执行超时（秒）
+  error_retry: 2              # 单步失败重试次数
+  nesting_max_depth: 3        # Skills 嵌套最大深度
 
 # 附件处理配置
 attachment:
@@ -1052,7 +1100,7 @@ monitoring:
 
 ---
 
-## 十七、Skill 示例
+## 十六、Skill 示例
 
 ### 17.1 pdf_analyzer
 
@@ -1165,7 +1213,7 @@ monitoring:
 
 ---
 
-## 十八、API 详细示例
+## 十七、API 详细示例
 
 ### 18.1 POST /task/execute 请求示例
 
@@ -1210,12 +1258,12 @@ monitoring:
 
 ### 18.2 SSE 响应事件流示例
 
-**Skill匹配模式（成功）：**
+**成功执行：**
 ```
 HTTP Header: X-Task-ID: task-xxx
 
 event: intent
-data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92,"timestamp":"2026-04-17T10:30:00Z"}
+data: {"timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
 data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
@@ -1239,38 +1287,12 @@ event: completed
 data: {"status":"success","timestamp":"2026-04-17T10:30:45Z","duration":"45s","result":{"document_type":"report","key_points":[...],"summary":"..."}}
 ```
 
-**自主执行模式：**
+**失败执行：**
 ```
 HTTP Header: X-Task-ID: task-xxx
 
 event: intent
-data: {"mode":"autonomous","reason":"未匹配到Skill","timestamp":"2026-04-17T10:30:00Z"}
-
-event: step_start
-data: {"type":"tool","name":"http_get","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","params":{"url":"https://example.com/data"}}
-
-event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在请求数据...","timestamp":"2026-04-17T10:30:06Z"}
-
-event: step_end
-data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:06.5Z","status":"success"}
-
-event: step_start
-data: {"type":"llm","name":"generate","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:07Z"}
-
-event: step_end
-data: {"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:15Z","status":"success"}
-
-event: completed
-data: {"status":"success","timestamp":"2026-04-17T10:30:15Z","duration":"15s","result":"执行结果内容"}
-```
-
-**失败模式：**
-```
-HTTP Header: X-Task-ID: task-xxx
-
-event: intent
-data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.85,"timestamp":"2026-04-17T10:30:00Z"}
+data: {"timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
 data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
@@ -1285,12 +1307,12 @@ event: completed
 data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"SKILL_ERROR","message":"pdf_analyzer执行失败"}}
 ```
 
-**取消模式：**
+**取消执行：**
 ```
 HTTP Header: X-Task-ID: task-xxx
 
 event: intent
-data: {"mode":"skill","skill_name":"pdf_analyzer","confidence":0.92,"timestamp":"2026-04-17T10:30:00Z"}
+data: {"timestamp":"2026-04-17T10:30:00Z"}
 
 event: step_start
 data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z"}
