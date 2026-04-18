@@ -7,7 +7,6 @@ require (
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/cloudwego/hertz v0.10.4
 	github.com/fsnotify/fsnotify v1.9.0
-	go.etcd.io/bbolt v1.4.3
 	go.uber.org/zap v1.27.1
 	gopkg.in/yaml.v3 v3.0.1
 )
