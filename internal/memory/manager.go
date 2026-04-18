@@ -1,0 +1,322 @@
+package memory
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/zfd81/groot/internal/logger"
+)
+
+// Manager Memory 接口的实现
+type Manager struct {
+	memoryDir     string
+	retentionDays int
+	log           *logger.Logger
+}
+
+// NewManager 创建 Memory Manager
+func NewManager(memoryDir string, retentionDays int, log *logger.Logger) *Manager {
+	// 确保目录存在
+	os.MkdirAll(memoryDir, 0755)
+
+	return &Manager{
+		memoryDir:     memoryDir,
+		retentionDays: retentionDays,
+		log:           log,
+	}
+}
+
+// GetMemoryDir 返回记忆目录路径
+func (m *Manager) GetMemoryDir() string {
+	return m.memoryDir
+}
+
+// sessionDir 返回会话目录路径
+func (m *Manager) sessionDir(sessionID string) string {
+	return filepath.Join(m.memoryDir, sessionID)
+}
+
+// historyPath 返回 history.json 路径
+func (m *Manager) historyPath(sessionID string) string {
+	return filepath.Join(m.sessionDir(sessionID), "history.json")
+}
+
+// chatsDir 返回 chats 目录路径
+func (m *Manager) chatsDir(sessionID string) string {
+	return filepath.Join(m.sessionDir(sessionID), "chats")
+}
+
+// chatPath 返回单次对话记录路径
+func (m *Manager) chatPath(sessionID, chatID string) string {
+	return filepath.Join(m.chatsDir(sessionID), chatID+".json")
+}
+
+// attachmentsDir 返回 attachments 目录路径
+func (m *Manager) attachmentsDir(sessionID string) string {
+	return filepath.Join(m.sessionDir(sessionID), "attachments")
+}
+
+// CreateSession 创建新会话
+func (m *Manager) CreateSession(sessionID string) error {
+	sessionDir := m.sessionDir(sessionID)
+
+	// 创建目录结构
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return fmt.Errorf("创建会话目录失败: %w", err)
+	}
+	if err := os.MkdirAll(m.chatsDir(sessionID), 0755); err != nil {
+		return fmt.Errorf("创建 chats 目录失败: %w", err)
+	}
+	if err := os.MkdirAll(m.attachmentsDir(sessionID), 0755); err != nil {
+		return fmt.Errorf("创建 attachments 目录失败: %w", err)
+	}
+
+	// 创建初始 history.json
+	history := &History{
+		SessionID: sessionID,
+		CreatedAt: time.Now(),
+		Messages:  []Message{},
+	}
+
+	return m.saveHistory(sessionID, history)
+}
+
+// ExistsSession 检查会话是否存在
+func (m *Manager) ExistsSession(sessionID string) bool {
+	historyPath := m.historyPath(sessionID)
+	_, err := os.Stat(historyPath)
+	return err == nil
+}
+
+// GetSessionInfo 获取会话信息
+func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
+	history, err := m.GetHistory(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SessionInfo{
+		SessionID:  sessionID,
+		CreatedAt:  history.CreatedAt,
+		RoundCount: len(history.Messages),
+		Path:       m.sessionDir(sessionID),
+	}, nil
+}
+
+// ListSessions 查询会话列表
+func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
+	entries, err := os.ReadDir(m.memoryDir)
+	if err != nil {
+		return nil, 0, fmt.Errorf("读取记忆目录失败: %w", err)
+	}
+
+	var sessions []SessionInfo
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessionID := entry.Name()
+		info, err := m.GetSessionInfo(sessionID)
+		if err != nil {
+			m.log.Info("获取会话信息失败: " + sessionID + ", error: " + err.Error())
+			continue
+		}
+		sessions = append(sessions, *info)
+	}
+
+	// 按创建时间倒序排列
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
+	})
+
+	total := len(sessions)
+
+	// 应用分页
+	if offset >= total {
+		return []SessionInfo{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	return sessions[offset:end], total, nil
+}
+
+// saveHistory 保存 history.json
+func (m *Manager) saveHistory(sessionID string, history *History) error {
+	data, err := json.MarshalIndent(history, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化 history 失败: %w", err)
+	}
+
+	return os.WriteFile(m.historyPath(sessionID), data, 0644)
+}
+
+// GetHistory 获取会话历史
+func (m *Manager) GetHistory(sessionID string) (*History, error) {
+	data, err := os.ReadFile(m.historyPath(sessionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("会话不存在: %s", sessionID)
+		}
+		return nil, fmt.Errorf("读取 history 失败: %w", err)
+	}
+
+	var history History
+	if err := json.Unmarshal(data, &history); err != nil {
+		return nil, fmt.Errorf("解析 history 失败: %w", err)
+	}
+
+	return &history, nil
+}
+
+// AppendMessage 追加对话消息
+func (m *Manager) AppendMessage(sessionID string, message *Message) error {
+	history, err := m.GetHistory(sessionID)
+	if err != nil {
+		return err
+	}
+
+	history.Messages = append(history.Messages, *message)
+
+	return m.saveHistory(sessionID, history)
+}
+
+// GetRoundCount 获取对话轮数
+func (m *Manager) GetRoundCount(sessionID string) int {
+	history, err := m.GetHistory(sessionID)
+	if err != nil {
+		return 0
+	}
+	return len(history.Messages)
+}
+
+// SaveChatRecord 保存详细对话记录
+func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
+	// 确保 chats 目录存在
+	os.MkdirAll(m.chatsDir(sessionID), 0755)
+
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化 chat record 失败: %w", err)
+	}
+
+	return os.WriteFile(m.chatPath(sessionID, record.ChatID), data, 0644)
+}
+
+// GetChatRecord 获取单次对话详情
+func (m *Manager) GetChatRecord(sessionID string, chatID string) (*ChatRecord, error) {
+	data, err := os.ReadFile(m.chatPath(sessionID, chatID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("对话记录不存在: %s", chatID)
+		}
+		return nil, fmt.Errorf("读取 chat record 失败: %w", err)
+	}
+
+	var record ChatRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, fmt.Errorf("解析 chat record 失败: %w", err)
+	}
+
+	return &record, nil
+}
+
+// GetLatestChatRecord 获取最近一次对话记录
+func (m *Manager) GetLatestChatRecord(sessionID string) (*ChatRecord, error) {
+	history, err := m.GetHistory(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(history.Messages) == 0 {
+		return nil, nil
+	}
+
+	latest := history.Messages[len(history.Messages)-1]
+	return m.GetChatRecord(sessionID, latest.ChatID)
+}
+
+// SaveAttachment 保存附件
+func (m *Manager) SaveAttachment(sessionID string, filename string, content []byte) (string, error) {
+	// 确保 attachments 目录存在
+	os.MkdirAll(m.attachmentsDir(sessionID), 0755)
+
+	// 文件名安全处理
+	safeName := sanitizeFilename(filename)
+
+	fullPath := filepath.Join(m.attachmentsDir(sessionID), safeName)
+
+	if err := os.WriteFile(fullPath, content, 0644); err != nil {
+		return "", fmt.Errorf("保存附件失败: %w", err)
+	}
+
+	return fullPath, nil
+}
+
+// GetAttachmentPath 获取附件完整路径
+func (m *Manager) GetAttachmentPath(sessionID string, filename string) string {
+	return filepath.Join(m.attachmentsDir(sessionID), sanitizeFilename(filename))
+}
+
+// sanitizeFilename 文件名安全处理
+func sanitizeFilename(name string) string {
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "..", "_")
+
+	// 限制长度
+	if len(name) > 255 {
+		ext := filepath.Ext(name)
+		base := name[:255-len(ext)]
+		name = base + ext
+	}
+
+	return name
+}
+
+// Cleanup 清理过期会话
+func (m *Manager) Cleanup(ctx context.Context) (int, error) {
+	entries, err := os.ReadDir(m.memoryDir)
+	if err != nil {
+		return 0, fmt.Errorf("读取记忆目录失败: %w", err)
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -m.retentionDays)
+	deleted := 0
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		sessionID := entry.Name()
+		sessionDir := m.sessionDir(sessionID)
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		// 检查创建时间
+		if info.ModTime().Before(cutoff) {
+			// 删除整个会话目录
+			if err := os.RemoveAll(sessionDir); err != nil {
+				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
+				continue
+			}
+			deleted++
+			m.log.Info("清理会话: " + sessionID + ", 创建时间: " + info.ModTime().Format("2006-01-02"))
+		}
+	}
+
+	m.log.Info(fmt.Sprintf("清理完成, 删除 %d 个会话", deleted))
+	return deleted, nil
+}
