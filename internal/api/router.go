@@ -12,11 +12,11 @@ func RegisterRoutes(h *server.Hertz,
 	authMW *middleware.AuthMiddleware,
 	rateLimitMW *middleware.RateLimitMiddleware,
 	recoveryMW *middleware.RecoveryMiddleware,
-	executeH *handler.ExecuteHandler,
+	chatH *handler.ChatHandler,
 	cancelH *handler.CancelHandler,
 	statusH *handler.StatusHandler,
-	historyH *handler.HistoryHandler,
 	detailH *handler.DetailHandler,
+	sessionH *handler.SessionHandler,
 	healthH *handler.HealthHandler,
 	skillsH *handler.SkillsHandler,
 	toolsH *handler.ToolsHandler,
@@ -32,12 +32,15 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.Use(authMW.Serve())
 	apiGroup.Use(rateLimitMW.Serve())
 
-	// Task endpoints
-	apiGroup.POST("/task/execute", executeH.Serve)
-	apiGroup.DELETE("/task/:task_id", cancelH.Serve)
-	apiGroup.GET("/task/status/:task_id", statusH.Serve)
-	apiGroup.GET("/task/history", historyH.Serve)
-	apiGroup.GET("/task/:task_id", detailH.Serve)
+	// Chat endpoints - 多轮对话
+	apiGroup.POST("/chat", chatH.Serve)
+	apiGroup.DELETE("/chat/:sid", cancelH.Serve)
+	apiGroup.GET("/chat/status/:sid", statusH.Serve)
+	apiGroup.GET("/chat/:sid/:cid", detailH.Serve)
+
+	// Session endpoints - 会话管理
+	apiGroup.GET("/sess/:sid", sessionH.GetSession)
+	apiGroup.GET("/sess/history", sessionH.ListSessions)
 
 	// Info endpoints
 	apiGroup.GET("/skills", skillsH.Serve)

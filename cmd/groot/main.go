@@ -16,9 +16,9 @@ import (
 	"github.com/zfd81/groot/internal/api"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
+	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/skill"
-	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 var (
@@ -87,17 +87,6 @@ func main() {
 		zap.String("config", filepath.Join(homeDir, "config.yaml")),
 	)
 
-	// Initialize storage - temporarily disabled until memory module implemented
-	// store, err := storage.NewBoltDBStorage(
-	// 	filepath.Join(homeDir, cfg.Storage.BoltDB.File),
-	// 	cfg.Storage.BoltDB.Bucket,
-	// )
-	// if err != nil {
-	// 	log.Error("无法初始化存储", zap.Error(err))
-	// 	os.Exit(1)
-	// }
-	// defer store.Close()
-
 	// Initialize skills registry
 	skillsRegistry := skill.NewRegistry()
 	skillLoader := skill.NewLoader(skillsRegistry)
@@ -137,8 +126,16 @@ func main() {
 	// Initialize cancel manager
 	cancelMgr := agent.NewCancelManager()
 
-	// Create API server - temporarily without storage
-	srv := api.NewServer(*cfg, homeDir, log, skillsRegistry, mcpMgr, cancelMgr)
+	// Initialize memory manager
+	memoryDir := filepath.Join(homeDir, "memory")
+	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
+	log.Info("Memory 初始化完成", zap.String("dir", memoryDir))
+
+	// Initialize runtime state
+	runtimeState := agent.NewRuntimeState()
+
+	// Create API server
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr, cancelMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

@@ -5,49 +5,63 @@ import (
 	"fmt"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/common/utils"
 
-	// "github.com/zfd81/groot/internal/api/types" // removed - not used
-	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
+	"github.com/zfd81/groot/internal/memory"
 )
 
-// DetailHandler handles GET /task/{task_id}
-// NOTE: temporarily disabled until memory module implemented
+// DetailHandler handles GET /chat/{sid}/{cid}
 type DetailHandler struct {
-	// storage storage.TaskStorage // removed
+	memory *memory.Manager
 }
 
 // NewDetailHandler creates a new detail handler
-// NOTE: temporarily disabled - will be re-enabled in Phase 4
-func NewDetailHandler(
-	// store storage.TaskStorage, // removed
-) *DetailHandler {
+func NewDetailHandler(mem *memory.Manager) *DetailHandler {
 	return &DetailHandler{
-		// storage: store,
+		memory: mem,
 	}
 }
 
 // Serve handles the detail request
-// NOTE: temporarily returns error until memory module implemented
 func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
-	taskID := rc.Param("task_id")
+	sessionID := rc.Param("sid")
+	chatID := rc.Param("cid")
 
-	if taskID == "" {
+	if sessionID == "" {
 		rc.SetContentType("application/json")
 		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"task_id 参数缺失"}`))
+		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
 		return
 	}
 
-	// Storage query disabled
-	// task, err := h.storage.Get(taskID)
-	// if err != nil {
-	// 	rc.SetContentType("application/json")
-	// 	rc.Write([]byte(fmt.Sprintf(`{"status":"task_not_found","task_id":"%s","message":"任务不存在"}`, taskID)))
-	// 	return
-	// }
+	if chatID == "" {
+		rc.SetContentType("application/json")
+		rc.SetStatusCode(400)
+		rc.Write([]byte(`{"status":"invalid_request","message":"chat_id 参数缺失"}`))
+		return
+	}
 
-	// Temporary placeholder response
-	rc.SetContentType("application/json")
-	rc.SetStatusCode(503)
-	rc.Write([]byte(fmt.Sprintf(`{"status":"service_unavailable","task_id":"%s","message":"任务详情查询功能暂时不可用，正在升级存储模块"}`, taskID)))
+	// 检查会话是否存在
+	if !h.memory.ExistsSession(sessionID) {
+		rc.SetContentType("application/json")
+		rc.SetStatusCode(404)
+		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))
+		return
+	}
+
+	// 获取对话记录
+	record, err := h.memory.GetChatRecord(sessionID, chatID)
+	if err != nil {
+		rc.SetContentType("application/json")
+		rc.SetStatusCode(404)
+		rc.Write([]byte(fmt.Sprintf(`{"status":"chat_not_found","session_id":"%s","chat_id":"%s","message":"对话记录不存在"}`, sessionID, chatID)))
+		return
+	}
+
+	rc.JSON(200, utils.H{
+		"status":   "success",
+		"session_id": sessionID,
+		"chat_id":    chatID,
+		"record":     record,
+	})
 }
