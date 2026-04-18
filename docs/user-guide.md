@@ -819,50 +819,55 @@ description: "分析结构化数据文件（CSV、JSON等）"
 
 ---
 
-## 七、API 使用指南
+## 七、API 详细说明
 
-### 7.1 API 列表
+### 7.1 认证方式
 
-| API | 方法 | 说明 |
-|-----|------|------|
-| `/task/execute` | POST | 执行任务（SSE 流式返回） |
-| `/task/{task_id}` | DELETE | 取消任务 |
-| `/task/status/{task_id}` | GET | 查询任务状态 |
-| `/task/history` | GET | 查询历史任务列表 |
-| `/task/{task_id}` | GET | 查询任务详情 |
-| `/health` | GET | 健康检查 |
-| `/skills` | GET | 列出 Skills |
-| `/tools` | GET | 列出 MCP 工具 |
-
-### 7.2 认证方式
-
-如果启用了认证，需要在请求头携带 API Key：
+如果启用了认证（`security.auth.enabled: true`），需要在请求头携带 API Key：
 
 ```http
 X-API-Key: your-secret-key
 ```
 
-### 7.3 POST /task/execute 详细说明
+Header 名称可在配置文件中自定义：
+
+```yaml
+security:
+  auth:
+    api_key:
+      header_name: X-Groot-Key  # 自定义 Header 名称
+```
+
+---
+
+### 7.2 POST /task/execute - 执行任务
+
+**功能说明：**
+
+执行 AI 任务，通过 SSE 流式返回执行进度和结果。适用于：
+- 文档分析、数据处理、代码生成等智能任务
+- 支持上传附件（PDF、CSV、图片等）
+- 实时获取执行进度，便于监控和调试
 
 **请求参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `instruction` | string | 是 | 自然语言指令 |
-| `prompt` | string | 否 | 系统提示词，设定 Agent 角色 |
+| `instruction` | string | 是 | 自然语言指令，描述要执行的任务 |
+| `prompt` | string | 否 | 系统提示词，设定 Agent 角色、行为约束 |
 | `attachments` | array | 否 | 附件列表 |
 
-**附件格式：**
+**附件格式（file 类型）：**
 
 ```json
 {
-  "type": "file",           // 类型：file / url
-  "name": "report.pdf",     // 文件名
-  "content": "base64..."    // Base64 内容（file 类型）
+  "type": "file",
+  "name": "report.pdf",
+  "content": "base64编码内容"
 }
 ```
 
-或：
+**附件格式（url 类型）：**
 
 ```json
 {
@@ -876,26 +881,1041 @@ X-API-Key: your-secret-key
 
 | Header | 说明 |
 |--------|------|
-| `X-Task-ID` | 任务唯一标识 |
-| `Content-Type` | `text/event-stream` |
+| `X-Task-ID` | 任务唯一标识，可用于查询状态、取消任务 |
+| `Content-Type` | `text/event-stream`（SSE 流式响应） |
 
 **SSE 事件类型：**
 
-| 事件 | 说明 |
-|------|------|
-| `intent` | 任务开始 |
-| `step_start` | 步骤开始 |
-| `progress` | 进度更新 |
-| `step_end` | 步骤结束 |
-| `completed` | 任务完成 |
+| 事件 | 说明 | 示例数据 |
+|------|------|---------|
+| `intent` | 任务开始 | `{"timestamp":"2026-04-18T10:30:00Z"}` |
+| `step_start` | 步骤开始 | `{"type":"tool","name":"file_read","step_id":"xxx"}` |
+| `progress` | 进度更新 | `{"message":"正在读取PDF..."}` |
+| `step_end` | 步骤结束 | `{"status":"success"}` |
+| `completed` | 任务完成 | `{"status":"success","result":"..."}` |
+
+**请求示例：**
+
+```bash
+curl -X POST http://localhost:8080/task/execute \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "写一个 Python 快速排序函数"}'
+```
+
+**Java 示例：**
+
+```java
+// 执行简单任务（无附件）
+public String executeTask(String instruction) throws Exception {
+    String jsonBody = "{\"instruction\":\"" + instruction + "\"}";
+    
+    Request request = new Request.Builder()
+        .url(baseUrl + "/task/execute")
+        .header("X-API-Key", apiKey)
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
+        .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
+        .build();
+    
+    // SSE 流式处理
+    EventSourceListener listener = new EventSourceListener() {
+        @Override
+        public void onEvent(EventSource eventSource, String id, String type, String data) {
+            System.out.println("[" + type + "] " + data);
+            if ("completed".equals(type)) {
+                System.out.println("任务完成");
+            }
+        }
+    };
+    
+    EventSources.createFactory(client).newEventSource(request, listener);
+    return null; // task_id 在响应头中获取
+}
+
+// 执行带附件任务
+public String executeTaskWithFile(String instruction, String filePath) throws Exception {
+    byte[] fileContent = Files.readAllBytes(Paths.get(filePath));
+    String base64Content = Base64.getEncoder().encodeToString(fileContent);
+    String fileName = Paths.get(filePath).getFileName().toString();
+    
+    String jsonBody = String.format("""
+        {"instruction":"%s","attachments":[{"type":"file","name":"%s","content":"%s"}]}
+        """, instruction, fileName, base64Content);
+    
+    Request request = new Request.Builder()
+        .url(baseUrl + "/task/execute")
+        .header("X-API-Key", apiKey)
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
+        .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
+        .build();
+    
+    EventSources.createFactory(client).newEventSource(request, listener);
+    return null;
+}
+```
+
+**Python 示例：**
+
+```python
+def execute_task(self, instruction: str, attachments: list = None, callback: callable = None) -> str:
+    """执行任务，返回 task_id"""
+    body = {"instruction": instruction}
+    
+    # 处理附件
+    if attachments:
+        processed = []
+        for att in attachments:
+            if att["type"] == "file":
+                with open(att["path"], "rb") as f:
+                    content = base64.b64encode(f.read()).decode()
+                processed.append({"type": "file", "name": att["name"], "content": content})
+            elif att["type"] == "url":
+                processed.append({"type": "url", "name": att["name"], "content": att["url"]})
+        body["attachments"] = processed
+    
+    # 发起 SSE 请求
+    response = requests.post(
+        f"{self.base_url}/task/execute",
+        headers=self.headers,
+        json=body,
+        stream=True
+    )
+    
+    task_id = response.headers.get("X-Task-ID")
+    
+    # 处理 SSE 流
+    event_type = None
+    for line in response.iter_lines():
+        if line:
+            line = line.decode()
+            if line.startswith("event:"):
+                event_type = line[6:].strip()
+            elif line.startswith("data:"):
+                data = line[5:].strip()
+                if callback:
+                    callback(event_type, data)
+    
+    return task_id
+
+# 调用示例
+task_id = groot.execute_task("分析这份财报", attachments=[
+    {"type": "file", "name": "report.pdf", "path": "/path/to/report.pdf"}
+], callback=lambda event, data: print(f"[{event}] {data}"))
+```
+
+**Go 示例：**
+
+```go
+// ExecuteTask 执行任务
+func (c *Client) ExecuteTask(ctx context.Context, instruction string, attachments []Attachment, callback func(SSEEvent)) (taskID string, err error) {
+    req := ExecuteRequest{
+        Instruction: instruction,
+        Attachments: attachments,
+    }
+    body, _ := json.Marshal(req)
+    
+    httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/task/execute", bytes.NewReader(body))
+    c.setHeaders(httpReq)
+    httpReq.Header.Set("Accept", "text/event-stream")
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return "", err
+    }
+    defer resp.Body.Close()
+    
+    taskID = resp.Header.Get("X-Task-ID")
+    
+    // 处理 SSE 流
+    scanner := bufio.NewScanner(resp.Body)
+    var eventType string
+    for scanner.Scan() {
+        line := scanner.Text()
+        if strings.HasPrefix(line, "event:") {
+            eventType = strings.TrimPrefix(line, "event:")
+        } else if strings.HasPrefix(line, "data:") {
+            data := strings.TrimPrefix(line, "data:")
+            if callback != nil {
+                callback(SSEEvent{Type: eventType, Data: data})
+            }
+        }
+    }
+    
+    return taskID, nil
+}
+
+// 调用示例
+taskID, _ := client.ExecuteTask(ctx, "写一个快速排序函数", nil, func(event SSEEvent) {
+    fmt.Printf("[%s] %s\n", event.Type, event.Data)
+})
+```
 
 ---
 
-## 八、API 调用示例
+### 7.3 DELETE /task/{task_id} - 取消任务
 
-### 8.1 Java 调用示例
+**功能说明：**
 
-**使用 OkHttp + SSE：**
+取消正在执行的任务。只能取消状态为 `running` 的任务，已完成或已取消的任务无法再次取消。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `task_id` | string | 是 | 任务 ID（路径参数） |
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 结果状态：`success` 或失败状态码 |
+| `task_id` | 任务 ID |
+| `message` | 结果消息 |
+
+**成功响应：**
+
+```json
+{
+  "status": "success",
+  "task_id": "task-20260418-103000523-a1b2",
+  "message": "任务已取消"
+}
+```
+
+**失败响应（任务已完成）：**
+
+```json
+{
+  "status": "task_completed",
+  "task_id": "task-20260418-103000523-a1b2",
+  "message": "任务已完成，无法取消"
+}
+```
+
+**失败响应（任务不存在）：**
+
+```json
+{
+  "status": "task_not_found",
+  "task_id": "task-xxx",
+  "message": "任务不存在"
+}
+```
+
+**请求示例：**
+
+```bash
+curl -X DELETE http://localhost:8080/task/task-20260418-103000523-a1b2 \
+  -H "X-API-Key: your-api-key"
+```
+
+**Java 示例：**
+
+```java
+public String cancelTask(String taskId) throws Exception {
+    Request request = new Request.Builder()
+        .url(baseUrl + "/task/" + taskId)
+        .header("X-API-Key", apiKey)
+        .delete()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String result = groot.cancelTask("task-20260418-103000523-a1b2");
+System.out.println(result);  // {"status":"success","message":"任务已取消"}
+```
+
+**Python 示例：**
+
+```python
+def cancel_task(self, task_id: str) -> dict:
+    """取消任务"""
+    response = requests.delete(
+        f"{self.base_url}/task/{task_id}",
+        headers=self.headers
+    )
+    return response.json()
+
+# 调用示例
+result = groot.cancel_task("task-20260418-103000523-a1b2")
+print(result)  # {"status": "success", "message": "任务已取消"}
+```
+
+**Go 示例：**
+
+```go
+// CancelTask 取消任务
+func (c *Client) CancelTask(ctx context.Context, taskID string) (map[string]interface{}, error) {
+    httpReq, _ := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/task/"+taskID, nil)
+    c.setHeaders(httpReq)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+result, _ := client.CancelTask(ctx, "task-20260418-103000523-a1b2")
+fmt.Println(result)  // map[status:success message:任务已取消]
+```
+
+---
+
+### 7.4 GET /task/status/{task_id} - 查询任务状态
+
+**功能说明：**
+
+查询任务的当前状态和执行进度。适用于轮询监控任务执行情况。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `task_id` | string | 是 | 任务 ID（路径参数） |
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 查询结果：`success` 或 `task_not_found` |
+| `task_id` | 任务 ID |
+| `task_status` | 任务状态：`running` / `completed` / `failed` / `cancelled` |
+| `progress` | 进度信息（运行中时） |
+| `started_at` | 开始时间 |
+| `elapsed_time` | 已耗时 |
+
+**运行中响应：**
+
+```json
+{
+  "status": "success",
+  "task_id": "task-20260418-103000523-a1b2",
+  "task_status": "running",
+  "progress": {
+    "current_step": 3,
+    "steps_completed": 2,
+    "percentage": 50
+  },
+  "started_at": "2026-04-18T10:30:00Z",
+  "elapsed_time": "8s"
+}
+```
+
+**已完成响应：**
+
+```json
+{
+  "status": "success",
+  "task_id": "task-20260418-103000523-a1b2",
+  "task_status": "completed",
+  "started_at": "2026-04-18T10:30:00Z",
+  "elapsed_time": "45s"
+}
+```
+
+**请求示例：**
+
+```bash
+curl http://localhost:8080/task/status/task-20260418-103000523-a1b2 \
+  -H "X-API-Key: your-api-key"
+```
+
+**Java 示例：**
+
+```java
+public String getTaskStatus(String taskId) throws Exception {
+    Request request = new Request.Builder()
+        .url(baseUrl + "/task/status/" + taskId)
+        .header("X-API-Key", apiKey)
+        .get()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String status = groot.getTaskStatus("task-20260418-103000523-a1b2");
+JSONObject json = new JSONObject(status);
+System.out.println("任务状态: " + json.getString("task_status"));
+```
+
+**Python 示例：**
+
+```python
+def get_task_status(self, task_id: str) -> dict:
+    """查询任务状态"""
+    response = requests.get(
+        f"{self.base_url}/task/status/{task_id}",
+        headers=self.headers
+    )
+    return response.json()
+
+# 调用示例
+status = groot.get_task_status("task-20260418-103000523-a1b2")
+print(f"任务状态: {status['task_status']}")
+if status['task_status'] == 'running':
+    print(f"进度: {status['progress']['percentage']}%")
+```
+
+**Go 示例：**
+
+```go
+// GetTaskStatus 查询任务状态
+func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
+    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/status/"+taskID, nil)
+    c.setHeaders(httpReq)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+status, _ := client.GetTaskStatus(ctx, "task-20260418-103000523-a1b2")
+fmt.Println("任务状态:", status["task_status"])
+```
+
+---
+
+### 7.5 GET /task/{task_id} - 查询任务详情
+
+**功能说明：**
+
+查询任务的完整详情，包括指令、结果、错误信息、完整执行步骤记录。适用于任务完成后查看详细执行过程。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `task_id` | string | 是 | 任务 ID（路径参数） |
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 查询结果：`success` 或 `task_not_found` |
+| `task` | 任务详情对象 |
+
+**task 对象字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 任务 ID |
+| `instruction` | 用户指令 |
+| `prompt` | 系统提示词 |
+| `status` | 任务状态 |
+| `start_time` | 开始时间 |
+| `end_time` | 结束时间 |
+| `duration` | 耗时（秒） |
+| `caller` | 调用方名称 |
+| `result` | 任务结果（成功时） |
+| `error` | 错误信息（失败时） |
+| `steps` | 步骤记录列表 |
+
+**成功响应：**
+
+```json
+{
+  "status": "success",
+  "task": {
+    "id": "task-20260418-103000523-a1b2",
+    "instruction": "分析这份PDF报告",
+    "status": "completed",
+    "start_time": "2026-04-18T10:30:00Z",
+    "end_time": "2026-04-18T10:30:45Z",
+    "duration": 45,
+    "caller": "business_system",
+    "result": "分析结果...",
+    "steps": [
+      {"step_id": "xxx", "type": "tool", "name": "file_read", "status": "success"},
+      {"step_id": "yyy", "type": "llm", "name": "model_response", "status": "success"}
+    ]
+  }
+}
+```
+
+**请求示例：**
+
+```bash
+curl http://localhost:8080/task/task-20260418-103000523-a1b2 \
+  -H "X-API-Key: your-api-key"
+```
+
+**Java 示例：**
+
+```java
+public String getTaskDetail(String taskId) throws Exception {
+    Request request = new Request.Builder()
+        .url(baseUrl + "/task/" + taskId)
+        .header("X-API-Key", apiKey)
+        .get()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String detail = groot.getTaskDetail("task-20260418-103000523-a1b2");
+JSONObject json = new JSONObject(detail);
+JSONObject task = json.getJSONObject("task");
+System.out.println("指令: " + task.getString("instruction"));
+System.out.println("步骤数: " + task.getJSONArray("steps").length());
+```
+
+**Python 示例：**
+
+```python
+def get_task_detail(self, task_id: str) -> dict:
+    """查询任务详情"""
+    response = requests.get(
+        f"{self.base_url}/task/{task_id}",
+        headers=self.headers
+    )
+    return response.json()
+
+# 调用示例
+detail = groot.get_task_detail("task-20260418-103000523-a1b2")
+task = detail['task']
+print(f"指令: {task['instruction']}")
+print(f"步骤数: {len(task['steps'])}")
+for step in task['steps']:
+    print(f"  - {step['type']}: {step['name']} ({step['status']})")
+```
+
+**Go 示例：**
+
+```go
+// GetTaskDetail 查询任务详情
+func (c *Client) GetTaskDetail(ctx context.Context, taskID string) (map[string]interface{}, error) {
+    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/"+taskID, nil)
+    c.setHeaders(httpReq)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+detail, _ := client.GetTaskDetail(ctx, "task-20260418-103000523-a1b2")
+task := detail["task"].(map[string]interface{})
+fmt.Println("指令:", task["instruction"])
+fmt.Println("步骤数:", len(task["steps"].([]interface{})))
+```
+
+---
+
+### 7.6 GET /task/history - 查询历史任务列表
+
+**功能说明：**
+
+查询历史任务列表，支持按状态、时间范围过滤和分页。适用于查看历史执行记录、统计分析。
+
+**请求参数（Query 参数）：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `status` | string | 否 | 按状态过滤：`running` / `completed` / `failed` / `cancelled` |
+| `start_time` | string | 否 | 开始时间，格式 `yyyyMMddHHmm`，如 `202604010000` |
+| `end_time` | string | 否 | 结束时间，格式 `yyyyMMddHHmm`，如 `202604182359` |
+| `limit` | int | 否 | 返回数量限制，默认 20，最大 100 |
+| `offset` | int | 否 | 分页偏移，默认 0 |
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 查询结果：`success` |
+| `total` | 符合条件的总数 |
+| `limit` | 当前返回数量 |
+| `offset` | 当前偏移 |
+| `tasks` | 任务列表 |
+
+**响应示例：**
+
+```json
+{
+  "status": "success",
+  "total": 50,
+  "limit": 10,
+  "offset": 0,
+  "tasks": [
+    {
+      "id": "task-20260418-103000523-a1b2",
+      "instruction": "分析PDF报告",
+      "status": "completed",
+      "start_time": "2026-04-18T10:30:00Z",
+      "end_time": "2026-04-18T10:30:45Z",
+      "duration": 45,
+      "caller": "business_system"
+    },
+    {
+      "id": "task-20260418-103010000-b2c3",
+      "instruction": "写排序函数",
+      "status": "completed",
+      "start_time": "2026-04-18T10:31:00Z",
+      "end_time": "2026-04-18T10:31:30Z",
+      "duration": 30,
+      "caller": "admin"
+    }
+  ]
+}
+```
+
+**请求示例：**
+
+```bash
+curl "http://localhost:8080/task/history?status=completed&limit=10" \
+  -H "X-API-Key: your-api-key"
+```
+
+**Java 示例：**
+
+```java
+public String getHistory(String status, int limit, int offset) throws Exception {
+    HttpUrl url = HttpUrl.parse(baseUrl + "/task/history")
+        .newBuilder()
+        .addQueryParameter("status", status)
+        .addQueryParameter("limit", String.valueOf(limit))
+        .addQueryParameter("offset", String.valueOf(offset))
+        .build();
+    
+    Request request = new Request.Builder()
+        .url(url)
+        .header("X-API-Key", apiKey)
+        .get()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String history = groot.getHistory("completed", 10, 0);
+JSONObject json = new JSONObject(history);
+System.out.println("总数: " + json.getInt("total"));
+JSONArray tasks = json.getJSONArray("tasks");
+for (int i = 0; i < tasks.length(); i++) {
+    JSONObject task = tasks.getJSONObject(i);
+    System.out.println("  - " + task.getString("id") + ": " + task.getString("instruction"));
+}
+```
+
+**Python 示例：**
+
+```python
+def get_history(self, status: str = None, limit: int = 20, offset: int = 0) -> dict:
+    """查询历史任务"""
+    params = {"limit": limit, "offset": offset}
+    if status:
+        params["status"] = status
+    
+    response = requests.get(
+        f"{self.base_url}/task/history",
+        headers=self.headers,
+        params=params
+    )
+    return response.json()
+
+# 调用示例
+history = groot.get_history(status="completed", limit=10)
+print(f"总数: {history['total']}")
+for task in history['tasks']:
+    print(f"  - {task['id']}: {task['instruction']} ({task['duration']}s)")
+```
+
+**Go 示例：**
+
+```go
+// GetHistory 查询历史任务
+func (c *Client) GetHistory(ctx context.Context, status string, limit int, offset int) (map[string]interface{}, error) {
+    url := fmt.Sprintf("%s/task/history?limit=%d&offset=%d", c.baseURL, limit, offset)
+    if status != "" {
+        url += "&status=" + status
+    }
+    
+    httpReq, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+    c.setHeaders(httpReq)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+history, _ := client.GetHistory(ctx, "completed", 10, 0)
+fmt.Println("总数:", history["total"])
+tasks := history["tasks"].([]interface{})
+for _, t := range tasks {
+    task := t.(map[string]interface{})
+    fmt.Printf("  - %s: %s (%ds)\n", task["id"], task["instruction"], int(task["duration"].(float64)))
+}
+```
+
+---
+
+### 7.7 GET /health - 健康检查
+
+**功能说明：**
+
+查询服务健康状态，包括 LLM 连接、MCP 服务、Skills 加载情况。适用于监控和运维检查。
+
+**请求参数：** 无需认证，无需参数。
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 健康状态：`healthy` / `unhealthy` |
+| `version` | 服务版本 |
+| `uptime` | 运行时长 |
+| `checks` | 各组件健康检查结果 |
+| `metrics` | 运行指标 |
+
+**响应示例：**
+
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime": "2h30m",
+  "checks": {
+    "llm": {"status": "healthy", "model": "gpt-4o"},
+    "mcp_servers": {"status": "healthy", "servers": ["file_operations", "http_request"]},
+    "skills": {"status": "healthy", "count": 12},
+    "memory": {"status": "healthy", "used_mb": 256}
+  },
+  "metrics": {
+    "tasks_running": 5,
+    "success_rate": 0.98
+  }
+}
+```
+
+**请求示例：**
+
+```bash
+curl http://localhost:8080/health
+```
+
+**Java 示例：**
+
+```java
+public String healthCheck() throws Exception {
+    Request request = new Request.Builder()
+        .url(baseUrl + "/health")
+        .get()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String health = groot.healthCheck();
+JSONObject json = new JSONObject(health);
+System.out.println("状态: " + json.getString("status"));
+System.out.println("运行时长: " + json.getString("uptime"));
+```
+
+**Python 示例：**
+
+```python
+def health_check(self) -> dict:
+    """健康检查"""
+    response = requests.get(f"{self.base_url}/health")
+    return response.json()
+
+# 调用示例
+health = groot.health_check()
+print(f"状态: {health['status']}")
+print(f"运行时长: {health['uptime']}")
+print(f"Skills 数量: {health['checks']['skills']['count']}")
+```
+
+**Go 示例：**
+
+```go
+// HealthCheck 健康检查
+func (c *Client) HealthCheck(ctx context.Context) (map[string]interface{}, error) {
+    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+health, _ := client.HealthCheck(ctx)
+fmt.Println("状态:", health["status"])
+fmt.Println("运行时长:", health["uptime"])
+```
+
+---
+
+### 7.8 GET /skills - 列出可用 Skills
+
+**功能说明：**
+
+列出当前已加载的 Skills，显示名称和描述。用于查看可用的任务模板。
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `skills` | Skills 列表 |
+| `total` | 总数 |
+
+**Skills 对象字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `name` | Skill 名称 |
+| `description` | Skill 描述 |
+
+**响应示例：**
+
+```json
+{
+  "skills": [
+    {"name": "pdf_analyzer", "description": "分析PDF文档并生成摘要"},
+    {"name": "code_generator", "description": "根据需求生成代码"},
+    {"name": "data_analyzer", "description": "分析结构化数据文件"}
+  ],
+  "total": 3
+}
+```
+
+**请求示例：**
+
+```bash
+curl http://localhost:8080/skills \
+  -H "X-API-Key: your-api-key"
+```
+
+**Java 示例：**
+
+```java
+public String listSkills() throws Exception {
+    Request request = new Request.Builder()
+        .url(baseUrl + "/skills")
+        .header("X-API-Key", apiKey)
+        .get()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String skills = groot.listSkills();
+JSONObject json = new JSONObject(skills);
+JSONArray skillsArray = json.getJSONArray("skills");
+for (int i = 0; i < skillsArray.length(); i++) {
+    JSONObject skill = skillsArray.getJSONObject(i);
+    System.out.println("  - " + skill.getString("name") + ": " + skill.getString("description"));
+}
+```
+
+**Python 示例：**
+
+```python
+def list_skills(self) -> dict:
+    """列出 Skills"""
+    response = requests.get(
+        f"{self.base_url}/skills",
+        headers=self.headers
+    )
+    return response.json()
+
+# 调用示例
+skills = groot.list_skills()
+for skill in skills['skills']:
+    print(f"  - {skill['name']}: {skill['description']}")
+```
+
+**Go 示例：**
+
+```go
+// ListSkills 列出 Skills
+func (c *Client) ListSkills(ctx context.Context) (map[string]interface{}, error) {
+    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/skills", nil)
+    c.setHeaders(httpReq)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+skills, _ := client.ListSkills(ctx)
+for _, s := range skills["skills"].([]interface{}) {
+    skill := s.(map[string]interface{})
+    fmt.Printf("  - %s: %s\n", skill["name"], skill["description"])
+}
+```
+
+---
+
+### 7.9 GET /tools - 列出可用 MCP 工具
+
+**功能说明：**
+
+列出当前已注册的 MCP 工具，显示名称、描述和所属 MCP。用于查看可用的工具列表。
+
+**响应字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `tools` | 工具列表 |
+| `total` | 总数 |
+
+**Tools 对象字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `name` | 工具名称 |
+| `description` | 工具描述 |
+| `mcp` | 所属 MCP 服务名称 |
+
+**响应示例：**
+
+```json
+{
+  "tools": [
+    {"name": "file_read", "description": "读取文件内容", "mcp": "file_operations"},
+    {"name": "file_write", "description": "写入文件内容", "mcp": "file_operations"},
+    {"name": "http_get", "description": "发送HTTP GET请求", "mcp": "http_request"},
+    {"name": "http_post", "description": "发送HTTP POST请求", "mcp": "http_request"}
+  ],
+  "total": 4
+}
+```
+
+**请求示例：**
+
+```bash
+curl http://localhost:8080/tools \
+  -H "X-API-Key: your-api-key"
+```
+
+**Java 示例：**
+
+```java
+public String listTools() throws Exception {
+    Request request = new Request.Builder()
+        .url(baseUrl + "/tools")
+        .header("X-API-Key", apiKey)
+        .get()
+        .build();
+    
+    Response response = client.newCall(request).execute();
+    return response.body().string();
+}
+
+// 调用示例
+String tools = groot.listTools();
+JSONObject json = new JSONObject(tools);
+JSONArray toolsArray = json.getJSONArray("tools");
+for (int i = 0; i < toolsArray.length(); i++) {
+    JSONObject tool = toolsArray.getJSONObject(i);
+    System.out.println("  - " + tool.getString("name") + " [" + tool.getString("mcp") + "]");
+}
+```
+
+**Python 示例：**
+
+```python
+def list_tools(self) -> dict:
+    """列出 MCP 工具"""
+    response = requests.get(
+        f"{self.base_url}/tools",
+        headers=self.headers
+    )
+    return response.json()
+
+# 调用示例
+tools = groot.list_tools()
+for tool in tools['tools']:
+    print(f"  - {tool['name']} [{tool['mcp']}]: {tool['description']}")
+```
+
+**Go 示例：**
+
+```go
+// ListTools 列出 MCP 工具
+func (c *Client) ListTools(ctx context.Context) (map[string]interface{}, error) {
+    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/tools", nil)
+    c.setHeaders(httpReq)
+    
+    resp, err := c.client.Do(httpReq)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result, nil
+}
+
+// 调用示例
+tools, _ := client.ListTools(ctx)
+for _, t := range tools["tools"].([]interface{}) {
+    tool := t.(map[string]interface{})
+    fmt.Printf("  - %s [%s]: %s\n", tool["name"], tool["mcp"], tool["description"])
+}
+```
+
+---
+
+## 八、完整客户端代码
+
+以下是三种语言的完整客户端封装代码，整合了所有 API 调用方法。
+
+### 8.1 Java 完整客户端
 
 ```java
 import okhttp3.*;
@@ -921,68 +1941,10 @@ public class GrootClient {
             .build();
     }
     
-    /**
-     * 执行任务（带附件）
-     */
-    public void executeTask(String instruction, String filePath) throws Exception {
-        // 读取文件并编码为 Base64
-        byte[] fileContent = Files.readAllBytes(Paths.get(filePath));
-        String base64Content = Base64.getEncoder().encodeToString(fileContent);
-        String fileName = Paths.get(filePath).getFileName().toString();
-        
-        // 构建请求 JSON
-        String jsonBody = String.format("""
-            {
-              "instruction": "%s",
-              "attachments": [
-                {
-                  "type": "file",
-                  "name": "%s",
-                  "content": "%s"
-                }
-              ]
-            }
-            """, instruction, fileName, base64Content);
-        
-        // 创建请求
-        Request request = new Request.Builder()
-            .url(baseUrl + "/task/execute")
-            .header("X-API-Key", apiKey)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-            .build();
-        
-        // 创建 SSE 监听器
-        EventSourceListener listener = new EventSourceListener() {
-            @Override
-            public void onEvent(EventSource eventSource, String id, String type, String data) {
-                System.out.println("Event: " + type);
-                System.out.println("Data: " + data);
-                
-                if ("completed".equals(type)) {
-                    System.out.println("任务完成");
-                }
-            }
-            
-            @Override
-            public void onFailure(EventSource eventSource, Throwable t, Response response) {
-                System.err.println("连接失败: " + t.getMessage());
-            }
-        };
-        
-        // 发起 SSE 请求
-        EventSource eventSource = EventSources.createFactory(client)
-            .newEventSource(request, listener);
-    }
+    // ========== 执行任务 ==========
     
-    /**
-     * 执行任务（纯文本指令）
-     */
-    public void executeSimpleTask(String instruction) throws Exception {
-        String jsonBody = String.format("""
-            {"instruction": "%s"}
-            """, instruction);
+    public void executeTask(String instruction, EventSourceListener listener) throws Exception {
+        String jsonBody = "{\"instruction\":\"" + instruction + "\"}";
         
         Request request = new Request.Builder()
             .url(baseUrl + "/task/execute")
@@ -991,34 +1953,33 @@ public class GrootClient {
             .header("Accept", "text/event-stream")
             .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
             .build();
-        
-        EventSourceListener listener = new EventSourceListener() {
-            @Override
-            public void onEvent(EventSource eventSource, String id, String type, String data) {
-                System.out.println(type + ": " + data);
-            }
-        };
         
         EventSources.createFactory(client).newEventSource(request, listener);
     }
     
-    /**
-     * 查询任务状态
-     */
-    public String getTaskStatus(String taskId) throws Exception {
+    public void executeTaskWithFile(String instruction, String filePath, EventSourceListener listener) throws Exception {
+        byte[] fileContent = Files.readAllBytes(Paths.get(filePath));
+        String base64Content = Base64.getEncoder().encodeToString(fileContent);
+        String fileName = Paths.get(filePath).getFileName().toString();
+        
+        String jsonBody = String.format(
+            "{\"instruction\":\"%s\",\"attachments\":[{\"type\":\"file\",\"name\":\"%s\",\"content\":\"%s\"}]}",
+            instruction, fileName, base64Content
+        );
+        
         Request request = new Request.Builder()
-            .url(baseUrl + "/task/status/" + taskId)
+            .url(baseUrl + "/task/execute")
             .header("X-API-Key", apiKey)
-            .get()
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
             .build();
         
-        Response response = client.newCall(request).execute();
-        return response.body().string();
+        EventSources.createFactory(client).newEventSource(request, listener);
     }
     
-    /**
-     * 取消任务
-     */
+    // ========== 取消任务 ==========
+    
     public String cancelTask(String taskId) throws Exception {
         Request request = new Request.Builder()
             .url(baseUrl + "/task/" + taskId)
@@ -1030,9 +1991,56 @@ public class GrootClient {
         return response.body().string();
     }
     
-    /**
-     * 健康检查
-     */
+    // ========== 查询状态 ==========
+    
+    public String getTaskStatus(String taskId) throws Exception {
+        Request request = new Request.Builder()
+            .url(baseUrl + "/task/status/" + taskId)
+            .header("X-API-Key", apiKey)
+            .get()
+            .build();
+        
+        Response response = client.newCall(request).execute();
+        return response.body().string();
+    }
+    
+    // ========== 查询详情 ==========
+    
+    public String getTaskDetail(String taskId) throws Exception {
+        Request request = new Request.Builder()
+            .url(baseUrl + "/task/" + taskId)
+            .header("X-API-Key", apiKey)
+            .get()
+            .build();
+        
+        Response response = client.newCall(request).execute();
+        return response.body().string();
+    }
+    
+    // ========== 查询历史 ==========
+    
+    public String getHistory(String status, int limit, int offset) throws Exception {
+        HttpUrl url = HttpUrl.parse(baseUrl + "/task/history")
+            .newBuilder()
+            .addQueryParameter("limit", String.valueOf(limit))
+            .addQueryParameter("offset", String.valueOf(offset))
+            .build();
+        if (status != null) {
+            url = url.newBuilder().addQueryParameter("status", status).build();
+        }
+        
+        Request request = new Request.Builder()
+            .url(url)
+            .header("X-API-Key", apiKey)
+            .get()
+            .build();
+        
+        Response response = client.newCall(request).execute();
+        return response.body().string();
+    }
+    
+    // ========== 健康检查 ==========
+    
     public String healthCheck() throws Exception {
         Request request = new Request.Builder()
             .url(baseUrl + "/health")
@@ -1043,18 +2051,30 @@ public class GrootClient {
         return response.body().string();
     }
     
-    // 使用示例
-    public static void main(String[] args) throws Exception {
-        GrootClient groot = new GrootClient("http://localhost:8080", "your-api-key");
+    // ========== 列出 Skills ==========
+    
+    public String listSkills() throws Exception {
+        Request request = new Request.Builder()
+            .url(baseUrl + "/skills")
+            .header("X-API-Key", apiKey)
+            .get()
+            .build();
         
-        // 简单任务
-        groot.executeSimpleTask("写一个 Python 快速排序函数");
+        Response response = client.newCall(request).execute();
+        return response.body().string();
+    }
+    
+    // ========== 列出 Tools ==========
+    
+    public String listTools() throws Exception {
+        Request request = new Request.Builder()
+            .url(baseUrl + "/tools")
+            .header("X-API-Key", apiKey)
+            .get()
+            .build();
         
-        // 带附件任务
-        groot.executeTask("分析这份PDF报告的财务状况", "/path/to/report.pdf");
-        
-        // 健康检查
-        System.out.println(groot.healthCheck());
+        Response response = client.newCall(request).execute();
+        return response.body().string();
     }
 }
 ```
@@ -1078,9 +2098,7 @@ public class GrootClient {
 
 ---
 
-### 8.2 Python 调用示例
-
-**使用 requests + sseclient：**
+### 8.2 Python 完整客户端
 
 ```python
 import requests
@@ -1089,7 +2107,7 @@ import base64
 from pathlib import Path
 
 class GrootClient:
-    """Groot AI Agent 客户端"""
+    """Groot AI Agent 完整客户端"""
     
     def __init__(self, base_url: str, api_key: str = None):
         self.base_url = base_url
@@ -1097,45 +2115,38 @@ class GrootClient:
         if api_key:
             self.headers["X-API-Key"] = api_key
     
-    def execute_task(self, instruction: str, attachments: list = None, callback: callable = None):
+    # ========== 执行任务 ==========
+    
+    def execute_task(self, instruction: str, attachments: list = None, callback: callable = None) -> str:
         """
-        执行任务
+        执行任务（SSE 流式返回）
         
         Args:
             instruction: 自然语言指令
-            attachments: 附件列表 [{"type": "file", "name": "xxx.pdf", "path": "/path/to/file"}]
-            callback: SSE 事件回调函数
+            attachments: 附件列表 [{"type": "file", "name": "xxx", "path": "/path"}]
+            callback: SSE 事件回调 callback(event_type, data)
         
         Returns:
             task_id: 任务 ID
         """
-        # 构建请求体
         body = {"instruction": instruction}
         
-        # 处理附件
         if attachments:
-            processed_attachments = []
+            processed = []
             for att in attachments:
                 if att["type"] == "file":
-                    # 读取文件并编码
-                    file_path = att["path"]
-                    file_name = att["name"] or Path(file_path).name
-                    with open(file_path, "rb") as f:
-                        content = base64.b64encode(f.read()).decode()
-                    processed_attachments.append({
-                        "type": "file",
-                        "name": file_name,
-                        "content": content
-                    })
+                    path = att.get("path", att.get("content"))
+                    name = att.get("name", Path(path).name if "path" in att else "file")
+                    if "path" in att:
+                        with open(path, "rb") as f:
+                            content = base64.b64encode(f.read()).decode()
+                    else:
+                        content = att["content"]
+                    processed.append({"type": "file", "name": name, "content": content})
                 elif att["type"] == "url":
-                    processed_attachments.append({
-                        "type": "url",
-                        "name": att["name"],
-                        "content": att["url"]
-                    })
-            body["attachments"] = processed_attachments
+                    processed.append({"type": "url", "name": att["name"], "content": att["url"]})
+            body["attachments"] = processed
         
-        # 发起 SSE 请求
         response = requests.post(
             f"{self.base_url}/task/execute",
             headers=self.headers,
@@ -1143,11 +2154,9 @@ class GrootClient:
             stream=True
         )
         
-        # 获取 task_id
         task_id = response.headers.get("X-Task-ID")
-        print(f"任务 ID: {task_id}")
         
-        # 处理 SSE 事件流
+        event_type = None
         for line in response.iter_lines():
             if line:
                 line = line.decode()
@@ -1157,22 +2166,10 @@ class GrootClient:
                     data = line[5:].strip()
                     if callback:
                         callback(event_type, data)
-                    else:
-                        print(f"[{event_type}] {data}")
         
         return task_id
     
-    def execute_simple_task(self, instruction: str):
-        """执行简单任务（无附件）"""
-        return self.execute_task(instruction)
-    
-    def get_task_status(self, task_id: str) -> dict:
-        """查询任务状态"""
-        response = requests.get(
-            f"{self.base_url}/task/status/{task_id}",
-            headers=self.headers
-        )
-        return response.json()
+    # ========== 取消任务 ==========
     
     def cancel_task(self, task_id: str) -> dict:
         """取消任务"""
@@ -1182,6 +2179,18 @@ class GrootClient:
         )
         return response.json()
     
+    # ========== 查询状态 ==========
+    
+    def get_task_status(self, task_id: str) -> dict:
+        """查询任务状态"""
+        response = requests.get(
+            f"{self.base_url}/task/status/{task_id}",
+            headers=self.headers
+        )
+        return response.json()
+    
+    # ========== 查询详情 ==========
+    
     def get_task_detail(self, task_id: str) -> dict:
         """查询任务详情"""
         response = requests.get(
@@ -1190,11 +2199,14 @@ class GrootClient:
         )
         return response.json()
     
-    def get_history(self, status: str = None, limit: int = 20) -> dict:
-        """查询历史任务"""
-        params = {"limit": limit}
+    # ========== 查询历史 ==========
+    
+    def get_history(self, status: str = None, limit: int = 20, offset: int = 0) -> dict:
+        """查询历史任务列表"""
+        params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
+        
         response = requests.get(
             f"{self.base_url}/task/history",
             headers=self.headers,
@@ -1202,69 +2214,32 @@ class GrootClient:
         )
         return response.json()
     
+    # ========== 健康检查 ==========
+    
     def health_check(self) -> dict:
         """健康检查"""
         response = requests.get(f"{self.base_url}/health")
         return response.json()
     
+    # ========== 列出 Skills ==========
+    
     def list_skills(self) -> dict:
-        """列出 Skills"""
+        """列出可用 Skills"""
         response = requests.get(
             f"{self.base_url}/skills",
             headers=self.headers
         )
         return response.json()
     
+    # ========== 列出 Tools ==========
+    
     def list_tools(self) -> dict:
-        """列出 MCP 工具"""
+        """列出可用 MCP 工具"""
         response = requests.get(
             f"{self.base_url}/tools",
             headers=self.headers
         )
         return response.json()
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 创建客户端
-    groot = GrootClient("http://localhost:8080", "your-api-key")
-    
-    # 健康检查
-    print("健康检查:", groot.health_check())
-    
-    # 列出 Skills
-    print("可用 Skills:", groot.list_skills())
-    
-    # 执行简单任务
-    def on_event(event_type, data):
-        if event_type == "completed":
-            result = json.loads(data)
-            print("任务完成:", result)
-        elif event_type == "progress":
-            print("进度:", data)
-    
-    task_id = groot.execute_task(
-        "写一个 Python 快速排序函数",
-        callback=on_event
-    )
-    
-    # 执行带附件任务
-    task_id = groot.execute_task(
-        "分析这份财报，提取关键财务指标",
-        attachments=[
-            {"type": "file", "path": "/path/to/Q3_Report.pdf"}
-        ],
-        callback=on_event
-    )
-    
-    # 查询状态
-    print("任务状态:", groot.get_task_status(task_id))
-    
-    # 取消任务
-    print("取消任务:", groot.cancel_task(task_id))
-    
-    # 查询历史
-    print("历史任务:", groot.get_history(status="completed", limit=10))
 ```
 
 **安装依赖：**
@@ -1275,7 +2250,7 @@ pip install requests
 
 ---
 
-### 8.3 Go 调用示例
+### 8.3 Go 完整客户端
 
 ```go
 package grootclient
@@ -1313,15 +2288,14 @@ func NewClient(baseURL, apiKey string) *Client {
 
 // Attachment 附件结构
 type Attachment struct {
-	Type    string `json:"type"`    // file / url
-	Name    string `json:"name"`    // 文件名
-	Content string `json:"content"` // Base64 内容或 URL
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
 }
 
 // ExecuteRequest 执行请求
 type ExecuteRequest struct {
 	Instruction string       `json:"instruction"`
-	Prompt      string       `json:"prompt,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
@@ -1331,132 +2305,142 @@ type SSEEvent struct {
 	Data string
 }
 
-// ExecuteTask 执行任务（带 SSE 流式返回）
+// ========== 执行任务 ==========
+
 func (c *Client) ExecuteTask(ctx context.Context, req ExecuteRequest, callback func(SSEEvent)) (taskID string, err error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return "", err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/task/execute", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-
+	body, _ := json.Marshal(req)
+	
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/task/execute", bytes.NewReader(body))
 	c.setHeaders(httpReq)
 	httpReq.Header.Set("Accept", "text/event-stream")
-
+	
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-
+	
 	taskID = resp.Header.Get("X-Task-ID")
-
-	// 处理 SSE 流
-	reader := NewSSEReader(resp.Body)
-	for {
-		event, ok := reader.Next()
-		if !ok {
-			break
-		}
-		if callback != nil {
-			callback(event)
-		}
-	}
-
+	c.processSSE(resp.Body, callback)
+	
 	return taskID, nil
 }
 
-// ExecuteTaskWithFile 执行任务（带文件附件）
-func (c *Client) ExecuteTaskWithFile(ctx context.Context, instruction string, filePath string, callback func(SSEEvent)) (taskID string, err error) {
-	// 读取文件
+func (c *Client) ExecuteTaskWithFile(ctx context.Context, instruction, filePath string, callback func(SSEEvent)) (taskID string, err error) {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
-		return "", fmt.Errorf("读取文件失败: %w", err)
+		return "", err
 	}
-
-	// Base64 编码
-	base64Content := base64.StdEncoding.EncodeToString(content)
-
-	// 获取文件名
+	
 	fileName := filePath
 	if idx := strings.LastIndex(filePath, "/"); idx >= 0 {
 		fileName = filePath[idx+1:]
 	}
-
+	
 	req := ExecuteRequest{
 		Instruction: instruction,
 		Attachments: []Attachment{
-			{
-				Type:    "file",
-				Name:    fileName,
-				Content: base64Content,
-			},
+			{Type: "file", Name: fileName, Content: base64.StdEncoding.EncodeToString(content)},
 		},
 	}
-
+	
 	return c.ExecuteTask(ctx, req, callback)
 }
 
-// GetTaskStatus 查询任务状态
-func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/status/"+taskID, nil)
-	if err != nil {
-		return nil, err
+func (c *Client) processSSE(body io.ReadCloser, callback func(SSEEvent)) {
+	buf := make([]byte, 4096)
+	var eventType string
+	var buffer string
+	
+	for {
+		n, err := body.Read(buf)
+		if err != nil {
+			break
+		}
+		buffer += string(buf[:n])
+		
+		for {
+			idx := strings.Index(buffer, "\n")
+			if idx == -1 {
+				break
+			}
+			line := buffer[:idx]
+			buffer = buffer[idx+1:]
+			
+			if strings.HasPrefix(line, "event:") {
+				eventType = strings.TrimPrefix(line, "event:")
+			} else if strings.HasPrefix(line, "data:") {
+				data := strings.TrimPrefix(line, "data:")
+				if callback != nil {
+					callback(SSEEvent{Type: eventType, Data: data})
+				}
+			}
+		}
 	}
-	c.setHeaders(httpReq)
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	return result, err
 }
 
-// CancelTask 取消任务
+// ========== 取消任务 ==========
+
 func (c *Client) CancelTask(ctx context.Context, taskID string) (map[string]interface{}, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/task/"+taskID, nil)
-	if err != nil {
-		return nil, err
-	}
+	httpReq, _ := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/task/"+taskID, nil)
 	c.setHeaders(httpReq)
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	return result, err
+	return c.doRequest(httpReq)
 }
 
-// HealthCheck 健康检查
+// ========== 查询状态 ==========
+
+func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/status/"+taskID, nil)
+	c.setHeaders(httpReq)
+	return c.doRequest(httpReq)
+}
+
+// ========== 查询详情 ==========
+
+func (c *Client) GetTaskDetail(ctx context.Context, taskID string) (map[string]interface{}, error) {
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/"+taskID, nil)
+	c.setHeaders(httpReq)
+	return c.doRequest(httpReq)
+}
+
+// ========== 查询历史 ==========
+
+func (c *Client) GetHistory(ctx context.Context, status string, limit, offset int) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/task/history?limit=%d&offset=%d", c.baseURL, limit, offset)
+	if status != "" {
+		url += "&status=" + status
+	}
+	
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	c.setHeaders(httpReq)
+	return c.doRequest(httpReq)
+}
+
+// ========== 健康检查 ==========
+
 func (c *Client) HealthCheck(ctx context.Context) (map[string]interface{}, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	return result, err
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
+	return c.doRequest(httpReq)
 }
 
-// setHeaders 设置请求头
+// ========== 列出 Skills ==========
+
+func (c *Client) ListSkills(ctx context.Context) (map[string]interface{}, error) {
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/skills", nil)
+	c.setHeaders(httpReq)
+	return c.doRequest(httpReq)
+}
+
+// ========== 列出 Tools ==========
+
+func (c *Client) ListTools(ctx context.Context) (map[string]interface{}, error) {
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/tools", nil)
+	c.setHeaders(httpReq)
+	return c.doRequest(httpReq)
+}
+
+// ========== 辅助方法 ==========
+
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -1464,65 +2448,16 @@ func (c *Client) setHeaders(req *http.Request) {
 	}
 }
 
-// SSEReader SSE 流读取器
-type SSEReader struct {
-	reader *bytes.Reader
-}
-
-func NewSSEReader(r io.Reader) *SSEReader {
-	data, _ := io.ReadAll(r)
-	return &SSEReader{reader: bytes.NewReader(data)}
-}
-
-func (r *SSEReader) Next() (SSEEvent, bool) {
-	var eventType string
-	var data string
-
-	for {
-		line, err := r.reader.ReadString('\n')
-		if err != nil {
-			return SSEEvent{}, false
-		}
-		line = strings.TrimRight(line, "\n")
-
-		if strings.HasPrefix(line, "event:") {
-			eventType = strings.TrimPrefix(line, "event:")
-		} else if strings.HasPrefix(line, "data:") {
-			data = strings.TrimPrefix(line, "data:")
-			return SSEEvent{Type: eventType, Data: data}, true
-		}
+func (c *Client) doRequest(httpReq *http.Request) (map[string]interface{}, error) {
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, err
 	}
-}
-
-// 使用示例
-func ExampleUsage() {
-	client := NewClient("http://localhost:8080", "your-api-key")
-	ctx := context.Background()
-
-	// 健康检查
-	health, _ := client.HealthCheck(ctx)
-	fmt.Println("健康状态:", health)
-
-	// 执行简单任务
-	taskID, _ := client.ExecuteTask(ctx, ExecuteRequest{
-		Instruction: "写一个 Python 快速排序函数",
-	}, func(event SSEEvent) {
-		fmt.Printf("[%s] %s\n", event.Type, event.Data)
-	})
-	fmt.Println("任务 ID:", taskID)
-
-	// 执行带附件任务
-	taskID, _ = client.ExecuteTaskWithFile(ctx, "分析这份财报", "/path/to/report.pdf", func(event SSEEvent) {
-		fmt.Printf("[%s] %s\n", event.Type, event.Data)
-	})
-
-	// 查询状态
-	status, _ := client.GetTaskStatus(ctx, taskID)
-	fmt.Println("任务状态:", status)
-
-	// 取消任务
-	result, _ := client.CancelTask(ctx, taskID)
-	fmt.Println("取消结果:", result)
+	defer resp.Body.Close()
+	
+	var result map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	return result, err
 }
 ```
 
