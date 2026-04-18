@@ -14,8 +14,8 @@ import (
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/skill"
-	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 // Engine wraps eino's ChatModelAgent for task execution
@@ -50,6 +50,7 @@ func (e *Engine) Run(
 	instruction string,
 	prompt string,
 	attachmentPaths []AttachmentPath,
+	historyMessages []memory.Message,
 	progress func(stepID, eventType, message string),
 ) (*RunResult, error) {
 	// 1. Create ChatModel
@@ -95,12 +96,10 @@ func (e *Engine) Run(
 		EnableStreaming: true,
 	})
 
-	// 7. Build user message with attachment paths
-	userMessage := e.buildUserMessage(instruction, attachmentPaths)
+	// 7. Build message list with history context
+	msgs := e.buildMessageList(instruction, attachmentPaths, historyMessages)
 
 	// 8. Run agent and collect events
-	// Use adk.Message (alias for *schema.Message)
-	msgs := []adk.Message{schema.UserMessage(userMessage)}
 	iter := runner.Run(ctx, msgs)
 
 	var finalResult string
@@ -193,6 +192,29 @@ func (e *Engine) buildUserMessage(instruction string, attachmentPaths []Attachme
 		}
 	}
 	return msg
+}
+
+// buildMessageList builds message list with history context
+func (e *Engine) buildMessageList(instruction string, attachmentPaths []AttachmentPath, historyMessages []memory.Message) []adk.Message {
+	msgs := []adk.Message{}
+
+	// Add history messages as context (convert to conversation format)
+	for _, hMsg := range historyMessages {
+		// Previous user instruction
+		if hMsg.Instruction != "" {
+			msgs = append(msgs, schema.UserMessage(hMsg.Instruction))
+		}
+		// Previous assistant response
+		if hMsg.Result != "" {
+			msgs = append(msgs, schema.AssistantMessage(hMsg.Result, nil))
+		}
+	}
+
+	// Add current user message
+	userMessage := e.buildUserMessage(instruction, attachmentPaths)
+	msgs = append(msgs, schema.UserMessage(userMessage))
+
+	return msgs
 }
 
 // processEvent handles agent events and sends progress

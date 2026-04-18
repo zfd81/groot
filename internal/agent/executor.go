@@ -10,8 +10,8 @@ import (
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/skill"
-	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 // TaskStatus represents task status (temporary definition until memory module)
@@ -26,19 +26,21 @@ const (
 
 // Task represents a task (temporary definition until memory module)
 type Task struct {
-	ID          string
-	Instruction string
-	Prompt      string
-	Status      TaskStatus
-	StartTime   time.Time
-	EndTime     *time.Time
-	Duration    int
-	Result      string
-	Error       *TaskError
-	Steps       []StepRecord
-	Attachments []Attachment
-	Caller      string
-	Progress    *ProgressInfo
+	ID              string
+	Instruction     string
+	Prompt          string
+	Status          TaskStatus
+	StartTime       time.Time
+	EndTime         *time.Time
+	Duration        int
+	Result          string
+	Error           *TaskError
+	Steps           []StepRecord
+	Attachments     []Attachment
+	Caller          string
+	Progress        *ProgressInfo
+	Round           int
+	HistoryMessages []memory.Message
 }
 
 // TaskError represents task error
@@ -85,20 +87,19 @@ type ProgressInfo struct {
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
-	// storage         storage.TaskStorage // removed - will be re-added in Phase 4
-	skillRegistry     *skill.Registry
-	mcpManager        *mcp.Manager
-	cancelManager     *CancelManager
+	memoryManager    *memory.Manager
+	skillRegistry    *skill.Registry
+	mcpManager       *mcp.Manager
+	cancelManager    *CancelManager
 	attachmentHandler *attachment.Handler
-	config            config.Config
-	logger            *logger.Logger
-	runningTasks      sync.Map
+	config           config.Config
+	logger           *logger.Logger
+	runningTasks     sync.Map
 }
 
 // NewExecutor creates a new task executor
-// NOTE: storage parameter removed - will be re-added in Phase 4
 func NewExecutor(
-	// store storage.TaskStorage, // removed
+	memMgr *memory.Manager,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 	cancelMgr *CancelManager,
@@ -107,18 +108,18 @@ func NewExecutor(
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
-		// storage:         store,
-		skillRegistry:     skills,
-		mcpManager:        mcpMgr,
-		cancelManager:     cancelMgr,
+		memoryManager:    memMgr,
+		skillRegistry:    skills,
+		mcpManager:       mcpMgr,
+		cancelManager:    cancelMgr,
 		attachmentHandler: attHandler,
-		config:            cfg,
-		logger:            log,
+		config:           cfg,
+		logger:           log,
 	}
 }
 
 // Execute starts task execution
-func (e *Executor) Execute(task *Task, sse *SSEWriter, cancelCh chan struct{}) {
+func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 	e.runningTasks.Store(task.ID, true)
 	defer e.runningTasks.Delete(task.ID)
 
@@ -138,14 +139,14 @@ func (e *Executor) Execute(task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 
 		// Validate attachments
 		if err := e.attachmentHandler.Validate(attInput); err != nil {
-			e.handleFailure(task, sse, err, "attachment_validation_error")
+			e.handleFailure(sessionID, task, sse, err, "attachment_validation_error")
 			return
 		}
 
 		// Process attachments (decode Base64, save to temp)
 		processed, err := e.attachmentHandler.Process(task.ID, attInput)
 		if err != nil {
-			e.handleFailure(task, sse, err, "attachment_processing_error")
+			e.handleFailure(sessionID, task, sse, err, "attachment_processing_error")
 			return
 		}
 		processedAttachments = processed
@@ -171,7 +172,7 @@ func (e *Executor) Execute(task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 	}()
 
 	// Write intent event (after all preparation is complete)
-	sse.WriteIntent()
+	sse.WriteIntent(task.Round)
 
 	// Create engine using eino
 	engine := NewEngine(
@@ -196,12 +197,13 @@ func (e *Executor) Execute(task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 		}
 	}()
 
-	// Run engine with progress callback
+	// Run engine with progress callback and history messages
 	result, err := engine.Run(
 		ctx,
 		task.Instruction,
 		task.Prompt,
 		attachmentPaths,
+		task.HistoryMessages,
 		func(stepID, eventType, message string) {
 			select {
 			case <-ctx.Done():
@@ -218,48 +220,117 @@ func (e *Executor) Execute(task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 	duration := endTime.Sub(startTime)
 	durationStr := formatDuration(duration)
 
-	// Update task status (storage update disabled)
-	// updates := map[string]interface{}{
-	// 	"end_time": endTime,
-	// 	"duration": int(duration.Seconds()),
-	// 	"steps":    result.Steps,
-	// }
+	// Save chat record to memory
+	if e.memoryManager != nil {
+		record := &memory.ChatRecord{
+			ChatID:      task.ID,
+			SessionID:   sessionID,
+			Round:       task.Round,
+			Timestamp:   endTime,
+			Instruction: task.Instruction,
+			Duration:    int(duration.Seconds()),
+		}
 
-	if err != nil {
-		// updates["status"] = storage.StatusFailed
-		// updates["error"] = &storage.TaskError{...}
-		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
-	} else if ctx.Err() == context.Canceled {
-		// updates["status"] = storage.StatusCancelled
-		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
-	} else {
-		// updates["status"] = storage.StatusCompleted
-		// updates["result"] = result.Content
-		sse.WriteCompleted("success", durationStr, result.Content, nil, "")
+		if err != nil {
+			record.Status = "failed"
+			record.Error = &memory.Error{
+				Code:    "execution_error",
+				Message: err.Error(),
+			}
+		} else if ctx.Err() == context.Canceled {
+			record.Status = "cancelled"
+		} else {
+			record.Status = "completed"
+			record.Result = result.Content
+			record.Steps = convertSteps(result.Steps)
+		}
+
+		// Save chat record
+		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
+			e.logger.Error("保存对话记录失败: " + saveErr.Error())
+		}
+
+		// Append message to history
+		if err == nil && ctx.Err() != context.Canceled && result.Content != "" {
+			msg := &memory.Message{
+				ChatID:      task.ID,
+				Round:       task.Round,
+				Timestamp:   endTime,
+				Instruction: task.Instruction,
+				Result:      result.Content,
+				Status:      "completed",
+				Duration:    int(duration.Seconds()),
+				StepsCount:  len(result.Steps),
+			}
+			if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
+				e.logger.Error("追加历史消息失败: " + appendErr.Error())
+			}
+		}
 	}
 
-	// e.storage.Update(task.ID, updates) // disabled
+	if err != nil {
+		sse.WriteCompleted("failed", durationStr, task.Round, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
+	} else if ctx.Err() == context.Canceled {
+		sse.WriteCompleted("cancelled", durationStr, task.Round, nil, nil, "用户主动取消")
+	} else {
+		sse.WriteCompleted("success", durationStr, task.Round, result.Content, nil, "")
+	}
 
 	// Unregister from cancel manager
 	e.cancelManager.Unregister(task.ID)
 }
 
+// convertSteps converts agent steps to memory steps
+func convertSteps(steps []StepRecord) []memory.Step {
+	result := make([]memory.Step, len(steps))
+	for i, s := range steps {
+		result[i] = memory.Step{
+			StepID:       s.StepID,
+			Type:         s.Type,
+			Name:         s.Name,
+			Status:       string(s.Status),
+			NestingLevel: s.NestingLevel,
+		}
+		if s.Error != nil {
+			result[i].Error = &memory.Error{
+				Code:    s.Error.Code,
+				Message: s.Error.Message,
+			}
+		}
+		if s.StartTime != nil {
+			result[i].StartTime = *s.StartTime
+		}
+		if s.EndTime != nil {
+			result[i].EndTime = *s.EndTime
+		}
+	}
+	return result
+}
+
 // handleFailure handles task failure
-func (e *Executor) handleFailure(task *Task, sse *SSEWriter, err error, errorCode string) {
+func (e *Executor) handleFailure(sessionID string, task *Task, sse *SSEWriter, err error, errorCode string) {
 	endTime := time.Now()
 	duration := endTime.Sub(task.StartTime)
 	durationStr := formatDuration(duration)
 
-	// Storage update disabled
-	// updates := map[string]interface{}{
-	// 	"status":    storage.StatusFailed,
-	// 	"end_time":  endTime,
-	// 	"duration":  int(duration.Seconds()),
-	// 	"error":     &storage.TaskError{Code: errorCode, Message: err.Error()},
-	// }
-	// e.storage.Update(task.ID, updates)
+	// Save failed chat record to memory
+	if e.memoryManager != nil {
+		record := &memory.ChatRecord{
+			ChatID:      task.ID,
+			SessionID:   sessionID,
+			Round:       task.Round,
+			Timestamp:   endTime,
+			Instruction: task.Instruction,
+			Status:      "failed",
+			Duration:    int(duration.Seconds()),
+			Error:       &memory.Error{Code: errorCode, Message: err.Error()},
+		}
+		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
+			e.logger.Error("保存对话记录失败: " + saveErr.Error())
+		}
+	}
 
-	sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
+	sse.WriteCompleted("failed", durationStr, task.Round, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
 	e.cancelManager.Unregister(task.ID)
 }
 

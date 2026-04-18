@@ -45,7 +45,7 @@ func NewServer(
 	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
 
 	// Create executor
-	exec := agent.NewExecutor(skills, mcpMgr, cancelMgr, attHandler, cfg, log)
+	exec := agent.NewExecutor(mem, skills, mcpMgr, cancelMgr, attHandler, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)

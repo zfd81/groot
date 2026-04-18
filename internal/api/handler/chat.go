@@ -171,17 +171,19 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	// 10. 推送 intent 事件
-	sseWriter.WriteIntent()
+	sseWriter.WriteIntent(round)
 
 	// 11. 构建 Task 对象
 	task := &agent.Task{
-		ID:          chatID,
-		Instruction: req.Instruction,
-		Prompt:      req.Prompt,
-		Status:      agent.StatusRunning,
-		StartTime:   time.Now(),
-		Steps:       []agent.StepRecord{},
-		Progress:    &agent.ProgressInfo{},
+		ID:              chatID,
+		Instruction:     req.Instruction,
+		Prompt:          req.Prompt,
+		Status:          agent.StatusRunning,
+		StartTime:       time.Now(),
+		Steps:           []agent.StepRecord{},
+		Progress:        &agent.ProgressInfo{},
+		Round:           round,
+		HistoryMessages: historyMessages,
 	}
 
 	// 转换附件
@@ -196,7 +198,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	// 12. 执行 Agent
-	go h.agentExecutor.Execute(task, sseWriter, activeChat.CancelCh)
+	go h.agentExecutor.Execute(sessionID, task, sseWriter, activeChat.CancelCh)
 
 	// 记录日志
 	h.log.Info(fmt.Sprintf("开始对话: session=%s, chat=%s, round=%d, isNew=%v", sessionID, chatID, round, isNew))

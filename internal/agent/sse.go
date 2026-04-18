@@ -31,8 +31,9 @@ func (s *SSEWriter) WriteEvent(event string, data interface{}) error {
 }
 
 // WriteIntent writes intent event
-func (s *SSEWriter) WriteIntent() error {
-	return s.WriteEvent("intent", map[string]string{
+func (s *SSEWriter) WriteIntent(round int) error {
+	return s.WriteEvent("intent", map[string]interface{}{
+		"round":     round,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 }
@@ -78,11 +79,12 @@ func (s *SSEWriter) WriteProgress(stepID, message string) error {
 }
 
 // WriteCompleted writes completed event
-func (s *SSEWriter) WriteCompleted(status, duration string, result interface{}, errInfo *StepError, message string) error {
+func (s *SSEWriter) WriteCompleted(status, duration string, round int, result interface{}, errInfo *StepError, message string) error {
 	data := map[string]interface{}{
 		"status":    status,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"duration":  duration,
+		"round":     round,
 	}
 	if result != nil {
 		data["result"] = result
