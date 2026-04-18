@@ -1875,6 +1875,12 @@ react:
 | 错误日志 | 所有错误 | ERROR |
 | 性能日志 | 耗时指标 | INFO |
 
+> **当前实现说明：**
+> - 日志已通过 `event` 字段区分不同类型
+> - 分类级别控制（categories 配置）为预留功能，当前未实现
+> - 所有日志使用统一的全局级别（由 `logging.level` 控制）
+> - 未来版本将支持按分类设置不同日志级别
+
 ### 11.2 日志存储
 
 - 目录：`{GROOT_HOME}/logs/`
@@ -2312,7 +2318,7 @@ logging:
     directory: logs
     filename_pattern: groot-{date}.log
     max_age: 7
-  categories:
+  categories:    # 分类日志配置（预留功能，当前未实现）
     request: {enabled: true, level: info}
     skill: {enabled: true, level: info, log_input: true, log_output: true}
     llm: {enabled: true, level: debug}

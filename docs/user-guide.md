@@ -580,7 +580,8 @@ logging:
     filename_pattern: groot-{date}.log   # 文件名模式
     max_age: 7             # 日志保留天数
   
-  categories:              # 分类日志配置
+  categories:              # 分类日志配置（预留功能，当前未实现）
+                          # 未来版本将支持按分类设置不同日志级别
     request:
       enabled: true
       level: info          # API 请求日志
