@@ -16,7 +16,7 @@ llm:
   active_model: gpt-4o
   models:
     gpt-4o:
-      endpoint: https://api.openai.com/v1
+      base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o
       max_tokens: 4096

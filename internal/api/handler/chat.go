@@ -85,7 +85,24 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	// 3. 提取 X-Session-ID
 	sessionID := string(rc.GetHeader("X-Session-ID"))
 
-	// 4. 会话处理
+	// 4. 附件校验（在会话处理之前）
+	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
+		// 转换为 attachment.Attachment 格式
+		attInput := make([]attachment.Attachment, len(req.Attachments))
+		for i, att := range req.Attachments {
+			attInput[i] = attachment.Attachment{
+				Type:    att.Type,
+				Name:    att.Name,
+				Content: att.Content,
+			}
+		}
+		if err := h.attachmentHandler.Validate(attInput); err != nil {
+			rc.JSON(400, utils.H{"status": "attachment_validation_error", "message": err.Error()})
+			return
+		}
+	}
+
+	// 5. 会话处理
 	var isNew bool
 	var round int
 	var historyMessages []memory.Message

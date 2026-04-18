@@ -123,9 +123,6 @@ func main() {
 		log.Error("无法启动MCP watcher", zap.Error(err))
 	}
 
-	// Initialize cancel manager
-	cancelMgr := agent.NewCancelManager()
-
 	// Initialize memory manager
 	memoryDir := filepath.Join(homeDir, "memory")
 	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
@@ -134,8 +131,13 @@ func main() {
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
 
+	// Start cleanup scheduler
+	cleanupScheduler := memory.NewCleanupScheduler(memMgr, cfg.Memory.CleanupSchedule, log)
+	cleanupScheduler.Start()
+	log.Info("清理调度器已启动", zap.String("schedule", cfg.Memory.CleanupSchedule))
+
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr, cancelMgr)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -154,6 +156,9 @@ func main() {
 		// Stop watchers
 		skillWatcher.Stop()
 		mcpWatcher.Stop()
+
+		// Stop cleanup scheduler
+		cleanupScheduler.Stop()
 
 		// Close MCP executor (terminate running processes)
 		mcpMgr.GetExecutor().Close()

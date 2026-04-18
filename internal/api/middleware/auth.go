@@ -97,29 +97,34 @@ func getRequiredPermission(path, method string) string {
 		return ""
 	}
 
-	// Execute endpoint
-	if path == "/task/execute" && method == "POST" {
-		return "execute"
+	// Chat endpoint (POST /chat)
+	if path == "/chat" && method == "POST" {
+		return "chat"
 	}
 
-	// Cancel endpoint
-	if strings.HasPrefix(path, "/task/") && method == "DELETE" {
+	// Cancel endpoint (DELETE /chat/:sid)
+	if strings.HasPrefix(path, "/chat/") && method == "DELETE" {
 		return "cancel"
 	}
 
-	// Status endpoint
-	if strings.HasPrefix(path, "/task/status/") {
+	// Status endpoint (GET /chat/status/:sid)
+	if strings.HasPrefix(path, "/chat/status/") {
 		return "status"
 	}
 
-	// History endpoint
-	if path == "/task/history" {
-		return "history"
+	// Chat detail endpoint (GET /chat/:sid/:cid or GET /chat/:sid)
+	if strings.HasPrefix(path, "/chat/") && !strings.Contains(path, "/status/") && method == "GET" {
+		return "detail"
 	}
 
-	// Detail endpoint
-	if strings.HasPrefix(path, "/task/") && !strings.Contains(path, "/status/") && method == "GET" {
-		return "detail"
+	// Session endpoints
+	if strings.HasPrefix(path, "/sess/") {
+		return "session"
+	}
+
+	// Session history endpoint
+	if path == "/sess/history" {
+		return "history"
 	}
 
 	// Skills endpoint

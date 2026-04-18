@@ -87,14 +87,13 @@ type ProgressInfo struct {
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
-	memoryManager    *memory.Manager
-	skillRegistry    *skill.Registry
-	mcpManager       *mcp.Manager
-	cancelManager    *CancelManager
+	memoryManager     *memory.Manager
+	skillRegistry     *skill.Registry
+	mcpManager        *mcp.Manager
 	attachmentHandler *attachment.Handler
-	config           config.Config
-	logger           *logger.Logger
-	runningTasks     sync.Map
+	config            config.Config
+	logger            *logger.Logger
+	runningTasks      sync.Map
 }
 
 // NewExecutor creates a new task executor
@@ -102,19 +101,17 @@ func NewExecutor(
 	memMgr *memory.Manager,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
-	cancelMgr *CancelManager,
 	attHandler *attachment.Handler,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
-		memoryManager:    memMgr,
-		skillRegistry:    skills,
-		mcpManager:       mcpMgr,
-		cancelManager:    cancelMgr,
+		memoryManager:     memMgr,
+		skillRegistry:     skills,
+		mcpManager:        mcpMgr,
 		attachmentHandler: attHandler,
-		config:           cfg,
-		logger:           log,
+		config:            cfg,
+		logger:            log,
 	}
 }
 
@@ -275,9 +272,6 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	} else {
 		sse.WriteCompleted("success", durationStr, task.Round, result.Content, nil, "")
 	}
-
-	// Unregister from cancel manager
-	e.cancelManager.Unregister(task.ID)
 }
 
 // convertSteps converts agent steps to memory steps
@@ -331,7 +325,6 @@ func (e *Executor) handleFailure(sessionID string, task *Task, sse *SSEWriter, e
 	}
 
 	sse.WriteCompleted("failed", durationStr, task.Round, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
-	e.cancelManager.Unregister(task.ID)
 }
 
 // IsRunning checks if task is currently running

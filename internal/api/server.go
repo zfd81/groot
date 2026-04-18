@@ -34,7 +34,6 @@ func NewServer(
 	runtime *agent.RuntimeState,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
-	cancelMgr *agent.CancelManager,
 ) *Server {
 	// Create Hertz server
 	h := server.Default(
@@ -45,7 +44,7 @@ func NewServer(
 	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
 
 	// Create executor
-	exec := agent.NewExecutor(mem, skills, mcpMgr, cancelMgr, attHandler, cfg, log)
+	exec := agent.NewExecutor(mem, skills, mcpMgr, attHandler, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
