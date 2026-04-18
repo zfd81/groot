@@ -12,12 +12,13 @@ import (
 
 // ActiveChat 活跃对话状态
 type ActiveChat struct {
-	SessionID string        `json:"session_id"`
-	ChatID    string        `json:"chat_id"`
-	Status    string        `json:"status"` // running
-	Progress  *ChatProgress `json:"progress"`
-	StartTime time.Time     `json:"start_time"`
-	CancelCh  chan struct{} `json:"-"` // 取消信号通道
+	SessionID  string        `json:"session_id"`
+	ChatID     string        `json:"chat_id"`
+	Status     string        `json:"status"` // running, cancelled, completed
+	Progress   *ChatProgress `json:"progress"`
+	StartTime  time.Time     `json:"start_time"`
+	CancelCh   chan struct{} `json:"-"`     // 取消信号通道
+	cancelOnce sync.Once      `json:"-"`     // 确保 channel 只 close 一次
 }
 
 // ChatProgress 对话进度
@@ -95,7 +96,10 @@ func (r *RuntimeState) Cancel(sessionID string) error {
 	}
 
 	chat.Status = "cancelled"
-	close(chat.CancelCh)
+	// 使用 sync.Once 确保 channel 只被 close 一次，防止重复调用导致 panic
+	chat.cancelOnce.Do(func() {
+		close(chat.CancelCh)
+	})
 	return nil
 }
 
