@@ -1865,23 +1865,27 @@ react:
 
 ### 11.1 日志类型
 
-| 类型 | 用途 | 级别 |
-|------|------|------|
-| 请求日志 | API 调用记录 | INFO |
-| Skills 日志 | Skills 调用详情 | INFO |
-| LLM 日志 | LLM 调用详情 | DEBUG |
-| MCP 日志 | MCP 工具调用 | DEBUG |
-| 执行日志 | Agent 执行过程 | INFO |
-| 错误日志 | 所有错误 | ERROR |
-| 性能日志 | 耗时指标 | INFO |
+日志通过 `event` 字段区分不同类型：
 
-> **当前实现说明：**
-> - 日志已通过 `event` 字段区分不同类型
-> - 分类级别控制（categories 配置）为预留功能，当前未实现
-> - 所有日志使用统一的全局级别（由 `logging.level` 控制）
-> - 未来版本将支持按分类设置不同日志级别
+| event 值 | 用途 |
+|----------|------|
+| `api_request` | API 调用记录 |
+| `skill_hot_reload` | Skills 热插拔事件 |
+| `mcp_hot_reload` | MCP 热插拔事件 |
+| `task_completed` | 任务完成事件 |
 
-### 11.2 日志存储
+### 11.2 日志级别
+
+所有日志使用统一的全局级别，通过 `logging.level` 配置：
+
+| 级别 | 说明 |
+|------|------|
+| `debug` | 详细调试信息（包含 LLM/MCP 调用详情） |
+| `info` | 常规运行信息（默认） |
+| `warn` | 警告信息 |
+| `error` | 错误信息 |
+
+### 11.3 日志存储
 
 - 目录：`{GROOT_HOME}/logs/`
 - 格式：`groot-{date}.log`
@@ -2318,12 +2322,7 @@ logging:
     directory: logs
     filename_pattern: groot-{date}.log
     max_age: 7
-  categories:    # 分类日志配置（预留功能，当前未实现）
-    request: {enabled: true, level: info}
-    skill: {enabled: true, level: info, log_input: true, log_output: true}
-    llm: {enabled: true, level: debug}
-    mcp: {enabled: true, level: debug}
-    error: {enabled: true, level: error}
+```
 ```
 
 ---

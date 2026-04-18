@@ -579,26 +579,6 @@ logging:
                            # 也可使用绝对路径：/var/log/groot
     filename_pattern: groot-{date}.log   # 文件名模式
     max_age: 7             # 日志保留天数
-  
-  categories:              # 分类日志配置（预留功能，当前未实现）
-                          # 未来版本将支持按分类设置不同日志级别
-    request:
-      enabled: true
-      level: info          # API 请求日志
-    skill:
-      enabled: true
-      level: info          # Skills 调用日志
-      log_input: true      # 是否记录输入
-      log_output: true     # 是否记录输出
-    llm:
-      enabled: true
-      level: debug         # LLM 调用日志（详细）
-    mcp:
-      enabled: true
-      level: debug         # MCP 工具调用日志
-    error:
-      enabled: true
-      level: error         # 错误日志
 ```
 
 ### 4.3 权限说明
