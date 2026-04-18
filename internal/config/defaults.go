@@ -35,10 +35,10 @@ func DefaultConfig() *Config {
 				DebounceDelay: 2,
 			},
 		},
-		Storage: StorageConfig{
-			Engine:          "memory", // memory module will be implemented in Phase 2-4
+		Memory: MemoryConfig{
+			Directory:       "memory",
 			RetentionDays:   7,
-			CleanupInterval: "24h",
+			CleanupSchedule: "02:00",
 		},
 		Performance: PerformanceConfig{
 			RateLimit: RateLimitConfig{

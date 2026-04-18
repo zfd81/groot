@@ -12,7 +12,7 @@ type Config struct {
 	LLM         LLMConfig         `yaml:"llm"`
 	Skills      SkillsConfig      `yaml:"skills"`
 	MCP         MCPConfig         `yaml:"mcp"`
-	Storage     StorageConfig     `yaml:"storage"`
+	Memory      MemoryConfig      `yaml:"memory"`
 	Performance PerformanceConfig `yaml:"performance"`
 	React       ReactConfig       `yaml:"react"`
 	Attachment  AttachmentConfig  `yaml:"attachment"`
@@ -63,34 +63,11 @@ type HotReloadConfig struct {
 	DebounceDelay int  `yaml:"debounce_delay"`
 }
 
-// StorageConfig holds storage engine settings
-// NOTE: BoltDB field removed - will be re-added in Phase 4 (memory module)
-type StorageConfig struct {
-	Engine          string      `yaml:"engine"`
-	// BoltDB          BoltDBConfig `yaml:"boltdb"` // removed
-	Redis           RedisConfig  `yaml:"redis"`
-	Etcd            EtcdConfig   `yaml:"etcd"`
-	RetentionDays   int          `yaml:"retention_days"`
-	CleanupInterval string       `yaml:"cleanup_interval"`
-}
-
-// BoltDBConfig - temporarily removed, will be re-defined in memory module
-// type BoltDBConfig struct {
-// 	File   string `yaml:"file"`
-// 	Bucket string `yaml:"bucket"`
-// }
-
-// RedisConfig holds Redis settings (reserved for cluster)
-type RedisConfig struct {
-	Endpoint  string `yaml:"endpoint"`
-	Password  string `yaml:"password"`
-	KeyPrefix string `yaml:"key_prefix"`
-}
-
-// EtcdConfig holds etcd settings (reserved for cluster)
-type EtcdConfig struct {
-	Endpoints []string `yaml:"endpoints"`
-	KeyPrefix string   `yaml:"key_prefix"`
+// MemoryConfig 记忆模块配置
+type MemoryConfig struct {
+	Directory       string `yaml:"directory"`        // 记忆目录
+	RetentionDays   int    `yaml:"retention_days"`   // 保留天数
+	CleanupSchedule string `yaml:"cleanup_schedule"` // 清理时间 HH:MM
 }
 
 // PerformanceConfig holds performance control settings

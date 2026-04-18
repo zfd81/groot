@@ -65,8 +65,4 @@ func expandConfigEnvVars(cfg *Config) {
 		keyInfo.Key = ExpandEnv(keyInfo.Key)
 		cfg.Security.Auth.APIKey.Keys[i] = keyInfo
 	}
-
-	// Expand Redis settings
-	cfg.Storage.Redis.Endpoint = ExpandEnv(cfg.Storage.Redis.Endpoint)
-	cfg.Storage.Redis.Password = ExpandEnv(cfg.Storage.Redis.Password)
 }
