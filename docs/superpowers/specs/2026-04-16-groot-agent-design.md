@@ -2450,6 +2450,314 @@ description: "综合分析多种来源的资料，生成完整的分析报告"
 
 ---
 
+## 十八、记忆模块设计
+
+### 18.1 模块定位
+
+记忆模块是 Groot 的内部组件，用于支持多轮对话能力。对用户透明，用户唯一感知的是配置项：
+
+- 记忆目录路径
+- 保留时长
+- 清理时间
+
+### 18.2 核心能力
+
+| 能力 | 说明 |
+|------|------|
+| **会话创建** | 创建会话目录和 history.json 文件 |
+| **历史追加** | 向会话追加新一轮对话记录 |
+| **历史读取** | 读取指定会话的历史消息列表 |
+| **附件存储** | 保存附件到会话目录（保留原始文件名） |
+| **附件路径获取** | 获取会话附件的完整路径 |
+| **定时清理** | 按目录创建时间清理过期会话 |
+| **会话查询** | 查询会话是否存在、获取会话信息 |
+
+### 18.3 目录结构
+
+```
+memory/                              # 记忆根目录（可配置）
+├── sess_abc123/                     # 会话目录（以 session_id 命名）
+│   ├── history.json                 # 对话历史（JSON格式）
+│   └── attachments/                 # 附件目录
+│       ├── data.csv                 # 保留原始文件名
+│       ├── report.pdf
+│       ├── image.png
+├── sess_def456/
+│   ├── history.json
+│   └── attachments/
+│       └── ...
+└── ...
+```
+
+### 18.4 数据结构
+
+#### 18.4.1 history.json 格式
+
+```json
+{
+  "session_id": "sess_abc123",
+  "created_at": "2026-04-18T10:00:00Z",
+  "messages": [
+    {
+      "round": 1,
+      "timestamp": "2026-04-18T10:00:00Z",
+      "user_content": "用户指令内容",
+      "user_attachments": ["data.csv"],
+      "assistant_content": "助手回复内容",
+      "assistant_attachments": []
+    },
+    {
+      "round": 2,
+      "timestamp": "2026-04-18T10:05:00Z",
+      "user_content": "第二轮用户指令",
+      "user_attachments": ["report.pdf"],
+      "assistant_content": "第二轮助手回复",
+      "assistant_attachments": ["chart.png"]
+    }
+  ]
+}
+```
+
+#### 18.4.2 文件格式规范
+
+| 字段 | 格式 | 说明 |
+|------|------|------|
+| `created_at` | RFC3339 | `2026-04-18T10:00:00Z` |
+| `timestamp` | RFC3339 | `2026-04-18T10:05:00Z` |
+| `messages` | 数组 | 空会话时为 `[]`，不是 `null` |
+| `user_attachments` | 数组 | 无附件时为 `[]` |
+| `assistant_attachments` | 数组 | 无附件时为 `[]` |
+
+#### 18.4.3 附件命名规则
+
+- 保留原始文件名，不添加前缀
+- 同一会话中后续上传同名附件会覆盖之前的文件
+- 文件名记录在 history.json 的 `user_attachments` 或 `assistant_attachments` 字段中
+
+### 18.5 配置项
+
+```yaml
+# 记忆模块配置
+memory:
+  directory: memory                  # 记忆目录（支持绝对路径）
+                                     # 相对路径则相对于 homeDir
+  retention_days: 7                  # 会话保留天数
+  cleanup_schedule: "02:00"          # 清理时间（HH:MM 格式）
+```
+
+**目录路径解析规则：**
+
+| 配置值 | homeDir | 解析结果 |
+|--------|---------|---------|
+| `/data/groot/memory` | `/home/groot` | `/data/groot/memory` |
+| `memory` | `/home/groot` | `/home/groot/memory` |
+| `./memory` | `/home/groot` | `/home/groot/memory` |
+
+### 18.6 模块接口设计
+
+```go
+// Memory 记忆模块接口
+type Memory interface {
+    // 会话管理
+    CreateSession(sessionID string) error                    // 创建新会话
+    ExistsSession(sessionID string) bool                     // 检查会话是否存在
+    GetSessionInfo(sessionID string) (*SessionInfo, error)   // 获取会话信息
+    
+    // 历史操作
+    AppendMessage(sessionID string, msg *Message) error      // 追加对话记录
+    GetHistory(sessionID string) ([]*Message, error)         // 获取历史消息列表
+    GetRoundCount(sessionID string) (int, error)             // 获取对话轮数
+    
+    // 附件操作
+    SaveAttachment(sessionID string, filename string, content []byte) (string, error)
+                                                             // 保存附件（返回完整路径）
+    GetAttachmentPath(sessionID string, filename string) (string, error)
+                                                             // 获取附件完整路径
+    
+    // 清理
+    StartCleanupScheduler()                                  // 启动定时清理
+    StopCleanupScheduler()                                   // 停止定时清理
+    RunCleanup() (int, error)                                // 执行一次清理（返回删除数量）
+}
+
+// SessionInfo 会话信息
+type SessionInfo struct {
+    SessionID  string    `json:"session_id"`
+    CreatedAt  time.Time `json:"created_at"`
+    RoundCount int       `json:"round_count"`
+    Path       string    `json:"path"`           // 会话目录路径
+}
+
+// Message 对话消息
+type Message struct {
+    Round                int       `json:"round"`
+    Timestamp            time.Time `json:"timestamp"`
+    UserContent          string    `json:"user_content"`
+    UserAttachments      []string  `json:"user_attachments"`
+    AssistantContent     string    `json:"assistant_content"`
+    AssistantAttachments []string  `json:"assistant_attachments"`
+}
+
+// History history.json 文件结构
+type History struct {
+    SessionID string     `json:"session_id"`
+    CreatedAt time.Time  `json:"created_at"`
+    Messages  []*Message `json:"messages"`
+}
+```
+
+### 18.7 业务逻辑
+
+#### 18.7.1 创建会话
+
+```
+输入：sessionID
+流程：
+  1. 确保 memory 目录存在，不存在则创建
+  2. 创建会话目录 memory/{sessionID}/
+  3. 创建 attachments 子目录
+  4. 创建 history.json 文件（初始化空消息列表）
+  5. 返回成功
+```
+
+#### 18.7.2 追加对话记录
+
+```
+输入：sessionID, message
+流程：
+  1. 验证会话目录存在
+  2. 读取 history.json
+  3. 确定当前轮数 = len(messages) + 1
+  4. 设置 message.Round 和 message.Timestamp
+  5. 追加到 messages 数组
+  6. 写回 history.json（覆盖写入）
+  7. 返回成功
+```
+
+#### 18.7.3 获取历史消息
+
+```
+输入：sessionID
+流程：
+  1. 验证会话目录存在
+  2. 读取 history.json
+  3. 返回 messages 数组（完整历史，暂不裁剪）
+```
+
+#### 18.7.4 保存附件
+
+```
+输入：sessionID, filename, content
+流程：
+  1. 验证会话目录存在
+  2. 附件路径 = memory/{sessionID}/attachments/{filename}
+  3. 写入文件（同名则覆盖）
+  4. 返回附件完整路径
+```
+
+#### 18.7.5 定时清理
+
+```
+触发：每天 cleanup_schedule 时间（默认凌晨2点）
+流程：
+  1. 遍历 memory 目录下所有子目录
+  2. 获取每个目录的创建时间（文件系统属性）
+  3. 计算年龄 = 当前时间 - 创建时间
+  4. 如果年龄 >= retention_days * 24小时：
+     - 记录日志：[INFO] [memory] 清理会话 {sessionID}，创建时间：{createdAt}，轮数：{roundCount}
+     - 删除整个会话目录（history.json + attachments）
+  5. 汇总日志：[INFO] [memory] 清理完成，删除 {count} 个会话，剩余 {remain} 个
+```
+
+### 18.8 附件处理流程
+
+```
+用户上传附件 → attachment 模块校验（大小、类型、数量）
+            → 校验通过后，memory 模块保存到 memory/{sessionID}/attachments/{filename}
+            → Agent 执行时从 memory 目录读取附件
+            → 执行完成后，追加对话记录到 history.json
+```
+
+**说明：**
+- 附件直接保存到会话目录，不经过临时目录
+- 同名附件会覆盖，保证文件名一致性
+- 任务失败时附件已存在，下次可重新上传覆盖，最终随会话清理删除
+
+### 18.9 启动与停止流程
+
+#### 18.9.1 Groot 启动时
+
+```
+启动流程：
+  1. 解析 memory.directory 配置
+     - 清理路径（去掉 ./ 前缀）
+     - 绝对路径：直接使用
+     - 相对路径：拼接 homeDir
+  2. 确保 memory 目录存在，不存在则创建
+  3. 初始化 Memory Manager
+  4. 启动清理调度器（注册定时任务）
+```
+
+#### 18.9.2 Groot 停止时
+
+```
+停止流程：
+  1. 停止清理调度器
+  2. 等待当前清理任务完成（如有）
+  3. 释放资源
+```
+
+### 18.10 目录路径解析
+
+```go
+// resolveMemoryDir 解析记忆目录路径
+func resolveMemoryDir(memoryDir string, homeDir string) string {
+    // 清理路径（处理 "./memory" -> "memory"）
+    memoryDir = filepath.Clean(memoryDir)
+    
+    // 绝对路径：直接使用
+    if filepath.IsAbs(memoryDir) {
+        return memoryDir
+    }
+    
+    // 相对路径：拼接 homeDir
+    return filepath.Join(homeDir, memoryDir)
+}
+```
+
+### 18.11 清理日志
+
+清理操作使用系统统一日志记录，级别 INFO：
+
+```log
+2026-04-18 02:00:01 [INFO] [memory] 开始清理，保留天数: 7，当前会话数: 15
+2026-04-18 02:00:02 [INFO] [memory] 清理会话 sess_abc123，创建时间: 2026-04-10，轮数: 5
+2026-04-18 02:00:03 [INFO] [memory] 清理会话 sess_def456，创建时间: 2026-04-09，轮数: 3
+2026-04-18 02:00:05 [INFO] [memory] 清理完成，删除 2 个会话，剩余 13 个
+```
+
+### 18.12 错误处理
+
+| 场景 | 处理 |
+|------|------|
+| 会话不存在 | 返回错误，调用方需先 CreateSession |
+| history.json 不存在 | 返回错误，会话目录可能损坏 |
+| history.json 解析失败 | 记录 ERROR 日志，返回错误 |
+| 附件写入失败 | 记录 ERROR 日志，返回错误 |
+| 清理时目录读取失败 | 记录 ERROR 日志，跳过该目录继续清理 |
+
+### 18.13 实现文件
+
+| 文件 | 说明 |
+|------|------|
+| `internal/memory/types.go` | 数据结构定义（SessionInfo, Message, History） |
+| `internal/memory/memory.go` | Memory 接口定义 |
+| `internal/memory/manager.go` | Manager 实现类，核心业务逻辑 |
+| `internal/memory/cleanup.go` | 定时清理调度器 |
+| `internal/config/config.go` | 添加 MemoryConfig 配置项 |
+
+---
+
 ## 附录
 
 ### A. 环境变量
