@@ -36,8 +36,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		Storage: StorageConfig{
-			Engine:          "boltdb",
-			BoltDB:          BoltDBConfig{File: "groot.db", Bucket: "tasks"},
+			Engine:          "memory", // memory module will be implemented in Phase 2-4
 			RetentionDays:   7,
 			CleanupInterval: "24h",
 		},

@@ -2,102 +2,39 @@ package handler
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api/types"
-	"github.com/zfd81/groot/internal/storage"
-	"github.com/zfd81/groot/pkg/utils"
+	// "github.com/zfd81/groot/internal/api/types" // removed - not used
+	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 // HistoryHandler handles GET /task/history
+// NOTE: temporarily disabled until memory module implemented
 type HistoryHandler struct {
-	storage storage.TaskStorage
+	// storage storage.TaskStorage // removed
 }
 
 // NewHistoryHandler creates a new history handler
-func NewHistoryHandler(store storage.TaskStorage) *HistoryHandler {
-	return &HistoryHandler{storage: store}
+// NOTE: temporarily disabled - will be re-enabled in Phase 4
+func NewHistoryHandler(
+	// store storage.TaskStorage, // removed
+) *HistoryHandler {
+	return &HistoryHandler{
+		// storage: store,
+	}
 }
 
 // Serve handles the history request
+// NOTE: temporarily returns error until memory module implemented
 func (h *HistoryHandler) Serve(ctx context.Context, rc *app.RequestContext) {
-	query := storage.TaskQuery{
-		Limit:  20,
-		Offset: 0,
-	}
+	// Storage query disabled
+	// query := storage.TaskQuery{...}
+	// tasks, total, err := h.storage.List(&query)
+	// ...
 
-	// Parse status filter
-	statuses := rc.Query("status")
-	if statuses != "" {
-		query.Status = []storage.TaskStatus{storage.TaskStatus(statuses)}
-	}
-
-	// Parse time range
-	startTime := rc.Query("start_time")
-	if startTime != "" {
-		t, err := utils.ParseTime(startTime)
-		if err == nil {
-			query.StartTime = &t
-		}
-	}
-
-	endTime := rc.Query("end_time")
-	if endTime != "" {
-		t, err := utils.ParseTime(endTime)
-		if err == nil {
-			query.EndTime = &t
-		}
-	}
-
-	// Parse pagination
-	limit := rc.Query("limit")
-	if limit != "" {
-		l, err := strconv.Atoi(limit)
-		if err == nil && l > 0 && l <= 100 {
-			query.Limit = l
-		}
-	}
-
-	offset := rc.Query("offset")
-	if offset != "" {
-		o, err := strconv.Atoi(offset)
-		if err == nil && o >= 0 {
-			query.Offset = o
-		}
-	}
-
-	// Query tasks
-	tasks, total, err := h.storage.List(&query)
-	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"storage_error","message":"查询失败"}`))
-		return
-	}
-
-	// Build response
-	summaries := make([]types.TaskSummary, len(tasks))
-	for i, task := range tasks {
-		summaries[i] = types.TaskSummary{
-			ID:          task.ID,
-			Instruction: task.Instruction,
-			Status:      string(task.Status),
-			StartTime:   task.StartTime,
-			EndTime:     task.EndTime,
-			Duration:    task.Duration,
-			Caller:      task.Caller,
-		}
-	}
-
-	resp := types.HistoryResponse{
-		Status: "success",
-		Total:  total,
-		Limit:  query.Limit,
-		Offset: query.Offset,
-		Tasks:  summaries,
-	}
-
-	rc.JSON(200, resp)
+	// Temporary placeholder response
+	rc.SetContentType("application/json")
+	rc.SetStatusCode(503)
+	rc.Write([]byte(`{"status":"service_unavailable","message":"任务历史查询功能暂时不可用，正在升级存储模块"}`))
 }

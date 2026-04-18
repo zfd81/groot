@@ -7,21 +7,28 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api/types"
-	"github.com/zfd81/groot/internal/storage"
+	// "github.com/zfd81/groot/internal/api/types" // removed - not used
+	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 // StatusHandler handles GET /task/status/{task_id}
+// NOTE: temporarily disabled until memory module implemented
 type StatusHandler struct {
-	storage storage.TaskStorage
+	// storage storage.TaskStorage // removed
 }
 
 // NewStatusHandler creates a new status handler
-func NewStatusHandler(store storage.TaskStorage) *StatusHandler {
-	return &StatusHandler{storage: store}
+// NOTE: temporarily disabled - will be re-enabled in Phase 4
+func NewStatusHandler(
+	// store storage.TaskStorage, // removed
+) *StatusHandler {
+	return &StatusHandler{
+		// storage: store,
+	}
 }
 
 // Serve handles the status request
+// NOTE: temporarily returns error until memory module implemented
 func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	taskID := rc.Param("task_id")
 
@@ -32,34 +39,18 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	task, err := h.storage.Get(taskID)
-	if err != nil {
-		rc.SetContentType("application/json")
-		rc.Write([]byte(fmt.Sprintf(`{"status":"task_not_found","task_id":"%s","message":"任务不存在"}`, taskID)))
-		return
-	}
+	// Storage query disabled
+	// task, err := h.storage.Get(taskID)
+	// if err != nil {
+	// 	rc.SetContentType("application/json")
+	// 	rc.Write([]byte(fmt.Sprintf(`{"status":"task_not_found","task_id":"%s","message":"任务不存在"}`, taskID)))
+	// 	return
+	// }
 
-	// Calculate elapsed time
-	elapsed := time.Since(task.StartTime)
-	elapsedStr := formatElapsed(elapsed)
-
-	resp := types.StatusResponse{
-		Status:      "success",
-		TaskID:      taskID,
-		TaskStatus:  string(task.Status),
-		StartedAt:   task.StartTime.Format(time.RFC3339),
-		ElapsedTime: elapsedStr,
-	}
-
-	if task.Status == storage.StatusRunning && task.Progress != nil {
-		resp.Progress = &types.ProgressInfo{
-			CurrentStep:    task.Progress.CurrentStep,
-			StepsCompleted: task.Progress.StepsCompleted,
-			Percentage:     task.Progress.Percentage,
-		}
-	}
-
-	rc.JSON(200, resp)
+	// Temporary placeholder response
+	rc.SetContentType("application/json")
+	rc.SetStatusCode(503)
+	rc.Write([]byte(fmt.Sprintf(`{"status":"service_unavailable","task_id":"%s","message":"任务查询功能暂时不可用，正在升级存储模块"}`, taskID)))
 }
 
 // formatElapsed formats elapsed time

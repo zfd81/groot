@@ -15,7 +15,6 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/skill"
-	"github.com/zfd81/groot/internal/storage"
 )
 
 // Server represents the API server
@@ -26,11 +25,12 @@ type Server struct {
 }
 
 // NewServer creates a new API server
+// NOTE: storage parameter removed - will be re-added in Phase 4 (memory module)
 func NewServer(
 	cfg config.Config,
 	homeDir string,
 	log *logger.Logger,
-	store storage.TaskStorage,
+	// store storage.TaskStorage, // removed
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 	cancelMgr *agent.CancelManager,
@@ -40,31 +40,32 @@ func NewServer(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
 	)
 
-	// Create attachment handler
+	// Create attachment handler (reserved for future use)
 	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
+	_ = attHandler // reserved for executor when memory module implemented
 
-	// Create executor
-	exec := agent.NewExecutor(store, skills, mcpMgr, cancelMgr, attHandler, cfg, log)
+	// Create executor - temporarily disabled until memory module implemented
+	// exec := agent.NewExecutor(store, skills, mcpMgr, cancelMgr, attHandler, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
 	rateLimitMW := middleware.NewRateLimitMiddleware(cfg.Performance.RateLimit)
-	rateLimitMW.SetExecutor(exec)
+	// rateLimitMW.SetExecutor(exec) // disabled
 	recoveryMW := middleware.NewRecoveryMiddleware(log)
 
-	// Create handlers
-	executeH := handler.NewExecuteHandler(store, exec, cancelMgr)
-	cancelH := handler.NewCancelHandler(store, cancelMgr, exec)
-	statusH := handler.NewStatusHandler(store)
-	historyH := handler.NewHistoryHandler(store)
-	detailH := handler.NewDetailHandler(store)
-	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, exec)
+	// Create handlers - temporarily disabled until memory module implemented
+	// executeH := handler.NewExecuteHandler(store, exec, cancelMgr)
+	// cancelH := handler.NewCancelHandler(store, cancelMgr, exec)
+	// statusH := handler.NewStatusHandler(store)
+	// historyH := handler.NewHistoryHandler(store)
+	// detailH := handler.NewDetailHandler(store)
+	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, nil) // executor nil for now
 	skillsH := handler.NewSkillsHandler(skills)
 	toolsH := handler.NewToolsHandler(mcpMgr)
 
-	// Register routes
+	// Register routes with placeholder handlers
 	RegisterRoutes(h, authMW, rateLimitMW, recoveryMW,
-		executeH, cancelH, statusH, historyH, detailH,
+		nil, nil, nil, nil, nil, // execute, cancel, status, history, detail disabled
 		healthH, skillsH, toolsH)
 
 	return &Server{

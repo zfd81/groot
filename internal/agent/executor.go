@@ -11,24 +11,94 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/skill"
-	"github.com/zfd81/groot/internal/storage"
+	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
+
+// TaskStatus represents task status (temporary definition until memory module)
+type TaskStatus string
+
+const (
+	StatusRunning    TaskStatus = "running"
+	StatusCompleted  TaskStatus = "completed"
+	StatusFailed     TaskStatus = "failed"
+	StatusCancelled  TaskStatus = "cancelled"
+)
+
+// Task represents a task (temporary definition until memory module)
+type Task struct {
+	ID          string
+	Instruction string
+	Prompt      string
+	Status      TaskStatus
+	StartTime   time.Time
+	EndTime     *time.Time
+	Duration    int
+	Result      string
+	Error       *TaskError
+	Steps       []StepRecord
+	Attachments []Attachment
+	Caller      string
+	Progress    *ProgressInfo
+}
+
+// TaskError represents task error
+type TaskError struct {
+	Code    string
+	Message string
+}
+
+// Attachment represents attachment data
+type Attachment struct {
+	Type    string
+	Name    string
+	Content string
+}
+
+// AttachmentPath represents attachment path info
+type AttachmentPath struct {
+	OriginalName string
+	Type         string
+	FullPath     string
+	RelativePath string
+	Size         int64
+	ContentType  string
+}
+
+// StepRecord represents execution step
+type StepRecord struct {
+	StepID       string
+	Type         string
+	Name         string
+	StartTime    *time.Time
+	EndTime      *time.Time
+	Status       TaskStatus
+	NestingLevel int
+	Error        *TaskError
+}
+
+// ProgressInfo represents task progress
+type ProgressInfo struct {
+	CurrentStep    string
+	StepsCompleted int
+	Percentage     int
+}
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
-	storage         storage.TaskStorage
-	skillRegistry   *skill.Registry
-	mcpManager      *mcp.Manager
-	cancelManager   *CancelManager
+	// storage         storage.TaskStorage // removed - will be re-added in Phase 4
+	skillRegistry     *skill.Registry
+	mcpManager        *mcp.Manager
+	cancelManager     *CancelManager
 	attachmentHandler *attachment.Handler
-	config          config.Config
-	logger          *logger.Logger
-	runningTasks    sync.Map
+	config            config.Config
+	logger            *logger.Logger
+	runningTasks      sync.Map
 }
 
 // NewExecutor creates a new task executor
+// NOTE: storage parameter removed - will be re-added in Phase 4
 func NewExecutor(
-	store storage.TaskStorage,
+	// store storage.TaskStorage, // removed
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 	cancelMgr *CancelManager,
@@ -37,26 +107,26 @@ func NewExecutor(
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
-		storage:         store,
-		skillRegistry:   skills,
-		mcpManager:      mcpMgr,
-		cancelManager:   cancelMgr,
+		// storage:         store,
+		skillRegistry:     skills,
+		mcpManager:        mcpMgr,
+		cancelManager:     cancelMgr,
 		attachmentHandler: attHandler,
-		config:          cfg,
-		logger:          log,
+		config:            cfg,
+		logger:            log,
 	}
 }
 
 // Execute starts task execution
-func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan struct{}) {
+func (e *Executor) Execute(task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 	e.runningTasks.Store(task.ID, true)
 	defer e.runningTasks.Delete(task.ID)
 
 	// Process attachments if any (before intent event)
 	var processedAttachments []attachment.ProcessedAttachment
-	var attachmentPaths []storage.AttachmentPath
+	var attachmentPaths []AttachmentPath
 	if len(task.Attachments) > 0 && e.attachmentHandler != nil {
-		// Convert storage attachments to attachment.Attachment
+		// Convert attachments
 		attInput := make([]attachment.Attachment, len(task.Attachments))
 		for i, att := range task.Attachments {
 			attInput[i] = attachment.Attachment{
@@ -82,7 +152,7 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 
 		// Build attachment paths for engine
 		for _, pa := range processedAttachments {
-			attachmentPaths = append(attachmentPaths, storage.AttachmentPath{
+			attachmentPaths = append(attachmentPaths, AttachmentPath{
 				OriginalName: pa.OriginalName,
 				Type:         pa.Type,
 				FullPath:     pa.FullPath,
@@ -148,49 +218,46 @@ func (e *Executor) Execute(task *storage.Task, sse *SSEWriter, cancelCh chan str
 	duration := endTime.Sub(startTime)
 	durationStr := formatDuration(duration)
 
-	// Update task in storage
-	updates := map[string]interface{}{
-		"end_time": endTime,
-		"duration": int(duration.Seconds()),
-		"steps":    result.Steps,
-	}
+	// Update task status (storage update disabled)
+	// updates := map[string]interface{}{
+	// 	"end_time": endTime,
+	// 	"duration": int(duration.Seconds()),
+	// 	"steps":    result.Steps,
+	// }
 
 	if err != nil {
-		updates["status"] = storage.StatusFailed
-		updates["error"] = &storage.TaskError{
-			Code:    "execution_error",
-			Message: err.Error(),
-		}
+		// updates["status"] = storage.StatusFailed
+		// updates["error"] = &storage.TaskError{...}
 		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
 	} else if ctx.Err() == context.Canceled {
-		updates["status"] = storage.StatusCancelled
-		updates["error"] = nil
+		// updates["status"] = storage.StatusCancelled
 		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
 	} else {
-		updates["status"] = storage.StatusCompleted
-		updates["result"] = result.Content
+		// updates["status"] = storage.StatusCompleted
+		// updates["result"] = result.Content
 		sse.WriteCompleted("success", durationStr, result.Content, nil, "")
 	}
 
-	e.storage.Update(task.ID, updates)
+	// e.storage.Update(task.ID, updates) // disabled
 
 	// Unregister from cancel manager
 	e.cancelManager.Unregister(task.ID)
 }
 
 // handleFailure handles task failure
-func (e *Executor) handleFailure(task *storage.Task, sse *SSEWriter, err error, errorCode string) {
+func (e *Executor) handleFailure(task *Task, sse *SSEWriter, err error, errorCode string) {
 	endTime := time.Now()
 	duration := endTime.Sub(task.StartTime)
 	durationStr := formatDuration(duration)
 
-	updates := map[string]interface{}{
-		"status":    storage.StatusFailed,
-		"end_time":  endTime,
-		"duration":  int(duration.Seconds()),
-		"error":     &storage.TaskError{Code: errorCode, Message: err.Error()},
-	}
-	e.storage.Update(task.ID, updates)
+	// Storage update disabled
+	// updates := map[string]interface{}{
+	// 	"status":    storage.StatusFailed,
+	// 	"end_time":  endTime,
+	// 	"duration":  int(duration.Seconds()),
+	// 	"error":     &storage.TaskError{Code: errorCode, Message: err.Error()},
+	// }
+	// e.storage.Update(task.ID, updates)
 
 	sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
 	e.cancelManager.Unregister(task.ID)

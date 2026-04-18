@@ -64,20 +64,21 @@ type HotReloadConfig struct {
 }
 
 // StorageConfig holds storage engine settings
+// NOTE: BoltDB field removed - will be re-added in Phase 4 (memory module)
 type StorageConfig struct {
-	Engine          string       `yaml:"engine"`
-	BoltDB          BoltDBConfig `yaml:"boltdb"`
+	Engine          string      `yaml:"engine"`
+	// BoltDB          BoltDBConfig `yaml:"boltdb"` // removed
 	Redis           RedisConfig  `yaml:"redis"`
 	Etcd            EtcdConfig   `yaml:"etcd"`
 	RetentionDays   int          `yaml:"retention_days"`
 	CleanupInterval string       `yaml:"cleanup_interval"`
 }
 
-// BoltDBConfig holds BoltDB settings
-type BoltDBConfig struct {
-	File   string `yaml:"file"`
-	Bucket string `yaml:"bucket"`
-}
+// BoltDBConfig - temporarily removed, will be re-defined in memory module
+// type BoltDBConfig struct {
+// 	File   string `yaml:"file"`
+// 	Bucket string `yaml:"bucket"`
+// }
 
 // RedisConfig holds Redis settings (reserved for cluster)
 type RedisConfig struct {

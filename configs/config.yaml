@@ -35,11 +35,12 @@ mcp:
     debounce_delay: 2
 
 # 存储配置
+# NOTE: boltdb section temporarily removed - will be re-added in Phase 4 (memory module)
 storage:
   engine: boltdb
-  boltdb:
-    file: groot.db
-    bucket: tasks
+  # boltdb:
+  #   file: groot.db
+  #   bucket: tasks
   retention_days: 7
   cleanup_interval: 24h
 

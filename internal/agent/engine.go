@@ -15,7 +15,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/skill"
-	"github.com/zfd81/groot/internal/storage"
+	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 // Engine wraps eino's ChatModelAgent for task execution
@@ -49,7 +49,7 @@ func (e *Engine) Run(
 	ctx context.Context,
 	instruction string,
 	prompt string,
-	attachmentPaths []storage.AttachmentPath,
+	attachmentPaths []AttachmentPath,
 	progress func(stepID, eventType, message string),
 ) (*RunResult, error) {
 	// 1. Create ChatModel
@@ -104,7 +104,7 @@ func (e *Engine) Run(
 	iter := runner.Run(ctx, msgs)
 
 	var finalResult string
-	var steps []storage.StepRecord
+	var steps []StepRecord
 	stepIDGen := NewStepIDGenerator()
 
 	for {
@@ -174,7 +174,7 @@ func (e *Engine) buildSystemInstruction(prompt string) string {
 }
 
 // buildUserMessage builds user message with attachment paths
-func (e *Engine) buildUserMessage(instruction string, attachmentPaths []storage.AttachmentPath) string {
+func (e *Engine) buildUserMessage(instruction string, attachmentPaths []AttachmentPath) string {
 	msg := instruction
 	if len(attachmentPaths) > 0 {
 		msg += "\n\n附件:\n"
@@ -197,7 +197,7 @@ func (e *Engine) buildUserMessage(instruction string, attachmentPaths []storage.
 
 // processEvent handles agent events and sends progress
 // Returns the message content if it's an assistant response
-func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress func(string, string, string), steps *[]storage.StepRecord) string {
+func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress func(string, string, string), steps *[]StepRecord) string {
 	// Check for errors
 	if event.Err != nil {
 		progress(stepID, "error", event.Err.Error())
@@ -226,11 +226,11 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 				}
 				stream.Close()
 				if content != "" {
-					*steps = append(*steps, storage.StepRecord{
+					*steps = append(*steps, StepRecord{
 						StepID:       stepID,
 						Type:         "llm",
 						Name:         "model_response",
-						Status:       storage.StatusCompleted,
+						Status:       StatusCompleted,
 						NestingLevel: 0,
 					})
 					return content
@@ -242,11 +242,11 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 				msg := msgOutput.Message
 				if msg.Content != "" {
 					progress(stepID, "progress", msg.Content)
-					*steps = append(*steps, storage.StepRecord{
+					*steps = append(*steps, StepRecord{
 						StepID:       stepID,
 						Type:         "llm",
 						Name:         "model_response",
-						Status:       storage.StatusCompleted,
+						Status:       StatusCompleted,
 						NestingLevel: 0,
 					})
 					return msg.Content
@@ -277,7 +277,7 @@ func truncate(s string, maxLen int) string {
 // RunResult holds the result of agent run
 type RunResult struct {
 	Content string
-	Steps   []storage.StepRecord
+	Steps   []StepRecord
 }
 
 // StepIDGenerator generates step IDs

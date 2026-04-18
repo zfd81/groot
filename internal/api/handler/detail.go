@@ -6,21 +6,28 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/zfd81/groot/internal/api/types"
-	"github.com/zfd81/groot/internal/storage"
+	// "github.com/zfd81/groot/internal/api/types" // removed - not used
+	// "github.com/zfd81/groot/internal/storage" // removed - will be re-added in Phase 4
 )
 
 // DetailHandler handles GET /task/{task_id}
+// NOTE: temporarily disabled until memory module implemented
 type DetailHandler struct {
-	storage storage.TaskStorage
+	// storage storage.TaskStorage // removed
 }
 
 // NewDetailHandler creates a new detail handler
-func NewDetailHandler(store storage.TaskStorage) *DetailHandler {
-	return &DetailHandler{storage: store}
+// NOTE: temporarily disabled - will be re-enabled in Phase 4
+func NewDetailHandler(
+	// store storage.TaskStorage, // removed
+) *DetailHandler {
+	return &DetailHandler{
+		// storage: store,
+	}
 }
 
 // Serve handles the detail request
+// NOTE: temporarily returns error until memory module implemented
 func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	taskID := rc.Param("task_id")
 
@@ -31,60 +38,16 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	task, err := h.storage.Get(taskID)
-	if err != nil {
-		rc.SetContentType("application/json")
-		rc.Write([]byte(fmt.Sprintf(`{"status":"task_not_found","task_id":"%s","message":"任务不存在"}`, taskID)))
-		return
-	}
+	// Storage query disabled
+	// task, err := h.storage.Get(taskID)
+	// if err != nil {
+	// 	rc.SetContentType("application/json")
+	// 	rc.Write([]byte(fmt.Sprintf(`{"status":"task_not_found","task_id":"%s","message":"任务不存在"}`, taskID)))
+	// 	return
+	// }
 
-	// Build task detail
-	detail := types.TaskDetail{
-		ID:          task.ID,
-		Instruction: task.Instruction,
-		Prompt:      task.Prompt,
-		Status:      string(task.Status),
-		StartTime:   task.StartTime,
-		EndTime:     task.EndTime,
-		Duration:    task.Duration,
-		Caller:      task.Caller,
-		Result:      task.Result,
-	}
-
-	if task.Error != nil {
-		detail.Error = &types.ErrorInfo{
-			Code:    task.Error.Code,
-			Message: task.Error.Message,
-		}
-	}
-
-	// Convert steps
-	if task.Steps != nil {
-		steps := make([]types.StepDetail, len(task.Steps))
-		for i, s := range task.Steps {
-			steps[i] = types.StepDetail{
-				StepID:       s.StepID,
-				Type:         s.Type,
-				Name:         s.Name,
-				StartTime:    s.StartTime,
-				EndTime:      s.EndTime,
-				Status:       string(s.Status),
-				NestingLevel: s.NestingLevel,
-			}
-			if s.Error != nil {
-				steps[i].Error = &types.ErrorInfo{
-					Code:    s.Error.Code,
-					Message: s.Error.Message,
-				}
-			}
-		}
-		detail.Steps = steps
-	}
-
-	resp := types.DetailResponse{
-		Status: "success",
-		Task:   &detail,
-	}
-
-	rc.JSON(200, resp)
+	// Temporary placeholder response
+	rc.SetContentType("application/json")
+	rc.SetStatusCode(503)
+	rc.Write([]byte(fmt.Sprintf(`{"status":"service_unavailable","task_id":"%s","message":"任务详情查询功能暂时不可用，正在升级存储模块"}`, taskID)))
 }
