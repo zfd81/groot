@@ -195,16 +195,25 @@ Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
 
 | API | 方法 | 用途 |
 |-----|------|------|
-| `/task/execute` | POST | 执行任务，SSE 流式返回 |
-| `/task/{task_id}` | DELETE | 取消正在执行的任务 |
-| `/task/status/{task_id}` | GET | 查询任务状态 |
-| `/task/history` | GET | 查询历史任务列表 |
-| `/task/{task_id}` | GET | 查询任务详情（含完整步骤记录） |
+| `/chat` | POST | 执行对话，SSE 流式返回（支持多轮对话） |
+| `/chat/{sid}` | DELETE | 取消正在执行的对话 |
+| `/chat/status/{sid}` | GET | 查询最近一次对话状态 |
+| `/chat/{sid}` | GET | 查询最近一次对话详情（完整步骤记录） |
+| `/sess/{sid}` | GET | 查询会话详情（完整对话历史） |
+| `/sess/history` | GET | 查询会话列表 |
 | `/health` | GET | 健康检查 |
 | `/skills` | GET | 列出可用 Skills |
 | `/tools` | GET | 列出可用 MCP 工具 |
 
-### 3.2 POST /task/execute
+### 3.2 POST /chat
+
+**请求 Header：**
+
+| Header | 必填 | 说明 |
+|--------|------|------|
+| `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
+| `Content-Type` | 是 | `application/json` |
+| `X-API-Key` | 是 | 认证密钥（启用认证时） |
 
 **请求 Body：**
 
@@ -235,12 +244,12 @@ Agent 使用 ReAct（Reasoning + Acting + Observation）模式执行任务：
 | `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
 | `attachments` | 否 | 附件列表（Base64编码或URL）|
 
-Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
+Agent 会自动分析指令，结合历史对话上下文（如有），决定调用 Skills 或自主执行任务。
 
 **完整处理流程：**
 
 ```
-请求到达 → 请求校验 → 生成 task_id → 返回 X-Task-ID Header →
+请求到达 → 请求校验 → 会话处理 → 返回响应 Header →
 │
 ├─ 1. 请求校验
 │   ├─ 检查 instruction 是否为空
@@ -252,24 +261,53 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 │   ├─ 校验失败 → 返回 400 错误，终止
 │   └─ 校验通过 → 继续
 │
-├─ 2. 创建任务记录
-│   ├─ 生成 task_id（格式：task-{YYYYMMDD}-{HHMMSSmmm}-{random4}）
-│   ├─ 初始化任务状态为 running
+├─ 2. 会话处理
+│   │
+│   ├─ 提取 X-Session-ID（sid）
+│   │
+│   ├─ sid 为空 OR memory.ExistsSession(sid) = false（新建会话）
+│   │   ├─ 生成 session_id（格式：sess_{YYYYMMDDHHMMSSmmm}_{random4}）
+│   │   ├─ memory.CreateSession(session_id)
+│   │   ├─ isNew = true
+│   │   ├─ round = 1
+│   │   ├─ historyMessages = []（无历史）
+│   │   └─ session_id = 新生成的ID
+│   │
+│   ├─ sid 有值 AND memory.ExistsSession(sid) = true（继续会话）
+│   │   ├─ 检查该会话是否有对话正在执行
+│   │   │   ├─ 有 → 返回 409：chat_limit_exceeded，终止
+│   │   │   └─ 无 → 继续
+│   │   ├─ isNew = false
+│   │   ├─ historyMessages = memory.GetHistory(sid)
+│   │   ├─ round = memory.GetRoundCount(sid) + 1
+│   │   ├─ 设置 runningSessions[sid] = true（标记执行中）
+│   │   └─ session_id = sid
+│   │
+│   └─ 会话处理完成
+│
+├─ 3. 创建对话记录
+│   ├─ 生成 chat_id（格式：chat_{YYYYMMDDHHMMSSmmm}）
+│   ├─ 初始化对话状态为 running
 │   ├─ 记录开始时间、调用方信息
-│   └─ 持久化到存储（BoltDB）
+│   ├─ 持久化到存储
+│   └─ 注册到取消管理器（用于取消功能）
 │
-├─ 3. 返回响应 Header
+├─ 4. 返回响应 Header
+│   ├─ X-Session-ID: {session_id}
+│   ├─ X-Chat-ID: {chat_id}
 │   ├─ Content-Type: text/event-stream
-│   └─ X-Task-ID: {task_id}
-│   （此时 SSE 连接已建立，开始流式返回事件）
+│   ├─ Cache-Control: no-cache
+│   ├─ Connection: keep-alive
+│   └─ SSE 连接已建立，开始流式返回事件
 │
-├─ 4. 附件处理（如有附件）
-│   ├─ 创建任务临时目录：temp/{task_id}/
+├─ 5. 附件处理（如有附件）
 │   ├─ 遍历每个附件：
 │   │   ├─ Base64 解码
 │   │   ├─ 文件名安全处理（替换 /、\、.. 等危险字符）
-│   │   ├─ 保存到临时目录：temp/{task_id}/{safe_filename}
-│   │   └─ 记录文件信息（路径、大小、类型）
+│   │   ├─ memory.SaveAttachment(session_id, filename, content)
+│   │   │   └─ 保存到 memory/{session_id}/attachments/{filename}
+│   │   ├─ 记录文件信息（路径、大小、类型）
+│   │   └─ 同名文件会覆盖
 │   ├─ 构建附件信息文本：
 │   │   格式：
 │   │   ```
@@ -280,23 +318,30 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 │   │     大小: {文件大小} bytes
 │   │   ```
 │   ├─ 拼接到用户消息中（instruction + 附件信息）
-│   ├─ 处理失败 → SSE 推送 error，跳转到步骤9清理，终止
+│   ├─ 处理失败 → SSE 推送 error，跳转到步骤8清理，终止
 │   └─ 处理成功 → 继续
 │
-├─ 5. SSE 推送 intent 事件
+├─ 6. SSE 推送 intent 事件
 │   └─ {"timestamp":"开始时间"}
-│   （表示准备工作完成，Agent 开始执行）
+│   （表示准备工作完成，Agent 开始执行，首个事件）
 │
-├─ 6. 构建 Agent 上下文
+├─ 7. 构建 Agent 上下文
 │   ├─ 系统提示词（prompt + Skills 指令）
-│   ├─ 用户消息（instruction + 附件路径信息）
+│   ├─ 历史消息（historyMessages，继续会话时）
+│   │   ├─ 每轮对话：user_content + assistant_content
+│   │   ├─ 附件信息：user_attachments 文件名列表
+│   │   └─ 构建为 schema.Message 格式
+│   ├─ 当前用户消息（instruction + 附件路径信息）
 │   ├─ 注册的工具列表（MCP 工具）
-│   └─ 执行限制配置（max_iterations、max_tokens 等）
+│   ├─ 执行限制配置（max_iterations、max_tokens 等）
+│   └─ 附件路径：
+│       ├─ memory/{session_id}/attachments/{filename}
+│       └─ Agent 通过 MCP file_read 工具读取
 │
-├─ 7. ReAct 执行循环
+├─ 8. ReAct 执行循环
 │   │
 │   ├─ Reasoning（思考）
-│   │   LLM 分析当前状态，决定下一步动作
+│   │   LLM 分析当前状态（含历史上下文），决定下一步动作
 │   │
 │   ├─ Acting（执行）
 │   │   ├─ 调用 MCP 工具（如 file_read 读取附件）
@@ -319,16 +364,27 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 │       ├─ 用户取消 → 终止
 │       └─ 继续循环
 │
-├─ 8. 任务完成处理
-│   ├─ 更新任务状态（completed/failed/cancelled）
+├─ 9. 对话完成处理
+│   ├─ 更新对话状态
 │   ├─ 记录结束时间、耗时
 │   ├─ 保存结果或错误信息
-│   ├─ SSE 推送 completed 事件
 │   │
-│   └─ 9. 清理临时文件
-│       ├─ 删除任务临时目录：temp/{task_id}/
-│       ├─ 清理所有附件文件
-│       └─ 关闭 SSE 连接
+│   ├─ memory.AppendMessage(session_id, message)
+│   │   ├─ message.Round = round
+│   │   ├─ message.Timestamp = 结束时间
+│   │   ├─ message.UserContent = instruction
+│   │   ├─ message.UserAttachments = [附件文件名列表]
+│   │   ├─ message.AssistantContent = 执行结果
+│   │   ├─ message.AssistantAttachments = []（如有生成文件）
+│   │
+│   ├─ SSE 推送 completed 事件
+│   │   ├─ status: success/failed/cancelled
+│   │   ├─ round: {round}
+│   │   ├─ result: {...}
+│   │
+│   ├─ 删除 runningSessions[session_id]（清除执行标记）
+│   ├─ 从取消管理器注销
+│   └─ 关闭 SSE 连接
 │
 → 流程结束
 ```
@@ -337,33 +393,52 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 | 步骤 | 说明 | 失败处理 |
 |------|------|---------|
-| 请求校验 | 验证参数合法性 | 返回 400，不创建任务 |
-| 附件处理 | 解码并存储附件 | SSE 推送 error，清理临时文件后终止 |
-| ReAct 执行 | Agent 自主执行 | 推送 error 事件，终止 |
-| 清理临时文件 | 删除 temp/{task_id}/ | 无论成功/失败/取消都执行 |
+| 请求校验 | 验证参数合法性 | 返回 400，不创建会话 |
+| 会话处理 | 判断新建或继续会话，检查并发 | 返回 409（并发冲突）或继续 |
+| 附件处理 | 解码并存储到 memory 目录 | SSE 推送 error，终止 |
+| ReAct 执行 | Agent 自主执行（带历史上下文） | 推送 error 事件，终止 |
+| AppendMessage | 记录对话到 memory | 日志记录错误，不影响响应 |
 
 **intent 事件含义：**
 
-`intent` 事件表示"准备工作全部完成，Agent 开始执行"。准备工作包括：
+`intent` 事件是 SSE 流的**首个事件**，表示"准备工作全部完成，Agent 开始执行"。准备工作包括：
 - 请求校验
-- 任务记录创建
+- 会话处理（创建或获取）
+- 对话记录创建
 - 附件处理（如有）
 
-只有准备工作全部成功后，才推送 `intent` 事件。如果准备工作失败（如附件解码失败），直接推送错误事件并清理，不会推送 `intent`。
+只有准备工作全部成功后，才推送 `intent` 事件。如果准备工作失败（如附件解码失败），直接返回错误响应并终止，不会建立 SSE 连接。
+
+**会话处理逻辑总结：**
+
+| 条件 | sid | memory.ExistsSession | 处理方式 | isNew | round | historyMessages |
+|------|-----|---------------------|---------|-------|-------|-----------------|
+| 新会话 | 空 | - | 生成新 sid 并创建 | true | 1 | [] |
+| 会话不存在 | 有值 | false | 生成新 sid 并创建 | true | 1 | [] |
+| 继续会话 | 有值 | true | 使用传入 sid，检查并发 | false | count+1 | 从 memory 读取 |
 
 **附件存储目录结构：**
 
 ```
-{GROOT_HOME}/temp/
-├── task-20260417-103000523-a1b2/     # 任务A的临时目录
-│   ├── report.pdf                    # 附件1
-│   └── data.csv                      # 附件2
-├── task-20260417-103010000-b2c3/     # 任务B的临时目录
-│   └── config.json                   # 附件（同名不冲突）
+{GROOT_HOME}/memory/
+├── sess_20260418103000523_a1b2/     # 会话A
+│   ├── history.json                 # 对话历史
+│   └── attachments/                 # 附件目录
+│       ├── report.pdf               # 第1轮上传
+│       ├── data.csv                 # 第1轮上传
+│       ├── data.csv                 # 第3轮上传（覆盖第1轮）
+│       └── chart.png                # 第3轮上传
+├── sess_20260418103500123_b2c3/     # 会话B
+│   ├── history.json
+│   └── attachments/
+│       └── config.json
 └── ...
 ```
 
-每个任务的附件存储在独立目录 `temp/{task_id}/` 下，并发请求完全隔离。
+**特点：**
+- 附件保存在会话目录下的 `attachments/` 子目录
+- 保留原始文件名，同名文件会覆盖
+- 附件随会话清理而删除（memory 清理任务）
 
 **附件路径传递方式：**
 
@@ -374,58 +449,96 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 附件:
 - report.pdf (file)
-  路径: /Users/xxx/.groot/temp/task-xxx/report.pdf
+  路径: /home/groot/memory/sess_xxx/attachments/report.pdf
   类型: application/pdf
   大小: 1024000 bytes
+- data.csv (file)
+  路径: /home/groot/memory/sess_xxx/attachments/data.csv
+  类型: text/csv
+  大小: 512000 bytes
 ```
 
-**SSE 响应事件类型：**
+**历史消息传递方式：**
 
-| 事件类型 | 发送频率 | 说明 |
-|---------|---------|------|
-| `intent` | 1次 | 任务开始，标记执行起点 |
-| `step_start` | 多次 | 步骤开始（Skill/工具/LLM调用） |
-| `progress` | 多次 | 中间进度更新 |
-| `step_end` | 多次 | 步骤结束（含状态、时间戳） |
-| `completed` | 1次 | 任务完成（含最终结果） |
+继续会话时，历史消息构建为 schema.Message 格式传递给 Agent：
+
+```
+历史构建逻辑：
+  1. 遍历 historyMessages
+  2. 每轮对话构建两条消息：
+     - UserMessage：user_content + 附件文件名列表
+     - AssistantMessage：assistant_content
+  3. 添加当前用户消息
+  4. 传递给 Agent 的 messages 数组
+
+示例消息结构：
+  [
+    UserMessage("帮我分析数据\n\n附件:\n- data.csv"),
+    AssistantMessage("分析结果如下..."),
+    UserMessage("再画个图表"),
+    AssistantMessage("图表已生成..."),
+    UserMessage("继续分析")  // 当前指令
+  ]
+```
+
+**ID 生成规则：**
+
+| ID 类型 | 格式 | 示例 |
+|---------|------|------|
+| `session_id` | `sess_{YYYYMMDDHHMMSSmmm}_{random4}` | `sess_20260418103000523_a1b2` |
+| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260418103000523` |
+
+**说明：**
+- `YYYYMMDDHHMMSSmmm`：17位，年月日时分秒毫秒
+- `random4`：4位随机字符（小写字母+数字）
+- 全局唯一，多实例部署不冲突
 
 **响应 Header 元信息：**
 
 | Header | 说明 |
 |--------|------|
-| `X-Task-ID` | 任务唯一标识（请求发起时立即返回） |
+| `X-Session-ID` | 会话ID（新建或传入存在的） |
+| `X-Chat-ID` | 本次对话ID |
 | `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
 
-**说明：**
-- `X-Task-ID` 在 Header 中立即返回，调用方可用于查询状态或取消任务
-- `step_start` 和 `step_end` 通过 `step_id` 关联，调用方可计算耗时
+**SSE 响应事件类型：**
 
-**task_id 生成规则：**
-- 格式：`task-{YYYYMMDD}-{HHMMSSmmm}-{random4}`
-- 示例：`task-20260417-103000523-a1b2`
-- 时间戳精确到毫秒，random 为 4 位随机字符
-- 全局唯一，多实例部署不冲突
+| 事件类型 | 发送频率 | 说明 |
+|---------|---------|------|
+| `intent` | 1次 | 对话开始，标记执行起点（首个事件） |
+| `step_start` | 多次 | 步骤开始（Skill/工具/LLM调用） |
+| `progress` | 多次 | 中间进度更新 |
+| `step_end` | 多次 | 步骤结束（含状态、时间戳） |
+| `completed` | 1次 | 对话完成（含最终结果） |
+
+**事件顺序：**
+
+```
+intent → step_start → progress → step_end → ... → completed
+```
 
 **SSE 事件返回值结构：**
 
-**intent（任务开始）：**
+**intent（对话开始）：**
 
 ```json
-{"timestamp":"2026-04-17T10:30:00Z"}
+{"timestamp":"2026-04-18T10:30:00Z"}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `timestamp` | string | 是 | 任务开始时间戳（ISO格式） |
+| `timestamp` | string | 是 | 开始时间戳（ISO格式） |
 
 **step_start（步骤开始）：**
 
 ```json
-{"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+{"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z","nesting_level":0}
 ```
 
 ```json
-{"type":"tool","name":"file_read","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
+{"type":"tool","name":"file_read","step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05Z","params":{"path":"memory/sess_xxx/attachments/report.pdf"}}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -441,12 +554,12 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 
 成功：
 ```json
-{"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:45Z","status":"success"}
+{"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:45Z","status":"success"}
 ```
 
 失败：
 ```json
-{"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"file_error","message":"文件不存在"}}
+{"step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05Z","status":"failed","error":{"code":"file_error","message":"文件不存在"}}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -459,7 +572,7 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 **progress（进度更新）：**
 
 ```json
-{"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:10Z"}
+{"step_id":"20260418-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-18T10:30:10Z"}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -468,35 +581,36 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 | `message` | string | 是 | 进度消息 |
 | `timestamp` | string | 是 | 时间戳（ISO格式） |
 
-**completed（任务完成）：**
+**completed（对话完成）：**
 
 成功：
 ```json
-{"status":"success","timestamp":"2026-04-17T10:30:45Z","duration":"45s","result":{"document_type":"report","key_points":[...]}}
+{"status":"success","timestamp":"2026-04-18T10:30:45Z","duration":"45s","round":1,"result":{"document_type":"report","key_points":[...]}}
 ```
 
 失败：
 ```json
-{"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"skill_error","message":"执行失败"}}
+{"status":"failed","timestamp":"2026-04-18T10:30:05Z","duration":"5s","round":1,"error":{"code":"skill_error","message":"执行失败"}}
 ```
 
 取消：
 ```json
-{"status":"cancelled","timestamp":"2026-04-17T10:30:03Z","duration":"3s","message":"用户主动取消"}
+{"status":"cancelled","timestamp":"2026-04-18T10:30:03Z","duration":"3s","round":1,"message":"用户主动取消"}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `status` | string | 是 | 任务状态：`success` / `failed` / `cancelled` |
-| `timestamp` | string | 是 | 时间戳（任务结束时间） |
+| `status` | string | 是 | 状态：`success` / `failed` / `cancelled` |
+| `timestamp` | string | 是 | 结束时间戳 |
 | `duration` | string | 是 | 总耗时（如"45s"、"1m30s"） |
-| `result` | object | 否 | 任务结果（成功时） |
+| `round` | int | 是 | 当前对话轮次 |
+| `result` | object | 否 | 执行结果（成功时） |
 | `error` | object | 否 | 错误信息（失败时） |
 | `message` | string | 否 | 取消原因（取消时） |
 
 **step_id 生成规则：**
 - 格式：`{YYYYMMDD}-{HHMMSSmmm}-{random6}`
-- 示例：`20260417-103005523-a1b2c3`
+- 示例：`20260418-103005523-a1b2c3`
 - 时间戳精确到毫秒，random为6位随机字符
 - 全局唯一，多实例部署不冲突
 
@@ -505,12 +619,36 @@ Agent 会自动分析指令，决定调用 Skills 或自主执行任务。
 - `1`：子Skill/子步骤（主步骤内部调用）
 - `2+`：更深层嵌套
 
-### 3.3 DELETE /task/{task_id}
+**并发控制：**
+
+一个会话同一时间只能有一轮对话在执行，防止历史记录写入冲突。
+
+```
+控制逻辑：
+  1. 维护 runningSessions map[string]*sync.Mutex
+  2. 会话存在时，尝试获取锁
+  3. 锁已被占用 → 返回 409 chat_limit_exceeded
+  4. 获取成功 → 执行，完成后释放锁
+```
+
+**错误响应（HTTP 409）：**
+
+```json
+{
+  "status": "chat_limit_exceeded",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "该会话已有对话正在执行，请等待完成或取消后再发起新对话"
+}
+```
+
+### 3.3 DELETE /chat/{sid}
+
+取消指定会话中正在执行的对话。
 
 **请求方式：** 路径参数
 
 ```
-DELETE /task/task-xxx
+DELETE /chat/sess_20260418103000523_a1b2
 ```
 
 **响应：**
@@ -519,25 +657,26 @@ DELETE /task/task-xxx
 ```json
 {
   "status": "success",
-  "task_id": "task-xxx",
-  "message": "任务已取消"
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat_id": "chat_20260418103000523",
+  "message": "对话已取消"
 }
 ```
 
 失败：
 ```json
 {
-  "status": "task_completed",
-  "task_id": "task-xxx",
-  "message": "任务已完成，无法取消"
+  "status": "no_running_chat",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "该会话当前没有正在执行的对话"
 }
 ```
 
 ```json
 {
-  "status": "task_not_found",
-  "task_id": "task-xxx",
-  "message": "任务不存在"
+  "status": "session_not_found",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "会话不存在"
 }
 ```
 
@@ -546,49 +685,64 @@ DELETE /task/task-xxx
 | 字段 | 说明 |
 |------|------|
 | `status` | 结果状态：`success` 或失败状态码 |
-| `task_id` | 任务ID |
+| `session_id` | 会话ID |
+| `chat_id` | 对话ID（成功时） |
 | `message` | 结果消息 |
 
 **失败状态码：**
 
 | 状态码 | 说明 |
 |--------|------|
-| `task_completed` | 任务已完成 |
-| `task_failed` | 任务已失败 |
-| `task_not_found` | 任务不存在 |
+| `no_running_chat` | 该会话没有正在执行的对话 |
+| `session_not_found` | 会话不存在 |
 
-### 3.4 GET /task/status/{task_id}
+### 3.4 GET /chat/status/{sid}
+
+查询最近一次对话的运行状态。
 
 **请求方式：** 路径参数
 
 ```
-GET /task/status/task-xxx
+GET /chat/status/sess_20260418103000523_a1b2
 ```
 
 **响应：**
 
-成功：
+有正在执行的对话：
 ```json
 {
   "status": "success",
-  "task_id": "task-xxx",
-  "task_status": "running",
-  "progress": {
-    "current_step": 3,
-    "steps_completed": 2,
-    "percentage": 50
-  },
-  "started_at": "2026-04-17T10:30:00Z",
-  "elapsed_time": "8s"
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat": {
+    "chat_id": "chat_20260418103000523",
+    "round": 4,
+    "status": "running",
+    "progress": {
+      "current_step": 2,
+      "steps_completed": 1,
+      "percentage": 50
+    },
+    "started_at": "2026-04-18T10:30:00Z",
+    "elapsed_time": "15s"
+  }
 }
 ```
 
-失败（任务不存在）：
+无正在执行的对话：
 ```json
 {
-  "status": "task_not_found",
-  "task_id": "task-xxx",
-  "message": "任务不存在"
+  "status": "success",
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat": null
+}
+```
+
+会话不存在：
+```json
+{
+  "status": "session_not_found",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "会话不存在"
 }
 ```
 
@@ -596,14 +750,11 @@ GET /task/status/task-xxx
 
 | 字段 | 说明 |
 |------|------|
-| `status` | 查询结果：`success` 或 `task_not_found` |
-| `task_id` | 任务ID |
-| `task_status` | 任务状态：`running` / `completed` / `failed` / `cancelled` |
-| `progress` | 进度信息（运行中时） |
-| `started_at` | 开始时间 |
-| `elapsed_time` | 已耗时 |
+| `status` | 查询结果：`success` 或 `session_not_found` |
+| `session_id` | 会话ID |
+| `chat` | 最近一次对话信息（无则返回 null） |
 
-**task_status 状态说明：**
+**chat.status 状态说明：**
 
 | 状态 | 说明 |
 |------|------|
@@ -612,22 +763,153 @@ GET /task/status/task-xxx
 | `failed` | 已失败 |
 | `cancelled` | 已取消 |
 
-### 3.5 GET /task/history
+### 3.5 GET /chat/{sid}
+
+查询最近一次对话的完整步骤记录。
+
+**请求方式：** 路径参数
+
+```
+GET /chat/sess_20260418103000523_a1b2
+```
+
+**响应：**
+
+成功（包含完整步骤记录）：
+```json
+{
+  "status": "success",
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat": {
+    "chat_id": "chat_20260418103000523",
+    "round": 4,
+    "instruction": "用户指令内容",
+    "attachments": ["data.csv"],
+    "result": {
+      "summary": "执行结果..."
+    },
+    "status": "completed",
+    "started_at": "2026-04-18T10:30:00Z",
+    "ended_at": "2026-04-18T10:30:45Z",
+    "duration": 45,
+    "steps": [
+      {
+        "step_id": "20260418-103000000-a1b2c3",
+        "type": "skill",
+        "name": "pdf_analyzer",
+        "start_time": "2026-04-18T10:30:00Z",
+        "end_time": "2026-04-18T10:30:30Z",
+        "status": "success",
+        "nesting_level": 0
+      },
+      {
+        "step_id": "20260418-103005000-x9y8z7",
+        "type": "tool",
+        "name": "file_read",
+        "start_time": "2026-04-18T10:30:05Z",
+        "end_time": "2026-04-18T10:30:10Z",
+        "status": "success",
+        "nesting_level": 1
+      }
+    ]
+  }
+}
+```
+
+会话不存在：
+```json
+{
+  "status": "session_not_found",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "会话不存在"
+}
+```
+
+### 3.6 GET /sess/{sid}
+
+查询会话详情（完整对话历史，所有轮次）。
+
+**请求方式：** 路径参数
+
+```
+GET /sess/sess_20260418103000523_a1b2
+```
+
+**响应：**
+
+成功：
+```json
+{
+  "status": "success",
+  "session_id": "sess_20260418103000523_a1b2",
+  "session": {
+    "created_at": "2026-04-18T10:00:00Z",
+    "round_count": 4,
+    "path": "/home/groot/memory/sess_20260418103000523_a1b2"
+  },
+  "history": {
+    "messages": [
+      {
+        "round": 1,
+        "timestamp": "2026-04-18T10:00:00Z",
+        "user_content": "帮我分析这个数据文件",
+        "user_attachments": ["data.csv"],
+        "assistant_content": "好的，分析结果如下...",
+        "assistant_attachments": []
+      },
+      {
+        "round": 2,
+        "timestamp": "2026-04-18T10:05:00Z",
+        "user_content": "再画个图表",
+        "user_attachments": [],
+        "assistant_content": "图表已生成...",
+        "assistant_attachments": ["chart.png"]
+      },
+      {
+        "round": 3,
+        "timestamp": "2026-04-18T10:10:00Z",
+        "user_content": "导出报告",
+        "user_attachments": [],
+        "assistant_content": "报告已导出...",
+        "assistant_attachments": ["report.pdf"]
+      },
+      {
+        "round": 4,
+        "timestamp": "2026-04-18T10:30:00Z",
+        "user_content": "继续分析",
+        "user_attachments": [],
+        "assistant_content": "继续分析结果...",
+        "assistant_attachments": []
+      }
+    ]
+  }
+}
+```
+
+会话不存在：
+```json
+{
+  "status": "session_not_found",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "会话不存在"
+}
+```
+
+### 3.7 GET /sess/history
+
+查询会话列表。
 
 **请求方式：** Query 参数
 
 ```
-GET /task/history?status=completed&start_time=202604010000&end_time=202604172359&limit=10&offset=0
+GET /sess/history?limit=10&offset=0
 ```
 
 **Query 参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `status` | string | 否 | 按状态过滤：`running` / `completed` / `failed` / `cancelled` |
-| `start_time` | string | 否 | 开始时间，格式 `yyyyMMddHHmm`，如 `202604010000` |
-| `end_time` | string | 否 | 结束时间，格式 `yyyyMMddHHmm`，如 `202604172359` |
-| `limit` | int | 否 | 返回数量限制，默认 20，最大 100 |
+| `limit` | int | 否 | 返回数量，默认 20，最大 100 |
 | `offset` | int | 否 | 分页偏移，默认 0 |
 
 **响应：**
@@ -639,91 +921,33 @@ GET /task/history?status=completed&start_time=202604010000&end_time=202604172359
   "total": 50,
   "limit": 10,
   "offset": 0,
-  "tasks": [
+  "sessions": [
     {
-      "id": "task-xxx",
-      "instruction": "分析PDF报告",
-      "status": "completed",
-      "start_time": "2026-04-17T10:30:00Z",
-      "end_time": "2026-04-17T10:30:45Z",
-      "duration": 45,
-      "caller": "internal_system"
+      "session_id": "sess_20260418103000523_a1b2",
+      "created_at": "2026-04-18T10:00:00Z",
+      "round_count": 4,
+      "last_active_at": "2026-04-18T10:30:00Z"
     },
-    ...
+    {
+      "session_id": "sess_20260417093500123_b2c3",
+      "created_at": "2026-04-17T09:35:00Z",
+      "round_count": 5,
+      "last_active_at": "2026-04-17T10:00:00Z"
+    }
   ]
 }
 ```
 
-失败（无匹配）：
+无会话：
 ```json
 {
   "status": "success",
   "total": 0,
-  "tasks": []
+  "sessions": []
 }
 ```
 
-### 3.6 GET /task/{task_id}
-
-**请求方式：** 路径参数
-
-```
-GET /task/task-xxx
-```
-
-**响应：**
-
-成功（包含完整步骤记录）：
-```json
-{
-  "status": "success",
-  "task": {
-    "id": "task-xxx",
-    "instruction": "分析PDF报告",
-    "prompt": "你是一个财务分析师...",
-    "status": "completed",
-    "start_time": "2026-04-17T10:30:00Z",
-    "end_time": "2026-04-17T10:30:45Z",
-    "duration": 45,
-    "caller": "internal_system",
-    "result": {
-      "document_type": "report",
-      "summary": "..."
-    },
-    "steps": [
-      {
-        "step_id": "20260417-103000000-a1b2c3",
-        "type": "skill",
-        "name": "pdf_analyzer",
-        "start_time": "2026-04-17T10:30:00Z",
-        "end_time": "2026-04-17T10:30:30Z",
-        "status": "success",
-        "nesting_level": 0
-      },
-      {
-        "step_id": "20260417-103005000-x9y8z7",
-        "type": "tool",
-        "name": "file_read",
-        "start_time": "2026-04-17T10:30:05Z",
-        "end_time": "2026-04-17T10:30:10Z",
-        "status": "success",
-        "nesting_level": 1
-      }
-    ]
-  }
-}
-```
-
-失败（任务不存在）：
-```json
-{
-  "status": "task_not_found",
-  "task_id": "task-xxx",
-  "message": "任务不存在"
-}
-```
-
-### 3.7 GET /health
+### 3.9 GET /health
 
 **响应：**
 
@@ -739,18 +963,57 @@ GET /task/task-xxx
     "memory": {"status": "healthy", "used_mb": 256}
   },
   "metrics": {
-    "tasks_running": 5,
+    "chats_running": 5,
     "success_rate": 0.98
   }
 }
 ```
 
-### 3.8 API 详细示例
+### 3.10 GET /skills
 
-#### POST /task/execute 请求示例
+**响应：**
 
-**基本请求：**
 ```json
+{
+  "skills": [
+    {"name": "pdf_analyzer", "description": "分析PDF文档并生成摘要"},
+    {"name": "code_generator", "description": "根据需求生成代码"},
+    {"name": "data_analyzer", "description": "分析结构化数据文件"},
+    {"name": "report_generator", "description": "综合分析生成报告"}
+  ],
+  "total": 4
+}
+```
+
+### 3.11 GET /tools
+
+**响应：**
+
+```json
+{
+  "tools": [
+    {"name": "file_read", "description": "读取文件内容", "mcp": "file_operations"},
+    {"name": "file_write", "description": "写入文件内容", "mcp": "file_operations"},
+    {"name": "directory_list", "description": "列出目录内容", "mcp": "file_operations"},
+    {"name": "http_get", "description": "发送HTTP GET请求", "mcp": "http_request"},
+    {"name": "http_post", "description": "发送HTTP POST请求", "mcp": "http_request"}
+  ],
+  "total": 5
+}
+```
+
+### 3.12 API 详细示例
+
+#### POST /chat 请求示例
+
+**基本请求（新会话）：**
+
+```http
+POST /chat HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+X-API-Key: groot-api-key-2026abc
+
 {
   "instruction": "帮我分析这份PDF财务报告",
   "attachments": [
@@ -760,7 +1023,13 @@ GET /task/task-xxx
 ```
 
 **带 prompt 的请求：**
-```json
+
+```http
+POST /chat HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+X-API-Key: groot-api-key-2026abc
+
 {
   "instruction": "帮我分析这份PDF财务报告",
   "prompt": "你是一个财务分析师，重点关注利润增长率和潜在风险点。输出JSON格式。",
@@ -771,7 +1040,13 @@ GET /task/task-xxx
 ```
 
 **多附件请求：**
-```json
+
+```http
+POST /chat HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+X-API-Key: groot-api-key-2026abc
+
 {
   "instruction": "对比分析这份PDF报告和销售数据",
   "attachments": [
@@ -782,89 +1057,141 @@ GET /task/task-xxx
 ```
 
 **无附件请求（纯 LLM 执行）：**
-```json
+
+```http
+POST /chat HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+X-API-Key: groot-api-key-2026abc
+
 {
   "instruction": "帮我写一个 Python 快速排序函数"
 }
 ```
 
+**继续会话请求：**
+
+```http
+POST /chat HTTP/1.1
+Host: localhost:8080
+X-Session-ID: sess_20260418103000523_a1b2
+Content-Type: application/json
+X-API-Key: groot-api-key-2026abc
+
+{
+  "instruction": "根据刚才的分析，生成一份总结报告"
+}
+```
+
 #### SSE 响应事件流示例
 
-**成功执行：**
+**新会话执行（成功）：**
+
 ```
-HTTP Header: X-Task-ID: task-xxx
+HTTP Header: 
+  X-Session-ID: sess_20260418103000523_a1b2
+  X-Chat-ID: chat_20260418103000523
 
 event: intent
-data: {"timestamp":"2026-04-17T10:30:00Z"}
+data: {"timestamp":"2026-04-18T10:30:00Z"}
 
 event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z","nesting_level":0}
 
 event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:05Z"}
+data: {"step_id":"20260418-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-18T10:30:05Z"}
 
 event: step_start
-data: {"type":"tool","name":"file_read","step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05Z","params":{"path":"temp/report.pdf"}}
+data: {"type":"tool","name":"file_read","step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05Z","params":{"path":"memory/sess_xxx/attachments/report.pdf"}}
 
 event: step_end
-data: {"step_id":"20260417-103005000-x9y8z7","timestamp":"2026-04-17T10:30:05.2Z","status":"success"}
+data: {"step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05.2Z","status":"success"}
 
 event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在生成摘要...","timestamp":"2026-04-17T10:30:20Z"}
+data: {"step_id":"20260418-103000000-a1b2c3","message":"正在生成摘要...","timestamp":"2026-04-18T10:30:20Z"}
 
 event: step_end
-data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:45Z","status":"success"}
+data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:45Z","status":"success"}
 
 event: completed
-data: {"status":"success","timestamp":"2026-04-17T10:30:45Z","duration":"45s","result":{"document_type":"report","key_points":[...],"summary":"..."}}
+data: {"status":"success","timestamp":"2026-04-18T10:30:45Z","duration":"45s","round":1,"result":{"document_type":"report","key_points":[...],"summary":"..."}}
+```
+
+**继续会话执行（成功）：**
+
+```
+HTTP Header:
+  X-Session-ID: sess_20260418103000523_a1b2
+  X-Chat-ID: chat_20260418103500123
+
+event: intent
+data: {"timestamp":"2026-04-18T10:35:00Z"}
+
+event: step_start
+data: {"type":"llm","name":"response","step_id":"20260418-103500000-d4e5f6","timestamp":"2026-04-18T10:35:00Z","nesting_level":0}
+
+event: progress
+data: {"step_id":"20260418-103500000-d4e5f6","message":"根据历史分析生成报告...","timestamp":"2026-04-18T10:35:10Z"}
+
+event: step_end
+data: {"step_id":"20260418-103500000-d4e5f6","timestamp":"2026-04-18T10:35:30Z","status":"success"}
+
+event: completed
+data: {"status":"success","timestamp":"2026-04-18T10:35:30Z","duration":"30s","round":2,"result":{"report":"总结报告内容..."}}
 ```
 
 **失败执行：**
+
 ```
-HTTP Header: X-Task-ID: task-xxx
+HTTP Header:
+  X-Session-ID: sess_20260418103000523_a1b2
+  X-Chat-ID: chat_20260418103000523
 
 event: intent
-data: {"timestamp":"2026-04-17T10:30:00Z"}
+data: {"timestamp":"2026-04-18T10:30:00Z"}
 
 event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z","nesting_level":0}
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z","nesting_level":0}
 
 event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-17T10:30:02Z"}
+data: {"step_id":"20260418-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-18T10:30:02Z"}
 
 event: step_end
-data: {"step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:05Z","status":"failed","error":{"code":"file_error","message":"PDF文件已损坏"}}
+data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:05Z","status":"failed","error":{"code":"file_error","message":"PDF文件已损坏"}}
 
 event: completed
-data: {"status":"failed","timestamp":"2026-04-17T10:30:05Z","duration":"5s","error":{"code":"skill_error","message":"pdf_analyzer执行失败"}}
+data: {"status":"failed","timestamp":"2026-04-18T10:30:05Z","duration":"5s","round":1,"error":{"code":"skill_error","message":"pdf_analyzer执行失败"}}
 ```
 
 **取消执行：**
+
 ```
-HTTP Header: X-Task-ID: task-xxx
+HTTP Header:
+  X-Session-ID: sess_20260418103000523_a1b2
+  X-Chat-ID: chat_20260418103000523
 
 event: intent
-data: {"timestamp":"2026-04-17T10:30:00Z"}
+data: {"timestamp":"2026-04-18T10:30:00Z"}
 
 event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260417-103000000-a1b2c3","timestamp":"2026-04-17T10:30:00Z"}
+data: {"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z"}
 
 event: progress
-data: {"step_id":"20260417-103000000-a1b2c3","message":"正在处理...","timestamp":"2026-04-17T10:30:10Z"}
+data: {"step_id":"20260418-103000000-a1b2c3","message":"正在处理...","timestamp":"2026-04-18T10:30:10Z"}
 
-（用户发送取消请求）
+（用户发送 DELETE /chat/sess_xxx）
 
 event: completed
-data: {"status":"cancelled","timestamp":"2026-04-17T10:30:12Z","duration":"12s","message":"用户主动取消"}
+data: {"status":"cancelled","timestamp":"2026-04-18T10:30:12Z","duration":"12s","round":1,"message":"用户主动取消"}
 ```
 
 #### 其他 API 响应示例
 
-**DELETE /task/{task_id}：**
+**DELETE /chat/{sid}：**
 
 请求：
 ```http
-DELETE /task/task-20260417-103000523-a1b2 HTTP/1.1
+DELETE /chat/sess_20260418103000523_a1b2 HTTP/1.1
 Host: localhost:8080
 X-API-Key: groot-api-key-2026abc
 ```
@@ -873,34 +1200,26 @@ X-API-Key: groot-api-key-2026abc
 ```json
 {
   "status": "success",
-  "task_id": "task-20260417-103000523-a1b2",
-  "message": "任务已取消"
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat_id": "chat_20260418103000523",
+  "message": "对话已取消"
 }
 ```
 
-失败响应（任务已完成）：
+失败响应（无正在执行的对话）：
 ```json
 {
-  "status": "task_completed",
-  "task_id": "task-20260417-103000523-a1b2",
-  "message": "任务已完成，无法取消"
+  "status": "no_running_chat",
+  "session_id": "sess_20260418103000523_a1b2",
+  "message": "该会话当前没有正在执行的对话"
 }
 ```
 
-失败响应（任务不存在）：
-```json
-{
-  "status": "task_not_found",
-  "task_id": "task-20260417-103000523-a1b2",
-  "message": "任务不存在"
-}
-```
-
-**GET /task/status/{task_id}：**
+**GET /chat/status/{sid}：**
 
 请求：
 ```http
-GET /task/status/task-20260417-103000523-a1b2 HTTP/1.1
+GET /chat/status/sess_20260418103000523_a1b2 HTTP/1.1
 Host: localhost:8080
 X-API-Key: groot-api-key-2026abc
 ```
@@ -909,35 +1228,110 @@ X-API-Key: groot-api-key-2026abc
 ```json
 {
   "status": "success",
-  "task_id": "task-20260417-103000523-a1b2",
-  "task_status": "running",
-  "progress": {
-    "current_step": 3,
-    "steps_completed": 2,
-    "percentage": 50
-  },
-  "started_at": "2026-04-17T10:30:00Z",
-  "elapsed_time": "8s"
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat": {
+    "chat_id": "chat_20260418103000523",
+    "round": 4,
+    "status": "running",
+    "progress": {
+      "current_step": 2,
+      "steps_completed": 1,
+      "percentage": 50
+    },
+    "started_at": "2026-04-18T10:30:00Z",
+    "elapsed_time": "15s"
+  }
 }
 ```
 
-已完成响应：
+无执行中对话响应：
 ```json
 {
   "status": "success",
-  "task_id": "task-20260417-103000523-a1b2",
-  "task_status": "completed",
-  "started_at": "2026-04-17T10:30:00Z",
-  "elapsed_time": "45s"
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat": null
 }
 ```
 
-失败响应（任务不存在）：
+**GET /chat/{sid}：**
+
+请求：
+```http
+GET /chat/sess_20260418103000523_a1b2 HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+响应：
 ```json
 {
-  "status": "task_not_found",
-  "task_id": "task-20260417-103000523-a1b2",
-  "message": "任务不存在"
+  "status": "success",
+  "session_id": "sess_20260418103000523_a1b2",
+  "chat": {
+    "chat_id": "chat_20260418103000523",
+    "round": 4,
+    "instruction": "用户指令内容",
+    "attachments": ["data.csv"],
+    "result": {"summary": "执行结果..."},
+    "status": "completed",
+    "started_at": "2026-04-18T10:30:00Z",
+    "ended_at": "2026-04-18T10:30:45Z",
+    "duration": 45,
+    "steps": [...]
+  }
+}
+```
+
+**GET /sess/{sid}：**
+
+请求：
+```http
+GET /sess/sess_20260418103000523_a1b2 HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+响应：
+```json
+{
+  "status": "success",
+  "session_id": "sess_20260418103000523_a1b2",
+  "session": {
+    "created_at": "2026-04-18T10:00:00Z",
+    "round_count": 4,
+    "path": "/home/groot/memory/sess_20260418103000523_a1b2"
+  },
+  "history": {
+    "messages": [
+      {"round": 1, "user_content": "...", "assistant_content": "..."},
+      {"round": 2, "user_content": "...", "assistant_content": "..."},
+      {"round": 3, "user_content": "...", "assistant_content": "..."},
+      {"round": 4, "user_content": "...", "assistant_content": "..."}
+    ]
+  }
+}
+```
+
+**GET /sess/history：**
+
+请求：
+```http
+GET /sess/history?limit=10&offset=0 HTTP/1.1
+Host: localhost:8080
+X-API-Key: groot-api-key-2026abc
+```
+
+响应：
+```json
+{
+  "status": "success",
+  "total": 50,
+  "limit": 10,
+  "offset": 0,
+  "sessions": [
+    {"session_id": "sess_xxx", "created_at": "...", "round_count": 4, "last_active_at": "..."},
+    {"session_id": "sess_yyy", "created_at": "...", "round_count": 5, "last_active_at": "..."}
+  ]
 }
 ```
 
@@ -962,7 +1356,7 @@ Host: localhost:8080
     "memory": {"status": "healthy", "used_mb": 256}
   },
   "metrics": {
-    "tasks_running": 5,
+    "chats_running": 5,
     "success_rate": 0.98
   }
 }
@@ -1458,12 +1852,12 @@ report_generator (主Skill)
 └─ 工具: file_write
 ```
 
-### 6.3 取消任务机制
+### 6.3 取消对话机制
 
 ```
-DELETE /task/{task_id} →
+DELETE /chat/{sid} →
 │
-├─ 根据 task_id 查找执行状态
+├─ 根据 session_id 查找执行状态
 │
 ├─ 设置状态为 cancelled
 │
@@ -1473,6 +1867,8 @@ DELETE /task/{task_id} →
 │   └─ 清理资源
 │
 ├─ SSE 推送取消事件
+│
+├─ 释放会话锁（runningSessions）
 │
 └─ 关闭 SSE 连接
 ```
@@ -1782,7 +2178,7 @@ react:
 | 达到最大循环次数 | iteration > max_iterations | `completed` (failed) |
 | Token消耗超限 | tokens_used > max_tokens | `completed` (failed) |
 | 单步执行超时 | step_duration > step_timeout | `completed` (failed) |
-| 用户取消 | 调用 DELETE /task/{task_id} | `completed` (cancelled) |
+| 用户取消 | 调用 DELETE /chat/{sid} | `completed` (cancelled) |
 
 ### 9.3 错误响应
 
@@ -1966,7 +2362,7 @@ security:
 **调用方请求示例：**
 
 ```http
-POST /task/execute HTTP/1.1
+POST /chat HTTP/1.1
 Host: localhost:8080
 X-API-Key: groot-api-key-2026abc
 Content-Type: application/json
@@ -1980,7 +2376,7 @@ Content-Type: application/json
 **cURL 示例：**
 
 ```bash
-curl -X POST http://localhost:8080/task/execute \
+curl -X POST http://localhost:8080/chat \
   -H "X-API-Key: groot-api-key-2026abc" \
   -H "Content-Type: application/json" \
   -d '{"instruction": "帮我分析这份PDF报告"}'
@@ -2053,11 +2449,12 @@ security:
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
-| `execute` | POST /task/execute | 执行任务 |
-| `cancel` | DELETE /task/{task_id} | 取消任务 |
-| `status` | GET /task/status/{task_id} | 查询状态 |
-| `history` | GET /task/history | 查询历史任务列表 |
-| `detail` | GET /task/{task_id} | 查询任务详情 |
+| `chat` | POST /chat | 执行对话 |
+| `cancel` | DELETE /chat/{sid} | 取消对话 |
+| `status` | GET /chat/status/{sid} | 查询对话状态 |
+| `detail` | GET /chat/{sid} | 查询对话详情（步骤记录） |
+| `session` | GET /sess/{sid} | 查询会话详情 |
+| `history` | GET /sess/history | 查询会话列表 |
 | `skills` | GET /skills | 查看 Skills 列表 |
 | `tools` | GET /tools | 查看 MCP 工具列表 |
 | `health` | GET /health | 健康检查 |
@@ -2091,7 +2488,7 @@ Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`e
 
 ## 十三、附件处理配置
 
-> **处理流程说明：** 附件的完整处理流程（校验、解码、存储、路径传递、清理）已在前文 **3.2 POST /task/execute** 的"完整处理流程"中详细说明，本节仅补充配置和技术细节。
+> **处理流程说明：** 附件的完整处理流程（校验、解码、存储、路径传递）已在前文 **3.2 POST /chat** 的"完整处理流程"中详细说明，本节仅补充配置和技术细节。
 
 ### 13.1 支持的附件类型
 
@@ -2114,9 +2511,9 @@ Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`e
 
 **Groot 核心负责：**
 - 接收附件并验证（大小、数量、类型）
-- Base64 解码并存储到临时目录 `temp/{task_id}/`
+- Base64 解码并存储到会话目录 `memory/{session_id}/attachments/`
 - 将附件路径信息嵌入用户消息
-- 任务完成后自动清理临时文件
+- 附件随会话清理而删除（memory 清理任务）
 
 **MCP 工具负责：**
 - 实际读取文件内容（`file_read`）
@@ -2126,32 +2523,21 @@ Gateway 验证后，转发请求到 Groot 实例，Groot 不再重复验证（`e
 ### 13.4 配置
 
 ```yaml
+# 附件配置（上传校验）
 attachment:
   max_size: 50                    # 单个附件最大大小（MB）
   max_total_size: 100             # 所有附件总大小上限（MB）
   max_count: 10                   # 单次请求最大附件数量
-  allowed_types: [pdf, doc, json, csv, png, zip]  # 允许的附件类型
-  temp_directory: temp            # 附件临时存储目录（支持绝对路径或相对路径，见下方说明）
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, jpeg, zip]  # 允许的附件类型
+
+# 记忆模块配置（附件存储位置）
+memory:
+  directory: memory               # 附件存储在 memory/{session_id}/attachments/
+  retention_days: 7               # 会话保留天数（附件随会话清理）
+  cleanup_schedule: "02:00"       # 清理时间
 ```
 
-**temp_directory 配置说明：**
-
-| 配置值 | 实际路径 | 说明 |
-|--------|---------|------|
-| `temp` | `{GROOT_HOME}/temp` | 相对路径，与工作目录拼接 |
-| `./temp` | `{GROOT_HOME}/temp` | 相对路径，等效于 `temp` |
-| `/home/zfd/temp` | `/home/zfd/temp` | 绝对路径，直接使用 |
-| `/tmp/groot` | `/tmp/groot` | 绝对路径，系统临时目录 |
-
-**配置规则：**
-- 以 `/` 开头：视为绝对路径，直接使用
-- 其他情况：视为相对路径，与 `{GROOT_HOME}` 拼接
-- `filepath.Clean` 会自动处理 `./temp` → `temp`
-
-**建议：**
-- 单实例部署：使用相对路径 `temp`（默认）
-- 需要更大磁盘空间：使用绝对路径指向独立存储盘
-- 需要系统临时目录：使用 `/tmp/groot`（注意清理策略）
+> **说明：** 附件不再使用临时目录存储，而是直接保存在会话目录 `memory/{session_id}/attachments/` 中，随会话生命周期管理。原有的 `attachment.temp_directory` 配置已废弃。
 
 ---
 
@@ -2168,9 +2554,13 @@ attachment:
 │   └── {skill-name}/SKILL.md
 ├── mcp/
 │   └── {mcp-name}.json
+├── memory/                         # 记忆模块目录
+│   └── sess_xxx/                   # 会话目录
+│       ├── history.json            # 对话历史
+│       └── attachments/            # 附件
 ├── logs/
 │   └── groot-{date}.log
-└── temp/（任务临时文件）
+└── groot.db                        # BoltDB 数据库文件
 ```
 
 ### 14.2 配置优先级
@@ -2199,13 +2589,14 @@ attachment:
 ```
 解析参数 → 确定工作目录 → 检查/创建目录结构 →
 加载配置 → 初始化日志 → 初始化存储引擎 → 注册 Skills → 加载 MCP →
-初始化 LLM → 启动 HTTP 服务 → 等待请求
+初始化记忆模块 → 启动清理调度器 → 初始化 LLM → 启动 HTTP 服务 → 等待请求
 ```
 
 ### 15.3 优雅关闭
 
 - 停止接受新请求
-- 等待当前任务完成（超时30秒）
+- 等待当前对话完成（超时30秒）
+- 停止清理调度器
 - 关闭 MCP 连接
 - 刷新日志
 - 退出程序
@@ -2293,13 +2684,18 @@ react:
   error_retry: 2              # 单步失败重试次数
   nesting_max_depth: 3        # Skills 嵌套最大深度，-1 表示不限制
 
-# 附件处理配置
+# 附件处理配置（上传校验）
 attachment:
   max_size: 50                    # 单个附件最大大小（MB）
   max_total_size: 100             # 所有附件总大小上限（MB）
   max_count: 10                   # 单次请求最大附件数量
-  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, zip]  # 允许的附件类型
-  temp_directory: temp            # 附件临时存储目录（支持绝对路径或相对路径）
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, jpeg, zip]  # 允许的附件类型
+
+# 记忆模块配置
+memory:
+  directory: memory               # 记忆目录（支持绝对路径或相对路径）
+  retention_days: 7               # 会话保留天数
+  cleanup_schedule: "02:00"       # 清理时间（HH:MM）
 
 # 安全配置
 security:
@@ -2311,7 +2707,7 @@ security:
       keys:
         - name: default         # Key 名称（唯一标识）
           key: ${GROOT_API_KEY} # Key 值（环境变量或直接写）
-          permissions: all      # 权限范围
+          permissions: all      # 权限范围：chat, cancel, status, detail, session, history, skills, tools, health, all
 
 # 日志配置
 logging:
@@ -2322,7 +2718,6 @@ logging:
     directory: logs
     filename_pattern: groot-{date}.log
     max_age: 7
-```
 ```
 
 ---
