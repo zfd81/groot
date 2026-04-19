@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -87,13 +86,12 @@ type ProgressInfo struct {
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
-	memoryManager     *memory.Manager
-	skillRegistry     *skill.Registry
-	mcpManager        *mcp.Manager
-	attachmentHandler *attachment.Handler
-	config            config.Config
-	logger            *logger.Logger
-	runningTasks      sync.Map
+	memoryManager *memory.Manager
+	skillRegistry *skill.Registry
+	mcpManager    *mcp.Manager
+	config        config.Config
+	logger        *logger.Logger
+	runningTasks  sync.Map
 }
 
 // NewExecutor creates a new task executor
@@ -101,17 +99,15 @@ func NewExecutor(
 	memMgr *memory.Manager,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
-	attHandler *attachment.Handler,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
-		memoryManager:     memMgr,
-		skillRegistry:     skills,
-		mcpManager:        mcpMgr,
-		attachmentHandler: attHandler,
-		config:            cfg,
-		logger:            log,
+		memoryManager: memMgr,
+		skillRegistry: skills,
+		mcpManager:    mcpMgr,
+		config:        cfg,
+		logger:        log,
 	}
 }
 
@@ -120,56 +116,42 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	e.runningTasks.Store(task.ID, true)
 	defer e.runningTasks.Delete(task.ID)
 
-	// Process attachments if any (before intent event)
-	var processedAttachments []attachment.ProcessedAttachment
+	// Write started event
+	sse.WriteStarted()
+
+	// Generate step ID for attachment processing
+	stepIDGen := NewStepIDGenerator()
+
+	// Build attachment paths from already-processed attachments
+	// Note: Attachments are already processed by chat handler (Base64 decoded and saved)
 	var attachmentPaths []AttachmentPath
-	if len(task.Attachments) > 0 && e.attachmentHandler != nil {
-		// Convert attachments
-		attInput := make([]attachment.Attachment, len(task.Attachments))
-		for i, att := range task.Attachments {
-			attInput[i] = attachment.Attachment{
-				Type:    att.Type,
-				Name:    att.Name,
-				Content: att.Content,
-			}
-		}
-
-		// Validate attachments
-		if err := e.attachmentHandler.Validate(attInput); err != nil {
-			e.handleFailure(sessionID, task, sse, err, "attachment_validation_error")
-			return
-		}
-
-		// Process attachments (decode Base64, save to temp)
-		processed, err := e.attachmentHandler.Process(task.ID, attInput)
-		if err != nil {
-			e.handleFailure(sessionID, task, sse, err, "attachment_processing_error")
-			return
-		}
-		processedAttachments = processed
-
-		// Build attachment paths for engine
-		for _, pa := range processedAttachments {
-			attachmentPaths = append(attachmentPaths, AttachmentPath{
-				OriginalName: pa.OriginalName,
-				Type:         pa.Type,
-				FullPath:     pa.FullPath,
-				RelativePath: pa.Path,
-				Size:         pa.Size,
-				ContentType:  pa.ContentType,
+	for _, att := range task.Attachments {
+		// Send step_start for each attachment (if any)
+		if att.Type == "file" || att.Type == "image" {
+			stepID := stepIDGen.Next()
+			sse.WriteToolCall(stepID, "file_read", map[string]interface{}{
+				"filename": att.Name,
+				"type":     att.Type,
 			})
+			sse.WriteToolResult(stepID, "processed", "")
+		} else if att.Type == "url" {
+			stepID := stepIDGen.Next()
+			sse.WriteToolCall(stepID, "url_fetch", map[string]interface{}{
+				"name": att.Name,
+				"url":  att.Content,
+			})
+			sse.WriteToolResult(stepID, "processed", "")
 		}
+
+		attachmentPaths = append(attachmentPaths, AttachmentPath{
+			OriginalName: att.Name,
+			Type:         att.Type,
+			FullPath:     att.Content, // Content is already the saved file path
+			RelativePath: att.Content,
+			Size:         0, // Size info not available at this stage
+			ContentType:  getContentTypeFromType(att.Type),
+		})
 	}
-
-	// Cleanup attachments when done
-	defer func() {
-		if e.attachmentHandler != nil && len(processedAttachments) > 0 {
-			e.attachmentHandler.Cleanup(task.ID)
-		}
-	}()
-
-	// Write intent event (after all preparation is complete)
-	sse.WriteIntent(task.Round)
 
 	// Create engine using eino
 	engine := NewEngine(
@@ -195,6 +177,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	}()
 
 	// Run engine with progress callback and history messages
+	// Bug fix: progress callback needs to handle different event types
 	result, err := engine.Run(
 		ctx,
 		task.Instruction,
@@ -206,7 +189,18 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 			case <-ctx.Done():
 				return
 			default:
-				sse.WriteProgress(stepID, message)
+				// Handle different event types from engine
+				switch eventType {
+				case "step_start":
+					sse.WriteThinkingStart(stepID)
+					sse.WriteThinking(message)
+				case "step_end":
+					sse.WriteThinkingEnd(stepID, "success")
+				case "progress":
+					sse.WriteThinking(message)
+				default:
+					sse.WriteThinking(message)
+				}
 			}
 		},
 	)
@@ -217,29 +211,51 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	duration := endTime.Sub(startTime)
 	durationStr := formatDuration(duration)
 
+	// Determine final status - check cancellation FIRST before other conditions
+	// Context might be cancelled after engine.Run returns but before we check
+	ctxCancelled := ctx.Err() == context.Canceled
+
 	// Save chat record to memory
 	if e.memoryManager != nil {
+		// Build attachments list
+		attachments := []string{}
+		for _, att := range task.Attachments {
+			attachments = append(attachments, att.Name)
+		}
+
 		record := &memory.ChatRecord{
 			ChatID:      task.ID,
 			SessionID:   sessionID,
 			Round:       task.Round,
 			Timestamp:   endTime,
+			StartedAt:   startTime,
+			EndedAt:     endTime,
 			Instruction: task.Instruction,
 			Duration:    int(duration.Seconds()),
+			Attachments: attachments,
 		}
 
-		if err != nil {
+		// Check cancellation status FIRST (highest priority)
+		if ctxCancelled {
+			record.Status = "cancelled"
+		} else if err != nil {
 			record.Status = "failed"
 			record.Error = &memory.Error{
 				Code:    "execution_error",
 				Message: err.Error(),
 			}
-		} else if ctx.Err() == context.Canceled {
+		} else if result != nil && result.Cancelled {
 			record.Status = "cancelled"
-		} else {
+		} else if result != nil {
 			record.Status = "completed"
 			record.Result = result.Content
 			record.Steps = convertSteps(result.Steps)
+		} else {
+			record.Status = "failed"
+			record.Error = &memory.Error{
+				Code:    "unknown_error",
+				Message: "执行完成但无结果",
+			}
 		}
 
 		// Save chat record
@@ -248,29 +264,60 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		}
 
 		// Append message to history
-		if err == nil && ctx.Err() != context.Canceled && result.Content != "" {
-			msg := &memory.Message{
-				ChatID:      task.ID,
-				Round:       task.Round,
-				Timestamp:   endTime,
-				Instruction: task.Instruction,
-				Result:      result.Content,
-				Status:      "completed",
-				Duration:    int(duration.Seconds()),
-				StepsCount:  len(result.Steps),
+		// Always save message regardless of status
+		var stepsCount int
+		if result != nil {
+			stepsCount = len(result.Steps)
+		}
+
+		msg := &memory.Message{
+			ChatID:      task.ID,
+			Round:       task.Round,
+			Timestamp:   endTime,
+			Instruction: task.Instruction,
+			Attachments: attachments,
+			Duration:    int(duration.Seconds()),
+			StepsCount:  stepsCount,
+		}
+
+		// Check cancellation status FIRST (highest priority)
+		if ctxCancelled {
+			msg.Status = "cancelled"
+		} else if err != nil {
+			msg.Status = "failed"
+			msg.Error = &memory.Error{
+				Code:    "execution_error",
+				Message: err.Error(),
 			}
-			if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
-				e.logger.Error("追加历史消息失败: " + appendErr.Error())
+		} else if result != nil && result.Cancelled {
+			msg.Status = "cancelled"
+		} else if result != nil {
+			msg.Status = "completed"
+			msg.Result = result.Content
+		} else {
+			msg.Status = "failed"
+			msg.Error = &memory.Error{
+				Code:    "unknown_error",
+				Message: "执行完成但无结果",
 			}
+		}
+
+		if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
+			e.logger.Error("追加历史消息失败: " + appendErr.Error())
 		}
 	}
 
-	if err != nil {
-		sse.WriteCompleted("failed", durationStr, task.Round, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
-	} else if ctx.Err() == context.Canceled {
-		sse.WriteCompleted("cancelled", durationStr, task.Round, nil, nil, "用户主动取消")
+	// Send SSE completed event - check cancellation status FIRST
+	if ctxCancelled {
+		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
+	} else if err != nil {
+		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
+	} else if result != nil && result.Cancelled {
+		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
+	} else if result != nil {
+		sse.WriteCompleted("success", durationStr, result.Content, nil, "")
 	} else {
-		sse.WriteCompleted("success", durationStr, task.Round, result.Content, nil, "")
+		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "unknown_error", Message: "执行完成但无结果"}, "")
 	}
 }
 
@@ -307,6 +354,12 @@ func (e *Executor) handleFailure(sessionID string, task *Task, sse *SSEWriter, e
 	duration := endTime.Sub(task.StartTime)
 	durationStr := formatDuration(duration)
 
+	// Build attachments list
+	attachments := []string{}
+	for _, att := range task.Attachments {
+		attachments = append(attachments, att.Name)
+	}
+
 	// Save failed chat record to memory
 	if e.memoryManager != nil {
 		record := &memory.ChatRecord{
@@ -314,7 +367,10 @@ func (e *Executor) handleFailure(sessionID string, task *Task, sse *SSEWriter, e
 			SessionID:   sessionID,
 			Round:       task.Round,
 			Timestamp:   endTime,
+			StartedAt:   task.StartTime,
+			EndedAt:     endTime,
 			Instruction: task.Instruction,
+			Attachments: attachments,
 			Status:      "failed",
 			Duration:    int(duration.Seconds()),
 			Error:       &memory.Error{Code: errorCode, Message: err.Error()},
@@ -324,7 +380,7 @@ func (e *Executor) handleFailure(sessionID string, task *Task, sse *SSEWriter, e
 		}
 	}
 
-	sse.WriteCompleted("failed", durationStr, task.Round, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
+	sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
 }
 
 // IsRunning checks if task is currently running
@@ -341,6 +397,22 @@ func (e *Executor) RunningCount() int {
 		return true
 	})
 	return count
+}
+
+// getContentTypeFromType returns content type based on attachment type
+func getContentTypeFromType(attType string) string {
+	switch attType {
+	case "file":
+		return "application/octet-stream"
+	case "image":
+		return "image/png"
+	case "url":
+		return "url"
+	case "text":
+		return "text/plain"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // formatDuration formats duration for display
