@@ -311,7 +311,9 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 
 			// Send tool_result event
 			if cb.WriteToolResult != nil {
-				cb.WriteToolResult(stepID, output, errStr)
+				if err := cb.WriteToolResult(stepID, output, errStr); err != nil {
+					e.log.Error("SSE write tool_result failed: " + err.Error())
+				}
 			}
 
 			*steps = append(*steps, StepRecord{
@@ -341,7 +343,9 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 					}
 
 					if cb.WriteToolCall != nil {
-						cb.WriteToolCall(tc.ID, tc.Function.Name, arguments)
+						if err := cb.WriteToolCall(tc.ID, tc.Function.Name, arguments); err != nil {
+							e.log.Error("SSE write tool_call failed: " + err.Error())
+						}
 					}
 
 					*steps = append(*steps, StepRecord{
@@ -359,7 +363,9 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 			if msgOutput.IsStreaming && msgOutput.MessageStream != nil {
 				// Send message_start before streaming
 				if cb.WriteMessageStart != nil {
-					cb.WriteMessageStart()
+					if err := cb.WriteMessageStart(); err != nil {
+						e.log.Error("SSE write message_start failed: " + err.Error())
+					}
 				}
 
 				var content string
@@ -372,7 +378,9 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 					if msg != nil && msg.Content != "" {
 						content += msg.Content
 						if cb.WriteMessage != nil {
-							cb.WriteMessage(msg.Content)
+							if err := cb.WriteMessage(msg.Content); err != nil {
+								e.log.Error("SSE write message failed: " + err.Error())
+							}
 						}
 					}
 				}
@@ -380,7 +388,9 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 
 				// Send message_end after streaming completes
 				if cb.WriteMessageEnd != nil {
-					cb.WriteMessageEnd()
+					if err := cb.WriteMessageEnd(); err != nil {
+						e.log.Error("SSE write message_end failed: " + err.Error())
+					}
 				}
 
 				if content != "" {
@@ -401,13 +411,19 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 				if msg.Content != "" {
 					// Send message_start -> message -> message_end
 					if cb.WriteMessageStart != nil {
-						cb.WriteMessageStart()
+						if err := cb.WriteMessageStart(); err != nil {
+							e.log.Error("SSE write message_start failed: " + err.Error())
+						}
 					}
 					if cb.WriteMessage != nil {
-						cb.WriteMessage(msg.Content)
+						if err := cb.WriteMessage(msg.Content); err != nil {
+							e.log.Error("SSE write message failed: " + err.Error())
+						}
 					}
 					if cb.WriteMessageEnd != nil {
-						cb.WriteMessageEnd()
+						if err := cb.WriteMessageEnd(); err != nil {
+							e.log.Error("SSE write message_end failed: " + err.Error())
+						}
 					}
 
 					*steps = append(*steps, StepRecord{
