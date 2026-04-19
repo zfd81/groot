@@ -177,31 +177,77 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	}()
 
 	// Run engine with progress callback and history messages
-	// Bug fix: progress callback needs to handle different event types
 	result, err := engine.Run(
 		ctx,
 		task.Instruction,
 		task.Prompt,
 		attachmentPaths,
 		task.HistoryMessages,
-		func(stepID, eventType, message string) {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// Handle different event types from engine
-				switch eventType {
-				case "step_start":
-					sse.WriteThinkingStart(stepID)
-					sse.WriteThinking(message)
-				case "step_end":
-					sse.WriteThinkingEnd(stepID, "success")
-				case "progress":
-					sse.WriteThinking(message)
+		&ProgressCallback{
+			WriteThinkingStart: func(stepID string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
 				default:
-					sse.WriteThinking(message)
+					return sse.WriteThinkingStart(stepID)
 				}
-			}
+			},
+			WriteThinking: func(content string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteThinking(content)
+				}
+			},
+			WriteThinkingEnd: func(stepID, status string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteThinkingEnd(stepID, status)
+				}
+			},
+			WriteToolCall: func(stepID, name string, arguments map[string]interface{}) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteToolCall(stepID, name, arguments)
+				}
+			},
+			WriteToolResult: func(stepID, output, errStr string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteToolResult(stepID, output, errStr)
+				}
+			},
+			WriteMessageStart: func() error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteMessageStart()
+				}
+			},
+			WriteMessage: func(content string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteMessage(content)
+				}
+			},
+			WriteMessageEnd: func() error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteMessageEnd()
+				}
+			},
 		},
 	)
 

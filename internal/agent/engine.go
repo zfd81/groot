@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,18 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/skill"
 )
+
+// ProgressCallback handles SSE event callbacks with structured data
+type ProgressCallback struct {
+	WriteThinkingStart func(stepID string) error
+	WriteThinking      func(content string) error
+	WriteThinkingEnd   func(stepID, status string) error
+	WriteToolCall      func(stepID, name string, arguments map[string]interface{}) error
+	WriteToolResult    func(stepID, output, errStr string) error
+	WriteMessageStart  func() error
+	WriteMessage       func(content string) error
+	WriteMessageEnd    func() error
+}
 
 // Engine wraps eino's ChatModelAgent for task execution
 type Engine struct {
@@ -51,7 +64,7 @@ func (e *Engine) Run(
 	prompt string,
 	attachmentPaths []AttachmentPath,
 	historyMessages []memory.Message,
-	progress func(stepID, eventType, message string),
+	cb *ProgressCallback,
 ) (*RunResult, error) {
 	// 1. Create ChatModel
 	chatModel, err := llm.NewChatModel(ctx, e.llmConfig)
@@ -99,25 +112,71 @@ func (e *Engine) Run(
 	// 7. Build message list with history context
 	msgs := e.buildMessageList(instruction, attachmentPaths, historyMessages)
 
-	// 8. Run agent and collect events
+	// 8. Initialize step ID generator for reasoning steps
+	stepIDGen := NewStepIDGenerator()
+
+	// 9. Run agent and collect events with proper cancellation handling
 	iter := runner.Run(ctx, msgs)
 
 	var finalResult string
 	var steps []StepRecord
-	stepIDGen := NewStepIDGenerator()
+	var agentCancelled bool
 
+	// Use a channel to receive events asynchronously
+	eventCh := make(chan *adk.AgentEvent, 100) // buffered channel to avoid blocking
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			// Bug fix: check context cancellation before reading next event
+			select {
+			case <-ctx.Done():
+				close(eventCh)
+				return
+			default:
+				event, ok := iter.Next()
+				if !ok {
+					close(eventCh)
+					return
+				}
+				// Try to send event, but check cancellation frequently
+				select {
+				case eventCh <- event:
+				case <-ctx.Done():
+					close(eventCh)
+					return
+				}
+			}
+		}
+	}()
+
+	// Process events with cancellation support
+eventLoop:
 	for {
-		event, ok := iter.Next()
-		if !ok {
-			break
+		select {
+		case <-ctx.Done():
+			// Context was cancelled, return immediately with cancelled status
+			agentCancelled = true
+			break eventLoop
+		case event, ok := <-eventCh:
+			if !ok {
+				// Iterator finished, break out of loop
+				break eventLoop
+			}
+			// Process event and send progress
+			content := e.processEvent(event, stepIDGen, cb, &steps)
+			if content != "" {
+				finalResult = content
+			}
+		case <-done:
+			// Iterator goroutine finished
+			break eventLoop
 		}
+	}
 
-		// Process event and send progress
-		stepID := stepIDGen.Next()
-		content := e.processEvent(event, stepID, progress, &steps)
-		if content != "" {
-			finalResult = content
-		}
+	// 10. Handle cancellation
+	if agentCancelled || ctx.Err() == context.Canceled {
+		return &RunResult{Content: "", Steps: steps, Cancelled: true}, nil
 	}
 
 	if finalResult == "" {
@@ -217,12 +276,12 @@ func (e *Engine) buildMessageList(instruction string, attachmentPaths []Attachme
 	return msgs
 }
 
-// processEvent handles agent events and sends progress
+// processEvent handles agent events and sends SSE events via callback
 // Returns the message content if it's an assistant response
-func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress func(string, string, string), steps *[]StepRecord) string {
+func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator, cb *ProgressCallback, steps *[]StepRecord) string {
 	// Check for errors
 	if event.Err != nil {
-		progress(stepID, "error", event.Err.Error())
+		// Error during execution - no specific event, handled by caller
 		return ""
 	}
 
@@ -230,10 +289,79 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 	if event.Output != nil {
 		msgOutput := event.Output.MessageOutput
 
+		// Handle Tool role (tool result)
+		if msgOutput != nil && msgOutput.Role == schema.Tool {
+			// Tool result from MCP execution
+			// Get step_id from Message.ToolCallID
+			var stepID string
+			var output string
+			var errStr string
+
+			if msgOutput.Message != nil {
+				stepID = msgOutput.Message.ToolCallID
+				output = msgOutput.Message.Content
+			} else if msgOutput.ToolName != "" {
+				// Fallback: use ToolName if no ToolCallID
+				stepID = msgOutput.ToolName
+			}
+
+			if stepID == "" {
+				stepID = stepIDGen.Next()
+			}
+
+			// Send tool_result event
+			if cb.WriteToolResult != nil {
+				cb.WriteToolResult(stepID, output, errStr)
+			}
+
+			*steps = append(*steps, StepRecord{
+				StepID:       stepID,
+				Type:         "tool",
+				Name:         "tool_result",
+				Status:       StatusCompleted,
+				NestingLevel: 0,
+			})
+			return ""
+		}
+
+		// Handle Assistant role (LLM output)
 		if msgOutput != nil && msgOutput.Role == schema.Assistant {
-			// Handle streaming response
+			// Check for ToolCalls in Message (LLM wants to call tools)
+			if msgOutput.Message != nil && len(msgOutput.Message.ToolCalls) > 0 {
+				// Send tool_call events for each tool call request
+				for _, tc := range msgOutput.Message.ToolCalls {
+					// Parse arguments
+					arguments := make(map[string]interface{})
+					if tc.Function.Arguments != "" {
+						// Try to parse as JSON
+						if err := json.Unmarshal([]byte(tc.Function.Arguments), &arguments); err != nil {
+							// If not valid JSON, store as raw string
+							arguments["_raw"] = tc.Function.Arguments
+						}
+					}
+
+					if cb.WriteToolCall != nil {
+						cb.WriteToolCall(tc.ID, tc.Function.Name, arguments)
+					}
+
+					*steps = append(*steps, StepRecord{
+						StepID:       tc.ID,
+						Type:         "tool",
+						Name:         tc.Function.Name,
+						Status:       StatusRunning,
+						NestingLevel: 0,
+					})
+				}
+				return ""
+			}
+
+			// Handle streaming response (final message output)
 			if msgOutput.IsStreaming && msgOutput.MessageStream != nil {
-				// Read from stream using Recv()
+				// Send message_start before streaming
+				if cb.WriteMessageStart != nil {
+					cb.WriteMessageStart()
+				}
+
 				var content string
 				stream := msgOutput.MessageStream
 				for {
@@ -243,15 +371,23 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 					}
 					if msg != nil && msg.Content != "" {
 						content += msg.Content
-						progress(stepID, "progress", msg.Content)
+						if cb.WriteMessage != nil {
+							cb.WriteMessage(msg.Content)
+						}
 					}
 				}
 				stream.Close()
+
+				// Send message_end after streaming completes
+				if cb.WriteMessageEnd != nil {
+					cb.WriteMessageEnd()
+				}
+
 				if content != "" {
 					*steps = append(*steps, StepRecord{
-						StepID:       stepID,
-						Type:         "llm",
-						Name:         "model_response",
+						StepID:       stepIDGen.Next(),
+						Type:         "message",
+						Name:         "final_response",
 						Status:       StatusCompleted,
 						NestingLevel: 0,
 					})
@@ -263,11 +399,21 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 			if msgOutput.Message != nil {
 				msg := msgOutput.Message
 				if msg.Content != "" {
-					progress(stepID, "progress", msg.Content)
+					// Send message_start -> message -> message_end
+					if cb.WriteMessageStart != nil {
+						cb.WriteMessageStart()
+					}
+					if cb.WriteMessage != nil {
+						cb.WriteMessage(msg.Content)
+					}
+					if cb.WriteMessageEnd != nil {
+						cb.WriteMessageEnd()
+					}
+
 					*steps = append(*steps, StepRecord{
-						StepID:       stepID,
-						Type:         "llm",
-						Name:         "model_response",
+						StepID:       stepIDGen.Next(),
+						Type:         "message",
+						Name:         "final_response",
 						Status:       StatusCompleted,
 						NestingLevel: 0,
 					})
@@ -280,8 +426,7 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepID string, progress fun
 	// Process actions
 	if event.Action != nil {
 		if event.Action.Exit {
-			// Agent exited
-			progress(stepID, "exit", "任务完成")
+			// Agent exited normally - no specific event needed
 		}
 	}
 
@@ -298,8 +443,9 @@ func truncate(s string, maxLen int) string {
 
 // RunResult holds the result of agent run
 type RunResult struct {
-	Content string
-	Steps   []StepRecord
+	Content   string
+	Steps     []StepRecord
+	Cancelled bool
 }
 
 // StepIDGenerator generates step IDs
