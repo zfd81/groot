@@ -116,33 +116,10 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	e.runningTasks.Store(task.ID, true)
 	defer e.runningTasks.Delete(task.ID)
 
-	// Write started event
-	sse.WriteStarted()
-
-	// Generate step ID for attachment processing
-	stepIDGen := NewStepIDGenerator()
-
 	// Build attachment paths from already-processed attachments
 	// Note: Attachments are already processed by chat handler (Base64 decoded and saved)
 	var attachmentPaths []AttachmentPath
 	for _, att := range task.Attachments {
-		// Send step_start for each attachment (if any)
-		if att.Type == "file" || att.Type == "image" {
-			stepID := stepIDGen.Next()
-			sse.WriteToolCall(stepID, "file_read", map[string]interface{}{
-				"filename": att.Name,
-				"type":     att.Type,
-			})
-			sse.WriteToolResult(stepID, "processed", "")
-		} else if att.Type == "url" {
-			stepID := stepIDGen.Next()
-			sse.WriteToolCall(stepID, "url_fetch", map[string]interface{}{
-				"name": att.Name,
-				"url":  att.Content,
-			})
-			sse.WriteToolResult(stepID, "processed", "")
-		}
-
 		attachmentPaths = append(attachmentPaths, AttachmentPath{
 			OriginalName: att.Name,
 			Type:         att.Type,
