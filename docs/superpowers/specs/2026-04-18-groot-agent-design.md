@@ -317,72 +317,346 @@ llm:
 
 | 事件类型 | 发送频率 | 说明 |
 |---------|---------|------|
-| `intent` | 1次 | 对话开始，标记执行起点（首个事件） |
-| `step_start` | 多次 | 步骤开始（Skill/工具/LLM调用） |
-| `progress` | 多次 | 中间进度更新 |
-| `step_end` | 多次 | 步骤结束（含状态、时间戳） |
+| `started` | 1次 | 对话执行开始（整体开始信号） |
+| `thinking_start` | 多次 | 思考阶段开始 |
+| `thinking` | 多次 | 思考内容流式输出 |
+| `thinking_end` | 多次 | 思考阶段结束 |
+| `tool_call` | 多次 | 工具调用（name + arguments + step_id） |
+| `tool_result` | 多次 | 工具执行结果（step_id 匹配 tool_call） |
+| `message_start` | 1次 | 开始最终输出 |
+| `message` | 多次 | 最终回答流式输出 |
+| `message_end` | 1次 | 最终输出结束 |
 | `completed` | 1次 | 对话完成（含最终结果） |
 
 **事件顺序：**
 
 ```
-intent → step_start → progress → step_end → ... → completed
+started → [可选: thinking_start → thinking... → thinking_end] →
+[可选: tool_call → tool_result]* →
+[可选: thinking_start → thinking... → thinking_end] →
+message_start → message... → message_end →
+completed
+```
+
+**事件匹配规则：**
+
+| 开始事件 | 结束事件 | 匹配方式 |
+|---------|---------|---------|
+| `started` | `completed` | 自然匹配（整体唯一） |
+| `thinking_start` | `thinking_end` | **step_id 相同** |
+| `tool_call` | `tool_result` | **step_id 相同** |
+| `message_start` | `message_end` | 自然匹配（唯一输出阶段） |
+
+**事件可选性说明：**
+
+| 事件类型 | 是否必须 | 说明 |
+|---------|---------|------|
+| `started` | **必须** | 对话开始信号，始终发送 |
+| `thinking_start/end` | 可选 | 仅当 LLM 输出 thinking 内容时发送 |
+| `thinking` | 可选 | 仅当 LLM 输出 thinking 内容时发送 |
+| `tool_call/result` | 可选 | 仅当调用工具时发送 |
+| `message_start/end` | **必须** | 最终输出阶段，始终发送 |
+| `message` | **必须** | 最终回答内容，至少发送一次 |
+| `completed` | **必须** | 对话结束信号，始终发送 |
+
+**不同场景的事件流：**
+
+**场景1：纯 LLM 回答（无 thinking）：**
+```
+started → message_start → message → message → message_end → completed
+```
+
+**场景2：LLM 回答带 thinking：**
+```
+started → thinking_start → thinking → thinking → thinking_end → message_start → message → message_end → completed
+```
+
+**场景3：工具调用（无 thinking）：**
+```
+started → tool_call → tool_result → message_start → message → message_end → completed
+```
+
+**场景4：多轮工具调用带 thinking：**
+```
+started → thinking_start → thinking → thinking_end →
+tool_call → tool_result →
+thinking_start → thinking → thinking_end →
+message_start → message → message_end → completed
+```
+
+**场景5：并行工具调用：**
+```
+started → thinking_start → thinking → thinking_end →
+tool_call (step_id=a1) → tool_call (step_id=a2) →    ← 同时发起两个调用
+tool_result (step_id=a2) → tool_result (step_id=a1) → ← 按返回顺序，通过 step_id 匹配
+thinking_start → thinking → thinking_end →
+message_start → message → message_end → completed
 ```
 
 **SSE 事件结构：**
 
-**intent（对话开始）：**
-```json
-{"timestamp":"2026-04-18T10:30:00Z"}
-```
+---
 
-**step_start（步骤开始）：**
+### started（对话开始）
+
+整体执行开始信号，SSE 流的第一个事件。
+
 ```json
-{"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z","nesting_level":0}
+{
+  "session_id": "20260418103000523_a1b2",
+  "chat_id": "chat_20260418103000523",
+  "timestamp": "2026-04-18T10:30:00Z"
+}
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `type` | string | 是 | 执行类型：`skill` / `tool` / `llm` |
-| `name` | string | 是 | 名称（Skill名或工具名） |
-| `step_id` | string | 是 | 步骤编号（与 step_end 关联） |
-| `timestamp` | string | 是 | 时间戳（ISO格式） |
-| `nesting_level` | int | 否 | 嵌套层级（0=主，1=子） |
-| `params` | object | 否 | 参数（工具调用时） |
+| `session_id` | string | 是 | 会话ID，用于后续查询和继续对话 |
+| `chat_id` | string | 是 | 对话ID，用于查询本次对话详情 |
+| `timestamp` | string | 是 | 开始时间戳（ISO 8601格式） |
 
-**step_end（步骤结束）：**
+---
 
-成功：
+### thinking_start（开始思考）
+
+思考阶段开始，LLM 开始分析请求。
+
 ```json
-{"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:45Z","status":"success"}
+{
+  "step_id": "20260418-103000000-a1b2c3",
+  "timestamp": "2026-04-18T10:30:00Z"
+}
 ```
 
-失败：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `step_id` | string | 是 | 步骤唯一标识，用于匹配 `thinking_end` |
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+---
+
+### thinking（思考内容）
+
+LLM 思考过程的增量输出，可能多次发送。
+
 ```json
-{"step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05Z","status":"failed","error":{"code":"file_error","message":"文件不存在"}}
+{
+  "content": "我需要先读取PDF文件内容...",
+  "timestamp": "2026-04-18T10:30:01Z"
+}
 ```
 
-**progress（进度更新）：**
 ```json
-{"step_id":"20260418-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-18T10:30:10Z"}
+{
+  "content": "然后分析其中的财务数据...",
+  "timestamp": "2026-04-18T10:30:02Z"
+}
 ```
 
-**completed（对话完成）：**
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `content` | string | 是 | 思考内容增量片段，多次拼接为完整思考过程 |
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
 
-成功：
+---
+
+### thinking_end（思考结束）
+
+思考阶段结束，准备进入下一阶段。
+
 ```json
-{"status":"success","timestamp":"2026-04-18T10:30:45Z","duration":"45s","round":1,"result":{"document_type":"report","key_points":[...]}}
+{
+  "step_id": "20260418-103000000-a1b2c3",
+  "status": "success",
+  "timestamp": "2026-04-18T10:30:05Z"
+}
 ```
 
-失败：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `step_id` | string | 是 | 对应 `thinking_start` 的 step_id |
+| `status` | string | 是 | 状态：`success` |
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+---
+
+### tool_call（工具调用）
+
+LLM 决定调用工具，发送工具名称和参数。
+
 ```json
-{"status":"failed","timestamp":"2026-04-18T10:30:05Z","duration":"5s","round":1,"error":{"code":"skill_error","message":"执行失败"}}
+{
+  "step_id": "20260418-103005000-x9y8z7",
+  "name": "file_read",
+  "arguments": {
+    "path": "/home/groot/memory/20260418103000523_a1b2/attachments/report.pdf"
+  },
+  "timestamp": "2026-04-18T10:30:05Z"
+}
 ```
 
-取消：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `step_id` | string | 是 | 步骤唯一标识，用于匹配 `tool_result` |
+| `name` | string | 是 | 工具名称（如 `file_read`、`http_get`） |
+| `arguments` | object | 是 | 工具调用参数，结构由工具定义决定 |
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+---
+
+### tool_result（工具执行结果）
+
+工具执行完成后的输出结果，通过 `step_id` 与 `tool_call` 匹配。
+
 ```json
-{"status":"cancelled","timestamp":"2026-04-18T10:30:03Z","duration":"3s","round":1,"message":"用户主动取消"}
+{
+  "step_id": "20260418-103005000-x9y8z7",
+  "output": "PDF内容：财务报告2026Q3...",
+  "timestamp": "2026-04-18T10:30:10Z"
+}
 ```
+
+```json
+{
+  "step_id": "20260418-103006000-a2b3c4",
+  "error": "请求超时",
+  "timestamp": "2026-04-18T10:30:15Z"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `step_id` | string | 是 | 对应 `tool_call` 的 step_id |
+| `output` | string | 否 | 工具执行成功时的输出结果 |
+| `error` | string | 否 | 工具执行失败时的错误描述 |
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+**说明：** `output` 和 `error` 至少有一个，成功时 `output` 有值，失败时 `error` 有值。
+
+---
+
+### message_start（开始最终输出）
+
+最终答案输出开始。
+
+```json
+{
+  "timestamp": "2026-04-18T10:30:15Z"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+---
+
+### message（最终回答）
+
+最终答案的增量输出，可能多次发送。
+
+```json
+{
+  "content": "财务报告分析结果：\n\n",
+  "timestamp": "2026-04-18T10:30:16Z"
+}
+```
+
+```json
+{
+  "content": "1. 营业收入：同比增长15%",
+  "timestamp": "2026-04-18T10:30:17Z"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `content` | string | 是 | 最终答案增量片段，多次拼接为完整回答 |
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+---
+
+### message_end（最终输出结束）
+
+最终答案输出结束。
+
+```json
+{
+  "timestamp": "2026-04-18T10:30:45Z"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+
+---
+
+### completed（对话完成）
+
+整体执行结束信号，SSE 流的最后一个事件。
+
+**成功完成：**
+
+```json
+{
+  "status": "success",
+  "timestamp": "2026-04-18T10:30:45Z",
+  "duration": "45s",
+  "round": 1,
+  "chat_id": "chat_20260418103000523",
+  "result": "财务报告分析结果：\n1. 营业收入：同比增长15%\n2. 净利润：同比增长20%"
+}
+```
+
+**执行失败：**
+
+```json
+{
+  "status": "failed",
+  "timestamp": "2026-04-18T10:30:05Z",
+  "duration": "5s",
+  "round": 1,
+  "chat_id": "chat_20260418103000523",
+  "error": {
+    "code": "execution_error",
+    "message": "PDF文件已损坏，无法解析"
+  }
+}
+```
+
+**用户取消：**
+
+```json
+{
+  "status": "cancelled",
+  "timestamp": "2026-04-18T10:30:03Z",
+  "duration": "3s",
+  "round": 1,
+  "chat_id": "chat_20260418103000523",
+  "message": "用户主动取消"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `status` | string | 是 | 最终状态：`success`、`failed`、`cancelled` |
+| `timestamp` | string | 是 | 结束时间戳（ISO 8601格式） |
+| `duration` | string | 是 | 执行耗时（如 `45s`、`1m30s`） |
+| `round` | int | 是 | 对话轮次（新会话为1，继续会话递增） |
+| `chat_id` | string | 是 | 对话ID，用于查询详情 |
+| `result` | string | 条件 | 成功时的最终结果（status=success 时有） |
+| `error` | object | 条件 | 失败时的错误信息（status=failed 时必填） |
+| `message` | string | 条件 | 取消时的说明（status=cancelled 时有） |
+
+**error 对象结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | string | 错误码，如 `llm_error`、`tool_error`、`execution_error` |
+| `message` | string | 错误详细描述 |
+
+---
 
 **完整处理流程：**
 
@@ -459,9 +733,9 @@ intent → step_start → progress → step_end → ... → completed
 │   ├─ 处理失败 → SSE 推送 error，跳转到步骤8清理，终止
 │   └─ 处理成功 → 继续
 │
-├─ 6. SSE 推送 intent 事件
-│   └─ {"timestamp":"开始时间"}
-│   （表示准备工作完成，Agent 开始执行，首个事件）
+├─ 6. SSE 推送 started 事件
+│   └─ {"session_id":"xxx","chat_id":"xxx","timestamp":"开始时间"}
+│   （表示准备工作完成，Agent 执行正式启动，首个事件，**必须发送**）
 │
 ├─ 7. 构建 Agent 上下文
 │   ├─ 系统提示词（prompt + Skills 指令）
@@ -478,28 +752,55 @@ intent → step_start → progress → step_end → ... → completed
 │
 ├─ 8. ReAct 执行循环
 │   │
-│   ├─ Reasoning（思考）
-│   │   LLM 分析当前状态（含历史上下文），决定下一步动作
+│   ├─ Thinking（思考阶段）【可选】
+│   │   │
+│   │   ├─ 仅当 LLM 输出 thinking 内容时执行
+│   │   │
+│   │   ├─ thinking_start：开始思考
+│   │   │   ├─ SSE 推送事件（step_id）
+│   │   │   └─ 记录 step_id
+│   │   │
+│   │   ├─ thinking：流式输出思考内容
+│   │   │   ├─ SSE 推送事件（content 增量）
+│   │   │   ├─ LLM 分析当前状态，决定下一步动作
+│   │   │   └─ 多次发送
+│   │   │
+│   │   └─ thinking_end：思考结束
+│   │       ├─ SSE 推送事件（step_id, status）
+│   │       └─ 进入下一阶段（工具调用/直接输出）
 │   │
-│   ├─ Acting（执行）
-│   │   ├─ 调用 MCP 工具（如 file_read 读取附件）
-│   │   ├─ 调用 Skill
-│   │   └─ 直接生成回答
+│   ├─ Tool（工具调用阶段）【可选】
+│   │   │
+│   │   ├─ 仅当 Agent 决定调用工具时执行
+│   │   │
+│   │   ├─ tool_call：工具调用请求
+│   │   │   ├─ SSE 推送事件（step_id, name, arguments）
+│   │   │   └─ 执行 MCP 工具调用
+│   │   │
+│   │   └─ tool_result：工具执行结果
+│   │       ├─ SSE 推送事件（step_id, output/error）
+│   │       └─ 更新上下文，继续循环或结束
 │   │
-│   ├─ Observation（观察）
-│   │   获取执行结果，更新上下文
-│   │
-│   ├─ SSE 推送进度事件
-│   │   ├─ step_start：步骤开始
-│   │   ├─ progress：进度更新
-│   │   ├─ step_end：步骤结束
+│   ├─ Message（最终输出阶段）【必须】
+│   │   │
+│   │   ├─ message_start：开始输出（必须发送）
+│   │   │   ├─ SSE 推送事件
+│   │   │   └─ 开始生成最终回答
+│   │   │
+│   │   ├─ message：流式输出内容（至少发送一次）
+│   │   │   ├─ LLM 生成最终答案
+│   │   │   └─ SSE 流式推送内容
+│   │   │
+│   │   └─ message_end：输出结束（必须发送）
+│   │       ├─ SSE 推送事件
+│   │       └─ 准备完成
 │   │
 │   └─ 检查终止条件
-│       ├─ Agent 判断完成 → 结束循环
-│       ├─ 达到 max_iterations → 终止
-│       ├─ Token 消耗超限 → 终止
-│       ├─ 单步执行超时（step_timeout） → 终止
-│       ├─ 用户取消 → 终止
+│       ├─ Agent 判断完成 → 推送 completed 事件，结束
+│       ├─ 达到最大循环次数 → 推送 completed 事件，终止
+│       ├─ Token 消耗超限 → 推送 completed 事件，终止
+│       ├─ 单步失败 → Agent 判断是否重试或终止
+│       ├─ 用户取消 → 推送 completed (cancelled) 事件，终止
 │       └─ 继续循环
 │
 ├─ 9. 对话完成处理
@@ -623,7 +924,15 @@ intent → step_start → progress → step_end → ... → completed
 | 会话处理 | 判断新建或继续会话，检查并发 | 返回 409（并发冲突）或继续 |
 | RuntimeState.Register | 注册活跃对话状态 | - |
 | 附件处理 | 解码并存储到 memory 目录 | SSE 推送 error，终止 |
-| ReAct 执行 | Agent 自主执行（带历史上下文） | 推送 error 事件，终止 |
+| SSE started | 对话执行开始（整体开始信号） | - |
+| SSE thinking_start | 思考阶段开始（可选） | - |
+| SSE thinking | 流式输出思考内容 | 推送 error 事件，终止 |
+| SSE thinking_end | 思考阶段结束 | - |
+| SSE tool_call | 工具调用请求 | - |
+| SSE tool_result | 工具执行结果 | 推送 error 事件，终止 |
+| SSE message_start | 开始最终输出 | - |
+| SSE message | 流式输出最终回答 | 推送 error 事件，终止 |
+| SSE message_end | 最终输出结束 | - |
 | RuntimeState.Complete | 移除活跃状态，生成执行记录 | - |
 | Memory.SaveChatRecord | 保存详细执行记录 | 日志记录错误，不影响响应 |
 | Memory.AppendMessage | 更新 history.json | 日志记录错误，不影响响应 |
@@ -713,104 +1022,178 @@ X-API-Key: groot-api-key-2026abc
 
 **SSE 响应事件流示例：**
 
-**新会话执行（成功）：**
+**场景1：新会话执行（带 thinking 和工具调用）：**
 
 ```
 HTTP Header: 
   X-Session-ID: 20260418103000523_a1b2
   X-Chat-ID: chat_20260418103000523
 
-event: intent
-data: {"timestamp":"2026-04-18T10:30:00Z"}
+event: started
+data: {"session_id":"20260418103000523_a1b2","chat_id":"chat_20260418103000523","timestamp":"2026-04-18T10:30:00Z"}
 
-event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z","nesting_level":0}
+event: thinking_start
+data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z"}
 
-event: progress
-data: {"step_id":"20260418-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-18T10:30:05Z"}
+event: thinking
+data: {"content":"我需要先读取PDF文件...","timestamp":"2026-04-18T10:30:01Z"}
 
-event: step_start
-data: {"type":"tool","name":"file_read","step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05Z","params":{"path":"memory/20260418103000523_a1b2/attachments/report.pdf"}}
+event: thinking
+data: {"content":"使用 file_read 工具...","timestamp":"2026-04-18T10:30:02Z"}
 
-event: step_end
-data: {"step_id":"20260418-103005000-x9y8z7","timestamp":"2026-04-18T10:30:05.2Z","status":"success"}
+event: thinking_end
+data: {"step_id":"20260418-103000000-a1b2c3","status":"success","timestamp":"2026-04-18T10:30:03Z"}
 
-event: progress
-data: {"step_id":"20260418-103000000-a1b2c3","message":"正在生成摘要...","timestamp":"2026-04-18T10:30:20Z"}
+event: tool_call
+data: {"step_id":"20260418-103005000-x9y8z7","name":"file_read","arguments":{"path":"memory/20260418103000523_a1b2/attachments/report.pdf"},"timestamp":"2026-04-18T10:30:03Z"}
 
-event: step_end
-data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:45Z","status":"success"}
+event: tool_result
+data: {"step_id":"20260418-103005000-x9y8z7","output":"PDF内容：财务报告2026Q3...","timestamp":"2026-04-18T10:30:05Z"}
+
+event: thinking_start
+data: {"step_id":"20260418-103010000-b3c4d5","timestamp":"2026-04-18T10:30:05Z"}
+
+event: thinking
+data: {"content":"根据PDF内容，我需要提取关键财务指标...","timestamp":"2026-04-18T10:30:06Z"}
+
+event: thinking_end
+data: {"step_id":"20260418-103010000-b3c4d5","status":"success","timestamp":"2026-04-18T10:30:10Z"}
+
+event: message_start
+data: {"timestamp":"2026-04-18T10:30:10Z"}
+
+event: message
+data: {"content":"财务报告分析结果：","timestamp":"2026-04-18T10:30:11Z"}
+
+event: message
+data: {"content":"\n\n1. 营业收入：增长15%","timestamp":"2026-04-18T10:30:12Z"}
+
+event: message
+data: {"content":"\n2. 净利润：增长20%","timestamp":"2026-04-18T10:30:13Z"}
+
+event: message
+data: {"content":"\n3. 关键风险：市场竞争加剧","timestamp":"2026-04-18T10:30:14Z"}
+
+event: message_end
+data: {"timestamp":"2026-04-18T10:30:15Z"}
 
 event: completed
-data: {"status":"success","timestamp":"2026-04-18T10:30:45Z","duration":"45s","round":1,"result":{"document_type":"report","key_points":[...],"summary":"..."}}
+data: {"status":"success","timestamp":"2026-04-18T10:30:15Z","duration":"15s","round":1,"chat_id":"chat_20260418103000523","result":"财务报告分析结果..."}
 ```
 
-**继续会话执行（成功）：**
+**场景2：继续会话（带 thinking，无工具调用）：**
 
 ```
 HTTP Header:
   X-Session-ID: 20260418103000523_a1b2
   X-Chat-ID: chat_20260418103500123
 
-event: intent
-data: {"timestamp":"2026-04-18T10:35:00Z"}
+event: started
+data: {"session_id":"20260418103000523_a1b2","chat_id":"chat_20260418103500123","timestamp":"2026-04-18T10:35:00Z"}
 
-event: step_start
-data: {"type":"llm","name":"response","step_id":"20260418-103500000-d4e5f6","timestamp":"2026-04-18T10:35:00Z","nesting_level":0}
+event: thinking_start
+data: {"step_id":"20260418-103500000-d4e5f6","timestamp":"2026-04-18T10:35:00Z"}
 
-event: progress
-data: {"step_id":"20260418-103500000-d4e5f6","message":"根据历史分析生成报告...","timestamp":"2026-04-18T10:35:10Z"}
+event: thinking
+data: {"content":"根据历史分析...","timestamp":"2026-04-18T10:35:01Z"}
 
-event: step_end
-data: {"step_id":"20260418-103500000-d4e5f6","timestamp":"2026-04-18T10:35:30Z","status":"success"}
+event: thinking_end
+data: {"step_id":"20260418-103500000-d4e5f6","status":"success","timestamp":"2026-04-18T10:35:02Z"}
+
+event: message_start
+data: {"timestamp":"2026-04-18T10:35:02Z"}
+
+event: message
+data: {"content":"根据之前的分析，我建议...","timestamp":"2026-04-18T10:35:03Z"}
+
+event: message
+data: {"content":"关注以下几个要点...","timestamp":"2026-04-18T10:35:04Z"}
+
+event: message_end
+data: {"timestamp":"2026-04-18T10:35:30Z"}
 
 event: completed
-data: {"status":"success","timestamp":"2026-04-18T10:35:30Z","duration":"30s","round":2,"result":{"report":"总结报告内容..."}}
+data: {"status":"success","timestamp":"2026-04-18T10:35:30Z","duration":"30s","round":2,"chat_id":"chat_20260418103500123","result":"根据之前的分析..."}
 ```
 
-**失败执行：**
+**场景3：纯 LLM 回答（无 thinking，无工具）：**
+
+```
+HTTP Header:
+  X-Session-ID: 20260418103000523_a1b2
+  X-Chat-ID: chat_20260418104000123
+
+event: started
+data: {"session_id":"20260418103000523_a1b2","chat_id":"chat_20260418104000123","timestamp":"2026-04-18T10:40:00Z"}
+
+event: message_start
+data: {"timestamp":"2026-04-18T10:40:00Z"}
+
+event: message
+data: {"content":"好的，我来帮你...","timestamp":"2026-04-18T10:40:01Z"}
+
+event: message
+data: {"content":"这是一个简单的问题...","timestamp":"2026-04-18T10:40:02Z"}
+
+event: message_end
+data: {"timestamp":"2026-04-18T10:40:10Z"}
+
+event: completed
+data: {"status":"success","timestamp":"2026-04-18T10:40:10Z","duration":"10s","round":3,"chat_id":"chat_20260418104000123","result":"好的，我来帮你..."}
+```
+
+**场景4：工具调用失败：**
 
 ```
 HTTP Header:
   X-Session-ID: 20260418103000523_a1b2
   X-Chat-ID: chat_20260418103000523
 
-event: intent
-data: {"timestamp":"2026-04-18T10:30:00Z"}
+event: started
+data: {"session_id":"20260418103000523_a1b2","chat_id":"chat_20260418103000523","timestamp":"2026-04-18T10:30:00Z"}
 
-event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z","nesting_level":0}
+event: thinking_start
+data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z"}
 
-event: progress
-data: {"step_id":"20260418-103000000-a1b2c3","message":"正在读取PDF...","timestamp":"2026-04-18T10:30:02Z"}
+event: thinking
+data: {"content":"我需要读取PDF文件...","timestamp":"2026-04-18T10:30:01Z"}
 
-event: step_end
-data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:05Z","status":"failed","error":{"code":"file_error","message":"PDF文件已损坏"}}
+event: thinking_end
+data: {"step_id":"20260418-103000000-a1b2c3","status":"success","timestamp":"2026-04-18T10:30:02Z"}
+
+event: tool_call
+data: {"step_id":"20260418-103005000-x9y8z7","name":"file_read","arguments":{"path":"memory/.../report.pdf"},"timestamp":"2026-04-18T10:30:02Z"}
+
+event: tool_result
+data: {"step_id":"20260418-103005000-x9y8z7","error":"PDF文件已损坏","timestamp":"2026-04-18T10:30:05Z"}
 
 event: completed
-data: {"status":"failed","timestamp":"2026-04-18T10:30:05Z","duration":"5s","round":1,"error":{"code":"skill_error","message":"pdf_analyzer执行失败"}}
+data: {"status":"failed","timestamp":"2026-04-18T10:30:05Z","duration":"5s","round":1,"chat_id":"chat_20260418103000523","error":{"code":"execution_error","message":"PDF文件已损坏"}}
 ```
 
-**取消执行：**
+**场景5：用户取消执行：**
 
 ```
 HTTP Header:
   X-Session-ID: 20260418103000523_a1b2
   X-Chat-ID: chat_20260418103000523
 
-event: intent
-data: {"timestamp":"2026-04-18T10:30:00Z"}
+event: started
+data: {"session_id":"20260418103000523_a1b2","chat_id":"chat_20260418103000523","timestamp":"2026-04-18T10:30:00Z"}
 
-event: step_start
-data: {"type":"skill","name":"pdf_analyzer","step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z"}
+event: thinking_start
+data: {"step_id":"20260418-103000000-a1b2c3","timestamp":"2026-04-18T10:30:00Z"}
 
-event: progress
-data: {"step_id":"20260418-103000000-a1b2c3","message":"正在处理...","timestamp":"2026-04-18T10:30:10Z"}
+event: thinking
+data: {"content":"正在处理...","timestamp":"2026-04-18T10:30:01Z"}
+
+event: thinking
+data: {"content":"调用工具...","timestamp":"2026-04-18T10:30:10Z"}
 
 （用户发送 DELETE /chat/20260418103000523_a1b2）
 
 event: completed
-data: {"status":"cancelled","timestamp":"2026-04-18T10:30:12Z","duration":"12s","round":1,"message":"用户主动取消"}
+data: {"status":"cancelled","timestamp":"2026-04-18T10:30:12Z","duration":"12s","round":1,"chat_id":"chat_20260418103000523","message":"用户主动取消"}
 ```
 
 #### 3.1.3 DELETE /chat/{sid}
