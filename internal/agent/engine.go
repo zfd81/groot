@@ -292,37 +292,47 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 		// Handle Tool role (tool result)
 		if msgOutput != nil && msgOutput.Role == schema.Tool {
 			// Tool result from MCP execution
-			// Get step_id from Message.ToolCallID
+			// Get step_id and tool_name
 			var stepID string
 			var output string
 			var errStr string
+			var toolName string
 
 			if msgOutput.Message != nil {
 				stepID = msgOutput.Message.ToolCallID
 				output = msgOutput.Message.Content
-			} else if msgOutput.ToolName != "" {
-				// Fallback: use ToolName if no ToolCallID
-				stepID = msgOutput.ToolName
+			}
+			if msgOutput.ToolName != "" {
+				toolName = msgOutput.ToolName
 			}
 
 			if stepID == "" {
 				stepID = stepIDGen.Next()
 			}
 
-			// Send tool_result event
+			// First send tool_call event (to match tool_result)
+			// Note: eino may not send Assistant event with ToolCalls before Tool result
+			// So we send tool_call here based on ToolName
+			if toolName != "" && cb.WriteToolCall != nil {
+				if err := cb.WriteToolCall(stepID, toolName, nil); err != nil {
+					e.log.Error("SSE write tool_call failed: " + err.Error())
+				}
+				*steps = append(*steps, StepRecord{
+					StepID:       stepID,
+					Type:         "tool",
+					Name:         toolName,
+					Status:       StatusCompleted,
+					NestingLevel: 0,
+				})
+			}
+
+			// Then send tool_result event
 			if cb.WriteToolResult != nil {
 				if err := cb.WriteToolResult(stepID, output, errStr); err != nil {
 					e.log.Error("SSE write tool_result failed: " + err.Error())
 				}
 			}
 
-			*steps = append(*steps, StepRecord{
-				StepID:       stepID,
-				Type:         "tool",
-				Name:         "tool_result",
-				Status:       StatusCompleted,
-				NestingLevel: 0,
-			})
 			return ""
 		}
 
@@ -359,15 +369,10 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 				return ""
 			}
 
-			// Handle streaming response (final message output)
+			// Handle streaming response
+			// If there are ToolCalls after streaming, this is thinking phase
+			// Otherwise, this is final message output
 			if msgOutput.IsStreaming && msgOutput.MessageStream != nil {
-				// Send message_start before streaming
-				if cb.WriteMessageStart != nil {
-					if err := cb.WriteMessageStart(); err != nil {
-						e.log.Error("SSE write message_start failed: " + err.Error())
-					}
-				}
-
 				var content string
 				stream := msgOutput.MessageStream
 				for {
@@ -377,27 +382,37 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 					}
 					if msg != nil && msg.Content != "" {
 						content += msg.Content
-						if cb.WriteMessage != nil {
-							if err := cb.WriteMessage(msg.Content); err != nil {
-								e.log.Error("SSE write message failed: " + err.Error())
-							}
-						}
 					}
 				}
 				stream.Close()
 
-				// Send message_end after streaming completes
-				if cb.WriteMessageEnd != nil {
-					if err := cb.WriteMessageEnd(); err != nil {
-						e.log.Error("SSE write message_end failed: " + err.Error())
-					}
-				}
-
+				// Only send events if there's actual content
 				if content != "" {
+					// Check if this event has ToolCalls (thinking phase)
+					// or is final output (message phase)
+					// Note: ToolCalls might come in a separate event after streaming
+					// So we treat all streaming content as message for now
+					// Future improvement: detect thinking vs message based on context
+					if cb.WriteMessageStart != nil {
+						if err := cb.WriteMessageStart(); err != nil {
+							e.log.Error("SSE write message_start failed: " + err.Error())
+						}
+					}
+					if cb.WriteMessage != nil {
+						if err := cb.WriteMessage(content); err != nil {
+							e.log.Error("SSE write message failed: " + err.Error())
+						}
+					}
+					if cb.WriteMessageEnd != nil {
+						if err := cb.WriteMessageEnd(); err != nil {
+							e.log.Error("SSE write message_end failed: " + err.Error())
+						}
+					}
+
 					*steps = append(*steps, StepRecord{
 						StepID:       stepIDGen.Next(),
 						Type:         "message",
-						Name:         "final_response",
+						Name:         "streaming_response",
 						Status:       StatusCompleted,
 						NestingLevel: 0,
 					})
