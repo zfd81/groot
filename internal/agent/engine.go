@@ -281,18 +281,28 @@ func (e *Engine) buildMessageList(instruction string, attachmentPaths []Attachme
 func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator, cb *ProgressCallback, steps *[]StepRecord) string {
 	// Check for errors
 	if event.Err != nil {
-		// Error during execution - no specific event, handled by caller
+		e.log.Error("Agent event error: " + event.Err.Error())
 		return ""
+	}
+
+	// Info level logging for event processing (visible in production)
+	if event.Output != nil && event.Output.MessageOutput != nil {
+		msgOutput := event.Output.MessageOutput
+		e.log.Info(fmt.Sprintf("Event: Role=%s, IsStreaming=%v, HasMessage=%v, HasStream=%v, ToolCalls=%d",
+			string(msgOutput.Role), msgOutput.IsStreaming,
+			msgOutput.Message != nil, msgOutput.MessageStream != nil,
+			len(msgOutput.Message.ToolCalls)))
 	}
 
 	// Process output
 	if event.Output != nil {
 		msgOutput := event.Output.MessageOutput
 
-		// Handle Tool role (tool result)
+		// Handle Tool role (tool result from MCP execution)
 		if msgOutput != nil && msgOutput.Role == schema.Tool {
+			e.log.Info("Tool role event: processing tool result")
+
 			// Tool result from MCP execution
-			// Get step_id and tool_name
 			var stepID string
 			var output string
 			var errStr string
@@ -310,10 +320,12 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 				stepID = stepIDGen.Next()
 			}
 
-			// First send tool_call event (to match tool_result)
-			// Note: eino may not send Assistant event with ToolCalls before Tool result
-			// So we send tool_call here based on ToolName
+			e.log.Info(fmt.Sprintf("Tool result: toolName=%s, stepID=%s, outputLen=%d", toolName, stepID, len(output)))
+
+			// IMPORTANT: First send tool_call event BEFORE tool_result
+			// This ensures proper event ordering: thinking_start → thinking → thinking_end → tool_call → tool_result
 			if toolName != "" && cb.WriteToolCall != nil {
+				e.log.Info(fmt.Sprintf("Sending tool_call event: stepID=%s, toolName=%s", stepID, toolName))
 				if err := cb.WriteToolCall(stepID, toolName, nil); err != nil {
 					e.log.Error("SSE write tool_call failed: " + err.Error())
 				}
@@ -321,15 +333,23 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 					StepID:       stepID,
 					Type:         "tool",
 					Name:         toolName,
-					Status:       StatusCompleted,
+					Status:       StatusRunning,
 					NestingLevel: 0,
 				})
 			}
 
 			// Then send tool_result event
 			if cb.WriteToolResult != nil {
+				e.log.Info(fmt.Sprintf("Sending tool_result event: stepID=%s", stepID))
 				if err := cb.WriteToolResult(stepID, output, errStr); err != nil {
 					e.log.Error("SSE write tool_result failed: " + err.Error())
+				}
+			}
+
+			// Update step status to completed
+			for i := range *steps {
+				if (*steps)[i].StepID == stepID {
+					(*steps)[i].Status = StatusCompleted
 				}
 			}
 
@@ -338,41 +358,16 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 
 		// Handle Assistant role (LLM output)
 		if msgOutput != nil && msgOutput.Role == schema.Assistant {
-			// Check for ToolCalls in Message (LLM wants to call tools)
-			if msgOutput.Message != nil && len(msgOutput.Message.ToolCalls) > 0 {
-				// Send tool_call events for each tool call request
-				for _, tc := range msgOutput.Message.ToolCalls {
-					// Parse arguments
-					arguments := make(map[string]interface{})
-					if tc.Function.Arguments != "" {
-						// Try to parse as JSON
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &arguments); err != nil {
-							// If not valid JSON, store as raw string
-							arguments["_raw"] = tc.Function.Arguments
-						}
-					}
+			e.log.Info("Assistant role event: processing LLM output")
 
-					if cb.WriteToolCall != nil {
-						if err := cb.WriteToolCall(tc.ID, tc.Function.Name, arguments); err != nil {
-							e.log.Error("SSE write tool_call failed: " + err.Error())
-						}
-					}
+			// Check for ToolCalls - indicates thinking phase (will call tools)
+			hasToolCalls := msgOutput.Message != nil && len(msgOutput.Message.ToolCalls) > 0
 
-					*steps = append(*steps, StepRecord{
-						StepID:       tc.ID,
-						Type:         "tool",
-						Name:         tc.Function.Name,
-						Status:       StatusRunning,
-						NestingLevel: 0,
-					})
-				}
-				return ""
-			}
-
-			// Handle streaming response
-			// If there are ToolCalls after streaming, this is thinking phase
-			// Otherwise, this is final message output
+			// Handle streaming response - TRUE streaming: send each chunk immediately
 			if msgOutput.IsStreaming && msgOutput.MessageStream != nil {
+				e.log.Info(fmt.Sprintf("Streaming response: hasToolCalls=%v", hasToolCalls))
+
+				// KEY: Read all content FIRST before deciding event type
 				var content string
 				stream := msgOutput.MessageStream
 				for {
@@ -386,19 +381,75 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 				}
 				stream.Close()
 
-				// Only send events if there's actual content
-				if content != "" {
-					// Check if this event has ToolCalls (thinking phase)
-					// or is final output (message phase)
-					// Note: ToolCalls might come in a separate event after streaming
-					// So we treat all streaming content as message for now
-					// Future improvement: detect thinking vs message based on context
+				e.log.Info(fmt.Sprintf("Streaming complete: contentLen=%d, hasToolCalls=%v", len(content), hasToolCalls))
+
+				// KEY LOGIC: Determine event type based on content AND ToolCalls
+				// - Empty content → thinking (next event will be tool call)
+				// - Non-empty content with ToolCalls → thinking (will call tools)
+				// - Non-empty content without ToolCalls → message (final output)
+				isThinking := len(content) == 0 || hasToolCalls
+				stepID := stepIDGen.Next()
+
+				if isThinking {
+					// Thinking phase - send thinking_start/thinking/thinking_end
+					e.log.Info(fmt.Sprintf("Sending thinking events: stepID=%s, contentLen=%d", stepID, len(content)))
+					if cb.WriteThinkingStart != nil {
+						if err := cb.WriteThinkingStart(stepID); err != nil {
+							e.log.Error("SSE write thinking_start failed: " + err.Error())
+						}
+					}
+					if content != "" && cb.WriteThinking != nil {
+						if err := cb.WriteThinking(content); err != nil {
+							e.log.Error("SSE write thinking failed: " + err.Error())
+						}
+					}
+					if cb.WriteThinkingEnd != nil {
+						if err := cb.WriteThinkingEnd(stepID, "success"); err != nil {
+							e.log.Error("SSE write thinking_end failed: " + err.Error())
+						}
+					}
+					*steps = append(*steps, StepRecord{
+						StepID:       stepID,
+						Type:         "thinking",
+						Name:         "reasoning",
+						Status:       StatusCompleted,
+						NestingLevel: 0,
+					})
+
+					// Send tool_calls if present in this event
+					if hasToolCalls {
+						for _, tc := range msgOutput.Message.ToolCalls {
+							arguments := make(map[string]interface{})
+							if tc.Function.Arguments != "" {
+								if err := json.Unmarshal([]byte(tc.Function.Arguments), &arguments); err != nil {
+									arguments["_raw"] = tc.Function.Arguments
+								}
+							}
+							e.log.Info(fmt.Sprintf("Sending tool_call from streaming: id=%s, name=%s", tc.ID, tc.Function.Name))
+							if cb.WriteToolCall != nil {
+								if err := cb.WriteToolCall(tc.ID, tc.Function.Name, arguments); err != nil {
+									e.log.Error("SSE write tool_call failed: " + err.Error())
+								}
+							}
+							*steps = append(*steps, StepRecord{
+								StepID:       tc.ID,
+								Type:         "tool",
+								Name:         tc.Function.Name,
+								Status:       StatusRunning,
+								NestingLevel: 0,
+							})
+						}
+					}
+					return ""
+				} else {
+					// Message phase - final output
+					e.log.Info("Sending message events")
 					if cb.WriteMessageStart != nil {
 						if err := cb.WriteMessageStart(); err != nil {
 							e.log.Error("SSE write message_start failed: " + err.Error())
 						}
 					}
-					if cb.WriteMessage != nil {
+					if content != "" && cb.WriteMessage != nil {
 						if err := cb.WriteMessage(content); err != nil {
 							e.log.Error("SSE write message failed: " + err.Error())
 						}
@@ -408,11 +459,10 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 							e.log.Error("SSE write message_end failed: " + err.Error())
 						}
 					}
-
 					*steps = append(*steps, StepRecord{
 						StepID:       stepIDGen.Next(),
 						Type:         "message",
-						Name:         "streaming_response",
+						Name:         "final_response",
 						Status:       StatusCompleted,
 						NestingLevel: 0,
 					})
@@ -423,8 +473,66 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 			// Handle non-streaming response
 			if msgOutput.Message != nil {
 				msg := msgOutput.Message
+				hasToolCalls = len(msg.ToolCalls) > 0
+
+				e.log.Info(fmt.Sprintf("Non-streaming: ContentLen=%d, ToolCalls=%d", len(msg.Content), len(msg.ToolCalls)))
+
 				if msg.Content != "" {
-					// Send message_start -> message -> message_end
+					// Determine if thinking or message
+					if hasToolCalls {
+						// Thinking phase - content followed by tool calls
+						stepID := stepIDGen.Next()
+						e.log.Info(fmt.Sprintf("Sending thinking (has ToolCalls): stepID=%s", stepID))
+						if cb.WriteThinkingStart != nil {
+							if err := cb.WriteThinkingStart(stepID); err != nil {
+								e.log.Error("SSE write thinking_start failed: " + err.Error())
+							}
+						}
+						if cb.WriteThinking != nil {
+							if err := cb.WriteThinking(msg.Content); err != nil {
+								e.log.Error("SSE write thinking failed: " + err.Error())
+							}
+						}
+						if cb.WriteThinkingEnd != nil {
+							if err := cb.WriteThinkingEnd(stepID, "success"); err != nil {
+								e.log.Error("SSE write thinking_end failed: " + err.Error())
+							}
+						}
+						*steps = append(*steps, StepRecord{
+							StepID:       stepID,
+							Type:         "thinking",
+							Name:         "reasoning",
+							Status:       StatusCompleted,
+							NestingLevel: 0,
+						})
+
+						// Send tool_calls
+						for _, tc := range msg.ToolCalls {
+							arguments := make(map[string]interface{})
+							if tc.Function.Arguments != "" {
+								if err := json.Unmarshal([]byte(tc.Function.Arguments), &arguments); err != nil {
+									arguments["_raw"] = tc.Function.Arguments
+								}
+							}
+							e.log.Info(fmt.Sprintf("Sending tool_call: id=%s, name=%s", tc.ID, tc.Function.Name))
+							if cb.WriteToolCall != nil {
+								if err := cb.WriteToolCall(tc.ID, tc.Function.Name, arguments); err != nil {
+									e.log.Error("SSE write tool_call failed: " + err.Error())
+								}
+							}
+							*steps = append(*steps, StepRecord{
+								StepID:       tc.ID,
+								Type:         "tool",
+								Name:         tc.Function.Name,
+								Status:       StatusRunning,
+								NestingLevel: 0,
+							})
+						}
+						return ""
+					}
+
+					// No ToolCalls - final message output
+					e.log.Info("Sending message (no ToolCalls)")
 					if cb.WriteMessageStart != nil {
 						if err := cb.WriteMessageStart(); err != nil {
 							e.log.Error("SSE write message_start failed: " + err.Error())
@@ -450,6 +558,33 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 					})
 					return msg.Content
 				}
+
+				// No content but has ToolCalls
+				if hasToolCalls {
+					e.log.Info("No content but has ToolCalls")
+					for _, tc := range msg.ToolCalls {
+						arguments := make(map[string]interface{})
+						if tc.Function.Arguments != "" {
+							if err := json.Unmarshal([]byte(tc.Function.Arguments), &arguments); err != nil {
+								arguments["_raw"] = tc.Function.Arguments
+							}
+						}
+						e.log.Info(fmt.Sprintf("Sending tool_call (no content): id=%s, name=%s", tc.ID, tc.Function.Name))
+						if cb.WriteToolCall != nil {
+							if err := cb.WriteToolCall(tc.ID, tc.Function.Name, arguments); err != nil {
+								e.log.Error("SSE write tool_call failed: " + err.Error())
+							}
+						}
+						*steps = append(*steps, StepRecord{
+							StepID:       tc.ID,
+							Type:         "tool",
+							Name:         tc.Function.Name,
+							Status:       StatusRunning,
+							NestingLevel: 0,
+						})
+					}
+					return ""
+				}
 			}
 		}
 	}
@@ -457,7 +592,7 @@ func (e *Engine) processEvent(event *adk.AgentEvent, stepIDGen *StepIDGenerator,
 	// Process actions
 	if event.Action != nil {
 		if event.Action.Exit {
-			// Agent exited normally - no specific event needed
+			e.log.Info("Agent exit action detected")
 		}
 	}
 
