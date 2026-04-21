@@ -40,6 +40,7 @@ type Task struct {
 	Progress        *ProgressInfo
 	Round           int
 	HistoryMessages []memory.Message
+	ModelName       string
 }
 
 // TaskError represents task error
@@ -159,6 +160,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		task.Prompt,
 		attachmentPaths,
 		task.HistoryMessages,
+		task.ModelName,
 		&ProgressCallback{
 			WriteThinking: func(content string) error {
 				select {
