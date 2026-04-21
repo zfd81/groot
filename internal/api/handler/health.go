@@ -63,7 +63,7 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		Checks: map[string]types.CheckInfo{
 			"llm": {
 				Status: "healthy",
-				Info:   map[string]string{"model": h.config.LLM.ActiveModel},
+				Info:   map[string]string{"model": h.config.LLM.DefaultModel},
 			},
 			"mcp_servers": {
 				Status: "healthy",

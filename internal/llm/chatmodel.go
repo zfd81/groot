@@ -13,10 +13,10 @@ import (
 
 // NewChatModel creates an OpenAI-compatible ChatModel using eino-ext
 func NewChatModel(ctx context.Context, cfg config.LLMConfig) (model.BaseChatModel, error) {
-	// Get active model config
-	modelCfg := cfg.GetActiveModel()
+	// Get default model config
+	modelCfg := cfg.GetDefaultModel()
 	if modelCfg == nil {
-		return nil, fmt.Errorf("model %s not found in config", cfg.ActiveModel)
+		return nil, fmt.Errorf("model %s not found in config", cfg.DefaultModel)
 	}
 
 	// Create OpenAI ChatModel with timeout based on max_tokens

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -33,8 +34,8 @@ type ServerConfig struct {
 
 // LLMConfig holds LLM settings
 type LLMConfig struct {
-	ActiveModel string                 `yaml:"active_model"`
-	Models      map[string]ModelConfig `yaml:"models"`
+	DefaultModel string                 `yaml:"default_model"`
+	Models       map[string]ModelConfig `yaml:"models"`
 }
 
 // ModelConfig holds individual model settings
@@ -146,12 +147,58 @@ func ExpandEnv(value string) string {
 	return value
 }
 
-// GetActiveModel returns the active model configuration
-func (c *LLMConfig) GetActiveModel() *ModelConfig {
-	if model, ok := c.Models[c.ActiveModel]; ok {
+// GetDefaultModel returns the default model configuration
+func (c *LLMConfig) GetDefaultModel() *ModelConfig {
+	if model, ok := c.Models[c.DefaultModel]; ok {
 		// Expand environment variables in API key
 		model.APIKey = ExpandEnv(model.APIKey)
 		return &model
 	}
+	return nil
+}
+
+// GetModelByName returns the model configuration by name
+// If name is empty, returns the default model
+func (c *LLMConfig) GetModelByName(name string) *ModelConfig {
+	if name == "" {
+		return c.GetDefaultModel()
+	}
+	if model, ok := c.Models[name]; ok {
+		// Expand environment variables in API key
+		model.APIKey = ExpandEnv(model.APIKey)
+		return &model
+	}
+	return nil
+}
+
+// ValidateModel checks if a model name exists in config
+// Empty name is valid (will use default model)
+func (c *LLMConfig) ValidateModel(name string) bool {
+	if name == "" {
+		return true // Empty is valid, will use default model
+	}
+	_, exists := c.Models[name]
+	return exists
+}
+
+// ValidateLLMConfig validates LLM configuration at startup.
+// If DefaultModel is empty, it sets DefaultModel to the first model in Models map.
+func ValidateLLMConfig(cfg *LLMConfig) error {
+	if len(cfg.Models) == 0 {
+		return fmt.Errorf("models 配置不能为空")
+	}
+
+	if cfg.DefaultModel == "" {
+		// Use first model as default if not specified
+		for name := range cfg.Models {
+			cfg.DefaultModel = name
+			break
+		}
+	}
+
+	if !cfg.ValidateModel(cfg.DefaultModel) {
+		return fmt.Errorf("default_model '%s' 不存在于 models 配置中", cfg.DefaultModel)
+	}
+
 	return nil
 }
