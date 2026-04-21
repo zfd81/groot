@@ -216,16 +216,14 @@ def server():
             }
         },
         "skills": {
+            "directory": "skills",
             "hot_reload": {
                 "enabled": True,
                 "debounce_delay": 2
             }
         },
         "mcp": {
-            "hot_reload": {
-                "enabled": True,
-                "debounce_delay": 2
-            }
+            "directory": "mcp"
         },
         "security": {
             "auth": {

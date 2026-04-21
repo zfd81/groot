@@ -1,6 +1,6 @@
 """
-Skills/MCP 热插拔测试
-测试 Skills 和 MCP 的动态加载、修改、删除
+Skills 热插拔测试
+测试 Skills 的动态加载、修改、删除
 
 注意: 热插拔使用防抖延迟(debounce_delay: 2秒)
 测试需要等待足够时间确保防抖处理完成
@@ -132,122 +132,11 @@ description: "版本2"
         shutil.rmtree(skill_dir)
 
 
-class TestMCPHotReload:
-    """MCP 热插拔测试"""
-
-    def test_add_mcp_updates_tools(self, server, api_headers, mock_mcp_config):
-        """TC-HOT-004: 添加 MCP 后工具列表更新"""
-        # 等待热插拔生效
-        time.sleep(5)
-
-        # 查询工具列表
-        response = requests.get(
-            f"{BASE_URL}/tools",
-            headers=api_headers
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # 验证工具来自新 MCP（新格式：按 MCP 分组）
-        # data 应为 {"mcp_name": {"tools": [...], "total": N}, ...}
-        # mock MCP 可能不会真正加载工具，但配置应已生效
-
-    def test_remove_mcp_updates_tools(self, server, api_headers, mock_mcp_config):
-        """TC-HOT-005: 删除 MCP 后工具列表更新"""
-        mcp_file = f"{TEST_HOME}/mcp/test_mcp.json"
-
-        # 等待加载
-        time.sleep(5)
-
-        # 删除 MCP 配置
-        os.remove(mcp_file)
-
-        # 等待热插拔生效
-        time.sleep(5)
-
-        # 查询工具列表
-        response = requests.get(
-            f"{BASE_URL}/tools",
-            headers=api_headers
-        )
-
-        assert response.status_code == 200
-
-    def test_modify_mcp_reconnects(self, server, api_headers):
-        """TC-HOT-006: 修改 MCP 后重新连接"""
-        mcp_file = f"{TEST_HOME}/mcp/modify_test.json"
-
-        # 创建初始 MCP 配置
-        mcp_config_v1 = {
-            "name": "modify_test",
-            "type": "stdio",
-            "description": "版本1",
-            "isActive": True,
-            "command": "echo",
-            "args": ["v1"]
-        }
-
-        with open(mcp_file, "w") as f:
-            json.dump(mcp_config_v1, f)
-
-        time.sleep(5)
-
-        # 修改配置
-        mcp_config_v2 = {
-            "name": "modify_test",
-            "type": "stdio",
-            "description": "版本2",
-            "isActive": True,
-            "command": "echo",
-            "args": ["v2"]
-        }
-
-        with open(mcp_file, "w") as f:
-            json.dump(mcp_config_v2, f)
-
-        time.sleep(5)
-
-        # 清理
-        os.remove(mcp_file)
-
-    def test_mcp_deactivate(self, server, api_headers):
-        """TC-HOT-007: MCP 设置 isActive=false 后禁用"""
-        mcp_file = f"{TEST_HOME}/mcp/deactivate_test.json"
-
-        mcp_config = {
-            "name": "deactivate_test",
-            "type": "stdio",
-            "description": "测试MCP",
-            "isActive": False,  # 禁用
-            "command": "echo",
-            "args": ["test"]
-        }
-
-        with open(mcp_file, "w") as f:
-            json.dump(mcp_config, f)
-
-        time.sleep(5)
-
-        # 验证工具列表不包含该 MCP 的工具
-        response = requests.get(
-            f"{BASE_URL}/tools",
-            headers=api_headers
-        )
-
-        # 新格式：按 MCP 分组
-        # data 应为 {"mcp_name": {"tools": [...], "total": N}, ...}
-        # 禁用的 MCP 不应出现在分组中
-
-        # 清理
-        os.remove(mcp_file)
-
-
 class TestSkillFormat:
     """Skill 格式验证测试"""
 
     def test_skill_yaml_frontmatter(self, server, api_headers):
-        """TC-HOT-008: Skill YAML frontmatter 格式"""
+        """TC-HOT-004: Skill YAML frontmatter 格式"""
         skill_dir = f"{TEST_HOME}/skills/format_test"
         os.makedirs(skill_dir, exist_ok=True)
 
@@ -286,61 +175,11 @@ dependencies: []
         shutil.rmtree(skill_dir)
 
 
-class TestMCPFormat:
-    """MCP 配置格式验证测试"""
-
-    def test_mcp_json_format(self, server, api_headers):
-        """TC-HOT-009: MCP JSON 配置格式"""
-        mcp_file = f"{TEST_HOME}/mcp/format_test.json"
-
-        # stdio 类型配置
-        mcp_config = {
-            "name": "format_test",
-            "type": "stdio",
-            "description": "格式测试MCP",
-            "isActive": True,
-            "command": "echo",
-            "args": ["test"],
-            "env": {}
-        }
-
-        with open(mcp_file, "w") as f:
-            json.dump(mcp_config, f)
-
-        time.sleep(5)
-
-        # 清理
-        os.remove(mcp_file)
-
-    def test_mcp_sse_type(self, server, api_headers):
-        """TC-HOT-010: MCP sse 类型配置"""
-        mcp_file = f"{TEST_HOME}/mcp/sse_test.json"
-
-        mcp_config = {
-            "name": "sse_test",
-            "type": "sse",
-            "description": "SSE类型MCP",
-            "isActive": False,  # 不实际连接
-            "baseUrl": "https://example.com/mcp/sse",
-            "headers": {
-                "Authorization": "Bearer test-token"
-            }
-        }
-
-        with open(mcp_file, "w") as f:
-            json.dump(mcp_config, f)
-
-        time.sleep(5)
-
-        # 清理
-        os.remove(mcp_file)
-
-
 class TestDebounceDelay:
     """防抖延迟测试"""
 
     def test_debounce_delay(self, server, api_headers):
-        """TC-HOT-011: 防抖延迟生效（2秒内多次修改只触发一次）"""
+        """TC-HOT-005: 防抖延迟生效（2秒内多次修改只触发一次）"""
         skill_dir = f"{TEST_HOME}/skills/debounce_test"
         os.makedirs(skill_dir, exist_ok=True)
 
