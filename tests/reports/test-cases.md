@@ -79,7 +79,7 @@ server:
   port: 8080
 
 llm:
-  active_model: mock-model
+  default_model: mock-model
   models:
     mock-model:
       base_url: http://localhost:8888/mock
@@ -1269,7 +1269,7 @@ $GROOT_HOME/memory/
 
 | 测试编号 | 测试名称 | 说明 |
 |---------|---------|------|
-| TC-LLM-CFG-001 | active_model 配置 | 当前激活模型 |
+| TC-LLM-CFG-001 | default_model 配置 | 默认模型 |
 | TC-LLM-CFG-002 | models 配置列表 | 多模型配置 |
 | TC-LLM-CFG-003 | api_key 环境变量引用 | 环境变量格式 |
 

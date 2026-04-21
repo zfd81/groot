@@ -33,13 +33,13 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 
 ### 1.3 LLM 配置
 
-支持多模型配置，通过 `active_model` 指定当前使用的模型。
+支持多模型配置，通过 `default_model` 指定默认使用的模型。
 
 **配置示例：**
 
 ```yaml
 llm:
-  active_model: gpt-4o           # 当前激活的模型
+  default_model: gpt-4o           # 默认模型
   models:
     gpt-4o:                      # 模型名称（自定义）
       base_url: https://api.openai.com/v1
@@ -59,7 +59,7 @@ llm:
 
 | 字段 | 说明 |
 |------|------|
-| `active_model` | 当前激活的模型名称，对应 models 中的某个 key |
+| `default_model` | 默认模型名称，对应 models 中的某个 key |
 | `base_url` | LLM API 地址（OpenAI 兼容协议） |
 | `api_key` | API 密钥，支持环境变量引用 `${VAR_NAME}` |
 | `model` | 实际调用时的模型名称 |
@@ -68,7 +68,7 @@ llm:
 
 **模型切换：**
 
-修改 `active_model` 值后，需要重启服务才能生效。
+修改 `default_model` 值后，需要重启服务才能生效。
 
 > **说明：** Groot 仅支持 Skills 的热插拔，LLM 和 MCP 配置修改需重启服务。
 
@@ -2261,7 +2261,7 @@ server:
 
 # LLM 配置（OpenAI兼容协议）
 llm:
-  active_model: gpt-4o             # 当前激活的模型名称
+  default_model: gpt-4o             # 默认模型名称
   models:
     gpt-4o:                        # 模型配置名称（自定义）
       base_url: https://api.openai.com/v1    # LLM API 地址

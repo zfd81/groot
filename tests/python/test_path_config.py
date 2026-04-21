@@ -66,7 +66,7 @@ def abs_path_server():
         "agent": {"name": "groot", "version": "1.0.0"},
         "server": {"host": "0.0.0.0", "port": int(abs_port)},
         "llm": {
-            "active_model": "mock-model",
+            "default_model": "mock-model",
             "models": {
                 "mock-model": {
                     "base_url": "http://localhost:8888/mock",

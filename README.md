@@ -213,7 +213,7 @@ LLM 配置决定 Agent 使用哪个大模型执行任务。以下是一个最小
 
 ```yaml
 llm:
-  active_model: gpt-4o           # 当前激活的模型
+  default_model: gpt-4o           # 默认模型
   models:
     gpt-4o:
       base_url: https://api.openai.com/v1
@@ -235,11 +235,11 @@ api_key: sk-xxxxxxxxxxxx
 
 #### 多模型配置示例
 
-可配置多个模型，通过 `active_model` 切换（需重启）：
+可配置多个模型，通过 `default_model` 指定默认使用的模型（需重启）：
 
 ```yaml
 llm:
-  active_model: gpt-4o
+  default_model: gpt-4o
   models:
     gpt-4o:
       base_url: https://api.openai.com/v1
@@ -418,7 +418,7 @@ server:
 
 # LLM 配置（OpenAI兼容协议）
 llm:
-  active_model: gpt-4o             # 当前激活的模型名称
+  default_model: gpt-4o             # 当前激活的模型名称
   models:
     gpt-4o:                        # 模型配置名称（自定义）
       base_url: https://api.openai.com/v1    # LLM API 地址
@@ -540,7 +540,7 @@ logging:
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `active_model` | **是** | 当前激活的模型名称，对应 models 中的某个 key，修改后需重启 |
+| `default_model` | **是** | 默认模型名称，对应 models 中的某个 key，修改后需重启 |
 | `models.{name}.base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
 | `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
 | `models.{name}.model` | **是** | 实际调用时的模型名称 |
@@ -837,6 +837,7 @@ Header 名称可在配置文件中自定义。
 | Header | 必填 | 说明 |
 |--------|------|------|
 | `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
+| `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型；为空则使用配置中的默认模型 |
 | `Content-Type` | 是 | `application/json` |
 | `X-API-Key` | 是 | 认证密钥（启用认证时） |
 
