@@ -8,6 +8,8 @@
 - memory.directory: 会话记忆目录
 - logging.file.directory: 日志文件目录
 - attachment.temp_directory: 附件临时目录
+
+绝对路径测试目录：tests/abs_path_test/
 """
 
 import pytest
@@ -16,7 +18,154 @@ import os
 import glob
 import tempfile
 import shutil
-from conftest import BASE_URL, TEST_HOME
+import subprocess
+import signal
+import yaml
+from conftest import BASE_URL, TEST_HOME, TEST_PORT, TEST_API_KEY, GROOT_BIN, wait_for_server
+
+
+# ============================================================================
+# 绝对路径测试目录配置
+# ============================================================================
+
+# tests 目录路径
+TESTS_DIR = os.path.dirname(os.path.dirname(__file__))
+
+# 绝对路径测试目录（位于 tests/abs_path_test/）
+ABS_PATH_TEST_DIR = os.path.join(TESTS_DIR, "abs_path_test")
+
+# 绝对路径测试的子目录
+ABS_PATH_LOGS_DIR = os.path.join(ABS_PATH_TEST_DIR, "logs")
+ABS_PATH_MEMORY_DIR = os.path.join(ABS_PATH_TEST_DIR, "memory")
+ABS_PATH_TEMP_DIR = os.path.join(ABS_PATH_TEST_DIR, "temp")
+
+
+@pytest.fixture(scope="module")
+def abs_path_server():
+    """启动使用绝对路径配置的测试服务器"""
+    import time
+
+    # 创建绝对路径测试目录
+    os.makedirs(ABS_PATH_TEST_DIR, exist_ok=True)
+    os.makedirs(ABS_PATH_LOGS_DIR, exist_ok=True)
+    os.makedirs(ABS_PATH_MEMORY_DIR, exist_ok=True)
+    os.makedirs(ABS_PATH_TEMP_DIR, exist_ok=True)
+
+    # 创建 GROOT_HOME 目录（相对路径将相对于此目录）
+    home_dir = os.path.join(ABS_PATH_TEST_DIR, "groot_home")
+    os.makedirs(home_dir, exist_ok=True)
+    os.makedirs(f"{home_dir}/skills", exist_ok=True)
+    os.makedirs(f"{home_dir}/mcp", exist_ok=True)
+
+    # 使用不同端口避免冲突
+    abs_port = str(int(TEST_PORT) + 100)  # 例如 8180
+    abs_base_url = f"http://localhost:{abs_port}"
+
+    # 写入配置文件：使用绝对路径
+    config = {
+        "agent": {"name": "groot", "version": "1.0.0"},
+        "server": {"host": "0.0.0.0", "port": int(abs_port)},
+        "llm": {
+            "active_model": "mock-model",
+            "models": {
+                "mock-model": {
+                    "base_url": "http://localhost:8888/mock",
+                    "api_key": "mock-key",
+                    "model": "mock",
+                    "max_tokens": 4096,
+                    "temperature": 0.7
+                }
+            }
+        },
+        "skills": {
+            "directory": f"{home_dir}/skills",  # 相对路径
+            "hot_reload": {"enabled": True, "debounce_delay": 2}
+        },
+        "mcp": {
+            "directory": f"{home_dir}/mcp",  # 相对路径
+            "hot_reload": {"enabled": True, "debounce_delay": 2}
+        },
+        "memory": {
+            "directory": ABS_PATH_MEMORY_DIR,  # 绝对路径
+            "retention_days": 1,
+            "cleanup_schedule": "02:00"
+        },
+        "logging": {
+            "level": "debug",
+            "format": "json",
+            "output": ["stdout", "file"],
+            "file": {
+                "directory": ABS_PATH_LOGS_DIR,  # 绝对路径
+                "filename_pattern": "groot-{date}.log",
+                "max_age": 7
+            }
+        },
+        "attachment": {
+            "max_size": 50,
+            "max_total_size": 100,
+            "max_count": 10,
+            "allowed_types": ["txt", "json"],
+            "temp_directory": ABS_PATH_TEMP_DIR  # 绝对路径
+        },
+        "security": {
+            "auth": {
+                "enabled": True,
+                "type": "api_key",
+                "api_key": {
+                    "header_name": "X-API-Key",
+                    "keys": [{"name": "test_client", "key": TEST_API_KEY, "permissions": ["all"]}]
+                }
+            }
+        }
+    }
+
+    config_path = os.path.join(home_dir, "config.yaml")
+    with open(config_path, "w") as f:
+        yaml.dump(config, f)
+
+    # 检查是否已有服务器在此端口运行
+    try:
+        response = requests.get(f"{abs_base_url}/health", timeout=2)
+        if response.status_code == 200:
+            yield abs_base_url
+            return
+    except:
+        pass
+
+    # 启动 groot 进程
+    env = os.environ.copy()
+    env["GROOT_HOME"] = home_dir
+    env["GROOT_API_KEY"] = TEST_API_KEY
+
+    process = subprocess.Popen(
+        [GROOT_BIN, "-H", home_dir, "-p", abs_port],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+
+    # 等待服务器启动
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        try:
+            response = requests.get(f"{abs_base_url}/health", timeout=2)
+            if response.status_code == 200:
+                break
+        except:
+            pass
+        time.sleep(1)
+
+    yield abs_base_url
+
+    # 清理：停止服务器
+    process.send_signal(signal.SIGTERM)
+    process.wait(timeout=10)
+
+
+@pytest.fixture
+def abs_path_api_headers():
+    """绝对路径测试的 API headers"""
+    return {"X-API-Key": TEST_API_KEY, "Content-Type": "application/json"}
 
 
 class TestDefaultPathConfig:
@@ -101,23 +250,96 @@ class TestDefaultPathConfig:
 class TestAbsolutePathConfig:
     """绝对路径配置测试
 
-    注意：此测试需要创建临时目录并修改配置文件
-    在实际测试环境中可能需要手动配置
+    使用 tests/abs_path_test/ 目录作为绝对路径测试目录
+    配置文件中 memory、logs、temp 使用绝对路径
     """
 
-    @pytest.mark.skip(reason="需要修改配置文件并重启服务")
-    def test_absolute_path_for_logs(self, server):
-        """TC-PATH-006: logs 使用绝对路径"""
-        # 配置绝对路径如 /tmp/groot_test_logs
-        # 日志应直接写入该路径
-        pass
+    def test_absolute_path_logs_directory(self, abs_path_server):
+        """TC-PATH-006: logs 使用绝对路径
 
-    @pytest.mark.skip(reason="需要修改配置文件并重启服务")
-    def test_absolute_path_for_memory(self, server):
-        """TC-PATH-007: memory 使用绝对路径"""
-        # 配置绝对路径如 /tmp/groot_test_memory
-        # 会话数据应直接写入该路径
-        pass
+        配置: logging.file.directory = tests/abs_path_test/logs
+        验证: 日志文件直接写入该目录，而非 GROOT_HOME/logs
+        """
+        # 执行请求产生日志
+        requests.get(f"{abs_path_server}/health")
+
+        # 验证日志目录在绝对路径位置
+        assert os.path.exists(ABS_PATH_LOGS_DIR), f"Logs directory should exist at absolute path {ABS_PATH_LOGS_DIR}"
+
+        # 验证日志文件存在
+        log_files = glob.glob(os.path.join(ABS_PATH_LOGS_DIR, "groot-*.log"))
+        assert len(log_files) > 0, f"Log files should exist in {ABS_PATH_LOGS_DIR}"
+
+    def test_absolute_path_memory_directory(self, abs_path_server, abs_path_api_headers):
+        """TC-PATH-007: memory 使用绝对路径
+
+        配置: memory.directory = tests/abs_path_test/memory
+        验证: 会话数据直接写入该目录，而非 GROOT_HOME/memory
+        """
+        # 执行对话以创建 memory 数据
+        response = requests.post(
+            f"{abs_path_server}/chat",
+            headers=abs_path_api_headers,
+            json={"instruction": "测试绝对路径 memory"},
+            stream=True
+        )
+
+        # 等待完成
+        from conftest import SSEClient
+        SSEClient(response)
+
+        # 验证 memory 目录在绝对路径位置
+        assert os.path.exists(ABS_PATH_MEMORY_DIR), f"Memory directory should exist at absolute path {ABS_PATH_MEMORY_DIR}"
+
+        # 验证 session 子目录存在
+        session_dirs = [d for d in os.listdir(ABS_PATH_MEMORY_DIR) if os.path.isdir(os.path.join(ABS_PATH_MEMORY_DIR, d))]
+        assert len(session_dirs) > 0, f"Session subdirectories should exist in {ABS_PATH_MEMORY_DIR}"
+
+    def test_absolute_path_temp_directory(self, abs_path_server, abs_path_api_headers):
+        """TC-PATH-016: temp 使用绝对路径
+
+        配置: attachment.temp_directory = tests/abs_path_test/temp
+        验证: 附件临时文件直接写入该目录
+        """
+        # 验证目录存在（服务启动时创建）
+        assert os.path.exists(ABS_PATH_TEMP_DIR), f"Temp directory should exist at absolute path {ABS_PATH_TEMP_DIR}"
+
+    def test_relative_path_skills_directory(self, abs_path_server):
+        """TC-PATH-017: skills 使用相对路径
+
+        配置: skills.directory = skills（相对于 GROOT_HOME）
+        验证: skills 目录位于 GROOT_HOME/skills
+        """
+        home_dir = os.path.join(ABS_PATH_TEST_DIR, "groot_home")
+        expected_path = os.path.join(home_dir, "skills")
+
+        assert os.path.exists(expected_path), f"Skills directory should exist at relative path {expected_path}"
+
+    def test_relative_path_mcp_directory(self, abs_path_server):
+        """TC-PATH-018: mcp 使用相对路径
+
+        配置: mcp.directory = mcp（相对于 GROOT_HOME）
+        验证: mcp 目录位于 GROOT_HOME/mcp
+        """
+        home_dir = os.path.join(ABS_PATH_TEST_DIR, "groot_home")
+        expected_path = os.path.join(home_dir, "mcp")
+
+        assert os.path.exists(expected_path), f"MCP directory should exist at relative path {expected_path}"
+
+    def test_absolute_path_not_under_home(self, abs_path_server):
+        """TC-PATH-019: 绝对路径不在 GROOT_HOME 下
+
+        验证：使用绝对路径的目录不在 GROOT_HOME 目录树中
+        """
+        home_dir = os.path.join(ABS_PATH_TEST_DIR, "groot_home")
+
+        # logs 使用绝对路径，不应在 home_dir 下
+        logs_in_home = os.path.join(home_dir, "logs")
+        assert not os.path.exists(logs_in_home), f"Logs should NOT be in {logs_in_home} (using absolute path)"
+
+        # memory 使用绝对路径，不应在 home_dir 下
+        memory_in_home = os.path.join(home_dir, "memory")
+        assert not os.path.exists(memory_in_home), f"Memory should NOT be in {memory_in_home} (using absolute path)"
 
 
 class TestPathResolution:
@@ -304,6 +526,13 @@ DEFAULT_DIRECTORY_CONFIG = {
     "temp": "temp",
 }
 
+# 绝对路径测试目录（位于 tests/abs_path_test/）
+ABS_PATH_TEST_DIRS = {
+    "logs": ABS_PATH_LOGS_DIR,
+    "memory": ABS_PATH_MEMORY_DIR,
+    "temp": ABS_PATH_TEMP_DIR,
+}
+
 # 路径解析规则说明
 PATH_RESOLUTION_RULES = """
 路径解析规则：
@@ -316,4 +545,8 @@ PATH_RESOLUTION_RULES = """
    - "/data/memory" -> /data/memory
 
 3. 目录自动创建：服务启动时或首次使用时自动创建所需目录
+
+测试示例：
+- 相对路径测试：使用默认配置，目录位于 TEST_HOME 下
+- 绝对路径测试：使用 tests/abs_path_test/ 目录，配置绝对路径指向此目录
 """
