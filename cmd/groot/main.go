@@ -187,8 +187,6 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("环境变量:")
 	fmt.Println("  GROOT_HOME          工作目录")
-	fmt.Println("  OPENAI_API_KEY      LLM API密钥")
-	fmt.Println("  GROOT_API_KEY       认证密钥")
 	fmt.Println()
 	fmt.Println("示例:")
 	fmt.Println("  groot                         # 使用默认配置")
