@@ -20,6 +20,9 @@ go.work.sum
 *.swp
 *.swo
 
+# Git worktrees
+.worktrees/
+
 # macOS
 .DS_Store
 .AppleDouble
