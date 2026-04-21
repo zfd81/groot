@@ -20,6 +20,10 @@ func Load(homeDir string) (*Config, error) {
 		if err := generateDefaultConfig(configPath, cfg); err != nil {
 			return nil, fmt.Errorf("failed to generate default config: %w", err)
 		}
+		// Validate default config
+		if err := ValidateLLMConfig(&cfg.LLM); err != nil {
+			return nil, fmt.Errorf("LLM 配置验证失败: %w", err)
+		}
 		return cfg, nil
 	}
 
@@ -36,6 +40,11 @@ func Load(homeDir string) (*Config, error) {
 
 	// Expand environment variables in all relevant fields
 	expandConfigEnvVars(cfg)
+
+	// Validate LLM configuration
+	if err := ValidateLLMConfig(&cfg.LLM); err != nil {
+		return nil, fmt.Errorf("LLM 配置验证失败: %w", err)
+	}
 
 	return cfg, nil
 }
