@@ -23,19 +23,18 @@ func NewToolsHandler(mcpMgr *mcp.Manager) *ToolsHandler {
 func (h *ToolsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	tools := h.mcpManager.ListTools()
 
-	toolInfos := make([]types.ToolInfo, len(tools))
-	for i, t := range tools {
-		toolInfos[i] = types.ToolInfo{
+	// 按 MCP 分组
+	grouped := make(map[string]types.ToolsGroup)
+	for _, t := range tools {
+		group := grouped[t.MCP]
+		group.Tools = append(group.Tools, types.ToolInfo{
 			Name:        t.Name,
 			Description: t.Description,
-			MCP:         t.MCP,
-		}
+			// MCP 字段不填充，避免冗余
+		})
+		group.Total++
+		grouped[t.MCP] = group
 	}
 
-	resp := types.ToolsResponse{
-		Tools: toolInfos,
-		Total: len(toolInfos),
-	}
-
-	rc.JSON(200, resp)
+	rc.JSON(200, grouped)
 }
