@@ -70,7 +70,7 @@ llm:
 
 修改 `active_model` 值后，需要重启服务才能生效。
 
-> **说明：** Groot 仅支持 Skills 和 MCP 的热插拔，LLM 配置修改需重启服务。
+> **说明：** Groot 仅支持 Skills 的热插拔，LLM 和 MCP 配置修改需重启服务。
 
 ---
 
@@ -166,7 +166,7 @@ llm:
 |------|------|
 | ReAct Agent Engine | Reasoning（LLM调用/决策）、Acting（Skill/MCP/直接回答）、Observation（结果处理）、循环终止控制 |
 | Skills | Skills 加载、指令解析、注册给 Agent、热插拔管理、依赖解析 |
-| MCP | 外部 MCP 加载、工具调用执行、热插拔管理 |
+| MCP | 外部 MCP 加载、工具调用执行 |
 | Memory | Session 管理（创建/查询）、History 管理（多轮对话上下文）、Chat Recorder（执行记录持久化）、Runtime State（活跃状态/进度/取消）、Attachment Store、Cleanup Scheduler |
 
 **System Layer（系统层）**
@@ -2109,7 +2109,6 @@ JSON 结构化日志：
 |----------|------|
 | `api_request` | API 调用记录 |
 | `skill_hot_reload` | Skills 热插拔事件 |
-| `mcp_hot_reload` | MCP 热插拔事件 |
 | `chat_completed` | 对话完成事件 |
 
 #### 5.2.3 日志存储与轮转
@@ -2279,15 +2278,14 @@ llm:
 
 # Skills 热插拔配置
 skills:
+  directory: skills                # Skills 目录（相对于 GROOT_HOME）
   hot_reload:
     enabled: true                  # 是否启用 Skills 热插拔
     debounce_delay: 2              # 防抖延迟（秒）
 
-# MCP 热插拔配置
+# MCP 配置目录
 mcp:
-  hot_reload:
-    enabled: true                  # 是否启用 MCP 热插拔
-    debounce_delay: 2              # 防抖延迟（秒）
+  directory: mcp                   # MCP 配置目录（相对于 GROOT_HOME）
 
 # ReAct 执行配置
 react:

@@ -60,8 +60,7 @@ type SkillsConfig struct {
 **MCPConfig 新增 Directory 字段：**
 ```go
 type MCPConfig struct {
-    Directory  string        `yaml:"directory"`    // MCP 配置目录
-    HotReload  HotReloadConfig `yaml:"hot_reload"`
+    Directory  string `yaml:"directory"`    // MCP 配置目录
 }
 ```
 
@@ -76,7 +75,6 @@ Skills: SkillsConfig{
 },
 MCP: MCPConfig{
     Directory: "mcp",  // 新增
-    HotReload: HotReloadConfig{...},
 },
 Memory: MemoryConfig{
     Directory: "memory",  // 保持不变
