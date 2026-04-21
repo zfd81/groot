@@ -443,7 +443,37 @@ logging:
     compress: false                # 是否压缩旧日志文件
 ```
 
-### 4.3 配置字段详解
+### 4.3 目录配置说明
+
+所有目录配置支持相对路径和绝对路径：
+
+- **相对路径**：相对于 `~/.groot` 目录（GROOT_HOME）
+- **绝对路径**：直接使用指定路径
+
+示例配置：
+
+```yaml
+# 相对路径示例（目录位于 ~/.groot/memory）
+memory:
+  directory: memory
+
+# 绝对路径示例（目录位于 /data/logs）
+logging:
+  file:
+    directory: /data/logs
+```
+
+可配置的目录包括：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `skills.directory` | `skills` | Skills 脚本目录 |
+| `mcp.directory` | `mcp` | MCP 配置目录 |
+| `memory.directory` | `memory` | 会话记忆目录 |
+| `logging.file.directory` | `logs` | 日志文件目录 |
+| `attachment.temp_directory` | `temp` | 附件临时目录 |
+
+### 4.4 配置字段详解
 
 #### Agent 配置
 
@@ -535,7 +565,7 @@ logging:
 | `file.max_size` | 否 | 单个日志文件最大大小（MB），默认 `100` |
 | `file.compress` | 否 | 是否压缩旧日志文件，默认 `false` |
 
-### 4.4 权限说明
+### 4.5 权限说明
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
@@ -550,7 +580,7 @@ logging:
 | `health` | GET /health | 健康检查 |
 | `all` | 以上全部 | 全部权限 |
 
-### 4.5 配置热更新
+### 4.6 配置热更新
 
 **支持热更新的配置：**
 - Skills 配置：修改 SKILL.md 文件自动生效
