@@ -2,7 +2,7 @@
 /groot
 /groot_new
 
-# Go 编译产物（bin目录）
+# Go 编译产物（bin目录 - 项目级）
 bin/
 
 # Go 测试产物
@@ -25,7 +25,12 @@ go.work.sum
 .AppleDouble
 .LSOverride
 
-# Python 测试环境（tests/python 目录）
+# Python 测试环境（根目录 - 临时调试）
+/.venv/
+/.pytest_cache/
+__pycache__/
+
+# Python 测试环境（tests/python 目录 - 正式测试）
 tests/python/.venv/
 tests/python/.pytest_cache/
 tests/python/__pycache__/
