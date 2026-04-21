@@ -118,12 +118,6 @@ func main() {
 	}
 	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()), zap.String("dir", mcpDir))
 
-	// Start MCP watcher
-	mcpWatcher := mcp.NewWatcher(mcpMgr, cfg.MCP, log)
-	if err := mcpWatcher.Start(mcpDir); err != nil {
-		log.Error("无法启动MCP watcher", zap.Error(err))
-	}
-
 	// Initialize memory manager
 	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
 	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
@@ -166,7 +160,6 @@ func main() {
 		// Stop watchers
 		grootMdWatcher.Stop()
 		skillWatcher.Stop()
-		mcpWatcher.Stop()
 
 		// Stop cleanup scheduler
 		cleanupScheduler.Stop()
