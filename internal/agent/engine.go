@@ -62,10 +62,11 @@ func (e *Engine) Run(
 	prompt string,
 	attachmentPaths []AttachmentPath,
 	historyMessages []memory.Message,
+	modelName string,
 	cb *ProgressCallback,
 ) (*RunResult, error) {
 	// 1. Create ChatModel
-	chatModel, err := llm.NewChatModel(ctx, e.llmConfig)
+	chatModel, err := llm.NewChatModel(ctx, e.llmConfig, modelName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
 	}
