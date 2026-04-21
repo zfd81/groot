@@ -51,3 +51,5 @@ tests/abs_path_test/
 .env.local
 *.pem
 *.key
+
+.trae/  # Trae 配置目录
