@@ -12,7 +12,7 @@ import json
 import os
 import time
 import shutil
-from conftest import BASE_URL, TEST_HOME, generate_session_id
+from conftest import BASE_URL, TEST_HOME
 
 
 class TestGrootMdHotReload:
@@ -39,14 +39,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 发送 chat 请求验证内容是否注入
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "你好，请用一句话介绍自己"
-            },
+            json={"instruction": "你好，请用一句话介绍自己"},
             stream=True
         )
 
@@ -86,14 +82,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 发送请求验证
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "测试"
-            },
+            json={"instruction": "测试"},
             stream=True
         )
 
@@ -120,14 +112,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 验证已加载
-        session_id_v1 = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id_v1,
-                "prompt": "你好"
-            },
+            json={"instruction": "你好"},
             stream=True
         )
         assert response.status_code == 200
@@ -142,14 +130,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 验证删除后仍可正常工作
-        session_id_v2 = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id_v2,
-                "prompt": "你好"
-            },
+            json={"instruction": "你好"},
             stream=True
         )
 
@@ -169,14 +153,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 发送请求，验证服务正常
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "你好，请介绍自己"
-            },
+            json={"instruction": "你好，请介绍自己"},
             stream=True
         )
 
@@ -206,14 +186,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 验证服务正常
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "测试"
-            },
+            json={"instruction": "测试"},
             stream=True
         )
 
@@ -263,14 +239,10 @@ class TestGrootMdHotReload:
         time.sleep(1)
 
         # 验证加载
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "你好"
-            },
+            json={"instruction": "你好"},
             stream=True
         )
 
@@ -301,14 +273,10 @@ IMPORTANT_START_MARKER
         time.sleep(1)
 
         # 发送请求
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "测试 prompt 内容"
-            },
+            json={"instruction": "测试 prompt 内容"},
             stream=True
         )
 
@@ -342,14 +310,10 @@ class TestGrootMdMultipleChanges:
         time.sleep(1)
 
         # 验证
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "测试"
-            },
+            json={"instruction": "测试"},
             stream=True
         )
 
@@ -386,14 +350,10 @@ version: 1.0
         time.sleep(1)
 
         # 验证加载
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "你好"
-            },
+            json={"instruction": "你好"},
             stream=True
         )
 
@@ -427,14 +387,10 @@ func main() {
         time.sleep(1)
 
         # 验证加载
-        session_id = generate_session_id()
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json={
-                "session_id": session_id,
-                "prompt": "测试代码"
-            },
+            json={"instruction": "测试代码"},
             stream=True
         )
 
