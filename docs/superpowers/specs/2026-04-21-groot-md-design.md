@@ -29,8 +29,9 @@ GROOT.md（缓存）
 | GROOT.md 不存在 | 正常运行，清空缓存 |
 | GROOT.md 存在但为空 | 正常运行，清空缓存 |
 | GROOT.md 读取失败 | 记录警告日志，正常运行，清空缓存 |
+| GROOT.md 被创建 | Watcher 检测到，加载内容到缓存 |
+| GROOT.md 被修改 | Watcher 检测到，重新加载内容到缓存 |
 | GROOT.md 被删除 | Watcher 检测到，清空缓存 |
-| GROOT.md 被创建 | Watcher 检测到，加载内容 |
 
 ## 热加载机制
 
