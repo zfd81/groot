@@ -1,0 +1,40 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0 -- /Users/zhangfengda/workspace/groot/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/zhangfengda/workspace/groot
+collecting ... collected 18 items
+
+tests/python/test_path_config.py::TestDefaultPathConfig::test_skills_directory_default PASSED [  5%]
+tests/python/test_path_config.py::TestDefaultPathConfig::test_mcp_directory_default PASSED [ 11%]
+tests/python/test_path_config.py::TestDefaultPathConfig::test_memory_directory_default PASSED [ 16%]
+tests/python/test_path_config.py::TestDefaultPathConfig::test_logs_directory_default PASSED [ 22%]
+tests/python/test_path_config.py::TestDefaultPathConfig::test_temp_directory_default PASSED [ 27%]
+tests/python/test_path_config.py::TestAbsolutePathConfig::test_absolute_path_logs_directory PASSED [ 33%]
+tests/python/test_path_config.py::TestAbsolutePathConfig::test_absolute_path_memory_directory PASSED [ 38%]
+tests/python/test_path_config.py::TestAbsolutePathConfig::test_absolute_path_temp_directory PASSED [ 44%]
+tests/python/test_path_config.py::TestAbsolutePathConfig::test_relative_path_skills_directory PASSED [ 50%]
+tests/python/test_path_config.py::TestAbsolutePathConfig::test_relative_path_mcp_directory PASSED [ 55%]
+tests/python/test_path_config.py::TestAbsolutePathConfig::test_absolute_path_not_under_home PASSED [ 61%]
+tests/python/test_path_config.py::TestPathResolution::test_relative_path_resolution PASSED [ 66%]
+tests/python/test_path_config.py::TestPathResolution::test_absolute_path_resolution PASSED [ 72%]
+tests/python/test_path_config.py::TestPathResolution::test_path_is_abs_detection PASSED [ 77%]
+tests/python/test_path_config.py::TestConfigDirectoryFields::test_config_file_has_directory_fields PASSED [ 83%]
+tests/python/test_path_config.py::TestDirectoryAutoCreation::test_memory_directory_auto_created PASSED [ 88%]
+tests/python/test_path_config.py::TestDirectoryAutoCreation::test_logs_directory_auto_created PASSED [ 94%]
+tests/python/test_path_config.py::TestPathConfigIntegration::test_all_directories_under_home PASSED [100%]
+
+=============================== warnings summary ===============================
+.venv/lib/python3.9/site-packages/urllib3/__init__.py:35
+  /Users/zhangfengda/workspace/groot/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================== slowest durations ===============================
+6.07s setup    tests/python/test_path_config.py::TestDefaultPathConfig::test_skills_directory_default
+1.01s setup    tests/python/test_path_config.py::TestAbsolutePathConfig::test_absolute_path_logs_directory
+0.01s call     tests/python/test_path_config.py::TestDefaultPathConfig::test_memory_directory_default
+0.01s call     tests/python/test_path_config.py::TestDefaultPathConfig::test_logs_directory_default
+0.01s call     tests/python/test_path_config.py::TestPathConfigIntegration::test_all_directories_under_home
+
+(49 durations < 0.005s hidden.  Use -vv to show these durations.)
+======================== 18 passed, 1 warning in 7.13s =========================
