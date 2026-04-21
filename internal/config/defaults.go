@@ -73,13 +73,6 @@ func DefaultConfig() *Config {
 				FilenamePattern: "groot-{date}.log",
 				MaxAge:          7,
 			},
-			Categories: map[string]CatConfig{
-				"request": {Enabled: true, Level: "info"},
-				"skill":   {Enabled: true, Level: "info", LogInput: true, LogOutput: true},
-				"llm":     {Enabled: true, Level: "debug"},
-				"mcp":     {Enabled: true, Level: "debug"},
-				"error":   {Enabled: true, Level: "error"},
-			},
 		},
 	}
 }

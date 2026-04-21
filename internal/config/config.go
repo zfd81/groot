@@ -116,11 +116,10 @@ type KeyInfo struct {
 
 // LoggingConfig holds logging settings
 type LoggingConfig struct {
-	Level      string               `yaml:"level"`
-	Format     string               `yaml:"format"`
-	Output     []string             `yaml:"output"`
-	File       LogFileConfig        `yaml:"file"`
-	Categories map[string]CatConfig `yaml:"categories"`
+	Level  string        `yaml:"level"`
+	Format string        `yaml:"format"`
+	Output []string      `yaml:"output"`
+	File   LogFileConfig `yaml:"file"`
 }
 
 // LogFileConfig holds log file settings
@@ -128,14 +127,6 @@ type LogFileConfig struct {
 	Directory       string `yaml:"directory"`
 	FilenamePattern string `yaml:"filename_pattern"`
 	MaxAge          int    `yaml:"max_age"`
-}
-
-// CatConfig holds category-specific log settings
-type CatConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Level     string `yaml:"level"`
-	LogInput  bool   `yaml:"log_input,omitempty"`
-	LogOutput bool   `yaml:"log_output,omitempty"`
 }
 
 // ExpandEnv replaces ${VAR_NAME} with environment variable values
