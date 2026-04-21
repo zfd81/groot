@@ -52,10 +52,9 @@ type SkillsConfig struct {
 	HotReload HotReloadConfig `yaml:"hot_reload"`
 }
 
-// MCPConfig holds MCP hot-reload settings
+// MCPConfig holds MCP settings
 type MCPConfig struct {
-	Directory string          `yaml:"directory"`    // MCP 配置目录
-	HotReload HotReloadConfig `yaml:"hot_reload"`
+	Directory string `yaml:"directory"` // MCP 配置目录
 }
 
 // HotReloadConfig holds hot-reload settings

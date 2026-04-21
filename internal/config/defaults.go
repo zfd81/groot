@@ -32,10 +32,6 @@ func DefaultConfig() *Config {
 		},
 		MCP: MCPConfig{
 			Directory: "mcp",
-			HotReload: HotReloadConfig{
-				Enabled:       true,
-				DebounceDelay: 2,
-			},
 		},
 		Memory: MemoryConfig{
 			Directory:       "memory",
