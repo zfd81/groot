@@ -36,7 +36,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **智能决策执行** | 自动判断意图，自主选择调用 Skills 或 MCP 工具完成任务 |
 | **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
 | **Skills 嵌套** | 复杂任务自动拆解，子任务递归执行 |
-| **热插拔扩展** | Skills 和 MCP 工具支持动态添加，无需重启服务 |
+| **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
 
 ### 1.3 会话与对话
 
@@ -122,7 +122,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `config.yaml` | 主配置文件，控制服务行为 |
 | `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
 | `skills/` | Skills 定义目录，支持热插拔 |
-| `mcp/` | MCP 工具配置目录，支持热插拔 |
+| `mcp/` | MCP 工具配置目录，修改需重启服务 |
 | `memory/` | 会话数据目录（JSON 存储） |
 | `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
 | `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
@@ -435,15 +435,14 @@ llm:
 
 # Skills 热插拔配置
 skills:
+  directory: skills                  # Skills 目录（相对于 GROOT_HOME）
   hot_reload:
-    enabled: true                  # 是否启用 Skills 热插拔
-    debounce_delay: 2              # 防抖延迟（秒）
+    enabled: true                    # 是否启用 Skills 热插拔
+    debounce_delay: 2                # 防抖延迟（秒）
 
-# MCP 热插拔配置
+# MCP 配置目录
 mcp:
-  hot_reload:
-    enabled: true                  # 是否启用 MCP 热插拔
-    debounce_delay: 2              # 防抖延迟（秒）
+  directory: mcp                     # MCP 配置目录（相对于 GROOT_HOME）
 
 # ReAct 执行配置
 react:
@@ -552,6 +551,7 @@ logging:
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
+| `directory` | 否 | Skills 目录（相对于 GROOT_HOME），默认 `skills` |
 | `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
 | `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
 
@@ -559,8 +559,7 @@ logging:
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
-| `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
+| `directory` | 否 | MCP 配置目录（相对于 GROOT_HOME），默认 `mcp` |
 
 #### ReAct 配置
 
@@ -707,7 +706,7 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 └── web_search.json        # 网络搜索服务（streamable_http 类型）
 ```
 
-每个 MCP 工具使用独立的 JSON 配置文件，支持热插拔（修改配置文件自动生效）。
+每个 MCP 工具使用独立的 JSON 配置文件。添加、修改或删除 MCP 配置后需要重启服务才能生效。
 
 ### 6.2 连接类型
 
@@ -800,13 +799,6 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 | `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
 | `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
 | `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
-
-### 6.4 热插拔机制
-
-- 启用 `mcp.hot_reload.enabled: true` 后，修改 `.json` 文件自动生效
-- 新增 MCP：创建 `.json` 配置文件
-- 修改 MCP：编辑 `.json` 内容，断开旧连接建立新连接
-- 删除 MCP：删除对应 `.json` 文件
 
 ---
 
