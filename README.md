@@ -1,4 +1,4 @@
-<table>
+<table border="0" cellpadding="10" cellspacing="0">
   <tr>
     <td width="200" valign="middle">
       <img src="groot.jpg" alt="Groot Logo" width="180">
