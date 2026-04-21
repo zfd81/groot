@@ -186,7 +186,7 @@ type ToolsResponse struct {
 type ToolInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	MCP         string `json:"mcp"`
+	MCP         string `json:"mcp,omitempty"`
 }
 
 // ToolsGroup represents a group of tools from a single MCP

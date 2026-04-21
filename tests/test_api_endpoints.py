@@ -632,7 +632,7 @@ class TestToolsAPI:
                 assert "mcp" not in tool
 
     def test_tools_include_builtin(self, server, api_headers):
-        """TC-023: 工具列表包含内置 MCP 工具"""
+        """TC-023: 工具列表包含 MCP 工具（验证分组格式）"""
         response = requests.get(
             f"{BASE_URL}/tools",
             headers=api_headers
@@ -641,9 +641,26 @@ class TestToolsAPI:
         assert response.status_code == 200
         data = response.json()
 
-        # 内置工具：file_operations
-        tool_names = [t["name"] for t in data["tools"]]
-        assert "file_read" in tool_names or "file_write" in tool_names
+        # 验证新格式：按 MCP 分组
+        assert isinstance(data, dict)
+
+        # 遍历所有 MCP 分组收集工具名称
+        tool_names = []
+        for mcp_name, group in data.items():
+            # 验证每个分组结构
+            assert "tools" in group
+            assert "total" in group
+            assert isinstance(group["tools"], list)
+            tool_names.extend([t["name"] for t in group["tools"]])
+
+        # 验证：如果有 MCP 工具，检查结构正确
+        # 注意：内置 MCP (file_operations) 已移除，此测试主要验证分组格式
+        if tool_names:
+            # 至少有工具返回，验证工具有 name 和 description
+            for mcp_name, group in data.items():
+                for tool in group["tools"]:
+                    assert "name" in tool
+                    assert "description" in tool
 
 
 class TestAPIResponseFormat:
