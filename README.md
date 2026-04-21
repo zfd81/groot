@@ -1,9 +1,9 @@
-<table border="0" cellpadding="10" cellspacing="0">
-  <tr>
-    <td width="200" valign="middle">
+<table style="border: none; border-collapse: collapse;">
+  <tr style="border: none;">
+    <td width="200" valign="middle" style="border: none; padding: 10px;">
       <img src="groot.jpg" alt="Groot Logo" width="180">
     </td>
-    <td valign="middle">
+    <td valign="middle" style="border: none; padding: 10px;">
       <h1>Groot AI Agent</h1>
       <p><strong>面向业务系统的 AI Agent 服务</strong></p>
       <p>通过 REST API 接入，让你的系统立刻拥有智能任务执行能力<br>
