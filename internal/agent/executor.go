@@ -216,6 +216,13 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	// Determine final status
 	ctxCancelled := ctx.Err() == context.Canceled
 
+	// If execution failed (not cancelled), send error via SSE before saving to memory
+	if err != nil && !ctxCancelled {
+		// Send error event to client via SSE
+		sse.WriteError("execution_error", err.Error())
+		sse.WriteDone()
+	}
+
 	// Save chat record to memory
 	if e.memoryManager != nil {
 		attachments := []string{}

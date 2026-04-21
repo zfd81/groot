@@ -84,6 +84,15 @@ func (s *SSEWriter) WriteDone() error {
 	return err
 }
 
+// WriteError writes error event
+func (s *SSEWriter) WriteError(code, message string) error {
+	return s.WriteData(map[string]interface{}{
+		"event":   "error",
+		"code":    code,
+		"message": message,
+	})
+}
+
 // ToolCall represents a tool call (OpenAI format)
 type ToolCall struct {
 	ID       string       `json:"id"`
