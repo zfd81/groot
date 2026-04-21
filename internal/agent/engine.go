@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -351,11 +352,20 @@ func (e *Engine) buildTools() []tool.BaseTool {
 func (e *Engine) buildSystemInstruction(prompt string) string {
 	sb := &strings.Builder{}
 
+	// 1. GROOT.md（从全局缓存读取，放在最前面）
+	grootMd := grootmd.GetContent()
+	if grootMd != "" {
+		sb.WriteString(grootMd)
+		sb.WriteString("\n\n")
+	}
+
+	// 2. prompt（用户传入）
 	if prompt != "" {
 		sb.WriteString(prompt)
 		sb.WriteString("\n\n")
 	}
 
+	// 3. Skills 指令
 	if e.skillsRegistry.Count() > 0 {
 		sb.WriteString("可用技能 (专用任务模板):\n")
 		for _, skill := range e.skillsRegistry.List() {
@@ -366,6 +376,7 @@ func (e *Engine) buildSystemInstruction(prompt string) string {
 		sb.WriteString("\n")
 	}
 
+	// 4. 执行规则
 	sb.WriteString("执行规则:\n")
 	sb.WriteString("1. 分析用户请求，判断需要使用哪个技能或工具\n")
 	sb.WriteString("2. 如果有匹配的技能，按照技能指令执行\n")
