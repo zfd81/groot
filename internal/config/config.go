@@ -48,11 +48,13 @@ type ModelConfig struct {
 
 // SkillsConfig holds Skills hot-reload settings
 type SkillsConfig struct {
+	Directory string          `yaml:"directory"`    // skills 目录
 	HotReload HotReloadConfig `yaml:"hot_reload"`
 }
 
 // MCPConfig holds MCP hot-reload settings
 type MCPConfig struct {
+	Directory string          `yaml:"directory"`    // MCP 配置目录
 	HotReload HotReloadConfig `yaml:"hot_reload"`
 }
 
