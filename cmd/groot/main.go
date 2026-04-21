@@ -78,6 +78,9 @@ func main() {
 		cfg.Server.Port = port
 	}
 
+	// Resolve log directory path (before logger initialization)
+	cfg.Logging.File.Directory = config.ResolvePath(cfg.Logging.File.Directory, homeDir)
+
 	// Initialize logger
 	log := logger.New(cfg.Logging)
 	defer log.Sync()
@@ -92,11 +95,11 @@ func main() {
 	skillLoader := skill.NewLoader(skillsRegistry)
 
 	// Load skills
-	skillsDir := filepath.Join(homeDir, "skills")
+	skillsDir := config.ResolvePath(cfg.Skills.Directory, homeDir)
 	if err := skillLoader.LoadAll(skillsDir); err != nil {
 		log.Error("无法加载Skills", zap.Error(err))
 	}
-	log.Info("Skills 加载完成", zap.Int("count", skillsRegistry.Count()))
+	log.Info("Skills 加载完成", zap.Int("count", skillsRegistry.Count()), zap.String("dir", skillsDir))
 
 	// Start skills watcher
 	skillWatcher := skill.NewWatcher(skillLoader, cfg.Skills, log)
@@ -108,11 +111,11 @@ func main() {
 	mcpMgr := mcp.NewManager(log)
 
 	// Load MCP configs
-	mcpDir := filepath.Join(homeDir, "mcp")
+	mcpDir := config.ResolvePath(cfg.MCP.Directory, homeDir)
 	if err := mcpMgr.LoadAll(mcpDir); err != nil {
 		log.Error("无法加载MCP配置", zap.Error(err))
 	}
-	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()))
+	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()), zap.String("dir", mcpDir))
 
 	// Start MCP watcher
 	mcpWatcher := mcp.NewWatcher(mcpMgr, cfg.MCP, log)
@@ -121,7 +124,7 @@ func main() {
 	}
 
 	// Initialize memory manager
-	memoryDir := filepath.Join(homeDir, "memory")
+	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
 	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
 	log.Info("Memory 初始化完成", zap.String("dir", memoryDir))
 
@@ -132,6 +135,9 @@ func main() {
 	cleanupScheduler := memory.NewCleanupScheduler(memMgr, cfg.Memory.CleanupSchedule, log)
 	cleanupScheduler.Start()
 	log.Info("清理调度器已启动", zap.String("schedule", cfg.Memory.CleanupSchedule))
+
+	// Resolve temp directory path
+	cfg.Attachment.TempDirectory = config.ResolvePath(cfg.Attachment.TempDirectory, homeDir)
 
 	// Create API server
 	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr)
