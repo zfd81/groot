@@ -98,14 +98,14 @@ if [ "$VERBOSE" == "true" ]; then
     PYTEST_ARGS="$PYTEST_ARGS -v"
 fi
 
-# 运行 pytest
+# 运行 pytest（在 tests/python 目录下运行）
 cd "$TEST_DIR"
 
 pytest $PYTEST_ARGS \
     --tb=short \
     --strict-markers \
     -rA \
-    tests/
+    .
 
 # 测试完成
 echo ""
