@@ -604,7 +604,7 @@ class TestToolsAPI:
     """GET /tools API 测试"""
 
     def test_list_tools(self, server, api_headers):
-        """TC-022: 列出 MCP 工具"""
+        """TC-022: 列出 MCP 工具 (按 MCP 分组)"""
         response = requests.get(
             f"{BASE_URL}/tools",
             headers=api_headers
@@ -612,16 +612,24 @@ class TestToolsAPI:
 
         assert response.status_code == 200
         data = response.json()
-        assert "tools" in data
-        assert "total" in data
-        assert isinstance(data["tools"], list)
 
-        # 验证工具字段
-        if data["tools"]:
-            tool = data["tools"][0]
-            assert "name" in tool
-            assert "description" in tool
-            assert "mcp" in tool  # MCP 来源标识
+        # 验证新格式：按 MCP 分组
+        # data 应为 {"filesystem": {"tools": [...], "total": N}, ...}
+        assert isinstance(data, dict)
+
+        # 验证每个 MCP 分组结构
+        for mcp_name, group in data.items():
+            assert "tools" in group
+            assert "total" in group
+            assert isinstance(group["tools"], list)
+            assert group["total"] == len(group["tools"])
+
+            # 验证工具字段（不包含冗余的 mcp 字段）
+            for tool in group["tools"]:
+                assert "name" in tool
+                assert "description" in tool
+                # mcp 字段不应存在
+                assert "mcp" not in tool
 
     def test_tools_include_builtin(self, server, api_headers):
         """TC-023: 工具列表包含内置 MCP 工具"""
