@@ -218,9 +218,14 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 
 	// If execution failed (not cancelled), send error via SSE before saving to memory
 	if err != nil && !ctxCancelled {
+		e.logger.Error("Agent execution failed: " + err.Error())
 		// Send error event to client via SSE
-		sse.WriteError("execution_error", err.Error())
-		sse.WriteDone()
+		if writeErr := sse.WriteError("execution_error", err.Error()); writeErr != nil {
+			e.logger.Error("Failed to write SSE error: " + writeErr.Error())
+		}
+		if writeErr := sse.WriteDone(); writeErr != nil {
+			e.logger.Error("Failed to write SSE done: " + writeErr.Error())
+		}
 	}
 
 	// Save chat record to memory
