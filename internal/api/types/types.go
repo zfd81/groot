@@ -189,6 +189,12 @@ type ToolInfo struct {
 	MCP         string `json:"mcp"`
 }
 
+// ToolsGroup represents a group of tools from a single MCP
+type ToolsGroup struct {
+	Tools []ToolInfo `json:"tools"`
+	Total int        `json:"total"`
+}
+
 // ErrorResponse represents error response
 type ErrorResponse struct {
 	Status  string `json:"status"`
