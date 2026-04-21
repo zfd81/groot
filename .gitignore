@@ -41,6 +41,7 @@ tests/python/__pycache__/
 # 测试运行时产物（tests 目录）
 tests/logs/*.log
 tests/temp/
+tests/abs_path_test/
 
 # Claude Code 本地配置
 .claude/
