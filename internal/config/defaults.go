@@ -24,12 +24,14 @@ func DefaultConfig() *Config {
 			},
 		},
 		Skills: SkillsConfig{
+			Directory: "skills",
 			HotReload: HotReloadConfig{
 				Enabled:       true,
 				DebounceDelay: 2,
 			},
 		},
 		MCP: MCPConfig{
+			Directory: "mcp",
 			HotReload: HotReloadConfig{
 				Enabled:       true,
 				DebounceDelay: 2,
