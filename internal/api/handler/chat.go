@@ -83,6 +83,18 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
+	// 2.5. 提取 X-Model-Name header
+	modelName := string(rc.GetHeader("X-Model-Name"))
+
+	// 2.6. 验证模型名称
+	if modelName != "" && !h.config.LLM.ValidateModel(modelName) {
+		rc.JSON(400, utils.H{
+			"status":  "invalid_model",
+			"message": fmt.Sprintf("模型 '%s' 不存在", modelName),
+		})
+		return
+	}
+
 	// 3. 提取 X-Session-ID
 	sessionID := string(rc.GetHeader("X-Session-ID"))
 
@@ -259,6 +271,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		Progress:        &agent.ProgressInfo{},
 		Round:           round,
 		HistoryMessages: historyMessages,
+		ModelName:       modelName,
 	}
 
 	// 转换附件
