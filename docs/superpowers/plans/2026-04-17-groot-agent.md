@@ -211,7 +211,7 @@ type ServerConfig struct {
 
 // LLMConfig holds LLM settings
 type LLMConfig struct {
-	ActiveModel string                 `yaml:"active_model"`
+	DefaultModel string                 `yaml:"default_model"`
 	Models      map[string]ModelConfig `yaml:"models"`
 }
 
@@ -608,7 +608,7 @@ server:
 
 # LLM 配置（OpenAI兼容协议）
 llm:
-  active_model: gpt-4o
+  default_model: gpt-4o
   models:
     gpt-4o:
       endpoint: https://api.openai.com/v1

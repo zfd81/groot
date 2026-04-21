@@ -652,8 +652,8 @@ description: "热更新测试"
 class TestLLMMultiModelConfig:
     """LLM 多模型配置测试"""
 
-    def test_active_model_field(self, server):
-        """TC-LLM-CFG-001: active_model 配置"""
+    def test_default_model_field(self, server):
+        """TC-LLM-CFG-001: default_model 配置"""
         response = requests.get(f"{BASE_URL}/health")
 
         data = response.json()
@@ -661,7 +661,7 @@ class TestLLMMultiModelConfig:
         if "checks" in data and "llm" in data["checks"]:
             llm_check = data["checks"]["llm"]
             if "model" in llm_check:
-                # 验证 active_model 已设置
+                # 验证 default_model 已设置
                 assert llm_check["model"]
 
     def test_models_list_config(self, server, api_headers):

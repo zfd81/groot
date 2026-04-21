@@ -12,7 +12,7 @@ func DefaultConfig() *Config {
 			Port: 8080,
 		},
 		LLM: LLMConfig{
-			ActiveModel: "gpt-4o",
+			DefaultModel: "gpt-4o",
 			Models: map[string]ModelConfig{
 				"gpt-4o": {
 					BaseURL:     "https://api.openai.com/v1",

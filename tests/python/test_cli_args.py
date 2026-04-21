@@ -206,7 +206,7 @@ security:
         # 配置中使用环境变量引用
         config_content = """
 llm:
-  active_model: mock
+  default_model: mock
   models:
     mock:
       base_url: http://localhost:8888

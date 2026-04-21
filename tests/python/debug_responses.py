@@ -36,7 +36,7 @@ def create_config():
         },
         "api_keys": [TEST_API_KEY],
         "llm": {
-            "active_model": "mock-model",
+            "default_model": "mock-model",
             "models": {
                 "mock-model": {
                     "base_url": "http://localhost:8888/mock",
