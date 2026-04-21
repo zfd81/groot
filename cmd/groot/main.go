@@ -15,6 +15,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
@@ -131,6 +132,12 @@ func main() {
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
 
+	// Start GROOT.md watcher (unconditionally)
+	grootMdWatcher := grootmd.NewWatcher(homeDir, log)
+	if err := grootMdWatcher.Start(); err != nil {
+		log.Error("无法启动 GROOT.md watcher", zap.Error(err))
+	}
+
 	// Start cleanup scheduler
 	cleanupScheduler := memory.NewCleanupScheduler(memMgr, cfg.Memory.CleanupSchedule, log)
 	cleanupScheduler.Start()
@@ -157,6 +164,7 @@ func main() {
 		srv.Stop(ctx)
 
 		// Stop watchers
+		grootMdWatcher.Stop()
 		skillWatcher.Stop()
 		mcpWatcher.Stop()
 
