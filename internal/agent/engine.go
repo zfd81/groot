@@ -157,6 +157,16 @@ eventLoop:
 			// Process event
 			if event.Err != nil {
 				e.log.Error("Agent event error: " + event.Err.Error())
+				// 检查是否是严重错误（如连接失败），应该返回给调用者
+				// NodeRunError 表示节点执行失败，通常是 LLM 连接问题
+				if strings.Contains(event.Err.Error(), "NodeRunError") ||
+					strings.Contains(event.Err.Error(), "connection refused") ||
+					strings.Contains(event.Err.Error(), "dial tcp") ||
+					strings.Contains(event.Err.Error(), "no such host") ||
+					strings.Contains(event.Err.Error(), "timeout") {
+					// 直接返回错误，让 executor 统一处理 SSE 错误发送
+					return nil, fmt.Errorf("LLM 服务连接失败: %w", event.Err)
+				}
 				continue
 			}
 
