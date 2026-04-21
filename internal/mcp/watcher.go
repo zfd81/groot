@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -39,6 +40,11 @@ func NewWatcher(manager *Manager, cfg config.MCPConfig, log *logger.Logger) *Wat
 func (w *Watcher) Start(dir string) error {
 	if !w.config.HotReload.Enabled {
 		return nil
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
 	}
 
 	watcher, err := fsnotify.NewWatcher()

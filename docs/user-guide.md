@@ -1,7 +1,7 @@
 # Groot AI Agent 使用手册
 
 **版本:** 1.0.0  
-**日期:** 2026-04-18
+**日期:** 2026-04-19
 
 ---
 
@@ -9,31 +9,42 @@
 
 ### 1.1 什么是 Groot
 
-Groot 是一款面向业务系统的 AI Agent 服务中间件。通过 REST API 接入，让你的系统立刻拥有智能任务执行能力——接收自然语言指令，自主调用工具完成任务，实时反馈执行进度。
+Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你的系统立刻拥有智能任务执行能力——理解指令、调用工具、自主完成任务。
 
-**一句话概括：** 把 AI Agent 能力嵌入你的业务系统，像调用普通 API一样使用智能执行能力。
+**一句话概括：** 把 AI Agent 能力嵌入你的业务系统，像调用普通 API 一样使用智能执行能力。
 
 ### 1.2 核心特性
 
 | 特性 | 说明 |
 |------|------|
-| **自然语言交互** | 接收指令 + 附件，无需编写复杂逻辑，AI 自动理解意图 |
-| **智能决策执行** | 自动判断需要调用哪些 Skills 或 MCP 工具，自主完成任务 |
-| **流式进度反馈** | SSE 实时推送执行过程，调用方全程可见，便于监控和调试 |
-| **附件处理** | 支持 Base64 编码文件和 URL 链接，自动存储、传递、清理 |
-| **Skills 扩展** | 通过编写 Skill 文件定义专属任务模板，热插拔无需重启 |
-| **MCP 工具集成** | 内置文件操作、HTTP 请求工具，支持外部 MCP 服务接入 |
+| **多轮对话** | 支持会话（Session）概念，同一会话内可进行多轮对话，Agent 自动记住历史上下文 |
+| **自然语言交互** | 接收指令 + 附件，无需编写代码逻辑，AI 自动理解意图 |
+| **智能决策执行** | 自动判断意图，自主选择调用 Skills 或 MCP 工具完成任务 |
+| **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
+| **Skills 嵌套** | 复杂任务自动拆解，子任务递归执行 |
+| **热插拔扩展** | Skills 和 MCP 工具支持动态添加，无需重启服务 |
 
-### 1.3 典型应用场景
+### 1.3 会话与对话
 
-| 场景 | 说明 | 示例指令 |
-|------|------|---------|
-| **文档分析** | 上传 PDF/Word 文件，自动提取关键信息并生成摘要 | "分析这份财报，提取关键财务指标" |
-| **数据处理** | 上传 CSV/JSON 数据文件，执行统计分析并生成报告 | "分析销售数据，计算月度增长趋势" |
-| **代码生成** | 根据需求描述生成代码片段 | "写一个 Python 快速排序函数" |
-| **内容创作** | 根据素材生成营销文案、技术文档等 | "根据产品特性写一篇推广文章" |
-| **信息检索** | 通过 HTTP 工具获取网络数据并整理 | "获取天气信息并生成出行建议" |
-| **多文件对比** | 同时上传多个文件，对比分析差异 | "对比这份合同和模板，找出修改条款" |
+**会话（Session）：**
+- 会话是多轮对话的容器，每个会话有唯一的 `session_id`
+- 会话内的所有对话共享历史上下文，Agent 能记住之前的交流
+- 会话数据存储在文件系统的 `memory` 目录
+
+**对话（Chat）：**
+- 每次调用 `/chat` API 都会产生一次对话
+- 对话属于某个会话，同一会话内的对话按轮次编号
+- 每次对话的详细执行记录独立存储
+
+**关系图：**
+
+```
+Session（会话）
+  ├── Chat 1（第1轮对话）→ 历史 + 结果
+  ├── Chat 2（第2轮对话）→ 历史 + 结果 + 第1轮上下文
+  ├── Chat 3（第3轮对话）→ 历史 + 结果 + 第1、2轮上下文
+  └── ...
+```
 
 ### 1.4 技术架构
 
@@ -52,7 +63,8 @@ Groot 是一款面向业务系统的 AI Agent 服务中间件。通过 REST API 
 │  └─────────────┘  └─────────────┘  └─────────────┘          │
 │                              ↓                               │
 │  ┌─────────────┐  ┌─────────────┐                            │
-│  │ BoltDB 存储 │  │ Skills 注册 │                            │
+│  │ Memory 存储 │  │ Skills 注册 │                            │
+│  │ (JSON文件)  │  │             │                            │
 │  └─────────────┘  └─────────────┘                            │
 └─────────────────────────────────────────────────────────────┘
                               ↓
@@ -66,41 +78,52 @@ Groot 是一款面向业务系统的 AI Agent 服务中间件。通过 REST API 
 
 ## 二、工作目录结构
 
-Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过参数或环境变量修改。
+Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过命令行或环境变量更改。
 
 ### 2.1 目录结构
 
 ```
 {GROOT_HOME}/
-├── config.yaml          # 主配置文件（首次启动自动生成）
-├── groot.db             # BoltDB 数据库文件（任务记录）
-├── skills/              # Skills 目录（任务模板）
-│   └── {skill-name}/
-│       └── SKILL.md     # Skill 定义文件
-├── mcp/                 # MCP 配置目录（工具配置）
-│   ├── file_operations.json   # 内置文件操作工具
-│   ├── http_request.json      # 内置 HTTP 请求工具
-│   └── {custom-mcp}.json      # 自定义 MCP 配置
-├── logs/                # 日志目录
-│   └── groot-{date}.log # 按日期分割的日志文件
-└── temp/                # 附件临时存储目录
-    └── task-{id}/       # 每个任务的独立目录
-        ├── file1.pdf    # 任务附件
-        └── file2.csv
+├── config.yaml                    # 主配置文件
+├── skills/                        # Skills 目录
+│   └── {skill-name}/SKILL.md      # Skill 定义文件
+├── mcp/                           # MCP 配置目录
+│   └── {mcp-name}.json            # MCP 配置文件
+├── memory/                        # 记忆模块目录
+│   └── {session_id}/              # 会话目录
+│       ├── history.json           # 对话历史（含执行元数据摘要）
+│       ├── attachments/           # 附件目录
+│       │   └── {filename}         # 附件文件
+│       └── chats/                 # 详细执行记录目录
+│           └── chat_{timestamp}.json  # 单次对话完整记录
+├── logs/                          # 日志目录
+│   └── groot-{date}.log           # 日志文件
 ```
 
 ### 2.2 目录说明
 
-| 目录/文件 | 说明 | 可配置 |
-|----------|------|--------|
-| `config.yaml` | 主配置文件，控制服务行为 | 自动生成，可手动修改 |
-| `groot.db` | BoltDB 数据库，存储任务记录 | 配置文件指定路径 |
-| `skills/` | Skills 定义目录，支持热插拔 | 固定位置 |
-| `mcp/` | MCP 工具配置目录，支持热插拔 | 固定位置 |
-| `logs/` | 日志存储目录 | 配置文件指定 |
-| `temp/` | 附件临时存储，任务完成后自动清理 | 支持绝对路径配置 |
+| 目录/文件 | 说明 |
+|----------|------|
+| `config.yaml` | 主配置文件，控制服务行为 |
+| `skills/` | Skills 定义目录，支持热插拔 |
+| `mcp/` | MCP 工具配置目录，支持热插拔 |
+| `memory/` | 会话数据目录（JSON 存储） |
+| `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
+| `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
+| `logs/` | 日志存储目录 |
 
-### 2.3 工作目录配置方式
+### 2.3 ID 格式说明
+
+| ID 类型 | 格式 | 示例 |
+|---------|------|------|
+| `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260419103000523_a1b2` |
+| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260419103000523` |
+
+**说明：**
+- `session_id`：会话唯一标识，毫秒级时间戳 + 4位随机字符
+- `chat_id`：单次对话标识，固定前缀 `chat_` + 毫秒级时间戳
+
+### 2.4 工作目录配置方式
 
 | 方式 | 示例 | 优先级 |
 |------|------|--------|
@@ -119,97 +142,92 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | 操作系统 | Linux / macOS / Windows |
 | Go 版本 | Go 1.21+（仅源码编译需要） |
 | 内存 | 建议 512MB+ |
-| 磁盘 | 建议 1GB+（用于附件临时存储和数据库） |
+| 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
 
 ### 3.2 环境准备
 
-**配置 LLM API 密钥：**
+#### 配置文件
 
-Groot 需要配置 LLM API 密钥才能正常工作。有两种配置方式：
+Groot 首次启动时会自动生成默认配置文件 `{GROOT_HOME}/config.yaml`。
 
-**方式一：配置文件中直接写入（简单但不够安全）**
+**配置项概览：**
+
+| 配置项 | 必需性 | 说明 |
+|------|------|------|
+| `llm` | **必需** | LLM 配置，必须至少配置一个可用模型 |
+| 其他配置项 | 可选 | 均有默认值，详见第四章"配置文件详解" |
+
+> **重点：** 只有 `llm` 配置是必需的，其他配置项均可使用默认值。
+
+#### LLM 配置示例
+
+LLM 配置决定 Agent 使用哪个大模型执行任务。以下是一个最小配置示例：
 
 ```yaml
 llm:
+  active_model: gpt-4o           # 当前激活的模型
   models:
     gpt-4o:
-      api_key: sk-xxxxxxxxxxxx    # 直接写密钥
+      base_url: https://api.openai.com/v1
+      api_key: xxx                          # API 密钥
+      model: gpt-4o
 ```
 
-**方式二：配置文件引用环境变量（推荐，更安全）**
+`api_key` 支持两种写法：
+
+```yaml
+# 方式一：环境变量引用（推荐）
+api_key: ${OPENAI_API_KEY}
+
+# 方式二：直接写入密钥
+api_key: sk-xxxxxxxxxxxx
+```
+
+> **推荐环境变量：** 避免密钥硬编码，便于环境切换。若使用 `${VAR_NAME}`，需设置对应环境变量；若直接写密钥，则不需要。
+
+#### 多模型配置示例
+
+可配置多个模型，通过 `active_model` 切换（需重启）：
 
 ```yaml
 llm:
+  active_model: gpt-4o
   models:
     gpt-4o:
-      api_key: ${OPENAI_API_KEY}   # 引用环境变量
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4o
+    
+    claude-3.5:
+      base_url: https://api.anthropic.com/v1
+      api_key: ${ANTHROPIC_API_KEY}
+      model: claude-3-5-sonnet-20241022
+    
+    qwen-plus:
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: ${DASHSCOPE_API_KEY}
+      model: qwen-plus
 ```
 
-然后设置环境变量：
+#### 环境变量
+
+**固定环境变量：**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `GROOT_HOME` | 工作目录 | `~/.groot` |
+
+**用户自定义环境变量：**
+
+配置文件中 `${VAR_NAME}` 引用的变量名由用户自定义，是否需要设置取决于配置文件的写法：
 
 ```bash
-# LLM API 密钥（配置文件引用时需要）
-export OPENAI_API_KEY="sk-xxxxxxxxxxxx"
-
-# 其他 LLM 服务密钥（如使用多模型配置）
+# 示例（变量名可自定义）
+export OPENAI_API_KEY="sk-xxxx"
 export ANTHROPIC_API_KEY="sk-ant-xxxx"
-export DASHSCOPE_API_KEY="sk-xxxx"
 ```
 
-> **说明：** 
-> - 环境变量不是必须配置的，取决于配置文件中的写法
-> - 使用 `${VAR_NAME}` 格式引用环境变量，避免密钥硬编码
-> - 配置文件中可以配置多个模型的 API Key，见第四章配置详解
-
-**认证密钥（启用认证时需要）：**
-
-Groot 支持配置多个 API Key，每个 Key 可以设置不同的权限范围。
-
-**配置示例：**
-
-```yaml
-security:
-  auth:
-    enabled: true
-    api_key:
-      keys:
-        # Key 1：管理员，全部权限
-        - name: admin
-          key: ${GROOT_ADMIN_KEY}
-          permissions: [all]
-        
-        # Key 2：业务系统，执行权限
-        - name: business_system
-          key: biz-key-2026-secret
-          permissions: [execute, status, cancel]
-        
-        # Key 3：监控服务，只读权限
-        - name: monitor
-          key: ${GROOT_MONITOR_KEY}
-          permissions: [status, health, skills, tools, history]
-```
-
-**对应的环境变量（配置文件引用时需要）：**
-
-```bash
-# 管理员 API Key
-export GROOT_ADMIN_KEY="admin-secret-key"
-
-# 监控服务 API Key
-export GROOT_MONITOR_KEY="monitor-secret-key"
-```
-
-> **说明：**
-> - 可以配置多个 API Key，每个 Key 有独立的名称和权限
-> - 权限包括：`execute`、`cancel`、`status`、`history`、`detail`、`skills`、`tools`、`health`、`all`
-> - 完整权限配置说明见第四章配置详解
-
-**其他可选环境变量：**
-
-```bash
-# 工作目录（可选，默认 ~/.groot）
-export GROOT_HOME="/opt/groot"
-```
+> **判断方法：** 配置文件有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
 
 ### 3.3 安装方式
 
@@ -242,44 +260,20 @@ go build -o bin/groot cmd/groot/main.go
 # 或者使用 Makefile
 make build
 
-# 编译完成后，运行方式：
-
-# 方式 A：直接运行编译后的程序
+# 运行
 ./bin/groot
-
-# 方式 B：移动到 PATH 目录，方便全局调用
-mv bin/groot /usr/local/bin/groot
-groot
-
-# 方式 C：直接运行（无需编译）
-go run cmd/groot/main.go
 ```
 
 ### 3.4 启动服务
 
-根据安装方式选择启动方法：
-
 ```bash
-# 方式一：预编译二进制（已移动到 PATH）
+# 方式一：预编译二进制
 groot
 
-# 方式二：源码编译（未移动到 PATH）
+# 方式二：源码编译
 ./bin/groot
 
-# 方式三：直接运行（无需编译）
-go run cmd/groot/main.go
-```
-
-**常用启动参数：**
-
-```bash
-# 指定工作目录
-groot -H /opt/groot
-
-# 指定端口
-groot -p 9090
-
-# 组合使用
+# 指定工作目录和端口
 groot -H /opt/groot -p 9090
 
 # 查看帮助
@@ -288,6 +282,15 @@ groot --help
 # 查看版本
 groot --version
 ```
+
+**启动参数：**
+
+| 参数 | 缩写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--home` | `-H` | 工作目录 | `~/.groot` |
+| `--port` | `-p` | HTTP端口 | 配置文件值 |
+| `--help` | `-h` | 显示帮助 | - |
+| `--version` | `-v` | 显示版本 | - |
 
 **启动输出示例：**
 
@@ -318,7 +321,8 @@ curl http://localhost:8080/health
   "checks": {
     "llm": {"status": "healthy", "model": "gpt-4o"},
     "mcp_servers": {"status": "healthy", "servers": ["file_operations", "http_request"]},
-    "skills": {"status": "healthy", "count": 4}
+    "skills": {"status": "healthy", "count": 4},
+    "memory": {"status": "healthy", "used_mb": 256}
   }
 }
 ```
@@ -334,7 +338,8 @@ kill -SIGTERM <pid>
 
 服务会优雅关闭：
 - 停止接受新请求
-- 等待当前任务完成（超时 30 秒）
+- 等待当前对话完成（超时 30 秒）
+- 停止清理调度器
 - 关闭 MCP 连接
 - 刷新日志
 - 退出程序
@@ -353,247 +358,206 @@ kill -SIGTERM <pid>
 # Groot Agent 配置文件
 # 生成时间: 2026-04-18
 
-# ============================================================
 # Agent 基础配置
-# ============================================================
 agent:
-  name: groot           # 服务名称，用于日志和监控标识
-  version: 1.0.0        # 版本号
+  name: groot                      # Agent 名称
+  version: 1.0.0                   # Agent 版本号
 
-# ============================================================
 # HTTP 服务配置
-# ============================================================
 server:
-  host: 0.0.0.0         # 监听地址，0.0.0.0 表示所有网卡
-                        # 内网部署可改为 127.0.0.1
-  port: 8080            # 监听端口
-                        # 可通过命令行 -p 参数覆盖
+  host: 0.0.0.0                    # 服务监听地址
+  port: 8080                       # 服务监听端口
 
-# ============================================================
-# LLM 配置（OpenAI 兼容协议）
-# ============================================================
+# LLM 配置（OpenAI兼容协议）
 llm:
-  active_model: gpt-4o  # 当前激活的模型，对应 models 中的某个 key
-                        # 切换模型需重启服务
-  
+  active_model: gpt-4o             # 当前激活的模型名称
   models:
-    # OpenAI GPT-4o
-    gpt-4o:
-      base_url: https://api.openai.com/v1   # API 地址
-                                              # 可改为兼容服务的地址
-      api_key: ${OPENAI_API_KEY}             # API 密钥，支持环境变量
-                                              # 也可直接写明文（不推荐）
-      model: gpt-4o                          # 实际模型名称
-      max_tokens: 4096                       # 单次调用最大 Token
-      temperature: 0.7                       # 输出随机性（0-1）
-    
-    # Anthropic Claude（示例）
+    gpt-4o:                        # 模型配置名称（自定义）
+      base_url: https://api.openai.com/v1    # LLM API 地址
+      api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
+      model: gpt-4o                          # 实际调用时的模型名称
+      max_tokens: 4096                       # 单次调用最大 Token 数
+      temperature: 0.7                       # 输出随机性（0-1，越高越随机）
     claude-3.5:
       base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-3-5-sonnet-20241022
       max_tokens: 4096
       temperature: 0.7
-    
-    # 国内兼容服务（示例）
-    dashscope:
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api_key: ${DASHSCOPE_API_KEY}
-      model: qwen-plus
-      max_tokens: 4096
-      temperature: 0.7
 
-# ============================================================
 # Skills 热插拔配置
-# ============================================================
 skills:
   hot_reload:
-    enabled: true        # 是否启用热插拔
-                        # true: 修改 SKILL.md 自动生效
-                        # false: 需重启服务
-    debounce_delay: 2    # 防抖延迟（秒）
-                        # 防止编辑过程中频繁触发加载
+    enabled: true                  # 是否启用 Skills 热插拔
+    debounce_delay: 2              # 防抖延迟（秒）
 
-# ============================================================
 # MCP 热插拔配置
-# ============================================================
 mcp:
   hot_reload:
-    enabled: true        # 是否启用热插拔
-                        # true: 修改 .json 配置自动生效
-                        # false: 需重启服务
-    debounce_delay: 2    # 防抖延迟（秒）
+    enabled: true                  # 是否启用 MCP 热插拔
+    debounce_delay: 2              # 防抖延迟（秒）
 
-# ============================================================
-# 存储配置
-# ============================================================
-storage:
-  engine: boltdb         # 存储引擎：boltdb（单机）、redis（集群预留）、etcd（集群预留）
-  
-  boltdb:
-    file: groot.db       # 数据库文件名（相对工作目录）
-                        # 也可使用绝对路径：/data/groot/groot.db
-    bucket: tasks        # 存储桶名称
-  
-  redis:                 # Redis 配置（集群预留）
-    endpoint: ${REDIS_ENDPOINT}
-    password: ${REDIS_PASSWORD}
-    key_prefix: groot:task:
-  
-  etcd:                  # etcd 配置（集群预留）
-    endpoints: [${ETCD_ENDPOINT_1}, ${ETCD_ENDPOINT_2}]
-    key_prefix: /groot/tasks/
-  
-  retention_days: 7      # 任务记录保留天数
-                        # 超过天数自动清理
-  cleanup_interval: 24h  # 清理任务执行间隔
-
-# ============================================================
-# 性能控制配置
-# ============================================================
-performance:
-  rate_limit:
-    max_concurrent_tasks: 10       # 最大并发任务数
-                                    # 超过返回 429 Too Many Requests
-    max_requests_per_minute: 60    # 每分钟最大请求数
-    max_requests_per_hour: 1000    # 每小时最大请求数
-  
-  timeout:
-    task_max_duration: 300         # 单任务最大执行时长（秒）
-                                    # 超过自动终止
-    llm_call_timeout: 60           # 单次 LLM 调用超时（秒）
-    tool_call_timeout: 30          # 单次工具调用超时（秒）
-  
-  llm:
-    max_concurrent_calls: 5        # LLM 并发调用数限制
-    retry_on_failure: 3            # LLM 调用失败重试次数
-    retry_delay: 2                 # 重试间隔（秒）
-  
-  mcp:
-    max_concurrent_calls_per_server: 3  # 每个 MCP 服务并发调用数限制
-
-# ============================================================
 # ReAct 执行配置
-# ============================================================
 react:
-  max_iterations: 20          # 最大循环次数，防止无限循环
-                              # -1 表示不限制
-  max_tokens: 100000          # 最大 Token 消耗，防止成本失控
-                              # -1 表示不限制
-  step_timeout: 60            # 单步执行超时（秒）
-                              # -1 表示不限制
-  error_retry: 2              # 单步失败重试次数
-  nesting_max_depth: 3        # Skills 嵌套最大深度
-                              # -1 表示不限制
+  max_iterations: 20               # 最大循环次数，-1 表示不限制
+  max_tokens: 100000               # 最大Token消耗，-1 表示不限制
+  step_timeout: 60                 # 单步执行超时（秒），-1 表示不限制
+  error_retry: 2                   # 单步失败重试次数
+  nesting_max_depth: 3             # Skills嵌套最大深度，-1 表示不限制
 
-# ============================================================
 # 附件处理配置
-# ============================================================
 attachment:
-  max_size: 50                    # 单个附件最大大小（MB）
-                                  # 建议 10-50MB
-  max_total_size: 100             # 所有附件总大小上限（MB）
-  max_count: 10                   # 单次请求最大附件数量
-  allowed_types:                  # 允许的附件类型（扩展名）
-    - pdf
-    - doc
-    - docx
-    - txt
-    - json
-    - csv
-    - xml
-    - yaml
-    - png
-    - jpg
-    - zip
-  
-  # 附件临时存储目录配置说明：
-  # --------------------------------
-  # 相对路径：与工作目录拼接
-  #   temp          → {GROOT_HOME}/temp
-  #   ./temp        → {GROOT_HOME}/temp（等效）
-  #   data/files    → {GROOT_HOME}/data/files
-  #
-  # 绝对路径：直接使用（以 / 开头）
-  #   /home/zfd/temp           → /home/zfd/temp
-  #   /tmp/groot               → /tmp/groot（系统临时目录）
-  #   /data/storage/attachments → /data/storage/attachments
-  #
-  # 建议：
-  #   - 单实例部署：使用相对路径 temp（默认）
-  #   - 需要更大磁盘：使用绝对路径指向独立存储盘
-  #   - 系统临时目录：使用 /tmp/groot（注意清理策略）
-  temp_directory: temp
+  max_size: 50                     # 单个附件最大大小（MB）
+  max_total_size: 100              # 附件总大小上限（MB）
+  max_count: 10                    # 附件数量上限
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, jpeg, zip]  # 允许的附件类型
 
-# ============================================================
+# 记忆模块配置
+memory:
+  directory: memory                # 记忆目录（相对路径或绝对路径）
+  retention_days: 7                # 会话保留天数
+  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
+
 # 安全配置
-# ============================================================
 security:
   auth:
-    enabled: false              # 是否开启认证
-                                # true: 需要 API Key
-                                # false: 无需认证（内网/集群模式）
-    type: api_key               # 认证类型，目前只支持 api_key
-    
+    enabled: true                  # 是否开启认证
+    type: api_key                  # 认证类型
     api_key:
-      header_name: X-API-Key    # 认证 Header 名称
-                                # 客户端需在请求头携带此字段
-      
-      keys:                     # API Key 配置列表
-        # 示例1：管理员账号，全部权限
-        - name: admin
-          key: ${GROOT_API_KEY}       # 密钥值，支持环境变量
-          permissions:                # 权限列表
-            - all                     # all 表示全部权限
-        
-        # 示例2：业务系统账号，执行权限
-        - name: business_system
-          key: biz-key-2026-secret
-          permissions:
-            - execute        # 执行任务
-            - status         # 查询状态
-            - cancel         # 取消任务
-        
-        # 示例3：监控账号，只读权限
-        - name: monitor
-          key: ${MONITOR_API_KEY}
-          permissions:
-            - status         # 查询状态
-            - health         # 健康检查
-            - skills         # 查看 Skills
-            - tools          # 查看 MCP 工具
-            - history        # 查询历史
+      header_name: X-API-Key       # 认证 Header 名称
+      keys:
+        - name: default            # Key 名称（唯一标识）
+          key: ${GROOT_API_KEY}    # Key 值（支持环境变量引用）
+          permissions: all         # 权限范围：all 或 [chat, status, ...]
 
-# ============================================================
 # 日志配置
-# ============================================================
 logging:
-  level: info              # 日志级别：debug / info / warn / error
-  format: json             # 日志格式：json / text
-  output:                  # 输出目标
-    - stdout               # 标准输出
-    - file                 # 文件
-  
+  level: info                      # 日志级别：debug/info/warn/error
+  format: json                     # 日志格式：json/text
+  output: [stdout, file]           # 输出目标：stdout/file（可同时输出）
   file:
-    directory: logs        # 日志目录（相对工作目录）
-                           # 也可使用绝对路径：/var/log/groot
-    filename_pattern: groot-{date}.log   # 文件名模式
-    max_age: 7             # 日志保留天数
+    directory: logs                # 日志文件目录
+    filename_pattern: groot-{date}.log  # 文件名模式，{date} 替换为 YYYY-MM-DD
+    max_age: 7                     # 日志保留天数
+    max_size: 100                  # 单个日志文件最大大小（MB），超过则轮转
+    compress: false                # 是否压缩旧日志文件
 ```
 
-### 4.3 权限说明
+### 4.3 配置字段详解
+
+#### Agent 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `name` | 否 | Agent 名称，用于日志标识，默认 `groot` |
+| `version` | 否 | Agent 版本号，默认 `1.0.0` |
+
+#### Server 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `host` | 否 | 监听地址，默认 `0.0.0.0`（所有网卡） |
+| `port` | 否 | 监听端口，默认 `8080` |
+
+#### LLM 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `active_model` | **是** | 当前激活的模型名称，对应 models 中的某个 key，修改后需重启 |
+| `models.{name}.base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
+| `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
+| `models.{name}.model` | **是** | 实际调用时的模型名称 |
+| `models.{name}.max_tokens` | 否 | 单次调用最大 Token 数，默认 `4096` |
+| `models.{name}.temperature` | 否 | 输出随机性（0-1），默认 `0.7` |
+
+#### Skills 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
+| `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
+
+#### MCP 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
+| `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
+
+#### ReAct 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `max_iterations` | 否 | 最大循环次数，默认 `20`，`-1` 表示不限 |
+| `max_tokens` | 否 | 最大 Token 消耗，默认 `100000`，`-1` 表示不限 |
+| `step_timeout` | 否 | 单步执行超时（秒），默认 `60`，`-1` 表示不限 |
+| `error_retry` | 否 | 单步失败重试次数，默认 `2` |
+| `nesting_max_depth` | 否 | Skills 嵌套最大深度，默认 `3`，`-1` 表示不限 |
+
+#### Attachment 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `max_size` | 否 | 单个附件最大大小（MB），默认 `50` |
+| `max_total_size` | 否 | 附件总大小上限（MB），默认 `100` |
+| `max_count` | 否 | 单次请求最大附件数量，默认 `10` |
+| `allowed_types` | 否 | 允许的文件扩展名列表，默认常见文档和图片类型 |
+
+#### Memory 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `directory` | 否 | 记忆目录，相对路径拼接工作目录，绝对路径直接使用，默认 `memory` |
+| `retention_days` | 否 | 会话保留天数，超过后自动清理，默认 `7` |
+| `cleanup_schedule` | 否 | 清理任务执行时间（HH:MM），默认 `02:00` |
+
+#### Security 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `auth.enabled` | 否 | 是否开启认证，默认 `false` |
+| `auth.type` | 否 | 认证类型，目前只支持 `api_key` |
+| `auth.api_key.header_name` | 否 | 认证 Header 名称，默认 `X-API-Key` |
+| `auth.api_key.keys[].name` | 否 | Key 名称（唯一标识） |
+| `auth.api_key.keys[].key` | 否 | Key 值，支持 `${VAR_NAME}` 引用 |
+| `auth.api_key.keys[].permissions` | 否 | 权限范围：`all` 或 `[chat, status, ...]` |
+
+#### Logging 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `level` | 否 | 日志级别：`debug`/`info`/`warn`/`error`，默认 `info` |
+| `format` | 否 | 日志格式：`json`/`text`，默认 `json` |
+| `output` | 否 | 输出目标：`[stdout, file]`，可同时输出 |
+| `file.directory` | 否 | 日志文件目录，默认 `logs` |
+| `file.filename_pattern` | 否 | 文件名模式，`{date}` 替换为 YYYY-MM-DD |
+| `file.max_age` | 否 | 日志保留天数，默认 `7` |
+| `file.max_size` | 否 | 单个日志文件最大大小（MB），默认 `100` |
+| `file.compress` | 否 | 是否压缩旧日志文件，默认 `false` |
+
+### 4.4 权限说明
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
-| `execute` | POST /task/execute | 执行任务 |
-| `cancel` | DELETE /task/{task_id} | 取消任务 |
-| `status` | GET /task/status/{task_id} | 查询状态 |
-| `history` | GET /task/history | 查询历史任务列表 |
-| `detail` | GET /task/{task_id} | 查询任务详情 |
+| `chat` | POST /chat | 执行对话 |
+| `cancel` | DELETE /chat/{sid} | 取消对话 |
+| `status` | GET /chat/status/{sid} | 查询对话状态 |
+| `detail` | GET /chat/{sid} | 查询对话详情 |
+| `session` | GET /sess/{sid} | 查询会话详情 |
+| `history` | GET /sess/history | 查询会话列表 |
 | `skills` | GET /skills | 查看 Skills 列表 |
 | `tools` | GET /tools | 查看 MCP 工具列表 |
 | `health` | GET /health | 健康检查 |
 | `all` | 以上全部 | 全部权限 |
+
+### 4.5 配置热更新
+
+**支持热更新的配置：**
+- Skills 配置：修改 SKILL.md 文件自动生效
+- MCP 配置：修改 .json 文件自动生效
+
+**不支持热更新的配置：**
+- LLM 配置、Server 配置、Security 配置、Memory 配置、Logging 配置需重启服务
 
 ---
 
@@ -628,10 +592,10 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 
 ## 执行步骤
 
-1. 使用 file_read 工具读取 PDF 文件
+1. 使用 file_operations.file_read 工具读取 PDF 文件
 2. 提取文档的关键内容和结构
 3. 根据文档类型生成相应的结构化摘要
-4. 输出 JSON 格式的分析结果
+4. 输出结构化的分析结果
 
 ## 输出格式
 
@@ -639,75 +603,18 @@ dependencies: []                      # 依赖的其他 Skill（可选）
   "document_type": "文档类型",
   "title": "文档标题",
   "key_points": ["关键要点"],
-  "summary": "详细摘要"
+  "summary": "详细摘要",
+  "recommendations": ["建议"]
 }
 ```
 
 ### 5.3 热插拔机制
 
 - 启用 `skills.hot_reload.enabled: true` 后，修改 `SKILL.md` 自动生效
+- 防抖延迟 `debounce_delay` 防止编辑过程中频繁触发加载
 - 新增 Skill：创建目录和 `SKILL.md` 文件
 - 修改 Skill：编辑 `SKILL.md` 内容
 - 删除 Skill：删除对应目录
-
-### 5.4 内置 Skills 示例
-
-Groot 启动后可手动创建以下 Skills：
-
-**code_generator（代码生成）：**
-
-```markdown
----
-name: code_generator
-description: "根据需求描述生成代码，支持多种编程语言"
----
-
-# 代码生成助手
-
-你是一个专业的代码生成助手。
-
-## 执行步骤
-
-1. 分析用户需求，明确功能目标
-2. 确定编程语言和代码结构
-3. 生成完整代码实现，包含注释
-4. 提供使用示例
-
-## 输出格式
-
-```{language}
-// 代码内容
-```
-
-**使用示例：**
-...
-```
-
-**data_analyzer（数据分析）：**
-
-```markdown
----
-name: data_analyzer
-description: "分析结构化数据文件（CSV、JSON等）"
----
-
-# 数据分析助手
-
-## 执行步骤
-
-1. 使用 file_read 工具读取数据文件
-2. 解析数据结构，识别字段类型
-3. 执行统计分析
-4. 输出分析报告
-
-## 输出格式
-
-{
-  "data_overview": {...},
-  "statistics": {...},
-  "insights": [...]
-}
-```
 
 ---
 
@@ -717,59 +624,22 @@ description: "分析结构化数据文件（CSV、JSON等）"
 
 ```
 {GROOT_HOME}/mcp/
-├── file_operations.json    # 内置文件操作
-├── http_request.json       # 内置 HTTP 请求
-└── custom_tool.json        # 自定义 MCP
+├── database_tool.json     # 数据库查询工具（stdio 类型）
+├── web_parser.json        # 网页解析服务（sse 类型）
+└── web_search.json        # 网络搜索服务（streamable_http 类型）
 ```
 
-### 6.2 内置 MCP 配置
+每个 MCP 工具使用独立的 JSON 配置文件，支持热插拔（修改配置文件自动生效）。
 
-**file_operations.json（文件操作）：**
+### 6.2 连接类型
 
-```json
-{
-  "name": "file_operations",
-  "type": "builtin",
-  "description": "文件读写和目录操作",
-  "isActive": true,
-  "tools": ["file_read", "file_write", "file_search", "directory_list", "directory_create"],
-  "restrictions": {
-    "allowed_paths": [],
-    "denied_operations": []
-  }
-}
-```
+| 类型 | 说明 | 适用场景 |
+|------|------|---------|
+| `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
+| `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
+| `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
 
-| 字段 | 说明 |
-|------|------|
-| `type: "builtin"` | 表示内置工具，无需外部连接 |
-| `allowed_paths` | 允许访问的目录列表，空数组表示无限制 |
-| `denied_operations` | 禁止的操作列表 |
-
-**http_request.json（HTTP 请求）：**
-
-```json
-{
-  "name": "http_request",
-  "type": "builtin",
-  "description": "HTTP 请求发送",
-  "isActive": true,
-  "tools": ["http_get", "http_post", "http_put", "http_delete"],
-  "restrictions": {
-    "denied_domains": ["localhost", "127.0.0.1", "10.*", "192.168.*"],
-    "timeout": 30,
-    "max_response_size": 10
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `denied_domains` | 禁止访问的域名/IP（防止 SSRF） |
-| `timeout` | 请求超时时间（秒） |
-| `max_response_size` | 最大响应大小（MB） |
-
-### 6.3 外部 MCP 配置
+### 6.3 MCP 配置示例
 
 **stdio 类型（本地命令行工具）：**
 
@@ -787,6 +657,16 @@ description: "分析结构化数据文件（CSV、JSON等）"
 }
 ```
 
+| 字段 | 说明 |
+|------|------|
+| `name` | MCP 名称，用于日志和调试 |
+| `type` | 连接类型，`stdio` 表示通过标准输入输出通信 |
+| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
+| `isActive` | 是否启用，`false` 时跳过加载 |
+| `command` | 要执行的可执行程序名称 |
+| `args` | 命令行参数数组，支持环境变量引用 `${VAR}` |
+| `env` | 环境变量映射，传递给子进程 |
+
 **sse 类型（远程 SSE 服务）：**
 
 ```json
@@ -801,6 +681,15 @@ description: "分析结构化数据文件（CSV、JSON等）"
   }
 }
 ```
+
+| 字段 | 说明 |
+|------|------|
+| `name` | MCP 名称，用于日志和调试 |
+| `type` | 连接类型，`sse` 表示 Server-Sent Events（单向推送） |
+| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
+| `isActive` | 是否启用，`false` 时跳过加载 |
+| `baseUrl` | 远程服务的 SSE 接口地址 |
+| `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
 
 **streamable_http 类型（HTTP 流式服务）：**
 
@@ -817,11 +706,49 @@ description: "分析结构化数据文件（CSV、JSON等）"
 }
 ```
 
+| 字段 | 说明 |
+|------|------|
+| `name` | MCP 名称，用于日志和调试 |
+| `type` | 连接类型，`streamable_http` 表示双向流式 HTTP 通信 |
+| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
+| `isActive` | 是否启用，`false` 时跳过加载 |
+| `baseUrl` | 远程服务的 API 地址 |
+| `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
+
+**连接类型对比：**
+
+| 类型 | 说明 | 适用场景 |
+|------|------|---------|
+| `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
+| `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
+| `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
+
+### 6.4 热插拔机制
+
+- 启用 `mcp.hot_reload.enabled: true` 后，修改 `.json` 文件自动生效
+- 新增 MCP：创建 `.json` 配置文件
+- 修改 MCP：编辑 `.json` 内容，断开旧连接建立新连接
+- 删除 MCP：删除对应 `.json` 文件
+
 ---
 
 ## 七、API 详细说明
 
-### 7.1 认证方式
+### 7.1 API 列表
+
+| API | 方法 | 用途 |
+|-----|------|------|
+| `/chat` | POST | 执行对话，SSE 流式返回（支持多轮对话） |
+| `/chat/{sid}` | DELETE | 取消正在执行的对话 |
+| `/chat/status/{sid}` | GET | 查询最近一次对话状态 |
+| `/chat/{sid}` | GET | 查询最近一次对话详情（完整步骤记录） |
+| `/sess/{sid}` | GET | 查询会话详情（完整对话历史） |
+| `/sess/history` | GET | 查询会话列表 |
+| `/health` | GET | 健康检查 |
+| `/skills` | GET | 列出可用 Skills |
+| `/tools` | GET | 列出可用 MCP 工具 |
+
+### 7.2 认证方式
 
 如果启用了认证（`security.auth.enabled: true`），需要在请求头携带 API Key：
 
@@ -829,781 +756,433 @@ description: "分析结构化数据文件（CSV、JSON等）"
 X-API-Key: your-secret-key
 ```
 
-Header 名称可在配置文件中自定义：
-
-```yaml
-security:
-  auth:
-    api_key:
-      header_name: X-Groot-Key  # 自定义 Header 名称
-```
+Header 名称可在配置文件中自定义。
 
 ---
 
-### 7.2 POST /task/execute - 执行任务
+### 7.3 POST /chat - 执行对话（核心接口）
 
-**功能说明：**
+**请求 Header：**
 
-执行 AI 任务，通过 SSE 流式返回执行进度和结果。适用于：
-- 文档分析、数据处理、代码生成等智能任务
-- 支持上传附件（PDF、CSV、图片等）
-- 实时获取执行进度，便于监控和调试
+| Header | 必填 | 说明 |
+|--------|------|------|
+| `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
+| `Content-Type` | 是 | `application/json` |
+| `X-API-Key` | 是 | 认证密钥（启用认证时） |
 
-**请求参数：**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `instruction` | string | 是 | 自然语言指令，描述要执行的任务 |
-| `prompt` | string | 否 | 系统提示词，设定 Agent 角色、行为约束 |
-| `attachments` | array | 否 | 附件列表 |
-
-**附件格式（file 类型）：**
+**请求 Body：**
 
 ```json
 {
-  "type": "file",
-  "name": "report.pdf",
-  "content": "base64编码内容"
+  "instruction": "自然语言指令",
+  "prompt": "系统提示词，设定Agent角色和行为约束（可选）",
+  "attachments": [
+    {
+      "type": "file",
+      "name": "filename.ext",
+      "content": "base64编码内容"
+    },
+    {
+      "type": "url",
+      "name": "filename.ext",
+      "url": "https://example.com/file"
+    }
+  ]
 }
 ```
 
-**附件格式（url 类型）：**
+**参数说明：**
 
-```json
-{
-  "type": "url",
-  "name": "external_data",
-  "content": "https://example.com/data.json"
-}
-```
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `instruction` | 是 | 用户任务指令 |
+| `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
+| `attachments` | 否 | 附件列表（Base64编码或URL）|
 
-**响应头：**
+**响应 Header：**
 
 | Header | 说明 |
 |--------|------|
-| `X-Task-ID` | 任务唯一标识，可用于查询状态、取消任务 |
-| `Content-Type` | `text/event-stream`（SSE 流式响应） |
+| `X-Session-ID` | 会话ID（新建或传入存在的） |
+| `X-Chat-ID` | 本次对话ID |
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
 
-**SSE 事件类型：**
+**SSE 响应格式：**
 
-| 事件 | 说明 | 示例数据 |
-|------|------|---------|
-| `intent` | 任务开始 | `{"timestamp":"2026-04-18T10:30:00Z"}` |
-| `step_start` | 步骤开始 | `{"type":"tool","name":"file_read","step_id":"xxx"}` |
-| `progress` | 进度更新 | `{"message":"正在读取PDF..."}` |
-| `step_end` | 步骤结束 | `{"status":"success"}` |
-| `completed` | 任务完成 | `{"status":"success","result":"..."}` |
+所有事件使用标准 SSE `data:` 格式：
+
+```
+data: <JSON内容>\n\n
+```
+
+流结束时发送：
+
+```
+data: [DONE]
+```
+
+**事件类型：**
+
+| 事件类型 | role 字段 | 说明 |
+|---------|----------|------|
+| thinking | `assistant` | AI 思考过程，逐步流式输出（`reasoning_content` 字段） |
+| message | `assistant` | AI 回答内容，逐步流式输出（`content` 字段） |
+| tool_calls | `assistant` | AI 决定调用工具（`tool_calls` 字段） |
+| finish | `assistant` | 当前响应阶段结束（`finish_reason` 字段） |
+| tool_result | `tool` | 工具执行结果 |
+| done | - | 整体对话结束标记 `[DONE]` |
+
+**事件流示例：**
+
+```
+data: {"role":"assistant","reasoning_content":"用户"}
+data: {"role":"assistant","reasoning_content":"要求"}
+data: {"role":"assistant","reasoning_content":"读取文件"}
+data: {"role":"assistant","tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]}
+data: {"role":"assistant","finish_reason":"tool_calls"}
+data: {"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost"}
+data: {"role":"assistant","reasoning_content":"好的"}
+data: {"role":"assistant","content":"文件内容如下："}
+data: {"role":"assistant","content":"127.0.0.1 localhost"}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**finish_reason 值说明：**
+
+| 值 | 含义 | 后续事件 |
+|---|------|---------|
+| `tool_calls` | AI 需要调用工具 | 后续有 `tool_result` 事件，然后 AI 继续响应 |
+| `stop` | 对话完成 | 后续为 `[DONE]` |
+
+**事件可选性说明：**
+
+| 事件类型 | 是否必须 | 说明 |
+|---------|---------|------|
+| thinking (`reasoning_content`) | 可选 | 仅当 AI 输出思考内容时发送 |
+| message (`content`) | **必须** | 最终回答内容，至少发送一次 |
+| tool_calls | 可选 | 仅当调用工具时发送 |
+| finish (`finish_reason`) | **必须** | 每个响应阶段结束时发送 |
+| tool_result | 可选 | 仅当调用工具时发送（紧跟 tool_calls） |
+| `[DONE]` | **必须** | 整体对话结束标记 |
+
+**不同场景的事件流：**
+
+**场景1：纯 LLM 回答（无 thinking）：**
+
+```
+data: {"role":"assistant","content":"回答内容..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**场景2：LLM 回答带 thinking：**
+
+```
+data: {"role":"assistant","reasoning_content":"思考..."}
+data: {"role":"assistant","content":"回答内容..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**场景3：工具调用：**
+
+```
+data: {"role":"assistant","reasoning_content":"我需要调用工具..."}
+data: {"role":"assistant","tool_calls":[...]}
+data: {"role":"assistant","finish_reason":"tool_calls"}
+data: {"role":"tool","tool_call_id":"xxx","tool_name":"file_read","content":"结果"}
+data: {"role":"assistant","content":"最终回答..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**数据结构定义：**
+
+**thinking / message：**
+
+```json
+{
+  "role": "assistant",
+  "reasoning_content": "思考内容（可选）",
+  "content": "回答内容（可选）"
+}
+```
+
+**tool_calls：**
+
+```json
+{
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "id": "call_xxx",
+      "type": "function",
+      "function": {
+        "name": "工具名称",
+        "arguments": "JSON格式参数字符串"
+      }
+    }
+  ]
+}
+```
+
+**tool_result：**
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "对应 tool_calls 中的 id",
+  "tool_name": "工具名称",
+  "content": "执行结果"
+}
+```
+
+工具执行失败时：
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_xxx",
+  "tool_name": "file_read",
+  "content": "",
+  "error": "文件不存在"
+}
+```
 
 **请求示例：**
 
+**新会话请求：**
 ```bash
-curl -X POST http://localhost:8080/task/execute \
+curl -X POST http://localhost:8080/chat \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"instruction": "写一个 Python 快速排序函数"}'
+  -d '{"instruction": "帮我分析这份PDF财务报告", "attachments": [{"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}]}'
 ```
 
-**Java 示例：**
-
-```java
-// 执行简单任务（无附件）
-public String executeTask(String instruction) throws Exception {
-    String jsonBody = "{\"instruction\":\"" + instruction + "\"}";
-    
-    Request request = new Request.Builder()
-        .url(baseUrl + "/task/execute")
-        .header("X-API-Key", apiKey)
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream")
-        .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-        .build();
-    
-    // SSE 流式处理
-    EventSourceListener listener = new EventSourceListener() {
-        @Override
-        public void onEvent(EventSource eventSource, String id, String type, String data) {
-            System.out.println("[" + type + "] " + data);
-            if ("completed".equals(type)) {
-                System.out.println("任务完成");
-            }
-        }
-    };
-    
-    EventSources.createFactory(client).newEventSource(request, listener);
-    return null; // task_id 在响应头中获取
-}
-
-// 执行带附件任务
-public String executeTaskWithFile(String instruction, String filePath) throws Exception {
-    byte[] fileContent = Files.readAllBytes(Paths.get(filePath));
-    String base64Content = Base64.getEncoder().encodeToString(fileContent);
-    String fileName = Paths.get(filePath).getFileName().toString();
-    
-    String jsonBody = String.format("""
-        {"instruction":"%s","attachments":[{"type":"file","name":"%s","content":"%s"}]}
-        """, instruction, fileName, base64Content);
-    
-    Request request = new Request.Builder()
-        .url(baseUrl + "/task/execute")
-        .header("X-API-Key", apiKey)
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream")
-        .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-        .build();
-    
-    EventSources.createFactory(client).newEventSource(request, listener);
-    return null;
-}
-```
-
-**Python 示例：**
-
-```python
-def execute_task(self, instruction: str, attachments: list = None, callback: callable = None) -> str:
-    """执行任务，返回 task_id"""
-    body = {"instruction": instruction}
-    
-    # 处理附件
-    if attachments:
-        processed = []
-        for att in attachments:
-            if att["type"] == "file":
-                with open(att["path"], "rb") as f:
-                    content = base64.b64encode(f.read()).decode()
-                processed.append({"type": "file", "name": att["name"], "content": content})
-            elif att["type"] == "url":
-                processed.append({"type": "url", "name": att["name"], "content": att["url"]})
-        body["attachments"] = processed
-    
-    # 发起 SSE 请求
-    response = requests.post(
-        f"{self.base_url}/task/execute",
-        headers=self.headers,
-        json=body,
-        stream=True
-    )
-    
-    task_id = response.headers.get("X-Task-ID")
-    
-    # 处理 SSE 流
-    event_type = None
-    for line in response.iter_lines():
-        if line:
-            line = line.decode()
-            if line.startswith("event:"):
-                event_type = line[6:].strip()
-            elif line.startswith("data:"):
-                data = line[5:].strip()
-                if callback:
-                    callback(event_type, data)
-    
-    return task_id
-
-# 调用示例
-task_id = groot.execute_task("分析这份财报", attachments=[
-    {"type": "file", "name": "report.pdf", "path": "/path/to/report.pdf"}
-], callback=lambda event, data: print(f"[{event}] {data}"))
-```
-
-**Go 示例：**
-
-```go
-// ExecuteTask 执行任务
-func (c *Client) ExecuteTask(ctx context.Context, instruction string, attachments []Attachment, callback func(SSEEvent)) (taskID string, err error) {
-    req := ExecuteRequest{
-        Instruction: instruction,
-        Attachments: attachments,
-    }
-    body, _ := json.Marshal(req)
-    
-    httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/task/execute", bytes.NewReader(body))
-    c.setHeaders(httpReq)
-    httpReq.Header.Set("Accept", "text/event-stream")
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return "", err
-    }
-    defer resp.Body.Close()
-    
-    taskID = resp.Header.Get("X-Task-ID")
-    
-    // 处理 SSE 流
-    scanner := bufio.NewScanner(resp.Body)
-    var eventType string
-    for scanner.Scan() {
-        line := scanner.Text()
-        if strings.HasPrefix(line, "event:") {
-            eventType = strings.TrimPrefix(line, "event:")
-        } else if strings.HasPrefix(line, "data:") {
-            data := strings.TrimPrefix(line, "data:")
-            if callback != nil {
-                callback(SSEEvent{Type: eventType, Data: data})
-            }
-        }
-    }
-    
-    return taskID, nil
-}
-
-// 调用示例
-taskID, _ := client.ExecuteTask(ctx, "写一个快速排序函数", nil, func(event SSEEvent) {
-    fmt.Printf("[%s] %s\n", event.Type, event.Data)
-})
+**继续会话请求：**
+```bash
+curl -X POST http://localhost:8080/chat \
+  -H "X-Session-ID: 20260419103000523_a1b2" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "根据刚才的分析，生成一份总结报告"}'
 ```
 
 ---
 
-### 7.3 DELETE /task/{task_id} - 取消任务
+### 7.4 DELETE /chat/{sid} - 取消对话
 
-**功能说明：**
-
-取消正在执行的任务。只能取消状态为 `running` 的任务，已完成或已取消的任务无法再次取消。
+取消指定会话中正在执行的对话。
 
 **请求参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `task_id` | string | 是 | 任务 ID（路径参数） |
-
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `status` | 结果状态：`success` 或失败状态码 |
-| `task_id` | 任务 ID |
-| `message` | 结果消息 |
+| `sid` | string | 是 | 会话 ID（路径参数） |
 
 **成功响应：**
-
 ```json
 {
   "status": "success",
-  "task_id": "task-20260418-103000523-a1b2",
-  "message": "任务已取消"
+  "session_id": "20260419103000523_a1b2",
+  "chat_id": "chat_20260419103000523",
+  "message": "对话已取消"
 }
 ```
 
-**失败响应（任务已完成）：**
-
+**失败响应（无运行对话）：**
 ```json
 {
-  "status": "task_completed",
-  "task_id": "task-20260418-103000523-a1b2",
-  "message": "任务已完成，无法取消"
-}
-```
-
-**失败响应（任务不存在）：**
-
-```json
-{
-  "status": "task_not_found",
-  "task_id": "task-xxx",
-  "message": "任务不存在"
+  "status": "no_running_chat",
+  "session_id": "20260419103000523_a1b2",
+  "message": "该会话当前没有正在执行的对话"
 }
 ```
 
 **请求示例：**
-
 ```bash
-curl -X DELETE http://localhost:8080/task/task-20260418-103000523-a1b2 \
+curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
   -H "X-API-Key: your-api-key"
-```
-
-**Java 示例：**
-
-```java
-public String cancelTask(String taskId) throws Exception {
-    Request request = new Request.Builder()
-        .url(baseUrl + "/task/" + taskId)
-        .header("X-API-Key", apiKey)
-        .delete()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
-}
-
-// 调用示例
-String result = groot.cancelTask("task-20260418-103000523-a1b2");
-System.out.println(result);  // {"status":"success","message":"任务已取消"}
-```
-
-**Python 示例：**
-
-```python
-def cancel_task(self, task_id: str) -> dict:
-    """取消任务"""
-    response = requests.delete(
-        f"{self.base_url}/task/{task_id}",
-        headers=self.headers
-    )
-    return response.json()
-
-# 调用示例
-result = groot.cancel_task("task-20260418-103000523-a1b2")
-print(result)  # {"status": "success", "message": "任务已取消"}
-```
-
-**Go 示例：**
-
-```go
-// CancelTask 取消任务
-func (c *Client) CancelTask(ctx context.Context, taskID string) (map[string]interface{}, error) {
-    httpReq, _ := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/task/"+taskID, nil)
-    c.setHeaders(httpReq)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-result, _ := client.CancelTask(ctx, "task-20260418-103000523-a1b2")
-fmt.Println(result)  // map[status:success message:任务已取消]
 ```
 
 ---
 
-### 7.4 GET /task/status/{task_id} - 查询任务状态
+### 7.5 GET /chat/status/{sid} - 查询对话状态
 
-**功能说明：**
-
-查询任务的当前状态和执行进度。适用于轮询监控任务执行情况。
+查询指定会话中最近一次对话的运行状态。
 
 **请求参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `task_id` | string | 是 | 任务 ID（路径参数） |
-
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `status` | 查询结果：`success` 或 `task_not_found` |
-| `task_id` | 任务 ID |
-| `task_status` | 任务状态：`running` / `completed` / `failed` / `cancelled` |
-| `progress` | 进度信息（运行中时） |
-| `started_at` | 开始时间 |
-| `elapsed_time` | 已耗时 |
+| `sid` | string | 是 | 会话 ID（路径参数） |
 
 **运行中响应：**
-
 ```json
 {
   "status": "success",
-  "task_id": "task-20260418-103000523-a1b2",
-  "task_status": "running",
-  "progress": {
-    "current_step": 3,
-    "steps_completed": 2,
-    "percentage": 50
-  },
-  "started_at": "2026-04-18T10:30:00Z",
-  "elapsed_time": "8s"
+  "session_id": "20260419103000523_a1b2",
+  "chat": {
+    "chat_id": "chat_20260419103000523",
+    "round": 4,
+    "status": "running",
+    "progress": {
+      "current_step": 2,
+      "steps_completed": 1,
+      "percentage": 50
+    },
+    "started_at": "2026-04-19T10:30:00Z",
+    "elapsed_time": "15s"
+  }
 }
 ```
 
-**已完成响应：**
-
+**无运行对话响应：**
 ```json
 {
   "status": "success",
-  "task_id": "task-20260418-103000523-a1b2",
-  "task_status": "completed",
-  "started_at": "2026-04-18T10:30:00Z",
-  "elapsed_time": "45s"
+  "session_id": "20260419103000523_a1b2",
+  "chat": null
 }
-```
-
-**请求示例：**
-
-```bash
-curl http://localhost:8080/task/status/task-20260418-103000523-a1b2 \
-  -H "X-API-Key: your-api-key"
-```
-
-**Java 示例：**
-
-```java
-public String getTaskStatus(String taskId) throws Exception {
-    Request request = new Request.Builder()
-        .url(baseUrl + "/task/status/" + taskId)
-        .header("X-API-Key", apiKey)
-        .get()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
-}
-
-// 调用示例
-String status = groot.getTaskStatus("task-20260418-103000523-a1b2");
-JSONObject json = new JSONObject(status);
-System.out.println("任务状态: " + json.getString("task_status"));
-```
-
-**Python 示例：**
-
-```python
-def get_task_status(self, task_id: str) -> dict:
-    """查询任务状态"""
-    response = requests.get(
-        f"{self.base_url}/task/status/{task_id}",
-        headers=self.headers
-    )
-    return response.json()
-
-# 调用示例
-status = groot.get_task_status("task-20260418-103000523-a1b2")
-print(f"任务状态: {status['task_status']}")
-if status['task_status'] == 'running':
-    print(f"进度: {status['progress']['percentage']}%")
-```
-
-**Go 示例：**
-
-```go
-// GetTaskStatus 查询任务状态
-func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
-    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/status/"+taskID, nil)
-    c.setHeaders(httpReq)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-status, _ := client.GetTaskStatus(ctx, "task-20260418-103000523-a1b2")
-fmt.Println("任务状态:", status["task_status"])
 ```
 
 ---
 
-### 7.5 GET /task/{task_id} - 查询任务详情
+### 7.6 GET /chat/{sid}/{cid} - 查询对话详情
 
-**功能说明：**
-
-查询任务的完整详情，包括指令、结果、错误信息、完整执行步骤记录。适用于任务完成后查看详细执行过程。
+查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。
 
 **请求参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `task_id` | string | 是 | 任务 ID（路径参数） |
+| `sid` | string | 是 | 会话 ID（路径参数） |
+| `cid` | string | 是 | 对话 ID（路径参数） |
 
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `status` | 查询结果：`success` 或 `task_not_found` |
-| `task` | 任务详情对象 |
-
-**task 对象字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `id` | 任务 ID |
-| `instruction` | 用户指令 |
-| `prompt` | 系统提示词 |
-| `status` | 任务状态 |
-| `start_time` | 开始时间 |
-| `end_time` | 结束时间 |
-| `duration` | 耗时（秒） |
-| `caller` | 调用方名称 |
-| `result` | 任务结果（成功时） |
-| `error` | 错误信息（失败时） |
-| `steps` | 步骤记录列表 |
-
-**成功响应：**
-
+**响应示例：**
 ```json
 {
   "status": "success",
-  "task": {
-    "id": "task-20260418-103000523-a1b2",
-    "instruction": "分析这份PDF报告",
+  "session_id": "20260419103000523_a1b2",
+  "chat": {
+    "chat_id": "chat_20260419103000523",
+    "round": 1,
+    "instruction": "用户指令内容",
+    "attachments": ["data.csv"],
+    "result": {"summary": "执行结果..."},
     "status": "completed",
-    "start_time": "2026-04-18T10:30:00Z",
-    "end_time": "2026-04-18T10:30:45Z",
+    "started_at": "2026-04-19T10:30:00Z",
+    "ended_at": "2026-04-19T10:30:45Z",
     "duration": 45,
-    "caller": "business_system",
-    "result": "分析结果...",
     "steps": [
-      {"step_id": "xxx", "type": "tool", "name": "file_read", "status": "success"},
-      {"step_id": "yyy", "type": "llm", "name": "model_response", "status": "success"}
+      {
+        "step_id": "20260419-103000000-a1b2c3",
+        "type": "skill",
+        "name": "pdf_analyzer",
+        "start_time": "2026-04-19T10:30:00Z",
+        "end_time": "2026-04-19T10:30:30Z",
+        "status": "success"
+      }
     ]
   }
 }
 ```
 
-**请求示例：**
+---
 
-```bash
-curl http://localhost:8080/task/task-20260418-103000523-a1b2 \
-  -H "X-API-Key: your-api-key"
-```
+### 7.7 GET /sess/{sid} - 查询会话详情
 
-**Java 示例：**
+查询会话详情，包括完整对话历史（所有轮次）。
 
-```java
-public String getTaskDetail(String taskId) throws Exception {
-    Request request = new Request.Builder()
-        .url(baseUrl + "/task/" + taskId)
-        .header("X-API-Key", apiKey)
-        .get()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sid` | string | 是 | 会话 ID（路径参数） |
+
+**响应示例：**
+```json
+{
+  "status": "success",
+  "session_id": "20260419103000523_a1b2",
+  "session": {
+    "created_at": "2026-04-19T10:00:00Z",
+    "round_count": 4,
+    "path": "/home/groot/memory/20260419103000523_a1b2"
+  },
+  "history": {
+    "messages": [
+      {
+        "round": 1,
+        "timestamp": "2026-04-19T10:00:00Z",
+        "instruction": "帮我分析这个数据文件",
+        "attachments": ["data.csv"],
+        "result": "好的，分析结果如下...",
+        "status": "completed",
+        "duration": 45
+      },
+      {
+        "round": 2,
+        "timestamp": "2026-04-19T10:05:00Z",
+        "instruction": "生成图表",
+        "attachments": [],
+        "result": "图表已生成...",
+        "status": "completed",
+        "duration": 30
+      }
+    ]
+  }
 }
-
-// 调用示例
-String detail = groot.getTaskDetail("task-20260418-103000523-a1b2");
-JSONObject json = new JSONObject(detail);
-JSONObject task = json.getJSONObject("task");
-System.out.println("指令: " + task.getString("instruction"));
-System.out.println("步骤数: " + task.getJSONArray("steps").length());
-```
-
-**Python 示例：**
-
-```python
-def get_task_detail(self, task_id: str) -> dict:
-    """查询任务详情"""
-    response = requests.get(
-        f"{self.base_url}/task/{task_id}",
-        headers=self.headers
-    )
-    return response.json()
-
-# 调用示例
-detail = groot.get_task_detail("task-20260418-103000523-a1b2")
-task = detail['task']
-print(f"指令: {task['instruction']}")
-print(f"步骤数: {len(task['steps'])}")
-for step in task['steps']:
-    print(f"  - {step['type']}: {step['name']} ({step['status']})")
-```
-
-**Go 示例：**
-
-```go
-// GetTaskDetail 查询任务详情
-func (c *Client) GetTaskDetail(ctx context.Context, taskID string) (map[string]interface{}, error) {
-    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/"+taskID, nil)
-    c.setHeaders(httpReq)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-detail, _ := client.GetTaskDetail(ctx, "task-20260418-103000523-a1b2")
-task := detail["task"].(map[string]interface{})
-fmt.Println("指令:", task["instruction"])
-fmt.Println("步骤数:", len(task["steps"].([]interface{})))
 ```
 
 ---
 
-### 7.6 GET /task/history - 查询历史任务列表
+### 7.8 GET /sess/history - 查询会话列表
 
-**功能说明：**
+查询所有会话列表，支持分页。参数通过 URL Query String 传递。
 
-查询历史任务列表，支持按状态、时间范围过滤和分页。适用于查看历史执行记录、统计分析。
+**请求示例：**
 
-**请求参数（Query 参数）：**
+```http
+GET /sess/history?limit=10&offset=0
+X-API-Key: your-secret-key
+```
+
+**Query 参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `status` | string | 否 | 按状态过滤：`running` / `completed` / `failed` / `cancelled` |
-| `start_time` | string | 否 | 开始时间，格式 `yyyyMMddHHmm`，如 `202604010000` |
-| `end_time` | string | 否 | 结束时间，格式 `yyyyMMddHHmm`，如 `202604182359` |
-| `limit` | int | 否 | 返回数量限制，默认 20，最大 100 |
+| `limit` | int | 否 | 返回数量，默认 20，最大 100 |
 | `offset` | int | 否 | 分页偏移，默认 0 |
 
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `status` | 查询结果：`success` |
-| `total` | 符合条件的总数 |
-| `limit` | 当前返回数量 |
-| `offset` | 当前偏移 |
-| `tasks` | 任务列表 |
-
 **响应示例：**
-
 ```json
 {
   "status": "success",
   "total": 50,
   "limit": 10,
   "offset": 0,
-  "tasks": [
+  "sessions": [
     {
-      "id": "task-20260418-103000523-a1b2",
-      "instruction": "分析PDF报告",
-      "status": "completed",
-      "start_time": "2026-04-18T10:30:00Z",
-      "end_time": "2026-04-18T10:30:45Z",
-      "duration": 45,
-      "caller": "business_system"
-    },
-    {
-      "id": "task-20260418-103010000-b2c3",
-      "instruction": "写排序函数",
-      "status": "completed",
-      "start_time": "2026-04-18T10:31:00Z",
-      "end_time": "2026-04-18T10:31:30Z",
-      "duration": 30,
-      "caller": "admin"
+      "session_id": "20260419103000523_a1b2",
+      "created_at": "2026-04-19T10:00:00Z",
+      "round_count": 4,
+      "last_active_at": "2026-04-19T10:30:00Z"
     }
   ]
 }
 ```
 
-**请求示例：**
-
-```bash
-curl "http://localhost:8080/task/history?status=completed&limit=10" \
-  -H "X-API-Key: your-api-key"
-```
-
-**Java 示例：**
-
-```java
-public String getHistory(String status, int limit, int offset) throws Exception {
-    HttpUrl url = HttpUrl.parse(baseUrl + "/task/history")
-        .newBuilder()
-        .addQueryParameter("status", status)
-        .addQueryParameter("limit", String.valueOf(limit))
-        .addQueryParameter("offset", String.valueOf(offset))
-        .build();
-    
-    Request request = new Request.Builder()
-        .url(url)
-        .header("X-API-Key", apiKey)
-        .get()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
-}
-
-// 调用示例
-String history = groot.getHistory("completed", 10, 0);
-JSONObject json = new JSONObject(history);
-System.out.println("总数: " + json.getInt("total"));
-JSONArray tasks = json.getJSONArray("tasks");
-for (int i = 0; i < tasks.length(); i++) {
-    JSONObject task = tasks.getJSONObject(i);
-    System.out.println("  - " + task.getString("id") + ": " + task.getString("instruction"));
-}
-```
-
-**Python 示例：**
-
-```python
-def get_history(self, status: str = None, limit: int = 20, offset: int = 0) -> dict:
-    """查询历史任务"""
-    params = {"limit": limit, "offset": offset}
-    if status:
-        params["status"] = status
-    
-    response = requests.get(
-        f"{self.base_url}/task/history",
-        headers=self.headers,
-        params=params
-    )
-    return response.json()
-
-# 调用示例
-history = groot.get_history(status="completed", limit=10)
-print(f"总数: {history['total']}")
-for task in history['tasks']:
-    print(f"  - {task['id']}: {task['instruction']} ({task['duration']}s)")
-```
-
-**Go 示例：**
-
-```go
-// GetHistory 查询历史任务
-func (c *Client) GetHistory(ctx context.Context, status string, limit int, offset int) (map[string]interface{}, error) {
-    url := fmt.Sprintf("%s/task/history?limit=%d&offset=%d", c.baseURL, limit, offset)
-    if status != "" {
-        url += "&status=" + status
-    }
-    
-    httpReq, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-    c.setHeaders(httpReq)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-history, _ := client.GetHistory(ctx, "completed", 10, 0)
-fmt.Println("总数:", history["total"])
-tasks := history["tasks"].([]interface{})
-for _, t := range tasks {
-    task := t.(map[string]interface{})
-    fmt.Printf("  - %s: %s (%ds)\n", task["id"], task["instruction"], int(task["duration"].(float64)))
-}
-```
-
 ---
 
-### 7.7 GET /health - 健康检查
+### 7.9 GET /health - 健康检查
 
-**功能说明：**
-
-查询服务健康状态，包括 LLM 连接、MCP 服务、Skills 加载情况。适用于监控和运维检查。
-
-**请求参数：** 无需认证，无需参数。
-
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `status` | 健康状态：`healthy` / `unhealthy` |
-| `version` | 服务版本 |
-| `uptime` | 运行时长 |
-| `checks` | 各组件健康检查结果 |
-| `metrics` | 运行指标 |
+查询服务健康状态。
 
 **响应示例：**
-
 ```json
 {
   "status": "healthy",
@@ -1611,494 +1190,53 @@ for _, t := range tasks {
   "uptime": "2h30m",
   "checks": {
     "llm": {"status": "healthy", "model": "gpt-4o"},
-    "mcp_servers": {"status": "healthy", "servers": ["file_operations", "http_request"]},
+    "mcp_servers": {"status": "healthy", "servers": ["database_tool", "web_parser"]},
     "skills": {"status": "healthy", "count": 12},
     "memory": {"status": "healthy", "used_mb": 256}
   },
   "metrics": {
-    "tasks_running": 5,
+    "chats_running": 5,
     "success_rate": 0.98
   }
 }
 ```
 
-**请求示例：**
-
-```bash
-curl http://localhost:8080/health
-```
-
-**Java 示例：**
-
-```java
-public String healthCheck() throws Exception {
-    Request request = new Request.Builder()
-        .url(baseUrl + "/health")
-        .get()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
-}
-
-// 调用示例
-String health = groot.healthCheck();
-JSONObject json = new JSONObject(health);
-System.out.println("状态: " + json.getString("status"));
-System.out.println("运行时长: " + json.getString("uptime"));
-```
-
-**Python 示例：**
-
-```python
-def health_check(self) -> dict:
-    """健康检查"""
-    response = requests.get(f"{self.base_url}/health")
-    return response.json()
-
-# 调用示例
-health = groot.health_check()
-print(f"状态: {health['status']}")
-print(f"运行时长: {health['uptime']}")
-print(f"Skills 数量: {health['checks']['skills']['count']}")
-```
-
-**Go 示例：**
-
-```go
-// HealthCheck 健康检查
-func (c *Client) HealthCheck(ctx context.Context) (map[string]interface{}, error) {
-    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-health, _ := client.HealthCheck(ctx)
-fmt.Println("状态:", health["status"])
-fmt.Println("运行时长:", health["uptime"])
-```
-
 ---
 
-### 7.8 GET /skills - 列出可用 Skills
-
-**功能说明：**
-
-列出当前已加载的 Skills，显示名称和描述。用于查看可用的任务模板。
-
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `skills` | Skills 列表 |
-| `total` | 总数 |
-
-**Skills 对象字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `name` | Skill 名称 |
-| `description` | Skill 描述 |
+### 7.10 GET /skills - 列出可用 Skills
 
 **响应示例：**
-
 ```json
 {
   "skills": [
     {"name": "pdf_analyzer", "description": "分析PDF文档并生成摘要"},
-    {"name": "code_generator", "description": "根据需求生成代码"},
-    {"name": "data_analyzer", "description": "分析结构化数据文件"}
+    {"name": "code_generator", "description": "根据需求生成代码"}
   ],
-  "total": 3
-}
-```
-
-**请求示例：**
-
-```bash
-curl http://localhost:8080/skills \
-  -H "X-API-Key: your-api-key"
-```
-
-**Java 示例：**
-
-```java
-public String listSkills() throws Exception {
-    Request request = new Request.Builder()
-        .url(baseUrl + "/skills")
-        .header("X-API-Key", apiKey)
-        .get()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
-}
-
-// 调用示例
-String skills = groot.listSkills();
-JSONObject json = new JSONObject(skills);
-JSONArray skillsArray = json.getJSONArray("skills");
-for (int i = 0; i < skillsArray.length(); i++) {
-    JSONObject skill = skillsArray.getJSONObject(i);
-    System.out.println("  - " + skill.getString("name") + ": " + skill.getString("description"));
-}
-```
-
-**Python 示例：**
-
-```python
-def list_skills(self) -> dict:
-    """列出 Skills"""
-    response = requests.get(
-        f"{self.base_url}/skills",
-        headers=self.headers
-    )
-    return response.json()
-
-# 调用示例
-skills = groot.list_skills()
-for skill in skills['skills']:
-    print(f"  - {skill['name']}: {skill['description']}")
-```
-
-**Go 示例：**
-
-```go
-// ListSkills 列出 Skills
-func (c *Client) ListSkills(ctx context.Context) (map[string]interface{}, error) {
-    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/skills", nil)
-    c.setHeaders(httpReq)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-skills, _ := client.ListSkills(ctx)
-for _, s := range skills["skills"].([]interface{}) {
-    skill := s.(map[string]interface{})
-    fmt.Printf("  - %s: %s\n", skill["name"], skill["description"])
+  "total": 2
 }
 ```
 
 ---
 
-### 7.9 GET /tools - 列出可用 MCP 工具
-
-**功能说明：**
-
-列出当前已注册的 MCP 工具，显示名称、描述和所属 MCP。用于查看可用的工具列表。
-
-**响应字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `tools` | 工具列表 |
-| `total` | 总数 |
-
-**Tools 对象字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `name` | 工具名称 |
-| `description` | 工具描述 |
-| `mcp` | 所属 MCP 服务名称 |
+### 7.11 GET /tools - 列出可用 MCP 工具
 
 **响应示例：**
-
 ```json
 {
   "tools": [
     {"name": "file_read", "description": "读取文件内容", "mcp": "file_operations"},
     {"name": "file_write", "description": "写入文件内容", "mcp": "file_operations"},
-    {"name": "http_get", "description": "发送HTTP GET请求", "mcp": "http_request"},
-    {"name": "http_post", "description": "发送HTTP POST请求", "mcp": "http_request"}
+    {"name": "http_get", "description": "发送HTTP GET请求", "mcp": "http_request"}
   ],
-  "total": 4
-}
-```
-
-**请求示例：**
-
-```bash
-curl http://localhost:8080/tools \
-  -H "X-API-Key: your-api-key"
-```
-
-**Java 示例：**
-
-```java
-public String listTools() throws Exception {
-    Request request = new Request.Builder()
-        .url(baseUrl + "/tools")
-        .header("X-API-Key", apiKey)
-        .get()
-        .build();
-    
-    Response response = client.newCall(request).execute();
-    return response.body().string();
-}
-
-// 调用示例
-String tools = groot.listTools();
-JSONObject json = new JSONObject(tools);
-JSONArray toolsArray = json.getJSONArray("tools");
-for (int i = 0; i < toolsArray.length(); i++) {
-    JSONObject tool = toolsArray.getJSONObject(i);
-    System.out.println("  - " + tool.getString("name") + " [" + tool.getString("mcp") + "]");
-}
-```
-
-**Python 示例：**
-
-```python
-def list_tools(self) -> dict:
-    """列出 MCP 工具"""
-    response = requests.get(
-        f"{self.base_url}/tools",
-        headers=self.headers
-    )
-    return response.json()
-
-# 调用示例
-tools = groot.list_tools()
-for tool in tools['tools']:
-    print(f"  - {tool['name']} [{tool['mcp']}]: {tool['description']}")
-```
-
-**Go 示例：**
-
-```go
-// ListTools 列出 MCP 工具
-func (c *Client) ListTools(ctx context.Context) (map[string]interface{}, error) {
-    httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/tools", nil)
-    c.setHeaders(httpReq)
-    
-    resp, err := c.client.Do(httpReq)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    return result, nil
-}
-
-// 调用示例
-tools, _ := client.ListTools(ctx)
-for _, t := range tools["tools"].([]interface{}) {
-    tool := t.(map[string]interface{})
-    fmt.Printf("  - %s [%s]: %s\n", tool["name"], tool["mcp"], tool["description"])
+  "total": 3
 }
 ```
 
 ---
 
-## 八、完整客户端代码
+## 八、客户端代码示例
 
-以下是三种语言的完整客户端封装代码，整合了所有 API 调用方法。
-
-### 8.1 Java 完整客户端
-
-```java
-import okhttp3.*;
-import okhttp3.sse.EventSource;
-import okhttp3.sse.EventSourceListener;
-import okhttp3.sse.EventSources;
-import java.util.Base64;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-
-public class GrootClient {
-    
-    private final OkHttpClient client;
-    private final String baseUrl;
-    private final String apiKey;
-    
-    public GrootClient(String baseUrl, String apiKey) {
-        this.baseUrl = baseUrl;
-        this.apiKey = apiKey;
-        this.client = new OkHttpClient.Builder()
-            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
-            .build();
-    }
-    
-    // ========== 执行任务 ==========
-    
-    public void executeTask(String instruction, EventSourceListener listener) throws Exception {
-        String jsonBody = "{\"instruction\":\"" + instruction + "\"}";
-        
-        Request request = new Request.Builder()
-            .url(baseUrl + "/task/execute")
-            .header("X-API-Key", apiKey)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-            .build();
-        
-        EventSources.createFactory(client).newEventSource(request, listener);
-    }
-    
-    public void executeTaskWithFile(String instruction, String filePath, EventSourceListener listener) throws Exception {
-        byte[] fileContent = Files.readAllBytes(Paths.get(filePath));
-        String base64Content = Base64.getEncoder().encodeToString(fileContent);
-        String fileName = Paths.get(filePath).getFileName().toString();
-        
-        String jsonBody = String.format(
-            "{\"instruction\":\"%s\",\"attachments\":[{\"type\":\"file\",\"name\":\"%s\",\"content\":\"%s\"}]}",
-            instruction, fileName, base64Content
-        );
-        
-        Request request = new Request.Builder()
-            .url(baseUrl + "/task/execute")
-            .header("X-API-Key", apiKey)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-            .build();
-        
-        EventSources.createFactory(client).newEventSource(request, listener);
-    }
-    
-    // ========== 取消任务 ==========
-    
-    public String cancelTask(String taskId) throws Exception {
-        Request request = new Request.Builder()
-            .url(baseUrl + "/task/" + taskId)
-            .header("X-API-Key", apiKey)
-            .delete()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-    
-    // ========== 查询状态 ==========
-    
-    public String getTaskStatus(String taskId) throws Exception {
-        Request request = new Request.Builder()
-            .url(baseUrl + "/task/status/" + taskId)
-            .header("X-API-Key", apiKey)
-            .get()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-    
-    // ========== 查询详情 ==========
-    
-    public String getTaskDetail(String taskId) throws Exception {
-        Request request = new Request.Builder()
-            .url(baseUrl + "/task/" + taskId)
-            .header("X-API-Key", apiKey)
-            .get()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-    
-    // ========== 查询历史 ==========
-    
-    public String getHistory(String status, int limit, int offset) throws Exception {
-        HttpUrl url = HttpUrl.parse(baseUrl + "/task/history")
-            .newBuilder()
-            .addQueryParameter("limit", String.valueOf(limit))
-            .addQueryParameter("offset", String.valueOf(offset))
-            .build();
-        if (status != null) {
-            url = url.newBuilder().addQueryParameter("status", status).build();
-        }
-        
-        Request request = new Request.Builder()
-            .url(url)
-            .header("X-API-Key", apiKey)
-            .get()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-    
-    // ========== 健康检查 ==========
-    
-    public String healthCheck() throws Exception {
-        Request request = new Request.Builder()
-            .url(baseUrl + "/health")
-            .get()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-    
-    // ========== 列出 Skills ==========
-    
-    public String listSkills() throws Exception {
-        Request request = new Request.Builder()
-            .url(baseUrl + "/skills")
-            .header("X-API-Key", apiKey)
-            .get()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-    
-    // ========== 列出 Tools ==========
-    
-    public String listTools() throws Exception {
-        Request request = new Request.Builder()
-            .url(baseUrl + "/tools")
-            .header("X-API-Key", apiKey)
-            .get()
-            .build();
-        
-        Response response = client.newCall(request).execute();
-        return response.body().string();
-    }
-}
-```
-
-**Maven 依赖：**
-
-```xml
-<dependencies>
-    <dependency>
-        <groupId>com.squareup.okhttp3</groupId>
-        <artifactId>okhttp</artifactId>
-        <version>4.12.0</version>
-    </dependency>
-    <dependency>
-        <groupId>com.squareup.okhttp3</groupId>
-        <artifactId>okhttp-sse</artifactId>
-        <version>4.12.0</version>
-    </dependency>
-</dependencies>
-```
-
----
-
-### 8.2 Python 完整客户端
+### 8.1 Python 客户端
 
 ```python
 import requests
@@ -2107,54 +1245,48 @@ import base64
 from pathlib import Path
 
 class GrootClient:
-    """Groot AI Agent 完整客户端"""
+    """Groot AI Agent 客户端"""
     
     def __init__(self, base_url: str, api_key: str = None):
-        self.base_url = base_url
+        self.base_url = base_url.rstrip('/')
         self.headers = {"Content-Type": "application/json"}
         if api_key:
             self.headers["X-API-Key"] = api_key
     
-    # ========== 执行任务 ==========
-    
-    def execute_task(self, instruction: str, attachments: list = None, callback: callable = None) -> str:
-        """
-        执行任务（SSE 流式返回）
-        
-        Args:
-            instruction: 自然语言指令
-            attachments: 附件列表 [{"type": "file", "name": "xxx", "path": "/path"}]
-            callback: SSE 事件回调 callback(event_type, data)
-        
-        Returns:
-            task_id: 任务 ID
-        """
+    def execute_chat(self, instruction: str, attachments: list = None, 
+                     session_id: str = None, prompt: str = None,
+                     callback: callable = None) -> dict:
+        """执行对话（SSE 流式返回）"""
         body = {"instruction": instruction}
+        if prompt:
+            body["prompt"] = prompt
         
         if attachments:
             processed = []
             for att in attachments:
                 if att["type"] == "file":
-                    path = att.get("path", att.get("content"))
-                    name = att.get("name", Path(path).name if "path" in att else "file")
-                    if "path" in att:
-                        with open(path, "rb") as f:
-                            content = base64.b64encode(f.read()).decode()
-                    else:
-                        content = att["content"]
-                    processed.append({"type": "file", "name": name, "content": content})
+                    with open(att["path"], "rb") as f:
+                        content = base64.b64encode(f.read()).decode()
+                    processed.append({"type": "file", "name": att["name"], "content": content})
                 elif att["type"] == "url":
-                    processed.append({"type": "url", "name": att["name"], "content": att["url"]})
+                    processed.append({"type": "url", "name": att["name"], "url": att["url"]})
             body["attachments"] = processed
         
+        headers = self.headers.copy()
+        if session_id:
+            headers["X-Session-ID"] = session_id
+        
         response = requests.post(
-            f"{self.base_url}/task/execute",
-            headers=self.headers,
+            f"{self.base_url}/chat",
+            headers=headers,
             json=body,
             stream=True
         )
         
-        task_id = response.headers.get("X-Task-ID")
+        result = {
+            "session_id": response.headers.get("X-Session-ID"),
+            "chat_id": response.headers.get("X-Chat-ID"),
+        }
         
         event_type = None
         for line in response.iter_lines():
@@ -2166,62 +1298,59 @@ class GrootClient:
                     data = line[5:].strip()
                     if callback:
                         callback(event_type, data)
+                    if event_type == "completed":
+                        parsed = json.loads(data)
+                        result["status"] = parsed.get("status")
+                        if parsed.get("status") == "success":
+                            result["result"] = parsed.get("result")
         
-        return task_id
+        return result
     
-    # ========== 取消任务 ==========
-    
-    def cancel_task(self, task_id: str) -> dict:
-        """取消任务"""
+    def cancel_chat(self, session_id: str) -> dict:
+        """取消对话"""
         response = requests.delete(
-            f"{self.base_url}/task/{task_id}",
+            f"{self.base_url}/chat/{session_id}",
             headers=self.headers
         )
         return response.json()
     
-    # ========== 查询状态 ==========
-    
-    def get_task_status(self, task_id: str) -> dict:
-        """查询任务状态"""
+    def get_chat_status(self, session_id: str) -> dict:
+        """查询对话状态"""
         response = requests.get(
-            f"{self.base_url}/task/status/{task_id}",
+            f"{self.base_url}/chat/status/{session_id}",
             headers=self.headers
         )
         return response.json()
     
-    # ========== 查询详情 ==========
-    
-    def get_task_detail(self, task_id: str) -> dict:
-        """查询任务详情"""
+    def get_chat_detail(self, session_id: str, chat_id: str) -> dict:
+        """查询对话详情"""
         response = requests.get(
-            f"{self.base_url}/task/{task_id}",
+            f"{self.base_url}/chat/{session_id}/{chat_id}",
             headers=self.headers
         )
         return response.json()
     
-    # ========== 查询历史 ==========
-    
-    def get_history(self, status: str = None, limit: int = 20, offset: int = 0) -> dict:
-        """查询历史任务列表"""
-        params = {"limit": limit, "offset": offset}
-        if status:
-            params["status"] = status
-        
+    def get_session(self, session_id: str) -> dict:
+        """查询会话详情"""
         response = requests.get(
-            f"{self.base_url}/task/history",
+            f"{self.base_url}/sess/{session_id}",
+            headers=self.headers
+        )
+        return response.json()
+    
+    def list_sessions(self, limit: int = 20, offset: int = 0) -> dict:
+        """查询会话列表"""
+        response = requests.get(
+            f"{self.base_url}/sess/history",
             headers=self.headers,
-            params=params
+            params={"limit": limit, "offset": offset}
         )
         return response.json()
-    
-    # ========== 健康检查 ==========
     
     def health_check(self) -> dict:
         """健康检查"""
         response = requests.get(f"{self.base_url}/health")
         return response.json()
-    
-    # ========== 列出 Skills ==========
     
     def list_skills(self) -> dict:
         """列出可用 Skills"""
@@ -2231,8 +1360,6 @@ class GrootClient:
         )
         return response.json()
     
-    # ========== 列出 Tools ==========
-    
     def list_tools(self) -> dict:
         """列出可用 MCP 工具"""
         response = requests.get(
@@ -2240,329 +1367,75 @@ class GrootClient:
             headers=self.headers
         )
         return response.json()
-```
 
-**安装依赖：**
 
-```bash
-pip install requests
-```
-
----
-
-### 8.3 Go 完整客户端
-
-```go
-package grootclient
-
-import (
-	"bytes"
-	"context"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"strings"
-	"time"
-)
-
-// Client Groot API 客户端
-type Client struct {
-	baseURL string
-	apiKey  string
-	client  *http.Client
-}
-
-// NewClient 创建客户端
-func NewClient(baseURL, apiKey string) *Client {
-	return &Client{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		client: &http.Client{
-			Timeout: 300 * time.Second,
-		},
-	}
-}
-
-// Attachment 附件结构
-type Attachment struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
-}
-
-// ExecuteRequest 执行请求
-type ExecuteRequest struct {
-	Instruction string       `json:"instruction"`
-	Attachments []Attachment `json:"attachments,omitempty"`
-}
-
-// SSEEvent SSE 事件
-type SSEEvent struct {
-	Type string
-	Data string
-}
-
-// ========== 执行任务 ==========
-
-func (c *Client) ExecuteTask(ctx context.Context, req ExecuteRequest, callback func(SSEEvent)) (taskID string, err error) {
-	body, _ := json.Marshal(req)
-	
-	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/task/execute", bytes.NewReader(body))
-	c.setHeaders(httpReq)
-	httpReq.Header.Set("Accept", "text/event-stream")
-	
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	
-	taskID = resp.Header.Get("X-Task-ID")
-	c.processSSE(resp.Body, callback)
-	
-	return taskID, nil
-}
-
-func (c *Client) ExecuteTaskWithFile(ctx context.Context, instruction, filePath string, callback func(SSEEvent)) (taskID string, err error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", err
-	}
-	
-	fileName := filePath
-	if idx := strings.LastIndex(filePath, "/"); idx >= 0 {
-		fileName = filePath[idx+1:]
-	}
-	
-	req := ExecuteRequest{
-		Instruction: instruction,
-		Attachments: []Attachment{
-			{Type: "file", Name: fileName, Content: base64.StdEncoding.EncodeToString(content)},
-		},
-	}
-	
-	return c.ExecuteTask(ctx, req, callback)
-}
-
-func (c *Client) processSSE(body io.ReadCloser, callback func(SSEEvent)) {
-	buf := make([]byte, 4096)
-	var eventType string
-	var buffer string
-	
-	for {
-		n, err := body.Read(buf)
-		if err != nil {
-			break
-		}
-		buffer += string(buf[:n])
-		
-		for {
-			idx := strings.Index(buffer, "\n")
-			if idx == -1 {
-				break
-			}
-			line := buffer[:idx]
-			buffer = buffer[idx+1:]
-			
-			if strings.HasPrefix(line, "event:") {
-				eventType = strings.TrimPrefix(line, "event:")
-			} else if strings.HasPrefix(line, "data:") {
-				data := strings.TrimPrefix(line, "data:")
-				if callback != nil {
-					callback(SSEEvent{Type: eventType, Data: data})
-				}
-			}
-		}
-	}
-}
-
-// ========== 取消任务 ==========
-
-func (c *Client) CancelTask(ctx context.Context, taskID string) (map[string]interface{}, error) {
-	httpReq, _ := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/task/"+taskID, nil)
-	c.setHeaders(httpReq)
-	return c.doRequest(httpReq)
-}
-
-// ========== 查询状态 ==========
-
-func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/status/"+taskID, nil)
-	c.setHeaders(httpReq)
-	return c.doRequest(httpReq)
-}
-
-// ========== 查询详情 ==========
-
-func (c *Client) GetTaskDetail(ctx context.Context, taskID string) (map[string]interface{}, error) {
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/task/"+taskID, nil)
-	c.setHeaders(httpReq)
-	return c.doRequest(httpReq)
-}
-
-// ========== 查询历史 ==========
-
-func (c *Client) GetHistory(ctx context.Context, status string, limit, offset int) (map[string]interface{}, error) {
-	url := fmt.Sprintf("%s/task/history?limit=%d&offset=%d", c.baseURL, limit, offset)
-	if status != "" {
-		url += "&status=" + status
-	}
-	
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	c.setHeaders(httpReq)
-	return c.doRequest(httpReq)
-}
-
-// ========== 健康检查 ==========
-
-func (c *Client) HealthCheck(ctx context.Context) (map[string]interface{}, error) {
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
-	return c.doRequest(httpReq)
-}
-
-// ========== 列出 Skills ==========
-
-func (c *Client) ListSkills(ctx context.Context) (map[string]interface{}, error) {
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/skills", nil)
-	c.setHeaders(httpReq)
-	return c.doRequest(httpReq)
-}
-
-// ========== 列出 Tools ==========
-
-func (c *Client) ListTools(ctx context.Context) (map[string]interface{}, error) {
-	httpReq, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/tools", nil)
-	c.setHeaders(httpReq)
-	return c.doRequest(httpReq)
-}
-
-// ========== 辅助方法 ==========
-
-func (c *Client) setHeaders(req *http.Request) {
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
-	}
-}
-
-func (c *Client) doRequest(httpReq *http.Request) (map[string]interface{}, error) {
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	return result, err
-}
-```
-
----
-
-## 九、完整使用示例
-
-### 9.1 场景一：文档分析
-
-**用户需求：** 上传一份 PDF 财报，分析关键财务指标。
-
-**步骤：**
-
-1. 准备 PDF 文件（如 `Q3_Report.pdf`）
-2. 编写调用代码（以 Python 为例）
-
-```python
+# 使用示例
 groot = GrootClient("http://localhost:8080", "your-api-key")
 
-# 定义回调处理
-def handle_event(event_type, data):
-    if event_type == "intent":
-        print("任务开始...")
-    elif event_type == "progress":
-        print(f"进度: {data}")
-    elif event_type == "completed":
-        result = json.loads(data)
-        if result["status"] == "success":
-            print("分析结果:", result["result"])
-        else:
-            print("失败:", result["error"])
+# 新会话
+result1 = groot.execute_chat(
+    instruction="分析这份PDF报告",
+    attachments=[{"type": "file", "name": "report.pdf", "path": "./report.pdf"}],
+    callback=lambda e, d: print(f"[{e}] {d}")
+)
+print(f"会话ID: {result1['session_id']}")
 
-# 执行任务
-task_id = groot.execute_task(
+# 继续会话（多轮）
+result2 = groot.execute_chat(
+    instruction="生成分析摘要",
+    session_id=result1['session_id'],
+    callback=lambda e, d: print(f"[{e}] {d}")
+)
+print(f"第2轮结果: {result2['result']}")
+```
+
+---
+
+## 九、使用场景示例
+
+### 9.1 多轮文档分析
+
+```python
+# 第1轮：上传文档并分析
+result1 = groot.execute_chat(
     instruction="分析这份财报，提取营收、利润、增长率等关键指标",
-    attachments=[
-        {"type": "file", "path": "Q3_Report.pdf"}
-    ],
-    callback=handle_event
+    attachments=[{"type": "file", "name": "Q3_Report.pdf", "path": "Q3_Report.pdf"}]
+)
+session_id = result1['session_id']
+
+# 第2轮：追问细节
+result2 = groot.execute_chat(
+    instruction="重点分析利润增长的主要原因",
+    session_id=session_id
+)
+
+# 第3轮：生成报告
+result3 = groot.execute_chat(
+    instruction="生成一份分析报告摘要",
+    session_id=session_id
 )
 ```
 
-**预期输出：**
-
-```
-任务 ID: task-20260418-103000523-a1b2
-任务开始...
-进度: 正在读取PDF...
-进度: 正在提取关键信息...
-进度: 正在生成分析报告...
-分析结果: {
-  "document_type": "财务报告",
-  "key_metrics": {
-    "revenue": "125.6亿",
-    "profit": "18.2亿",
-    "growth_rate": "12.3%"
-  },
-  "summary": "..."
-}
-```
-
----
-
-### 9.2 场景二：代码生成
-
-**用户需求：** 生成一个 Python 数据处理工具。
+### 9.2 渐进式代码开发
 
 ```python
-task_id = groot.execute_task(
-    instruction="写一个 Python 工具类，包含 CSV 读取、数据清洗、统计分析功能",
-    prompt="你是资深 Python 开发者，注重代码质量和可维护性",
-    callback=handle_event
+# 第1轮：基础功能
+result1 = groot.execute_chat(
+    instruction="写一个 Python 数据处理工具类，包含 CSV 读取功能",
+    prompt="你是资深 Python 开发者"
 )
-```
+session_id = result1['session_id']
 
----
-
-### 9.3 场景三：多文件对比
-
-**用户需求：** 对比两份合同文件，找出差异条款。
-
-```python
-task_id = groot.execute_task(
-    instruction="对比这份合同和标准模板，列出所有修改过的条款",
-    attachments=[
-        {"type": "file", "path": "signed_contract.pdf"},
-        {"type": "file", "path": "template.pdf"}
-    ],
-    callback=handle_event
+# 第2轮：添加功能
+result2 = groot.execute_chat(
+    instruction="添加数据清洗功能（处理缺失值、异常值）",
+    session_id=session_id
 )
-```
 
----
-
-### 9.4 场景四：数据分析
-
-**用户需求：** 分析 CSV 销售数据，计算趋势。
-
-```python
-task_id = groot.execute_task(
-    instruction="分析销售数据，计算月度趋势、同比增长，输出 JSON 格式报告",
-    attachments=[
-        {"type": "file", "path": "sales_2023.csv"}
-    ],
-    callback=handle_event
+# 第3轮：添加测试
+result3 = groot.execute_chat(
+    instruction="写单元测试代码",
+    session_id=session_id
 )
 ```
 
@@ -2575,146 +1448,106 @@ task_id = groot.execute_task(
 **原因：** 未配置 LLM API 密钥。
 
 **解决：**
-
 ```bash
 export OPENAI_API_KEY="sk-xxxxx"
 ```
-
 或在配置文件中直接写入密钥。
 
 ---
 
-### Q2: 附件上传后 Agent 无法读取
+### Q2: 多轮对话时 Agent 没记住之前的内容
 
-**原因：** MCP `file_operations` 配置了 `allowed_paths` 限制。
+**原因：** session_id 传错或会话不存在。
 
-**解决：** 检查 MCP 配置文件，确保 `allowed_paths` 包含附件临时目录，或设置为空数组（无限制）：
-
-```json
-{
-  "restrictions": {
-    "allowed_paths": []
-  }
-}
-```
+**解决：** 确保每次继续对话时传入正确的 `X-Session-ID`。
 
 ---
 
-### Q3: 任务执行超时
+### Q3: 同一会话并发调用报错
 
-**原因：** LLM 响应慢或任务复杂。
+**原因：** 同一会话只能有一个活跃对话，防止执行冲突。
 
-**解决：** 调整超时配置：
-
-```yaml
-performance:
-  timeout:
-    task_max_duration: 600   # 增加到 10 分钟
-    llm_call_timeout: 120    # LLM 调用超时增加
-```
+**解决：** 等待当前对话完成后再发起下一轮，或取消当前对话。
 
 ---
 
-### Q4: 如何查看执行日志
+### Q4: 附件上传失败
 
-**方法：**
+**原因：** 附件类型不允许或大小超限。
 
-```bash
-# 查看实时日志
-tail -f ~/.groot/logs/groot-{date}.log
-
-# 搜索错误日志
-grep "error" ~/.groot/logs/groot-*.log
-```
+**解决：** 检查 `allowed_types` 配置和 `max_size` 限制。
 
 ---
 
-### Q5: 如何切换 LLM 模型
-
-**步骤：**
-
-1. 修改配置文件 `config.yaml`：
-
-```yaml
-llm:
-  active_model: claude-3.5  # 切换到 Claude
-```
-
-2. 重启服务
-
-```bash
-groot -H ~/.groot
-```
-
----
-
-### Q6: 认证失败 401 Unauthorized
+### Q5: 认证失败 401 Unauthorized
 
 **原因：** API Key 无效或未携带。
 
 **解决：**
-
 1. 确认配置了正确的 API Key
 2. 检查请求头是否携带 `X-API-Key`
 
-```http
-X-API-Key: your-secret-key
-```
-
 ---
 
-## 十一、最佳实践
+### Q6: 会话数据如何清理
 
-### 11.1 生产部署建议
+**说明：** 会话数据会自动清理。
 
-| 建议 | 说明 |
-|------|------|
-| 使用绝对路径 | `temp_directory` 配置到独立磁盘，避免磁盘空间不足 |
-| 启用认证 | 配置 API Key，区分不同调用方权限 |
-| 监控日志 | 接入日志采集系统（ELK 等），监控错误和性能 |
-| 定期清理 | 根据业务需要调整 `retention_days` |
-| 限流配置 | 根据并发量调整 `max_concurrent_tasks` |
-
-### 11.2 Skills 编写建议
-
-- 描述清晰：让 Agent 理解何时使用此 Skill
-- 步骤明确：按顺序定义执行步骤
-- 输出格式：指定结构化输出格式（如 JSON）
-- 避免冗余：只写必要的指令内容
-
-### 11.3 性能优化建议
-
-- 控制附件大小：建议单个附件 < 10MB
-- 控制并发量：根据 LLM API 限制调整并发配置
-- 监控 Token 消耗：设置 `max_tokens` 防止成本失控
+- 每天在 `cleanup_schedule` 时间执行清理
+- 清理超过 `retention_days` 天的会话
 
 ---
 
 ## 附录
 
-### A. 端口说明
+### A. 环境变量
 
-| 端口 | 服务 |
-|------|------|
-| 8080 | HTTP API（默认） |
+**固定环境变量（程序识别）：**
 
-### B. 环境变量列表
-
-| 变量 | 说明 | 必需性 |
+| 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件使用 `${OPENAI_API_KEY}` 时必需 |
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 配置文件引用时需要 |
-| `GROOT_ADMIN_KEY` | 管理员 API Key | 配置文件引用时需要（可自定义变量名） |
-| `GROOT_MONITOR_KEY` | 监控服务 API Key | 配置文件引用时需要（可自定义变量名） |
-| `GROOT_HOME` | 工作目录 | 否（默认 ~/.groot） |
+| `GROOT_HOME` | 工作目录 | `~/.groot` |
 
-> **说明：**
-> - 环境变量是否必需取决于配置文件中的写法
-> - LLM API Key 和认证 API Key 都可以配置多个
-> - 环境变量名可以自定义，配置文件中用 `${变量名}` 引用即可
-> - 例如：`key: ${MY_CUSTOM_KEY}` → 对应环境变量 `MY_CUSTOM_KEY`
+**用户自定义环境变量：**
 
-### C. 联系与支持
+配置文件中使用 `${VAR_NAME}` 引用的环境变量，变量名由用户自定义。以下是常见示例：
+
+| 变量（示例） | 用途 | 必需性 |
+|------|------|------|
+| `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件有 `${OPENAI_API_KEY}` 时需设置 |
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 配置文件有 `${ANTHROPIC_API_KEY}` 时需设置 |
+| `GROOT_API_KEY` | 认证密钥 | 启用认证且配置文件有引用时需设置 |
+
+> **判断方法：** 查看配置文件中是否使用 `${VAR_NAME}` 格式引用。如果引用了某个变量，则需设置对应的环境变量；如果配置文件直接写明文密钥，则不需要设置环境变量。变量名可自定义。
+
+### B. 文件路径约定
+
+| 路径 | 说明 |
+|------|------|
+| `{GROOT_HOME}/config.yaml` | 配置文件 |
+| `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
+| `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件 |
+| `{GROOT_HOME}/memory/{session_id}/history.json` | 对话历史 |
+| `{GROOT_HOME}/memory/{session_id}/attachments/` | 附件目录 |
+| `{GROOT_HOME}/memory/{session_id}/chats/{chat_id}.json` | 详细执行记录 |
+| `{GROOT_HOME}/logs/groot-{date}.log` | 日志文件 |
+
+### C. 错误码速查表
+
+| HTTP 状态码 | 错误码 | 说明 |
+|------------|--------|------|
+| 400 | `invalid_request` | 请求参数错误 |
+| 400 | `attachment_count_exceeded` | 附件数量超限 |
+| 400 | `attachment_type_not_allowed` | 附件类型不允许 |
+| 400 | `attachment_size_exceeded` | 附件大小超限 |
+| 401 | `unauthorized` | API Key 无效或缺失 |
+| 403 | `forbidden` | 权限不足 |
+| 409 | `chat_limit_exceeded` | 会话已有对话执行中 |
+| 500 | `config_error` | 配置错误 |
+| 500 | `llm_connection_error` | LLM 连接失败 |
+| 500 | `tool_call_error` | 工具调用失败 |
+
+### D. 联系与支持
 
 - GitHub: https://github.com/zfd81/groot
 - 问题反馈: GitHub Issues

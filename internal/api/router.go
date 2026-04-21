@@ -10,8 +10,6 @@ import (
 // RegisterRoutes registers all API routes
 func RegisterRoutes(h *server.Hertz,
 	authMW *middleware.AuthMiddleware,
-	rateLimitMW *middleware.RateLimitMiddleware,
-	recoveryMW *middleware.RecoveryMiddleware,
 	chatH *handler.ChatHandler,
 	cancelH *handler.CancelHandler,
 	statusH *handler.StatusHandler,
@@ -21,22 +19,19 @@ func RegisterRoutes(h *server.Hertz,
 	skillsH *handler.SkillsHandler,
 	toolsH *handler.ToolsHandler,
 ) {
-	// Global middleware
-	h.Use(recoveryMW.Serve())
-
 	// Health check (no auth required)
 	h.GET("/health", healthH.Serve)
 
-	// API group with auth and rate limit
+	// API group with auth
 	apiGroup := h.Group("/")
 	apiGroup.Use(authMW.Serve())
-	apiGroup.Use(rateLimitMW.Serve())
 
 	// Chat endpoints - 多轮对话
 	apiGroup.POST("/chat", chatH.Serve)
 	apiGroup.DELETE("/chat/:sid", cancelH.Serve)
 	apiGroup.GET("/chat/status/:sid", statusH.Serve)
-	apiGroup.GET("/chat/:sid/:cid", detailH.Serve)
+	apiGroup.GET("/chat/:sid", detailH.GetLatest)       // 获取最近一次对话详情
+	apiGroup.GET("/chat/:sid/:cid", detailH.Serve)      // 获取指定对话详情
 
 	// Session endpoints - 会话管理
 	apiGroup.GET("/sess/:sid", sessionH.GetSession)

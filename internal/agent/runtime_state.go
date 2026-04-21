@@ -48,13 +48,8 @@ func NewRuntimeState() *RuntimeState {
 	return &RuntimeState{}
 }
 
-// Register 注册活跃对话
+// Register 注册活跃对话（原子操作，防止并发冲突）
 func (r *RuntimeState) Register(sessionID, chatID string) (*ActiveChat, error) {
-	// 检查是否已有活跃对话
-	if r.IsRunning(sessionID) {
-		return nil, fmt.Errorf("session %s already has running chat", sessionID)
-	}
-
 	chat := &ActiveChat{
 		SessionID: sessionID,
 		ChatID:    chatID,
@@ -64,8 +59,17 @@ func (r *RuntimeState) Register(sessionID, chatID string) (*ActiveChat, error) {
 		CancelCh:  make(chan struct{}),
 	}
 
-	r.activeChats.Store(sessionID, chat)
-	return chat, nil
+	// 使用 LoadOrStore 确保原子性
+	// 如果已存在，返回 existing 和 loaded=true
+	// 如果不存在，存储新值并返回 stored 和 loaded=false
+	existing, loaded := r.activeChats.LoadOrStore(sessionID, chat)
+	if loaded {
+		// 已有活跃对话，返回错误
+		return nil, fmt.Errorf("session %s already has running chat", sessionID)
+	}
+
+	// 成功注册新对话
+	return existing.(*ActiveChat), nil
 }
 
 // Get 获取活跃对话状态
@@ -131,6 +135,11 @@ func (r *RuntimeState) Complete(sessionID string, result *ChatResult) (*memory.C
 	r.activeChats.Delete(sessionID)
 
 	return record, nil
+}
+
+// Delete removes active chat state for a session
+func (r *RuntimeState) Delete(sessionID string) {
+	r.activeChats.Delete(sessionID)
 }
 
 // IsRunning 检查会话是否有活跃对话

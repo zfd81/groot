@@ -40,31 +40,37 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 检查会话是否存在
-	if !h.memory.ExistsSession(sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))
-		return
-	}
-
 	// 获取活跃对话状态
 	activeChat, ok := h.runtimeState.Get(sessionID)
 	if !ok {
-		// 没有活跃对话，返回历史状态
-		history, err := h.memory.GetHistory(sessionID)
-		if err != nil {
-			rc.SetContentType("application/json")
-			rc.SetStatusCode(500)
-			rc.Write([]byte(`{"status":"error","message":"获取历史失败"}`))
+		// 没有活跃对话，返回 idle 状态
+		// 如果会话存在，返回历史信息；如果不存在，返回 chat=None
+		if h.memory.ExistsSession(sessionID) {
+			history, err := h.memory.GetHistory(sessionID)
+			if err != nil {
+				rc.SetContentType("application/json")
+				rc.SetStatusCode(500)
+				rc.Write([]byte(`{"status":"error","message":"获取历史失败"}`))
+				return
+			}
+
+			rc.JSON(200, utils.H{
+				"status":       "idle",
+				"session_id":   sessionID,
+				"round_count":  len(history.Messages),
+				"last_message": getLastMessage(history),
+				"chat":         nil,
+			})
 			return
 		}
 
+		// 会话不存在，返回 chat=None (不返回 404)
 		rc.JSON(200, utils.H{
 			"status":       "idle",
 			"session_id":   sessionID,
-			"round_count":  len(history.Messages),
-			"last_message": getLastMessage(history),
+			"round_count":  0,
+			"last_message": nil,
+			"chat":         nil,
 		})
 		return
 	}
@@ -72,13 +78,27 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	// 返回活跃对话状态
 	duration := formatElapsed(time.Since(activeChat.StartTime))
 
+	// 获取当前轮数
+	round := 1
+	if h.memory.ExistsSession(sessionID) {
+		history, err := h.memory.GetHistory(sessionID)
+		if err == nil {
+			round = len(history.Messages) + 1
+		}
+	}
+
 	rc.JSON(200, utils.H{
-		"status":       "running",
+		"status":       "success",
 		"session_id":   sessionID,
-		"chat_id":      activeChat.ChatID,
-		"start_time":   activeChat.StartTime.Format(time.RFC3339),
-		"duration":     duration,
-		"progress":     activeChat.Progress,
+		"chat": utils.H{
+			"chat_id":      activeChat.ChatID,
+			"status":       activeChat.Status,
+			"started_at":   activeChat.StartTime.Format(time.RFC3339),
+			"elapsed_time": duration,
+			"duration":     duration,
+			"round":        round,
+			"progress":     activeChat.Progress,
+		},
 	})
 }
 

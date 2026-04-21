@@ -39,20 +39,15 @@ func (h *CancelHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 检查会话是否存在
-	if !h.memory.ExistsSession(sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))
-		return
-	}
-
 	// 检查是否有活跃对话
 	activeChat, ok := h.runtimeState.Get(sessionID)
 	if !ok {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"no_running_chat","session_id":"%s","message":"该会话当前没有正在执行的对话"}`, sessionID)))
+		// 没有活跃对话，返回特定状态（幂等操作）
+		rc.JSON(200, utils.H{
+			"status":     "no_running_chat",
+			"session_id": sessionID,
+			"message":    "该会话当前没有正在执行的对话",
+		})
 		return
 	}
 

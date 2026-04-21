@@ -50,9 +50,23 @@ func (h *SessionHandler) GetSession(ctx context.Context, rc *app.RequestContext)
 	rc.JSON(200, utils.H{
 		"status":     "success",
 		"session_id": sessionID,
-		"session":    info,
-		"history":    history,
+		"session": utils.H{
+			"session_id":     info.SessionID,
+			"created_at":     info.CreatedAt,
+			"round_count":    info.RoundCount,
+			"path":           info.Path,
+			"last_active_at": getLastActiveTime(history),
+		},
+		"history": history,
 	})
+}
+
+// getLastActiveTime returns the timestamp of the last message
+func getLastActiveTime(history *memory.History) string {
+	if len(history.Messages) == 0 {
+		return ""
+	}
+	return history.Messages[len(history.Messages)-1].Timestamp.Format("2006-01-02T15:04:05Z")
 }
 
 // ListSessions 处理 GET /sess/history

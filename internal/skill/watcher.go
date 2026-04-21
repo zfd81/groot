@@ -42,6 +42,11 @@ func (w *Watcher) Start(dir string) error {
 		return nil // Hot-reload disabled
 	}
 
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -93,11 +98,39 @@ func (w *Watcher) run(dir string) {
 
 // handleEvent processes a file event
 func (w *Watcher) handleEvent(dir string, event fsnotify.Event, debounceDelay time.Duration) {
-	// Check if it's a new directory - add to watcher
+	// Check if it's a new directory - add to watcher and check for existing SKILL.md
 	if event.Op == fsnotify.Create {
 		info, err := os.Stat(event.Name)
 		if err == nil && info.IsDir() {
 			w.watcher.Add(event.Name)
+
+			// Check if SKILL.md already exists in this new directory (race condition handling)
+			skillFile := filepath.Join(event.Name, "SKILL.md")
+			if _, err := os.Stat(skillFile); err == nil {
+				// File already exists, trigger load after debounce
+				w.mu.Lock()
+				w.debounce[skillFile] = time.Now()
+				w.mu.Unlock()
+
+				go func() {
+					time.Sleep(debounceDelay)
+					w.mu.Lock()
+					lastTime := w.debounce[skillFile]
+					delete(w.debounce, skillFile)
+					w.mu.Unlock()
+
+					if time.Since(lastTime) < debounceDelay {
+						return
+					}
+
+					if err := w.loader.Load(skillFile); err != nil {
+						w.logger.Error("failed to load skill", zap.Error(err))
+					} else {
+						skillName := extractSkillName(skillFile)
+						w.logger.LogSkillHotReload("added", skillName, w.loader.registry.Count())
+					}
+				}()
+			}
 			return
 		}
 	}

@@ -1,0 +1,47 @@
+# Go 编译产物（根目录）
+/groot
+/groot_new
+
+# Go 编译产物（bin目录）
+bin/
+
+# Go 测试产物
+*.test
+*.out
+coverage.txt
+
+# Go 工具产物
+go.work
+go.work.sum
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python 测试环境（tests/python 目录）
+tests/python/.venv/
+tests/python/.pytest_cache/
+tests/python/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# 测试运行时产物（tests 目录）
+tests/logs/*.log
+tests/temp/
+
+# Claude Code 本地配置
+.claude/
+
+# 环境配置文件（包含敏感信息）
+.env
+.env.local
+*.pem
+*.key

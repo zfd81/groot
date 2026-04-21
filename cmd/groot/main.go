@@ -107,9 +107,6 @@ func main() {
 	// Initialize MCP manager
 	mcpMgr := mcp.NewManager(log)
 
-	// Register builtin tools
-	mcp.RegisterBuiltinTools(mcpMgr)
-
 	// Load MCP configs
 	mcpDir := filepath.Join(homeDir, "mcp")
 	if err := mcpMgr.LoadAll(mcpDir); err != nil {

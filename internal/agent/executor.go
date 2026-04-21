@@ -117,15 +117,14 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	defer e.runningTasks.Delete(task.ID)
 
 	// Build attachment paths from already-processed attachments
-	// Note: Attachments are already processed by chat handler (Base64 decoded and saved)
 	var attachmentPaths []AttachmentPath
 	for _, att := range task.Attachments {
 		attachmentPaths = append(attachmentPaths, AttachmentPath{
 			OriginalName: att.Name,
 			Type:         att.Type,
-			FullPath:     att.Content, // Content is already the saved file path
+			FullPath:     att.Content,
 			RelativePath: att.Content,
-			Size:         0, // Size info not available at this stage
+			Size:         0,
 			ContentType:  getContentTypeFromType(att.Type),
 		})
 	}
@@ -153,7 +152,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		}
 	}()
 
-	// Run engine with progress callback and history messages
+	// Run engine with simplified progress callback
 	result, err := engine.Run(
 		ctx,
 		task.Instruction,
@@ -161,52 +160,12 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		attachmentPaths,
 		task.HistoryMessages,
 		&ProgressCallback{
-			WriteThinkingStart: func(stepID string) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return sse.WriteThinkingStart(stepID)
-				}
-			},
 			WriteThinking: func(content string) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
 					return sse.WriteThinking(content)
-				}
-			},
-			WriteThinkingEnd: func(stepID, status string) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return sse.WriteThinkingEnd(stepID, status)
-				}
-			},
-			WriteToolCall: func(stepID, name string, arguments map[string]interface{}) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return sse.WriteToolCall(stepID, name, arguments)
-				}
-			},
-			WriteToolResult: func(stepID, output, errStr string) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return sse.WriteToolResult(stepID, output, errStr)
-				}
-			},
-			WriteMessageStart: func() error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return sse.WriteMessageStart()
 				}
 			},
 			WriteMessage: func(content string) error {
@@ -217,13 +176,32 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 					return sse.WriteMessage(content)
 				}
 			},
-			WriteMessageEnd: func() error {
+			WriteToolCalls: func(toolCalls []ToolCall) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteMessageEnd()
+					return sse.WriteToolCalls(toolCalls)
 				}
+			},
+			WriteFinish: func(reason string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteFinish(reason)
+				}
+			},
+			WriteToolResult: func(toolCallID, toolName, content string) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return sse.WriteToolResult(toolCallID, toolName, content)
+				}
+			},
+			WriteDone: func() error {
+				return sse.WriteDone()
 			},
 		},
 	)
@@ -232,15 +210,12 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	startTime := task.StartTime
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
-	durationStr := formatDuration(duration)
 
-	// Determine final status - check cancellation FIRST before other conditions
-	// Context might be cancelled after engine.Run returns but before we check
+	// Determine final status
 	ctxCancelled := ctx.Err() == context.Canceled
 
 	// Save chat record to memory
 	if e.memoryManager != nil {
-		// Build attachments list
 		attachments := []string{}
 		for _, att := range task.Attachments {
 			attachments = append(attachments, att.Name)
@@ -258,7 +233,6 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 			Attachments: attachments,
 		}
 
-		// Check cancellation status FIRST (highest priority)
 		if ctxCancelled {
 			record.Status = "cancelled"
 		} else if err != nil {
@@ -281,13 +255,11 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 			}
 		}
 
-		// Save chat record
 		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
 			e.logger.Error("保存对话记录失败: " + saveErr.Error())
 		}
 
 		// Append message to history
-		// Always save message regardless of status
 		var stepsCount int
 		if result != nil {
 			stepsCount = len(result.Steps)
@@ -303,7 +275,6 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 			StepsCount:  stepsCount,
 		}
 
-		// Check cancellation status FIRST (highest priority)
 		if ctxCancelled {
 			msg.Status = "cancelled"
 		} else if err != nil {
@@ -328,19 +299,6 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
 			e.logger.Error("追加历史消息失败: " + appendErr.Error())
 		}
-	}
-
-	// Send SSE completed event - check cancellation status FIRST
-	if ctxCancelled {
-		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
-	} else if err != nil {
-		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "execution_error", Message: err.Error()}, "")
-	} else if result != nil && result.Cancelled {
-		sse.WriteCompleted("cancelled", durationStr, nil, nil, "用户主动取消")
-	} else if result != nil {
-		sse.WriteCompleted("success", durationStr, result.Content, nil, "")
-	} else {
-		sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: "unknown_error", Message: "执行完成但无结果"}, "")
 	}
 }
 
@@ -369,41 +327,6 @@ func convertSteps(steps []StepRecord) []memory.Step {
 		}
 	}
 	return result
-}
-
-// handleFailure handles task failure
-func (e *Executor) handleFailure(sessionID string, task *Task, sse *SSEWriter, err error, errorCode string) {
-	endTime := time.Now()
-	duration := endTime.Sub(task.StartTime)
-	durationStr := formatDuration(duration)
-
-	// Build attachments list
-	attachments := []string{}
-	for _, att := range task.Attachments {
-		attachments = append(attachments, att.Name)
-	}
-
-	// Save failed chat record to memory
-	if e.memoryManager != nil {
-		record := &memory.ChatRecord{
-			ChatID:      task.ID,
-			SessionID:   sessionID,
-			Round:       task.Round,
-			Timestamp:   endTime,
-			StartedAt:   task.StartTime,
-			EndedAt:     endTime,
-			Instruction: task.Instruction,
-			Attachments: attachments,
-			Status:      "failed",
-			Duration:    int(duration.Seconds()),
-			Error:       &memory.Error{Code: errorCode, Message: err.Error()},
-		}
-		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
-			e.logger.Error("保存对话记录失败: " + saveErr.Error())
-		}
-	}
-
-	sse.WriteCompleted("failed", durationStr, nil, &StepError{Code: errorCode, Message: err.Error()}, "")
 }
 
 // IsRunning checks if task is currently running

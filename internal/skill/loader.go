@@ -31,7 +31,19 @@ func (l *Loader) LoadAll(dir string) error {
 	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		// Check if entry is a directory or a symlink pointing to a directory
+		isDir := entry.IsDir()
+		if entry.Type()&os.ModeSymlink != 0 {
+			// For symlinks, check if the target is a directory
+			targetPath := filepath.Join(dir, entry.Name())
+			info, err := os.Stat(targetPath)
+			if err != nil {
+				continue // Symlink target doesn't exist or is broken
+			}
+			isDir = info.IsDir()
+		}
+
+		if !isDir {
 			continue
 		}
 

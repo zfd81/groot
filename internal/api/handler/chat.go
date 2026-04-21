@@ -179,9 +179,6 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	// 11. 创建 SSE Writer
 	sseWriter := agent.NewSSEWriter(rc, sessionID, chatID, round)
 
-	// Send started event (整体开始信号，必须发送)
-	sseWriter.WriteStarted()
-
 	// 12. 处理附件
 	var attachmentPaths []memory.AttachmentPath
 	if len(req.Attachments) > 0 && h.attachmentHandler != nil {

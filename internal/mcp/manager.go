@@ -1,11 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/logger"
 )
@@ -34,21 +38,24 @@ func (m *Manager) GetExecutor() *ToolExecutor {
 	return m.executor
 }
 
-// Register adds an MCP configuration
-func (m *Manager) Register(config *MCPConfig) {
+// Register adds an MCP configuration with tools
+func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.mcps[config.Name] = config
 
-	// Register tools from this MCP
-	for _, toolName := range config.Tools {
-		m.tools[toolName] = &ToolInfo{
-			Name:        toolName,
-			Description: getToolDescription(toolName),
+	// Register tools
+	for _, tool := range tools {
+		m.tools[tool.Name] = &ToolInfo{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: tool.InputSchema,
 			MCP:         config.Name,
 		}
 	}
+
+	m.logger.Info("Registered MCP", zap.String("name", config.Name), zap.Int("tools", len(tools)))
 }
 
 // Unregister removes an MCP configuration
@@ -58,10 +65,11 @@ func (m *Manager) Unregister(name string) {
 
 	if config, ok := m.mcps[name]; ok {
 		// Remove tools from this MCP
-		for _, toolName := range config.Tools {
-			delete(m.tools, toolName)
+		for _, tool := range config.Tools {
+			delete(m.tools, tool.Name)
 		}
 		delete(m.mcps, name)
+		m.logger.Info("Unregistered MCP", zap.String("name", name))
 	}
 }
 
@@ -133,7 +141,8 @@ func (m *Manager) LoadAll(dir string) error {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
 			path := filepath.Join(dir, entry.Name())
 			if err := m.Load(path); err != nil {
-				return fmt.Errorf("failed to load %s: %w", path, err)
+				m.logger.Error("Failed to load MCP config", zap.String("path", path), zap.Error(err))
+				// Continue loading other configs instead of failing
 			}
 		}
 	}
@@ -141,7 +150,7 @@ func (m *Manager) LoadAll(dir string) error {
 	return nil
 }
 
-// Load parses a single MCP config file
+// Load parses a single MCP config file and discovers tools
 func (m *Manager) Load(path string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -158,41 +167,28 @@ func (m *Manager) Load(path string) error {
 	}
 
 	if !config.IsActive {
-		return nil // Skip inactive MCPs
+		m.logger.Info("Skipping inactive MCP", zap.String("name", config.Name))
+		return nil
 	}
 
-	m.Register(&config)
+	// Discover tools if not specified in config
+	tools := config.Tools
+	if len(tools) == 0 {
+		// Auto-discover tools via tools/list
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		discoveredTools, err := m.executor.DiscoverTools(ctx, &config)
+		if err != nil {
+			m.logger.Info("Failed to discover tools, using empty tool list",
+				zap.String("name", config.Name),
+				zap.Error(err))
+			tools = []ToolDefinition{}
+		} else {
+			tools = discoveredTools
+		}
+	}
+
+	m.Register(&config, tools)
 	return nil
-}
-
-// getToolDescription returns description for builtin tools
-func getToolDescription(name string) string {
-	switch name {
-	case "file_read":
-		return "读取文件内容"
-	case "file_write":
-		return "写入文件内容"
-	case "file_delete":
-		return "删除文件"
-	case "file_search":
-		return "搜索文件"
-	case "directory_list":
-		return "列出目录内容"
-	case "directory_create":
-		return "创建目录"
-	case "file_exists":
-		return "检查文件是否存在"
-	case "file_info":
-		return "获取文件信息"
-	case "http_get":
-		return "发送HTTP GET请求"
-	case "http_post":
-		return "发送HTTP POST请求"
-	case "http_put":
-		return "发送HTTP PUT请求"
-	case "http_delete":
-		return "发送HTTP DELETE请求"
-	default:
-		return name
-	}
 }

@@ -101,11 +101,18 @@ func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 		return nil, err
 	}
 
+	// 获取最后活跃时间
+	lastActiveAt := ""
+	if len(history.Messages) > 0 {
+		lastActiveAt = history.Messages[len(history.Messages)-1].Timestamp.Format("2006-01-02T15:04:05Z")
+	}
+
 	return &SessionInfo{
-		SessionID:  sessionID,
-		CreatedAt:  history.CreatedAt,
-		RoundCount: len(history.Messages),
-		Path:       m.sessionDir(sessionID),
+		SessionID:    sessionID,
+		CreatedAt:    history.CreatedAt,
+		RoundCount:   len(history.Messages),
+		LastActiveAt: lastActiveAt,
+		Path:         m.sessionDir(sessionID),
 	}, nil
 }
 

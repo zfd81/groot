@@ -7,17 +7,16 @@ import (
 
 // Config is the root configuration structure
 type Config struct {
-	Agent       AgentConfig       `yaml:"agent"`
-	Server      ServerConfig      `yaml:"server"`
-	LLM         LLMConfig         `yaml:"llm"`
-	Skills      SkillsConfig      `yaml:"skills"`
-	MCP         MCPConfig         `yaml:"mcp"`
-	Memory      MemoryConfig      `yaml:"memory"`
-	Performance PerformanceConfig `yaml:"performance"`
-	React       ReactConfig       `yaml:"react"`
-	Attachment  AttachmentConfig  `yaml:"attachment"`
-	Security    SecurityConfig    `yaml:"security"`
-	Logging     LoggingConfig     `yaml:"logging"`
+	Agent      AgentConfig      `yaml:"agent"`
+	Server     ServerConfig     `yaml:"server"`
+	LLM        LLMConfig        `yaml:"llm"`
+	Skills     SkillsConfig     `yaml:"skills"`
+	MCP        MCPConfig        `yaml:"mcp"`
+	Memory     MemoryConfig     `yaml:"memory"`
+	React      ReactConfig      `yaml:"react"`
+	Attachment AttachmentConfig `yaml:"attachment"`
+	Security   SecurityConfig   `yaml:"security"`
+	Logging    LoggingConfig    `yaml:"logging"`
 }
 
 // AgentConfig holds agent metadata
@@ -68,40 +67,6 @@ type MemoryConfig struct {
 	Directory       string `yaml:"directory"`        // 记忆目录
 	RetentionDays   int    `yaml:"retention_days"`   // 保留天数
 	CleanupSchedule string `yaml:"cleanup_schedule"` // 清理时间 HH:MM
-}
-
-// PerformanceConfig holds performance control settings
-type PerformanceConfig struct {
-	RateLimit RateLimitConfig `yaml:"rate_limit"`
-	Timeout   TimeoutConfig   `yaml:"timeout"`
-	LLM       LLMPerfConfig   `yaml:"llm"`
-	MCP       MCPPerfConfig   `yaml:"mcp"`
-}
-
-// RateLimitConfig holds rate limiting settings
-type RateLimitConfig struct {
-	MaxConcurrentTasks   int `yaml:"max_concurrent_tasks"`
-	MaxRequestsPerMinute int `yaml:"max_requests_per_minute"`
-	MaxRequestsPerHour   int `yaml:"max_requests_per_hour"`
-}
-
-// TimeoutConfig holds timeout settings
-type TimeoutConfig struct {
-	TaskMaxDuration int `yaml:"task_max_duration"`
-	LLMCallTimeout  int `yaml:"llm_call_timeout"`
-	ToolCallTimeout int `yaml:"tool_call_timeout"`
-}
-
-// LLMPerfConfig holds LLM performance settings
-type LLMPerfConfig struct {
-	MaxConcurrentCalls int `yaml:"max_concurrent_calls"`
-	RetryOnFailure     int `yaml:"retry_on_failure"`
-	RetryDelay         int `yaml:"retry_delay"`
-}
-
-// MCPPerfConfig holds MCP performance settings
-type MCPPerfConfig struct {
-	MaxConcurrentCallsPerServer int `yaml:"max_concurrent_calls_per_server"`
 }
 
 // ReactConfig holds ReAct execution limits

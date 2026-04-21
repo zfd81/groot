@@ -166,7 +166,7 @@ llm:
 |------|------|
 | ReAct Agent Engine | Reasoning（LLM调用/决策）、Acting（Skill/MCP/直接回答）、Observation（结果处理）、循环终止控制 |
 | Skills | Skills 加载、指令解析、注册给 Agent、热插拔管理、依赖解析 |
-| MCP | 内置/外部 MCP 加载、工具调用执行、权限检查、热插拔管理 |
+| MCP | 外部 MCP 加载、工具调用执行、热插拔管理 |
 | Memory | Session 管理（创建/查询）、History 管理（多轮对话上下文）、Chat Recorder（执行记录持久化）、Runtime State（活跃状态/进度/取消）、Attachment Store、Cleanup Scheduler |
 
 **System Layer（系统层）**
@@ -196,8 +196,7 @@ llm:
 - Skill 中的 Dependencies 在执行时递归加载
 
 **MCP 工具注册给 Agent：**
-- 内置 MCP 工具自动注册
-- 外部 MCP 工具从配置加载并注册
+- 外部 MCP 工具从配置文件加载并注册
 - 每个工具包含：名称、描述、参数定义
 
 **Agent 工具列表示例：**
@@ -313,348 +312,178 @@ llm:
 | `Cache-Control` | `no-cache` |
 | `Connection` | `keep-alive` |
 
-**SSE 响应事件类型：**
+**SSE 响应事件格式：**
 
-| 事件类型 | 发送频率 | 说明 |
-|---------|---------|------|
-| `started` | 1次 | 对话执行开始（整体开始信号） |
-| `thinking_start` | 多次 | 思考阶段开始 |
-| `thinking` | 多次 | 思考内容流式输出 |
-| `thinking_end` | 多次 | 思考阶段结束 |
-| `tool_call` | 多次 | 工具调用（name + arguments + step_id） |
-| `tool_result` | 多次 | 工具执行结果（step_id 匹配 tool_call） |
-| `message_start` | 1次 | 开始最终输出 |
-| `message` | 多次 | 最终回答流式输出 |
-| `message_end` | 1次 | 最终输出结束 |
-| `completed` | 1次 | 对话完成（含最终结果） |
-
-**事件顺序：**
+所有事件使用标准 SSE `data:` 格式：
 
 ```
-started → [可选: thinking_start → thinking... → thinking_end] →
-[可选: tool_call → tool_result]* →
-[可选: thinking_start → thinking... → thinking_end] →
-message_start → message... → message_end →
-completed
+data: <JSON内容>\n\n
 ```
 
-**事件匹配规则：**
+流结束时发送：
 
-| 开始事件 | 结束事件 | 匹配方式 |
-|---------|---------|---------|
-| `started` | `completed` | 自然匹配（整体唯一） |
-| `thinking_start` | `thinking_end` | **step_id 相同** |
-| `tool_call` | `tool_result` | **step_id 相同** |
-| `message_start` | `message_end` | 自然匹配（唯一输出阶段） |
+```
+data: [DONE]
+```
+
+**事件类型：**
+
+| 事件类型 | role 字段 | 说明 |
+|---------|----------|------|
+| thinking | `assistant` | AI 思考过程，逐步流式输出（`reasoning_content` 字段） |
+| message | `assistant` | AI 回答内容，逐步流式输出（`content` 字段） |
+| tool_calls | `assistant` | AI 决定调用工具（`tool_calls` 字段） |
+| finish | `assistant` | 当前响应阶段结束（`finish_reason` 字段） |
+| tool_result | `tool` | 工具执行结果 |
+| done | - | 整体对话结束标记 `[DONE]` |
+
+**事件流示例：**
+
+```
+data: {"role":"assistant","reasoning_content":"用户"}
+data: {"role":"assistant","reasoning_content":"要求"}
+data: {"role":"assistant","reasoning_content":"读取文件"}
+data: {"role":"assistant","tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]}
+data: {"role":"assistant","finish_reason":"tool_calls"}
+data: {"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost"}
+data: {"role":"assistant","reasoning_content":"好的"}
+data: {"role":"assistant","content":"文件内容如下："}
+data: {"role":"assistant","content":"127.0.0.1 localhost"}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**finish_reason 值说明：**
+
+| 值 | 含义 | 后续事件 |
+|---|------|---------|
+| `tool_calls` | AI 需要调用工具 | 后续有 `tool_result` 事件，然后 AI 继续响应 |
+| `stop` | 对话完成 | 后续为 `[DONE]` |
+
+**finish_reason 流程详解：**
+
+`finish_reason = "tool_calls"` 表示"对话暂停，AI 先去执行工具，回来继续回答"：
+
+```
+用户: "读取 /etc/hosts 文件"
+
+AI: {"role":"assistant","reasoning_content":"用户要求读取文件..."}
+AI: {"role":"assistant","tool_calls":[{"id":"call_abc",...}]}
+AI: {"role":"assistant","finish_reason":"tool_calls"}  ← 暂停点
+工具执行 file_read
+工具: {"role":"tool","tool_call_id":"call_abc","content":"127.0.0.1 localhost..."}
+AI: {"role":"assistant","reasoning_content":"文件已读取"}
+AI: {"role":"assistant","content":"文件内容如下..."}
+AI: {"role":"assistant","finish_reason":"stop"}  ← 对话结束
+[DONE]
+```
+
+`finish_reason = "stop"` 表示"AI 说完了，对话直接结束"：
+
+```
+用户: "你好"
+
+AI: {"role":"assistant","content":"你好！有什么可以帮助你的？"}
+AI: {"role":"assistant","finish_reason":"stop"}  ← 直接结束
+[DONE]
+```
+
+简单理解：
+- **tool_calls** = 暂停一下，先执行工具，回来继续
+- **stop** = 说完了，对话结束
 
 **事件可选性说明：**
 
 | 事件类型 | 是否必须 | 说明 |
 |---------|---------|------|
-| `started` | **必须** | 对话开始信号，始终发送 |
-| `thinking_start/end` | 可选 | 仅当 LLM 输出 thinking 内容时发送 |
-| `thinking` | 可选 | 仅当 LLM 输出 thinking 内容时发送 |
-| `tool_call/result` | 可选 | 仅当调用工具时发送 |
-| `message_start/end` | **必须** | 最终输出阶段，始终发送 |
-| `message` | **必须** | 最终回答内容，至少发送一次 |
-| `completed` | **必须** | 对话结束信号，始终发送 |
+| thinking (`reasoning_content`) | 可选 | 仅当 AI 输出思考内容时发送 |
+| message (`content`) | **必须** | 最终回答内容，至少发送一次 |
+| tool_calls | 可选 | 仅当调用工具时发送 |
+| finish (`finish_reason`) | **必须** | 每个响应阶段结束时发送 |
+| tool_result | 可选 | 仅当调用工具时发送（紧跟 tool_calls） |
+| `[DONE]` | **必须** | 整体对话结束标记 |
 
 **不同场景的事件流：**
 
 **场景1：纯 LLM 回答（无 thinking）：**
 ```
-started → message_start → message → message → message_end → completed
+data: {"role":"assistant","content":"回答内容..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
 ```
 
 **场景2：LLM 回答带 thinking：**
 ```
-started → thinking_start → thinking → thinking → thinking_end → message_start → message → message_end → completed
+data: {"role":"assistant","reasoning_content":"思考..."}
+data: {"role":"assistant","content":"回答内容..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
 ```
 
-**场景3：工具调用（无 thinking）：**
+**场景3：工具调用：**
 ```
-started → tool_call → tool_result → message_start → message → message_end → completed
-```
-
-**场景4：多轮工具调用带 thinking：**
-```
-started → thinking_start → thinking → thinking_end →
-tool_call → tool_result →
-thinking_start → thinking → thinking_end →
-message_start → message → message_end → completed
+data: {"role":"assistant","reasoning_content":"我需要调用工具..."}
+data: {"role":"assistant","tool_calls":[...]}
+data: {"role":"assistant","finish_reason":"tool_calls"}
+data: {"role":"tool","tool_call_id":"xxx","tool_name":"file_read","content":"结果"}
+data: {"role":"assistant","content":"最终回答..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
 ```
 
-**场景5：并行工具调用：**
+**场景4：多工具调用：**
 ```
-started → thinking_start → thinking → thinking_end →
-tool_call (step_id=a1) → tool_call (step_id=a2) →    ← 同时发起两个调用
-tool_result (step_id=a2) → tool_result (step_id=a1) → ← 按返回顺序，通过 step_id 匹配
-thinking_start → thinking → thinking_end →
-message_start → message → message_end → completed
+data: {"role":"assistant","tool_calls":[{"id":"call_001",...},{"id":"call_002",...}]}
+data: {"role":"assistant","finish_reason":"tool_calls"}
+data: {"role":"tool","tool_call_id":"call_001","tool_name":"file_read","content":"结果A"}
+data: {"role":"tool","tool_call_id":"call_002","tool_name":"file_read","content":"结果B"}
+data: {"role":"assistant","content":"两个文件已读取..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
 ```
 
-**SSE 事件结构：**
-
----
-
-### started（对话开始）
-
-整体执行开始信号，SSE 流的第一个事件。
+**tool_calls 结构定义：**
 
 ```json
 {
-  "session_id": "20260418103000523_a1b2",
-  "chat_id": "chat_20260418103000523",
-  "timestamp": "2026-04-18T10:30:00Z"
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "id": "call_xxx",
+      "type": "function",
+      "function": {
+        "name": "工具名称",
+        "arguments": "JSON格式参数字符串"
+      }
+    }
+  ]
 }
 ```
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `session_id` | string | 是 | 会话ID，用于后续查询和继续对话 |
-| `chat_id` | string | 是 | 对话ID，用于查询本次对话详情 |
-| `timestamp` | string | 是 | 开始时间戳（ISO 8601格式） |
-
----
-
-### thinking_start（开始思考）
-
-思考阶段开始，LLM 开始分析请求。
+**tool_result 结构定义：**
 
 ```json
 {
-  "step_id": "20260418-103000000-a1b2c3",
-  "timestamp": "2026-04-18T10:30:00Z"
+  "role": "tool",
+  "tool_call_id": "对应 tool_calls 中的 id",
+  "tool_name": "工具名称",
+  "content": "执行结果"
 }
 ```
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `step_id` | string | 是 | 步骤唯一标识，用于匹配 `thinking_end` |
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
+**错误处理：**
 
----
-
-### thinking（思考内容）
-
-LLM 思考过程的增量输出，可能多次发送。
+工具执行失败时：
 
 ```json
 {
-  "content": "我需要先读取PDF文件内容...",
-  "timestamp": "2026-04-18T10:30:01Z"
+  "role": "tool",
+  "tool_call_id": "call_xxx",
+  "tool_name": "file_read",
+  "content": "",
+  "error": "文件不存在"
 }
 ```
-
-```json
-{
-  "content": "然后分析其中的财务数据...",
-  "timestamp": "2026-04-18T10:30:02Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `content` | string | 是 | 思考内容增量片段，多次拼接为完整思考过程 |
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
----
-
-### thinking_end（思考结束）
-
-思考阶段结束，准备进入下一阶段。
-
-```json
-{
-  "step_id": "20260418-103000000-a1b2c3",
-  "status": "success",
-  "timestamp": "2026-04-18T10:30:05Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `step_id` | string | 是 | 对应 `thinking_start` 的 step_id |
-| `status` | string | 是 | 状态：`success` |
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
----
-
-### tool_call（工具调用）
-
-LLM 决定调用工具，发送工具名称和参数。
-
-```json
-{
-  "step_id": "20260418-103005000-x9y8z7",
-  "name": "file_read",
-  "arguments": {
-    "path": "/home/groot/memory/20260418103000523_a1b2/attachments/report.pdf"
-  },
-  "timestamp": "2026-04-18T10:30:05Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `step_id` | string | 是 | 步骤唯一标识，用于匹配 `tool_result` |
-| `name` | string | 是 | 工具名称（如 `file_read`、`http_get`） |
-| `arguments` | object | 是 | 工具调用参数，结构由工具定义决定 |
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
----
-
-### tool_result（工具执行结果）
-
-工具执行完成后的输出结果，通过 `step_id` 与 `tool_call` 匹配。
-
-```json
-{
-  "step_id": "20260418-103005000-x9y8z7",
-  "output": "PDF内容：财务报告2026Q3...",
-  "timestamp": "2026-04-18T10:30:10Z"
-}
-```
-
-```json
-{
-  "step_id": "20260418-103006000-a2b3c4",
-  "error": "请求超时",
-  "timestamp": "2026-04-18T10:30:15Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `step_id` | string | 是 | 对应 `tool_call` 的 step_id |
-| `output` | string | 否 | 工具执行成功时的输出结果 |
-| `error` | string | 否 | 工具执行失败时的错误描述 |
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
-**说明：** `output` 和 `error` 至少有一个，成功时 `output` 有值，失败时 `error` 有值。
-
----
-
-### message_start（开始最终输出）
-
-最终答案输出开始。
-
-```json
-{
-  "timestamp": "2026-04-18T10:30:15Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
----
-
-### message（最终回答）
-
-最终答案的增量输出，可能多次发送。
-
-```json
-{
-  "content": "财务报告分析结果：\n\n",
-  "timestamp": "2026-04-18T10:30:16Z"
-}
-```
-
-```json
-{
-  "content": "1. 营业收入：同比增长15%",
-  "timestamp": "2026-04-18T10:30:17Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `content` | string | 是 | 最终答案增量片段，多次拼接为完整回答 |
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
----
-
-### message_end（最终输出结束）
-
-最终答案输出结束。
-
-```json
-{
-  "timestamp": "2026-04-18T10:30:45Z"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `timestamp` | string | 是 | 时间戳（ISO 8601格式） |
-
----
-
-### completed（对话完成）
-
-整体执行结束信号，SSE 流的最后一个事件。
-
-**成功完成：**
-
-```json
-{
-  "status": "success",
-  "timestamp": "2026-04-18T10:30:45Z",
-  "duration": "45s",
-  "round": 1,
-  "chat_id": "chat_20260418103000523",
-  "result": "财务报告分析结果：\n1. 营业收入：同比增长15%\n2. 净利润：同比增长20%"
-}
-```
-
-**执行失败：**
-
-```json
-{
-  "status": "failed",
-  "timestamp": "2026-04-18T10:30:05Z",
-  "duration": "5s",
-  "round": 1,
-  "chat_id": "chat_20260418103000523",
-  "error": {
-    "code": "execution_error",
-    "message": "PDF文件已损坏，无法解析"
-  }
-}
-```
-
-**用户取消：**
-
-```json
-{
-  "status": "cancelled",
-  "timestamp": "2026-04-18T10:30:03Z",
-  "duration": "3s",
-  "round": 1,
-  "chat_id": "chat_20260418103000523",
-  "message": "用户主动取消"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `status` | string | 是 | 最终状态：`success`、`failed`、`cancelled` |
-| `timestamp` | string | 是 | 结束时间戳（ISO 8601格式） |
-| `duration` | string | 是 | 执行耗时（如 `45s`、`1m30s`） |
-| `round` | int | 是 | 对话轮次（新会话为1，继续会话递增） |
-| `chat_id` | string | 是 | 对话ID，用于查询详情 |
-| `result` | string | 条件 | 成功时的最终结果（status=success 时有） |
-| `error` | object | 条件 | 失败时的错误信息（status=failed 时必填） |
-| `message` | string | 条件 | 取消时的说明（status=cancelled 时有） |
-
-**error 对象结构：**
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `code` | string | 错误码，如 `llm_error`、`tool_error`、`execution_error` |
-| `message` | string | 错误详细描述 |
 
 ---
 
@@ -730,14 +559,10 @@ LLM 决定调用工具，发送工具名称和参数。
 │   │     大小: {文件大小} bytes
 │   │   ```
 │   ├─ 拼接到用户消息中（instruction + 附件信息）
-│   ├─ 处理失败 → SSE 推送 error，跳转到步骤8清理，终止
+│   ├─ 处理失败 → SSE 推送错误，终止
 │   └─ 处理成功 → 继续
 │
-├─ 6. SSE 推送 started 事件
-│   └─ {"session_id":"xxx","chat_id":"xxx","timestamp":"开始时间"}
-│   （表示准备工作完成，Agent 执行正式启动，首个事件，**必须发送**）
-│
-├─ 7. 构建 Agent 上下文
+├─ 6. 构建 Agent 上下文
 │   ├─ 系统提示词（prompt + Skills 指令）
 │   ├─ 历史消息（historyMessages，继续会话时）
 │   │   ├─ 每轮对话：instruction + result
@@ -750,60 +575,29 @@ LLM 决定调用工具，发送工具名称和参数。
 │       ├─ memory/{session_id}/attachments/{filename}
 │       └─ Agent 通过 MCP file_read 工具读取
 │
-├─ 8. ReAct 执行循环
+├─ 7. Agent 执行（SSE 流式转发）
 │   │
-│   ├─ Thinking（思考阶段）【可选】
-│   │   │
-│   │   ├─ 仅当 LLM 输出 thinking 内容时执行
-│   │   │
-│   │   ├─ thinking_start：开始思考
-│   │   │   ├─ SSE 推送事件（step_id）
-│   │   │   └─ 记录 step_id
-│   │   │
-│   │   ├─ thinking：流式输出思考内容
-│   │   │   ├─ SSE 推送事件（content 增量）
-│   │   │   ├─ LLM 分析当前状态，决定下一步动作
-│   │   │   └─ 多次发送
-│   │   │
-│   │   └─ thinking_end：思考结束
-│   │       ├─ SSE 推送事件（step_id, status）
-│   │       └─ 进入下一阶段（工具调用/直接输出）
+│   ├─ Agent 调用 eino 框架执行
+│   │   ├─ 接收 AgentEvent 流
+│   │   └─ 直接转发每个事件到 SSE 流
 │   │
-│   ├─ Tool（工具调用阶段）【可选】
-│   │   │
-│   │   ├─ 仅当 Agent 决定调用工具时执行
-│   │   │
-│   │   ├─ tool_call：工具调用请求
-│   │   │   ├─ SSE 推送事件（step_id, name, arguments）
-│   │   │   └─ 执行 MCP 工具调用
-│   │   │
-│   │   └─ tool_result：工具执行结果
-│   │       ├─ SSE 推送事件（step_id, output/error）
-│   │       └─ 更新上下文，继续循环或结束
-│   │
-│   ├─ Message（最终输出阶段）【必须】
-│   │   │
-│   │   ├─ message_start：开始输出（必须发送）
-│   │   │   ├─ SSE 推送事件
-│   │   │   └─ 开始生成最终回答
-│   │   │
-│   │   ├─ message：流式输出内容（至少发送一次）
-│   │   │   ├─ LLM 生成最终答案
-│   │   │   └─ SSE 流式推送内容
-│   │   │
-│   │   └─ message_end：输出结束（必须发送）
-│   │       ├─ SSE 推送事件
-│   │       └─ 准备完成
+│   ├─ 事件处理（直接转发）
+│   │   ├─ Assistant role + reasoning_content → 转发 thinking chunks
+│   │   ├─ Assistant role + content → 转发 message chunks
+│   │   ├─ Assistant role + tool_calls → 转发 tool_calls
+│   │   ├─ Assistant role + finish_reason → 转发 finish 事件
+│   │   ├─ Tool role → 转发 tool_result
+│   │   └─ Agent 执行完成 → 发送 [DONE]
 │   │
 │   └─ 检查终止条件
-│       ├─ Agent 判断完成 → 推送 completed 事件，结束
-│       ├─ 达到最大循环次数 → 推送 completed 事件，终止
-│       ├─ Token 消耗超限 → 推送 completed 事件，终止
-│       ├─ 单步失败 → Agent 判断是否重试或终止
-│       ├─ 用户取消 → 推送 completed (cancelled) 事件，终止
-│       └─ 继续循环
+│       ├─ finish_reason="stop" → 发送 [DONE]，结束
+│       ├─ 达到最大循环次数 → 发送 [DONE]，终止
+│       ├─ Token 消耗超限 → 发送 [DONE]，终止
+│       ├─ 执行错误 → 发送 [DONE]，终止
+│       ├─ 用户取消 → 发送 [DONE]，终止
+│       └─ 继续执行
 │
-├─ 9. 对话完成处理
+├─ 8. 对话完成处理
 │   ├─ RuntimeState.Complete(session_id, result)
 │   │   ├─ 移除活跃状态，返回 ChatRecord
 │   │   └─ chatRecord 包含：status, duration, steps, error
@@ -823,16 +617,16 @@ LLM 决定调用工具，发送工具名称和参数。
 │   │   ├─ message.StepsCount = 步骤数
 │   │   └─ 更新 history.json
 │   │
-│   ├─ SSE 推送 completed 事件
-│   │   ├─ status: success/failed/cancelled
-│   │   ├─ round: {round}
-│   │   ├─ result: {...}
-│   │
 │   ├─ 从取消管理器注销
 │   └─ 关闭 SSE 连接
 │
 → 流程结束
 ```
+
+> **实现提示：** Agent 执行阶段直接转发 eino 框架返回的 AgentEvent，无需额外转换逻辑。eino 的 MessageStream chunks 和 MessageOutput 结构与上述 SSE 格式一致，代码仅需：
+> 1. 流式 chunks 直接写入 SSE `data:`
+> 2. Tool role 事件直接写入 SSE `data:`
+> 3. 流结束时写入 `data: [DONE]`
 
 **会话处理逻辑总结：**
 
@@ -1830,51 +1624,73 @@ skills:
 | `stdio` | 标准输入输出通信 | 本地命令行工具 |
 | `sse` | Server-Sent Events | 远程 HTTP 服务（单向推送） |
 | `streamable_http` | Streamable HTTP | 远程 HTTP 服务（双向流式） |
-| `builtin` | 内置工具 | Groot 自带工具集 |
 
-#### 4.3.3 内置 MCP 工具定义
+#### 4.3.3 工具发现机制
 
-**file_operations：**
+MCP 工具支持自动发现，无需手动配置工具列表。
 
-| 操作 | 说明 | 参数 |
-|------|------|------|
-| `file_read` | 读取文件 | `path` |
-| `file_write` | 写入文件 | `path`, `content` |
-| `file_delete` | 删除文件 | `path` |
-| `file_search` | 搜索文件 | `pattern`, `directory` |
-| `directory_list` | 列出目录 | `path` |
-| `directory_create` | 创建目录 | `path` |
-| `file_exists` | 检查存在 | `path` |
-| `file_info` | 获取信息 | `path` |
+**发现流程：**
 
-**安全限制：**
-- 仅允许访问配置中 `allowed_paths` 指定的目录
-- 默认禁止删除操作
+```
+加载 MCP 配置 → 
+│
+├─ 配置中有 tools 字段 → 直接使用配置的工具列表
+│
+└─ 配置中无 tools 字段 → 连接 MCP Server → 调用 tools/list → 自动注册发现的工具
+```
 
-**http_request：**
+**tools/list 协议：**
 
-| 操作 | 说明 | 参数 |
-|------|------|------|
-| `http_get` | GET 请求 | `url`, `headers` |
-| `http_post` | POST 请求 | `url`, `body`, `headers` |
-| `http_put` | PUT 请求 | `url`, `body`, `headers` |
-| `http_delete` | DELETE 请求 | `url`, `headers` |
+| 连接类型 | 发现方式 |
+|---------|---------|
+| `stdio` | JSON-RPC: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` |
+| `sse` | HTTP POST to baseUrl, 解析 SSE data |
+| `streamable_http` | HTTP POST to `{baseUrl}/tools/list` |
 
-**安全限制：**
-- 禁止请求 localhost、内网 IP
-- 超时 30秒，最大响应 10MB
+**返回格式：**
 
-**code_execution（默认禁用）：**
+```json
+{
+  "result": {
+    "tools": [
+      {"name": "read_file", "description": "读取文件内容"},
+      {"name": "write_file", "description": "写入文件内容"}
+    ]
+  }
+}
+```
 
-| 操作 | 说明 | 参数 |
-|------|------|------|
-| `execute_python` | 执行 Python | `code`, `timeout` |
-| `execute_javascript` | 执行 JS | `code`, `timeout` |
-| `execute_shell` | 执行 Shell | `command`, `timeout` |
+**配置示例（自动发现）：**
 
-**安全限制：**
-- 默认禁用（高风险）
-- 启用后需沙箱执行，禁止网络访问
+```json
+{
+  "name": "filesystem",
+  "type": "stdio",
+  "description": "文件系统操作",
+  "isActive": true,
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+}
+```
+
+无需指定 `tools` 字段，系统自动发现。
+
+**配置示例（手动指定）：**
+
+```json
+{
+  "name": "custom_mcp",
+  "type": "stdio",
+  "description": "自定义 MCP",
+  "isActive": true,
+  "command": "my-mcp-server",
+  "tools": [
+    {"name": "custom_tool", "description": "自定义工具"}
+  ]
+}
+```
+
+手动指定 `tools` 字段时，跳过自动发现。
 
 #### 4.3.4 热插拔机制
 
@@ -1888,9 +1704,9 @@ skills:
 ```
 文件变化检测 → 防抖等待（2秒） →
 │
-├─ 新增 .json → 解析并注册 MCP → 建立连接 → 输出日志
+├─ 新增 .json → 解析配置 → 工具发现（tools/list） → 注册 MCP → 输出日志
 │
-├─ 修改 .json → 重新解析 → 断开旧连接 → 建立新连接 → 输出日志
+├─ 修改 .json → 重新解析 → 工具发现 → 断开旧连接 → 注册新配置 → 输出日志
 │
 └─ 删除 .json → 断开连接 → 移除 MCP 注册 → 输出日志
 ```

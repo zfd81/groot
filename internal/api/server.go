@@ -35,22 +35,26 @@ func NewServer(
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 ) *Server {
-	// Create Hertz server
+	// Set a large max request body size to allow attachment handler to validate sizes
+	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
+	// to return 400 with proper error code instead
+	// Use 200MB as max to handle large attachments with Base64 encoding
+	maxBodySize := 200 * 1024 * 1024 // 200MB
+
+	// Create Hertz server with custom body size limit
 	h := server.Default(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
+		server.WithMaxRequestBodySize(maxBodySize),
 	)
 
 	// Create attachment handler
 	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
 
 	// Create executor
-	exec := agent.NewExecutor(mem, skills, mcpMgr, attHandler, cfg, log)
+	exec := agent.NewExecutor(mem, skills, mcpMgr, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
-	rateLimitMW := middleware.NewRateLimitMiddleware(cfg.Performance.RateLimit)
-	// rateLimitMW.SetExecutor(exec) // disabled for now
-	recoveryMW := middleware.NewRecoveryMiddleware(log)
 
 	// Create handlers
 	chatH := handler.NewChatHandler(mem, runtime, exec, skills, mcpMgr, attHandler, cfg, log)
@@ -58,12 +62,12 @@ func NewServer(
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
-	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, exec)
+	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, mem, exec)
 	skillsH := handler.NewSkillsHandler(skills)
 	toolsH := handler.NewToolsHandler(mcpMgr)
 
 	// Register routes
-	RegisterRoutes(h, authMW, rateLimitMW, recoveryMW,
+	RegisterRoutes(h, authMW,
 		chatH, cancelH, statusH, detailH, sessionH,
 		healthH, skillsH, toolsH)
 

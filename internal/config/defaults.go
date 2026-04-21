@@ -40,26 +40,6 @@ func DefaultConfig() *Config {
 			RetentionDays:   7,
 			CleanupSchedule: "02:00",
 		},
-		Performance: PerformanceConfig{
-			RateLimit: RateLimitConfig{
-				MaxConcurrentTasks:   10,
-				MaxRequestsPerMinute: 60,
-				MaxRequestsPerHour:   1000,
-			},
-			Timeout: TimeoutConfig{
-				TaskMaxDuration: 300,
-				LLMCallTimeout:  60,
-				ToolCallTimeout: 30,
-			},
-			LLM: LLMPerfConfig{
-				MaxConcurrentCalls: 5,
-				RetryOnFailure:     3,
-				RetryDelay:         2,
-			},
-			MCP: MCPPerfConfig{
-				MaxConcurrentCallsPerServer: 3,
-			},
-		},
 		React: ReactConfig{
 			MaxIterations:   20,
 			MaxTokens:       100000,
@@ -71,7 +51,7 @@ func DefaultConfig() *Config {
 			MaxSize:       50,
 			MaxTotalSize:  100,
 			MaxCount:      10,
-			AllowedTypes:  []string{"pdf", "doc", "docx", "txt", "json", "csv", "xml", "yaml", "png", "jpg", "zip"},
+			AllowedTypes:  []string{}, // 空数组表示允许所有类型
 			TempDirectory: "temp",
 		},
 		Security: SecurityConfig{

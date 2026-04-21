@@ -11,6 +11,29 @@ import (
 	"github.com/zfd81/groot/internal/config"
 )
 
+// AttachmentError represents attachment validation error
+type AttachmentError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// Error implements error interface
+func (e *AttachmentError) Error() string {
+	return e.Message
+}
+
+// Error codes
+const (
+	ErrCodeCountExceeded     = "attachment_count_exceeded"
+	ErrCodeTypeNotAllowed    = "attachment_type_not_allowed"
+	ErrCodeSizeExceeded      = "attachment_size_exceeded"
+	ErrCodeTotalSizeExceeded = "attachment_total_size_exceeded"
+	ErrCodeDecodeError       = "attachment_decode_error"
+	ErrCodeMissingContent    = "attachment_missing_content"
+	ErrCodeMissingName       = "attachment_missing_name"
+	ErrCodeInvalidType       = "attachment_invalid_type"
+)
+
 // Handler handles attachment processing
 type Handler struct {
 	tempDir      string
@@ -72,19 +95,60 @@ type ProcessedAttachment struct {
 
 // Validate validates attachments before processing
 func (h *Handler) Validate(attachments []Attachment) error {
+	// Check count limit
 	if len(attachments) > h.maxCount {
-		return fmt.Errorf("附件数量超过限制：最大 %d 个，实际 %d 个", h.maxCount, len(attachments))
+		return &AttachmentError{
+			Code:    ErrCodeCountExceeded,
+			Message: fmt.Sprintf("附件数量超过限制：最大 %d 个，实际 %d 个", h.maxCount, len(attachments)),
+		}
 	}
 
 	var totalSize int64
 	for _, att := range attachments {
-		// Check type
-		ext := strings.ToLower(filepath.Ext(att.Name))
-		if ext != "" {
-			ext = ext[1:] // Remove leading dot
+		// Check name is present
+		if att.Name == "" {
+			return &AttachmentError{
+				Code:    ErrCodeMissingName,
+				Message: "附件缺少文件名",
+			}
 		}
-		if !h.isTypeAllowed(ext) {
-			return fmt.Errorf("附件类型不允许：%s (允许的类型：%s)", ext, strings.Join(h.allowedTypes, ", "))
+
+		// Check type is valid
+		if att.Type != "file" && att.Type != "image" && att.Type != "url" && att.Type != "text" {
+			return &AttachmentError{
+				Code:    ErrCodeInvalidType,
+				Message: fmt.Sprintf("无效的附件类型：%s", att.Type),
+			}
+		}
+
+		// Check content is present for file/image types
+		if (att.Type == "file" || att.Type == "image") && att.Content == "" {
+			return &AttachmentError{
+				Code:    ErrCodeMissingContent,
+				Message: fmt.Sprintf("附件 %s 缺少内容", att.Name),
+			}
+		}
+
+		// Check URL is present for url type
+		if att.Type == "url" && att.Content == "" && att.URL == "" {
+			return &AttachmentError{
+				Code:    ErrCodeMissingContent,
+				Message: fmt.Sprintf("URL附件 %s 缺少URL地址", att.Name),
+			}
+		}
+
+		// Check file type is allowed (only for file/image types)
+		if att.Type == "file" || att.Type == "image" {
+			ext := strings.ToLower(filepath.Ext(att.Name))
+			if ext != "" {
+				ext = ext[1:] // Remove leading dot
+			}
+			if !h.isTypeAllowed(ext) {
+				return &AttachmentError{
+					Code:    ErrCodeTypeNotAllowed,
+					Message: fmt.Sprintf("附件类型不允许：%s (允许的类型：%s)", ext, strings.Join(h.allowedTypes, ", ")),
+				}
+			}
 		}
 
 		// Check size (estimate from Base64 content length)
@@ -92,16 +156,23 @@ func (h *Handler) Validate(attachments []Attachment) error {
 			// Base64 encoding increases size by ~33%
 			estimatedSize := int64(len(att.Content)) * 3 / 4
 			if estimatedSize > h.maxSize {
-				return fmt.Errorf("附件大小超过限制：%s (最大 %d MB，实际约 %d MB)",
-					att.Name, h.maxSize/1024/1024, estimatedSize/1024/1024)
+				return &AttachmentError{
+					Code:    ErrCodeSizeExceeded,
+					Message: fmt.Sprintf("附件大小超过限制：%s (最大 %d MB，实际约 %d MB)",
+						att.Name, h.maxSize/1024/1024, estimatedSize/1024/1024),
+				}
 			}
 			totalSize += estimatedSize
 		}
 	}
 
+	// Check total size
 	if totalSize > h.maxTotalSize {
-		return fmt.Errorf("附件总大小超过限制：最大 %d MB，实际约 %d MB",
-			h.maxTotalSize/1024/1024, totalSize/1024/1024)
+		return &AttachmentError{
+			Code:    ErrCodeTotalSizeExceeded,
+			Message: fmt.Sprintf("附件总大小超过限制：最大 %d MB，实际约 %d MB",
+				h.maxTotalSize/1024/1024, totalSize/1024/1024),
+		}
 	}
 
 	return nil
@@ -148,7 +219,10 @@ func (h *Handler) processSingle(taskDir string, att Attachment) (*ProcessedAttac
 		// Decode Base64 content
 		content, err := base64.StdEncoding.DecodeString(att.Content)
 		if err != nil {
-			return nil, fmt.Errorf("Base64 解码失败：%w", err)
+			return nil, &AttachmentError{
+				Code:    ErrCodeDecodeError,
+				Message: fmt.Sprintf("Base64 解码失败：%s (%v)", att.Name, err),
+			}
 		}
 
 		// Generate safe filename
@@ -180,7 +254,10 @@ func (h *Handler) processSingle(taskDir string, att Attachment) (*ProcessedAttac
 		result.ContentType = "text/plain"
 
 	default:
-		return nil, fmt.Errorf("未知的附件类型：%s", att.Type)
+		return nil, &AttachmentError{
+			Code:    ErrCodeInvalidType,
+			Message: fmt.Sprintf("未知的附件类型：%s", att.Type),
+		}
 	}
 
 	return result, nil
@@ -272,5 +349,6 @@ func getContentType(filename string) string {
 type Attachment struct {
 	Type    string `json:"type"`    // file, image, url, text
 	Name    string `json:"name"`    // filename
-	Content string `json:"content"` // Base64 content or URL
+	Content string `json:"content"` // Base64 content (for file/image/text)
+	URL     string `json:"url"`     // URL (for url type)
 }

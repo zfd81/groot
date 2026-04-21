@@ -11,6 +11,7 @@ import (
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/skill"
 )
 
@@ -19,6 +20,7 @@ type HealthHandler struct {
 	config        config.Config
 	skillRegistry *skill.Registry
 	mcpManager    *mcp.Manager
+	memoryManager *memory.Manager
 	executor      *agent.Executor
 	startTime     time.Time
 }
@@ -28,12 +30,14 @@ func NewHealthHandler(
 	cfg config.Config,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
+	memMgr *memory.Manager,
 	exec *agent.Executor,
 ) *HealthHandler {
 	return &HealthHandler{
 		config:        cfg,
 		skillRegistry: skills,
 		mcpManager:    mcpMgr,
+		memoryManager: memMgr,
 		executor:      exec,
 		startTime:     time.Now(),
 	}
@@ -43,6 +47,14 @@ func NewHealthHandler(
 func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	uptime := time.Since(h.startTime)
 	uptimeStr := formatUptime(uptime)
+
+	// Get memory stats
+	var sessionCount int
+	if h.memoryManager != nil {
+		sessions, total, _ := h.memoryManager.ListSessions(1, 0)
+		sessionCount = total
+		_ = sessions
+	}
 
 	resp := types.HealthResponse{
 		Status:  "healthy",
@@ -61,9 +73,13 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 				Status: "healthy",
 				Info:   map[string]int{"count": h.skillRegistry.Count()},
 			},
+			"memory": {
+				Status: "healthy",
+				Info:   map[string]int{"sessions": sessionCount},
+			},
 		},
 		Metrics: map[string]interface{}{
-			"tasks_running": h.executor.RunningCount(),
+			"chats_running": h.executor.RunningCount(),
 		},
 	}
 
