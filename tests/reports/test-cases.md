@@ -1272,6 +1272,9 @@ $GROOT_HOME/memory/
 | TC-LLM-CFG-001 | default_model 配置 | 默认模型 |
 | TC-LLM-CFG-002 | models 配置列表 | 多模型配置 |
 | TC-LLM-CFG-003 | api_key 环境变量引用 | 环境变量格式 |
+| TC-LLM-CFG-004 | X-Model-Name 指定有效模型 | Header 指定模型 |
+| TC-LLM-CFG-005 | X-Model-Name 指定不存在模型 | 返回 400 invalid_model |
+| TC-LLM-CFG-006 | X-Model-Name 为空 | 使用默认模型 |
 
 ### 8.13 权限边界测试
 

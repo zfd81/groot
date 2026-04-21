@@ -418,7 +418,7 @@ server:
 
 # LLM 配置（OpenAI兼容协议）
 llm:
-  default_model: gpt-4o             # 当前激活的模型名称
+  default_model: gpt-4o             # 默认模型名称
   models:
     gpt-4o:                        # 模型配置名称（自定义）
       base_url: https://api.openai.com/v1    # LLM API 地址
