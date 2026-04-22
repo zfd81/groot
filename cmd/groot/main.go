@@ -218,11 +218,9 @@ func startServer(homeDir string, port int) {
 }
 
 func printHelp() {
-	fmt.Println("Groot Agent - AI 智能任务执行服务")
+	fmt.Println("用法: groot [选项] <子命令>")
 	fmt.Println()
-	fmt.Println("用法: groot [选项] <命令>")
-	fmt.Println()
-	fmt.Println("命令:")
+	fmt.Println("子命令:")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
@@ -231,12 +229,12 @@ func printHelp() {
 	fmt.Println("  -h, --help        显示帮助")
 	fmt.Println("  -v, --version     显示版本")
 	fmt.Println()
-	fmt.Println("tail 命令选项:")
+	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
 	fmt.Println("  -l <level>        按日志级别过滤 (error/warn/info/debug)")
 	fmt.Println("  -k <keyword>      按关键词过滤")
 	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
-	fmt.Println("  -h, --help        显示 tail 命令帮助")
+	fmt.Println("  -h, --help        显示 tail 子命令帮助")
 	fmt.Println()
 	fmt.Println("环境变量:")
 	fmt.Println("  GROOT_HOME        工作目录")

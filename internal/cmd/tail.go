@@ -255,8 +255,6 @@ func RunTail(flags *TailFlags) error {
 
 // PrintTailHelp prints the help message for the tail command
 func PrintTailHelp() {
-	fmt.Println("Groot Tail - 实时日志查看")
-	fmt.Println()
 	fmt.Println("用法: groot tail [选项]")
 	fmt.Println()
 	fmt.Println("选项:")
