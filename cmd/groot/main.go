@@ -14,6 +14,7 @@ import (
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/cmd"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/logger"
@@ -53,6 +54,24 @@ func main() {
 		return
 	}
 
+	// Get remaining arguments after flag parsing
+	args := flag.Args()
+
+	// Handle subcommands
+	if len(args) > 0 {
+		command := args[0]
+		switch command {
+		case "tail":
+			handleTailCommand(args[1:])
+		default:
+			fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", command)
+			printHelp()
+			os.Exit(1)
+		}
+		return
+	}
+
+	// No subcommand, start server
 	// Determine home directory
 	if homeDir == "" {
 		homeDir = os.Getenv("GROOT_HOME")
@@ -61,6 +80,23 @@ func main() {
 		}
 	}
 
+	startServer(homeDir, port)
+}
+
+func handleTailCommand(args []string) {
+	flags, err := cmd.ParseTailFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+
+	if err := cmd.RunTail(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func startServer(homeDir string, port int) {
 	// Ensure home directory exists
 	if err := os.MkdirAll(homeDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "无法创建工作目录: %s\n", err)
@@ -184,19 +220,31 @@ func main() {
 func printHelp() {
 	fmt.Println("Groot Agent - AI 智能任务执行服务")
 	fmt.Println()
-	fmt.Println("用法: groot [选项]")
+	fmt.Println("用法: groot [选项] <命令>")
+	fmt.Println()
+	fmt.Println("命令:")
+	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
-	fmt.Println("  -H, --home <dir>    工作目录 (默认 ~/.groot)")
-	fmt.Println("  -p, --port <port>   HTTP端口 (默认配置文件值)")
-	fmt.Println("  -h, --help          显示帮助")
-	fmt.Println("  -v, --version       显示版本")
+	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
+	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
+	fmt.Println("  -h, --help        显示帮助")
+	fmt.Println("  -v, --version     显示版本")
+	fmt.Println()
+	fmt.Println("tail 命令选项:")
+	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
+	fmt.Println("  -l <level>        按日志级别过滤 (error/warn/info/debug)")
+	fmt.Println("  -k <keyword>      按关键词过滤")
+	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
+	fmt.Println("  -h, --help        显示 tail 命令帮助")
 	fmt.Println()
 	fmt.Println("环境变量:")
-	fmt.Println("  GROOT_HOME          工作目录")
+	fmt.Println("  GROOT_HOME        工作目录")
 	fmt.Println()
 	fmt.Println("示例:")
-	fmt.Println("  groot                         # 使用默认配置")
-	fmt.Println("  groot -H /opt/groot            # 指定工作目录")
-	fmt.Println("  groot -p 9090                  # 指定端口")
+	fmt.Println("  groot                         # 使用默认配置启动服务")
+	fmt.Println("  groot -H /opt/groot            # 指定工作目录启动服务")
+	fmt.Println("  groot -p 9090                  # 指定端口启动服务")
+	fmt.Println("  groot tail                     # 显示最近 100 行日志")
+	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")
 }
