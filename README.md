@@ -392,6 +392,71 @@ kill -SIGTERM <pid>
 - 刷新日志
 - 退出程序
 
+### 3.7 日志查看命令（groot tail）
+
+Groot 提供了类似 `tail -f` 的实时日志查看命令，方便开发调试和运维监控。
+
+**基本用法：**
+
+```bash
+# 实时查看日志（类似 tail -f）
+groot tail
+
+# 查看最近 50 行日志后实时跟踪
+groot tail -n 50
+
+# 只查看错误级别日志
+groot tail -l error
+
+# 过滤包含特定关键词的日志
+groot tail -k "api_request"
+
+# 组合使用：查看最近 100 行错误日志并实时跟踪
+groot tail -n 100 -l error
+```
+
+**命令参数：**
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `-n N` | 显示最后 N 行历史日志后实时跟踪 | `groot tail -n 50` |
+| `-l level` | 按级别过滤，可选值：error/warn/info/debug | `groot tail -l error` |
+| `-k keyword` | 关键词过滤，只显示包含关键词的日志 | `groot tail -k "connection"` |
+
+**输出格式：**
+
+日志以易读格式输出，带颜色高亮：
+
+```
+2026-04-21T19:18:38+08:00 INFO   api/server.go:42  API 服务启动  event=api_request  port=8080
+2026-04-21T19:18:40+08:00 WARN   system/memory.go:8  内存使用率偏高  usage=85%
+2026-04-21T19:18:42+08:00 ERROR  service/connection.go:15  服务连接失败  error="connection refused"
+```
+
+**颜色说明：**
+
+| 级别 | 颜色 | 说明 |
+|------|------|------|
+| ERROR | 红色 | 错误日志，需要关注 |
+| WARN | 黄色 | 警告日志，可能有问题 |
+| INFO | 绿色 | 正常信息日志 |
+| DEBUG | 灰色 | 调试日志，默认不显示 |
+
+**退出方式：**
+
+按 `Ctrl+C` 退出实时跟踪。
+
+**日志文件位置：**
+
+日志文件默认存放在 `{GROOT_HOME}/logs/groot-{YYYY-MM-DD}.log`，可通过配置文件修改：
+
+```yaml
+logging:
+  file:
+    directory: logs                # 日志目录
+    filename_pattern: groot-{date}.log  # 文件名模式
+```
+
 ---
 
 ## 四、配置文件详解
