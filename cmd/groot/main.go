@@ -132,8 +132,8 @@ func startServer(homeDir string, port int) {
 	skillsRegistry := skill.NewRegistry()
 	skillLoader := skill.NewLoader(skillsRegistry)
 
-	// Load skills
-	skillsDir := config.ResolvePath(cfg.Skills.Directory, homeDir)
+	// Load skills (fixed directory: {GROOT_HOME}/skills)
+	skillsDir := filepath.Join(homeDir, "skills")
 	if err := skillLoader.LoadAll(skillsDir); err != nil {
 		log.Error("无法加载Skills", zap.Error(err))
 	}
@@ -148,8 +148,8 @@ func startServer(homeDir string, port int) {
 	// Initialize MCP manager
 	mcpMgr := mcp.NewManager(log)
 
-	// Load MCP configs
-	mcpDir := config.ResolvePath(cfg.MCP.Directory, homeDir)
+	// Load MCP configs (fixed directory: {GROOT_HOME}/mcp)
+	mcpDir := filepath.Join(homeDir, "mcp")
 	if err := mcpMgr.LoadAll(mcpDir); err != nil {
 		log.Error("无法加载MCP配置", zap.Error(err))
 	}
@@ -158,8 +158,8 @@ func startServer(homeDir string, port int) {
 	// Initialize API tool manager
 	apiMgr := apitool.NewManager(log)
 
-	// Load API tool configs
-	apiDir := config.ResolvePath(cfg.APITools.Directory, homeDir)
+	// Load API tool configs (fixed directory: {GROOT_HOME}/api)
+	apiDir := filepath.Join(homeDir, "api")
 	// 先获取MCP工具名称列表用于冲突检查
 	mcpToolNames := []string{}
 	for _, tool := range mcpMgr.ListTools() {

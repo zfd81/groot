@@ -73,16 +73,8 @@ func applyDefaults(cfg *Config) {
 	}
 
 	// Skills defaults
-	if cfg.Skills.Directory == "" {
-		cfg.Skills.Directory = "skills"
-	}
 	if cfg.Skills.HotReload.DebounceDelay == 0 {
 		cfg.Skills.HotReload.DebounceDelay = 2
-	}
-
-	// MCP defaults
-	if cfg.MCP.Directory == "" {
-		cfg.MCP.Directory = "mcp"
 	}
 
 	// Memory defaults

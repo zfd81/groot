@@ -523,14 +523,9 @@ llm:
 
 # Skills 热插拔配置
 skills:
-  directory: skills                  # Skills 目录（相对于 GROOT_HOME）
   hot_reload:
     enabled: true                    # 是否启用 Skills 热插拔
     debounce_delay: 2                # 防抖延迟（秒）
-
-# MCP 配置目录
-mcp:
-  directory: mcp                     # MCP 配置目录（相对于 GROOT_HOME）
 
 # ReAct 执行配置
 react:
@@ -602,11 +597,17 @@ logging:
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `skills.directory` | `skills` | Skills 脚本目录 |
-| `mcp.directory` | `mcp` | MCP 配置目录 |
-| `memory.directory` | `memory` | 会话记忆目录 |
-| `logging.file.directory` | `logs` | 日志文件目录 |
-| `attachment.temp_directory` | `temp` | 附件临时目录 |
+| `memory.directory` | `memory` | 会话记忆目录（支持相对/绝对路径） |
+| `logging.file.directory` | `logs` | 日志文件目录（支持相对/绝对路径） |
+| `attachment.temp_directory` | `temp` | 附件临时目录（支持相对/绝对路径） |
+
+**固定目录（不可配置）：**
+
+| 目录 | 位置 | 说明 |
+|------|------|------|
+| `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
+| `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
+| `api` | `{GROOT_HOME}/api` | API 工具配置目录 |
 
 ### 4.4 配置字段详解
 
@@ -639,15 +640,10 @@ logging:
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `directory` | 否 | Skills 目录（相对于 GROOT_HOME），默认 `skills` |
 | `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
 | `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
 
-#### MCP 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `directory` | 否 | MCP 配置目录（相对于 GROOT_HOME），默认 `mcp` |
+> **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。
 
 #### ReAct 配置
 
@@ -727,7 +723,9 @@ logging:
 
 ---
 
-## 五、Skills 配置
+## 五、Skills 配置（固定目录）
+
+Skills 目录固定位于 `{GROOT_HOME}/skills`，无需在配置文件中指定。
 
 ### 5.1 Skills 目录结构
 
@@ -786,7 +784,9 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 
 ## 六、MCP 工具配置
 
-### 6.1 MCP 配置目录
+### 6.1 MCP 配置目录（固定位置）
+
+MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定。
 
 ```
 {GROOT_HOME}/mcp/
@@ -903,7 +903,9 @@ API 工具是 MCP 工具的补充，提供更直接的 HTTP API 集成方式。�
 | 执行方式 | MCP 协议（stdio/sse/http） | 直接 HTTP 请求 |
 | 适用场景 | 复杂交互、外部进程、标准化工具 | 简单 API 调用、已有 HTTP 服务 |
 
-### API 工具配置目录
+### API 工具配置目录（固定位置）
+
+API 工具配置目录固定位于 `{GROOT_HOME}/api`，无需在配置文件中指定。
 
 ```
 {GROOT_HOME}/api/

@@ -12,8 +12,6 @@ type Config struct {
 	Server     ServerConfig     `yaml:"server"`
 	LLM        LLMConfig        `yaml:"llm"`
 	Skills     SkillsConfig     `yaml:"skills"`
-	MCP        MCPConfig        `yaml:"mcp"`
-	APITools   APIToolsConfig   `yaml:"api_tools"`
 	Memory     MemoryConfig     `yaml:"memory"`
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
@@ -50,13 +48,7 @@ type ModelConfig struct {
 
 // SkillsConfig holds Skills hot-reload settings
 type SkillsConfig struct {
-	Directory string          `yaml:"directory"`    // skills 目录
 	HotReload HotReloadConfig `yaml:"hot_reload"`
-}
-
-// MCPConfig holds MCP settings
-type MCPConfig struct {
-	Directory string `yaml:"directory"` // MCP 配置目录
 }
 
 // HotReloadConfig holds hot-reload settings
@@ -128,11 +120,6 @@ type LogFileConfig struct {
 	Directory       string `yaml:"directory"`
 	FilenamePattern string `yaml:"filename_pattern"`
 	MaxAge          int    `yaml:"max_age"`
-}
-
-// APIToolsConfig API工具配置
-type APIToolsConfig struct {
-	Directory string `yaml:"directory"` // API工具配置目录
 }
 
 // ExpandEnv replaces ${VAR_NAME} with environment variable values
