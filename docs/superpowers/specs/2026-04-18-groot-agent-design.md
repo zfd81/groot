@@ -215,20 +215,30 @@ llm:
 ```
 {GROOT_HOME}/
 ├── config.yaml                    # 主配置文件
-├── skills/                        # Skills 目录
+├── GROOT.md                       # 项目规范文件（自动注入系统指令）
+├── skills/                        # Skills 目录（固定位置）
 │   └── {skill-name}/SKILL.md      # Skill 定义文件
-├── mcp/                           # MCP 配置目录
+├── mcp/                           # MCP 配置目录（固定位置）
 │   └── {mcp-name}.json            # MCP 配置文件
-├── memory/                        # 记忆模块目录
+├── api/                           # API 工具配置目录（固定位置）
+│   └── {tool-name}.json           # API 工具配置文件
+├── {memoryDir}/                   # 记忆模块目录（可配置位置，默认 memory）
+│   ├── temp/                      # 附件处理临时目录（固定在 memory 目录下）
 │   └── {session_id}/              # 会话目录
 │       ├── history.json           # 对话历史（含执行元数据摘要）
 │       ├── attachments/           # 附件目录
 │       │   └── {filename}         # 附件文件
 │       └── chats/                 # 详细执行记录目录
 │           └── chat_{timestamp}.json  # 单次对话完整记录
-├── logs/                          # 日志目录
+├── {logDir}/                      # 日志目录（可配置位置，默认 logs）
 │   └── groot-{date}.log           # 日志文件
 ```
+
+**目录说明：**
+- `skills`、`mcp`、`api` 目录固定在 `{GROOT_HOME}` 下，不可配置
+- `memory` 目录可通过 `memory.directory` 配置，支持相对/绝对路径
+- `temp` 目录固定在 memory 目录下，位置取决于 memory.directory 配置
+- `logs` 目录可通过 `logging.file.directory` 配置，支持相对/绝对路径
 
 ---
 
@@ -1220,6 +1230,8 @@ attachment:
 | `max_count` | int | 否 | 单次请求附件数量上限，默认 10 |
 | `allowed_types` | array | 否 | 允许的文件扩展名列表，默认常见文档和图片类型 |
 
+**临时目录：** 附件处理临时目录固定为 `{memoryDir}/temp`，位置取决于 memory.directory 配置。
+
 #### 3.2.2 校验流程
 
 ```
@@ -1523,6 +1535,8 @@ dependencies: [other_skill]  # 可选，依赖的其他 Skill
     └── SKILL.md
 ```
 
+**说明：** Skills 目录固定为 `{GROOT_HOME}/skills`，不支持配置。
+
 #### 4.2.3 加载与注册
 
 **注册流程：**
@@ -1711,14 +1725,7 @@ MCP 工具支持自动发现，无需手动配置工具列表。
 └─ 删除 .json → 断开连接 → 移除 MCP 注册 → 输出日志
 ```
 
-**配置项：**
-
-```yaml
-mcp:
-  hot_reload:
-    enabled: true       # 是否启用热插拔
-    debounce_delay: 2   # 防抖延迟（秒）
-```
+**说明：** MCP 目录固定为 `{GROOT_HOME}/mcp`，不支持配置。
 
 ### 4.4 Memory
 
@@ -2278,14 +2285,9 @@ llm:
 
 # Skills 热插拔配置
 skills:
-  directory: skills                # Skills 目录（相对于 GROOT_HOME）
   hot_reload:
     enabled: true                  # 是否启用 Skills 热插拔
     debounce_delay: 2              # 防抖延迟（秒）
-
-# MCP 配置目录
-mcp:
-  directory: mcp                   # MCP 配置目录（相对于 GROOT_HOME）
 
 # ReAct 执行配置
 react:
@@ -2332,6 +2334,14 @@ logging:
     max_size: 100                  # 单个日志文件最大大小（MB），超过则轮转
     compress: false                # 是否压缩旧日志文件
 ```
+
+**固定目录说明：**
+
+以下目录位置固定，不可配置：
+- `{GROOT_HOME}/skills` - Skills 定义目录
+- `{GROOT_HOME}/mcp` - MCP 配置目录
+- `{GROOT_HOME}/api` - API 工具配置目录
+- `{memoryDir}/temp` - 附件处理临时目录（固定在 memory 目录下）
 
 ---
 
@@ -2409,9 +2419,15 @@ dependencies: [pdf_analyzer, data_analyzer]
 | 路径 | 说明 |
 |------|------|
 | `{GROOT_HOME}/config.yaml` | 配置文件 |
-| `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
-| `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件 |
-| `{GROOT_HOME}/memory/{session_id}/history.json` | 对话历史 |
-| `{GROOT_HOME}/memory/{session_id}/attachments/` | 附件目录 |
-| `{GROOT_HOME}/memory/{session_id}/chats/{chat_id}.json` | 详细执行记录 |
-| `{GROOT_HOME}/logs/groot-{date}.log` | 日志文件 |
+| `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件（固定位置） |
+| `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件（固定位置） |
+| `{GROOT_HOME}/api/{name}.json` | API 工具配置文件（固定位置） |
+| `{memoryDir}/temp/` | 附件处理临时目录（固定在 memory 目录下） |
+| `{memoryDir}/{session_id}/history.json` | 对话历史 |
+| `{memoryDir}/{session_id}/attachments/` | 附件目录 |
+| `{memoryDir}/{session_id}/chats/{chat_id}.json` | 详细执行记录 |
+| `{logDir}/groot-{date}.log` | 日志文件 |
+
+**说明：**
+- `{memoryDir}` 由 memory.directory 配置决定，默认为 `{GROOT_HOME}/memory`
+- `{logDir}` 由 logging.file.directory 配置决定，默认为 `{GROOT_HOME}/logs`

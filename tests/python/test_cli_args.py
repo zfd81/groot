@@ -10,11 +10,8 @@ import time
 import requests
 import signal
 
-# 获取正确的 groot 二进制路径
-GROOT_BIN = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "groot")
-# 如果 bin 目录不存在，尝试使用当前目录下的 groot
-if not os.path.exists(GROOT_BIN):
-    GROOT_BIN = os.path.join(os.path.dirname(os.path.dirname(__file__)), "groot")
+# 获取正确的 groot 二进制路径: tests/python -> tests -> groot -> bin/groot
+GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "bin", "groot"))
 
 
 class TestCommandLineArgs:

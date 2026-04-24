@@ -20,7 +20,8 @@ TEST_HOST = os.environ.get("GROOT_TEST_HOST", "localhost")
 TEST_PORT = os.environ.get("GROOT_TEST_PORT", "8080")
 TEST_API_KEY = os.environ.get("GROOT_TEST_API_KEY", "test-api-key-2026")
 TEST_HOME = os.environ.get("GROOT_TEST_HOME", "/tmp/groot_test")
-GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "groot"))
+# GROOT_BIN: tests/python -> tests -> groot -> bin/groot
+GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "bin", "groot"))
 
 BASE_URL = f"http://{TEST_HOST}:{TEST_PORT}"
 
@@ -194,37 +195,37 @@ def server():
     """启动测试服务器（session级别）"""
     # 创建测试目录（无论服务器是否已运行）
     os.makedirs(TEST_HOME, exist_ok=True)
+    # 固定目录：skills, mcp, api
     os.makedirs(f"{TEST_HOME}/skills", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/mcp", exist_ok=True)
+    os.makedirs(f"{TEST_HOME}/api", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/memory", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/logs", exist_ok=True)
 
     # 写入测试配置（无论服务器是否已运行，确保配置正确）
+    # 使用本地 LLM 配置
     config = {
         "agent": {"name": "groot", "version": "1.0.0"},
         "server": {"host": "0.0.0.0", "port": int(TEST_PORT)},
         "llm": {
-            "default_model": "mock-model",
+            "default_model": "qwen-local",
             "models": {
-                "mock-model": {
-                    "base_url": "http://localhost:8888/mock",
-                    "api_key": "mock-key",
-                    "model": "mock",
-                    "max_tokens": 4096,
-                    "temperature": 0.7
+                "qwen-local": {
+                    "base_url": "http://127.0.0.1:8230/v1",
+                    "api_key": "bonc1q2w3e",
+                    "model": "Qwen3.5-122B-A10B-6bit",
+                    "max_tokens": 40960,
+                    "temperature": 0.2
                 }
             }
         },
         "skills": {
-            "directory": "skills",
             "hot_reload": {
                 "enabled": True,
                 "debounce_delay": 2
             }
         },
-        "mcp": {
-            "directory": "mcp"
-        },
+        # skills/mcp/api directory 已移除配置，使用固定位置
         "security": {
             "auth": {
                 "enabled": True,

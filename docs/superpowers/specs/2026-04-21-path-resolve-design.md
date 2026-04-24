@@ -2,19 +2,45 @@
 
 ## 背景
 
-当前项目中各目录路径处理方式不一致：
+项目中有两类目录：**固定目录**和**可配置目录**。
 
-| 目录 | 当前行为 | 问题 |
+**固定目录：** 位置固定，不可通过配置更改。
+- `skills/` - Skills 定义目录，固定在 `{GROOT_HOME}/skills`
+- `mcp/` - MCP 配置目录，固定在 `{GROOT_HOME}/mcp`
+- `api/` - API 工具配置目录，固定在 `{GROOT_HOME}/api`
+- `temp/` - 附件处理临时目录，固定在 `{memoryDir}/temp`（位置取决于 memory.directory 配置）
+
+**可配置目录：** 支持相对路径和绝对路径配置。
+- `memory/` - 会话记忆目录
+- `logs/` - 日志文件目录
+
+## 设计方案
+
+### 1. 固定目录（不可配置）
+
+以下目录位置固定，用户无法通过配置更改：
+
+| 目录 | 固定位置 | 说明 |
 |------|----------|------|
-| `skills` | 硬编码 `filepath.Join(homeDir, "skills")` | 无配置项，不支持自定义 |
-| `mcp` | 硬编码 `filepath.Join(homeDir, "mcp")` | 无配置项，不支持自定义 |
-| `memory` | 强制 `filepath.Join(homeDir, cfg.Memory.Directory)` | 相对路径强制拼接，绝对路径无法使用 |
-| `logs` | 直接使用 `cfg.Logging.File.Directory` | 相对路径变成相对于执行目录 |
-| `temp` | 直接使用 `cfg.Attachment.TempDirectory` | 相对路径变成相对于执行目录 |
+| `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
+| `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
+| `api` | `{GROOT_HOME}/api` | API 工具配置目录 |
+| `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
 
-用户希望统一行为：**相对路径相对于 Home，绝对路径直接使用**。
+**说明：** temp 目录的位置取决于 memory.directory 配置：
+- 若 memory.directory = "memory"（默认），则 temp = `{GROOT_HOME}/memory/temp`
+- 若 memory.directory = "/data/groot/memory"，则 temp = `/data/groot/memory/temp`
 
-## 目标格式
+### 2. 可配置目录（支持相对/绝对路径）
+
+以下目录支持用户配置，可使用相对路径或绝对路径：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `memory.directory` | `memory` | 会话记忆目录 |
+| `logging.file.directory` | `logs` | 日志文件目录 |
+
+**路径解析规则：**
 
 | 配置值 | Home | 实际路径 |
 |--------|------|----------|
@@ -23,9 +49,7 @@
 | `/data/memory` | `~/.groot` | `/data/memory` |
 | `/var/log/groot` | `~/.groot` | `/var/log/groot` |
 
-## 设计方案
-
-### 1. 新增路径处理函数
+### 3. 路径处理函数
 
 文件: `internal/config/path.go`
 
@@ -43,97 +67,76 @@ func ResolvePath(path, homeDir string) string {
 }
 ```
 
-### 2. 新增配置项
-
-为 `skills` 和 `mcp` 目录添加配置项。
+### 4. 配置结构
 
 文件: `internal/config/config.go`
 
-**SkillsConfig 新增 Directory 字段：**
+**AttachmentConfig（移除 TempDirectory）：**
+```go
+type AttachmentConfig struct {
+    MaxSize      int      `yaml:"max_size"`
+    MaxTotalSize int      `yaml:"max_total_size"`
+    MaxCount     int      `yaml:"max_count"`
+    AllowedTypes []string `yaml:"allowed_types"`
+    // TempDirectory 已移除，固定为 {memoryDir}/temp
+}
+```
+
+**SkillsConfig（移除 Directory）：**
 ```go
 type SkillsConfig struct {
-    Directory  string        `yaml:"directory"`    // skills 目录
-    HotReload  HotReloadConfig `yaml:"hot_reload"`
+    HotReload HotReloadConfig `yaml:"hot_reload"`
+    // Directory 已移除，固定为 {GROOT_HOME}/skills
 }
 ```
 
-**MCPConfig 新增 Directory 字段：**
-```go
-type MCPConfig struct {
-    Directory  string `yaml:"directory"`    // MCP 配置目录
-}
-```
+**MCPConfig 和 APIToolsConfig 已移除：**
+- MCP 目录固定为 `{GROOT_HOME}/mcp`
+- API 工具目录固定为 `{GROOT_HOME}/api`
 
-### 3. 更新默认配置
-
-文件: `internal/config/defaults.go`
-
-```go
-Skills: SkillsConfig{
-    Directory: "skills",  // 新增
-    HotReload: HotReloadConfig{...},
-},
-MCP: MCPConfig{
-    Directory: "mcp",  // 新增
-},
-Memory: MemoryConfig{
-    Directory: "memory",  // 保持不变
-    ...
-},
-Logging: LoggingConfig{
-    ...
-    File: LogFileConfig{
-        Directory: "logs",  // 保持不变
-        ...
-    },
-},
-Attachment: AttachmentConfig{
-    ...
-    TempDirectory: "temp",  // 保持不变
-},
-```
-
-### 4. 修改 main.go 路径处理
+### 5. main.go 路径处理
 
 文件: `cmd/groot/main.go`
 
-将所有目录路径处理改为使用 `ResolvePath`：
-
 ```go
-// Skills
-skillsDir := config.ResolvePath(cfg.Skills.Directory, homeDir)
+// 固定目录路径
+skillsDir := filepath.Join(homeDir, "skills")
+mcpDir := filepath.Join(homeDir, "mcp")
+apiDir := filepath.Join(homeDir, "api")
 
-// MCP
-mcpDir := config.ResolvePath(cfg.MCP.Directory, homeDir)
-
-// Memory
+// 可配置目录路径（使用 ResolvePath）
 memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
-
-// Logs - 在 logger 初始化前处理
 cfg.Logging.File.Directory = config.ResolvePath(cfg.Logging.File.Directory, homeDir)
-
-// Temp - 在 attachment 处理前处理
-cfg.Attachment.TempDirectory = config.ResolvePath(cfg.Attachment.TempDirectory, homeDir)
 ```
 
-### 5. 更新用户手册
+### 6. Attachment Handler
 
-文件: `README.md`
+文件: `internal/attachment/handler.go`
 
-添加路径配置说明，说明相对路径和绝对路径的行为。
+```go
+func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
+    // temp 目录固定在 memory 目录下
+    tempDir := filepath.Join(memoryDir, "temp")
+    os.MkdirAll(tempDir, 0755)
+    ...
+}
+```
 
 ## 改动文件清单
 
 | 文件 | 改动类型 | 说明 |
 |------|----------|------|
-| `internal/config/path.go` | 新增 | 路径处理函数 |
-| `internal/config/config.go` | 修改 | 新增 SkillsConfig.Directory 和 MCPConfig.Directory |
-| `internal/config/defaults.go` | 修改 | 新增默认配置值 |
-| `cmd/groot/main.go` | 修改 | 使用 ResolvePath 处理所有目录路径 |
-| `README.md` | 修改 | 添加路径配置说明 |
+| `internal/config/config.go` | 修改 | 移除 MCPConfig、APIToolsConfig、SkillsConfig.Directory、AttachmentConfig.TempDirectory |
+| `internal/config/defaults.go` | 修改 | 移除相关默认配置值 |
+| `internal/config/loader.go` | 修改 | 移除相关默认填充逻辑 |
+| `internal/attachment/handler.go` | 修改 | NewHandler 参数改为 memoryDir，temp 固定为 memoryDir/temp |
+| `internal/api/server.go` | 修改 | NewServer 增加 memoryDir 参数 |
+| `cmd/groot/main.go` | 修改 | 使用固定路径，移除 TempDirectory 解析 |
+| `README.md` | 修改 | 更新目录配置说明 |
 
-## 测试要点
+## 设计原因
 
-- 默认配置（相对路径）正常工作，目录在 `~/.groot/` 下
-- 绝对路径配置正常工作，目录在指定位置
-- 现有功能不受影响（skills 加载、MCP 加载、memory 存储、日志写入）
+1. **简化配置：** skills、mcp、api 目录通常不需要自定义位置，固定路径减少配置复杂度。
+2. **避免错误：** 固定路径避免用户配置错误导致工具加载失败。
+3. **temp 目录归属：** temp 是附件处理的临时目录，逻辑上属于 memory 模块，放在 memory 目录下更合理。
+4. **保持灵活性：** memory 和 logs 目录可能需要放在不同存储位置（如 SSD 或网络存储），保留可配置性。

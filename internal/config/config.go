@@ -75,11 +75,10 @@ type ReactConfig struct {
 
 // AttachmentConfig holds attachment settings
 type AttachmentConfig struct {
-	MaxSize       int      `yaml:"max_size"`
-	MaxTotalSize  int      `yaml:"max_total_size"`
-	MaxCount      int      `yaml:"max_count"`
-	AllowedTypes  []string `yaml:"allowed_types"`
-	TempDirectory string   `yaml:"temp_directory"`
+	MaxSize      int      `yaml:"max_size"`
+	MaxTotalSize int      `yaml:"max_total_size"`
+	MaxCount     int      `yaml:"max_count"`
+	AllowedTypes []string `yaml:"allowed_types"`
 }
 
 // SecurityConfig holds security settings

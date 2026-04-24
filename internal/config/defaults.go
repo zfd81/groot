@@ -42,11 +42,10 @@ func DefaultConfig() *Config {
 			NestingMaxDepth: 3,
 		},
 		Attachment: AttachmentConfig{
-			MaxSize:       50,
-			MaxTotalSize:  100,
-			MaxCount:      10,
-			AllowedTypes:  []string{}, // 空数组表示允许所有类型
-			TempDirectory: "temp",
+			MaxSize:      50,
+			MaxTotalSize: 100,
+			MaxCount:     10,
+			AllowedTypes: []string{}, // 空数组表示允许所有类型
 		},
 		Security: SecurityConfig{
 			Auth: AuthConfig{

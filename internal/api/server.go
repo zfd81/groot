@@ -30,6 +30,7 @@ type Server struct {
 func NewServer(
 	cfg config.Config,
 	homeDir string,
+	memoryDir string,
 	log *logger.Logger,
 	mem *memory.Manager,
 	runtime *agent.RuntimeState,
@@ -49,8 +50,8 @@ func NewServer(
 		server.WithMaxRequestBodySize(maxBodySize),
 	)
 
-	// Create attachment handler
-	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
+	// Create attachment handler (temp directory is fixed at {memoryDir}/temp)
+	attHandler := attachment.NewHandler(cfg.Attachment, memoryDir)
 
 	// Create executor
 	exec := agent.NewExecutor(mem, skills, mcpMgr, apiMgr, cfg, log)
@@ -80,12 +81,20 @@ func NewServer(
 	}
 }
 
-// Start starts the server
+// Start starts the server with graceful error handling
 func (s *Server) Start() error {
 	s.logger.Info("Starting API server",
 		zap.String("host", s.config.Server.Host),
 		zap.Int("port", s.config.Server.Port),
 	)
+
+	// Recover from panic (e.g., port already in use)
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Server startup failed", zap.Any("error", r))
+		}
+	}()
+
 	return s.hertz.Run()
 }
 

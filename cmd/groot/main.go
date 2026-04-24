@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -192,11 +193,8 @@ func startServer(homeDir string, port int) {
 	cleanupScheduler.Start()
 	log.Info("清理调度器已启动", zap.String("schedule", cfg.Memory.CleanupSchedule))
 
-	// Resolve temp directory path
-	cfg.Attachment.TempDirectory = config.ResolvePath(cfg.Attachment.TempDirectory, homeDir)
-
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr, apiMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr, apiMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -224,6 +222,19 @@ func startServer(homeDir string, port int) {
 
 		log.Info("Groot Agent 已关闭")
 	}()
+
+	// Check if port is available before starting
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	conn, err := net.Dial("tcp", addr)
+	if err == nil {
+		conn.Close()
+		log.Error("端口已被占用",
+			zap.String("host", cfg.Server.Host),
+			zap.Int("port", cfg.Server.Port))
+		fmt.Fprintf(os.Stderr, "错误: 端口 %d 已被占用\n", cfg.Server.Port)
+		fmt.Fprintf(os.Stderr, "提示: 请检查是否有其他 Groot 进程运行，或使用 -p 指定其他端口\n")
+		os.Exit(1)
+	}
 
 	// Start server
 	log.Info("API 服务启动",

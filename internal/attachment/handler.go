@@ -44,11 +44,9 @@ type Handler struct {
 }
 
 // NewHandler creates a new attachment handler
-func NewHandler(cfg config.AttachmentConfig, homeDir string) *Handler {
-	// Determine temp directory path
-	// - Absolute path: use directly (e.g., /home/zfd/temp)
-	// - Relative path: join with homeDir (e.g., temp -> {homeDir}/temp)
-	tempDir := resolveTempDir(cfg.TempDirectory, homeDir)
+func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
+	// Temp directory is fixed at {memoryDir}/temp
+	tempDir := filepath.Join(memoryDir, "temp")
 
 	// Ensure temp directory exists
 	os.MkdirAll(tempDir, 0755)
@@ -64,22 +62,6 @@ func NewHandler(cfg config.AttachmentConfig, homeDir string) *Handler {
 		maxCount:     cfg.MaxCount,
 		allowedTypes: cfg.AllowedTypes,
 	}
-}
-
-// resolveTempDir resolves temp directory path
-// If tempDir is absolute path, use it directly
-// If tempDir is relative path (including "./temp"), join with homeDir
-func resolveTempDir(tempDir string, homeDir string) string {
-	// Clean the path (handle "./temp" -> "temp")
-	tempDir = filepath.Clean(tempDir)
-
-	// Check if absolute path
-	if filepath.IsAbs(tempDir) {
-		return tempDir
-	}
-
-	// Relative path: join with homeDir
-	return filepath.Join(homeDir, tempDir)
 }
 
 // ProcessedAttachment represents a processed attachment

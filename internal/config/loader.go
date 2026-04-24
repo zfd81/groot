@@ -115,9 +115,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.Attachment.MaxCount == 0 {
 		cfg.Attachment.MaxCount = 10
 	}
-	if cfg.Attachment.TempDirectory == "" {
-		cfg.Attachment.TempDirectory = "temp"
-	}
 
 	// Logging defaults
 	if cfg.Logging.Level == "" {

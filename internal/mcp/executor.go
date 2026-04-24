@@ -122,47 +122,8 @@ func (e *ToolExecutor) initializeStdio(ctx context.Context, proc *Process, confi
 
 	e.log.Info("MCP initialized notification sent")
 
-	// Wait for and respond to roots/list request from server
-	// CRITICAL: This MUST be handled before any tool calls!
-	e.log.Info("Waiting for roots/list request...")
-	line, err = reader.ReadString('\n')
-	if err != nil {
-		e.log.Info("No roots/list request received: " + err.Error())
-		proc.initialized = true
-		return nil
-	}
-
-	e.log.Info("Received message: " + strings.TrimSpace(line))
-
-	var serverReq map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &serverReq); err != nil {
-		e.log.Info("Failed to parse: " + err.Error())
-		proc.initialized = true
-		return nil
-	}
-
-	// Check if it's a roots/list request
-	if method, ok := serverReq["method"].(string); ok && method == "roots/list" {
-		workspaceRoot := "/Users/zhangfengda/workspace"
-		if config != nil && config.WorkspaceRoot != "" {
-			workspaceRoot = config.WorkspaceRoot
-		}
-		uri := "file:///" + strings.TrimPrefix(workspaceRoot, "/")
-		rootsResp := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      serverReq["id"],
-			"result": map[string]interface{}{
-				"roots": []map[string]interface{}{
-					{"uri": uri},
-				},
-			},
-		}
-		respBytes, _ := json.Marshal(rootsResp)
-		respBytes = append(respBytes, '\n')
-		proc.stdin.Write(respBytes)
-		e.log.Info("Sent roots/list response with URI: " + uri)
-	}
-
+	// Mark as initialized - don't block waiting for roots/list
+	// roots/list is an optional request from server, handle during tool calls if needed
 	proc.initialized = true
 	e.log.Info("MCP initialization complete")
 
@@ -176,7 +137,9 @@ func (e *ToolExecutor) discoverStdio(ctx context.Context, config *MCPConfig) ([]
 	// Start process if not running
 	proc, ok := e.processes[config.Name]
 	if !ok {
-		cmd := exec.CommandContext(ctx, config.Command, config.Args...)
+		// Use context.Background() for the process to avoid being killed when discovery context is cancelled
+		// The process should persist for tool execution after discovery
+		cmd := exec.CommandContext(context.Background(), config.Command, config.Args...)
 
 		cmd.Env = os.Environ()
 		if config.Env != nil {
@@ -267,8 +230,8 @@ func (e *ToolExecutor) discoverStdio(ctx context.Context, config *MCPConfig) ([]
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
-		ID    float64 `json:"id"`
-		Method string `json:"method"`
+		ID     float64 `json:"id"`
+		Method string  `json:"method"`
 	}
 
 	for {
@@ -462,7 +425,8 @@ func (e *ToolExecutor) ExecuteStdio(ctx context.Context, config *MCPConfig, tool
 	proc, ok := e.processes[config.Name]
 	if !ok {
 		// Start new process if discovery process doesn't exist
-		cmd := exec.CommandContext(ctx, config.Command, config.Args...)
+		// Use context.Background() to avoid process being killed by request context
+		cmd := exec.CommandContext(context.Background(), config.Command, config.Args...)
 
 		cmd.Env = os.Environ()
 		if config.Env != nil {
