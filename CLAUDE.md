@@ -35,11 +35,59 @@ groot/
 - ❌ 不要创建 `docs/user-guide.md` - 用户手册就是根目录的 `README.md`
 - ❌ 不要创建奇怪的目录名（如 `~/`）
 
+## 测试规范
+
+项目采用分层测试策略，**禁止引入新的测试模式或工具**：
+
+### 单元测试（Go）
+
+- **测试对象**: `internal/` 包内的单个函数、结构体、逻辑单元
+- **测试工具**: Go 标准测试框架 (`*_test.go`)
+- **目录位置**: 与源码同目录，如 `internal/apitool/xxx_test.go`
+- **运行命令**: `go test ./internal/xxx/... -v`
+- **命名规范**: `Test<功能名>` 或 `Test<结构体>_<方法名>`
+
+### 系统测试（Python）
+
+- **测试对象**: API 端点、CLI 命令、完整流程、端到端场景
+- **测试工具**: Python pytest
+- **目录位置**: `tests/python/`
+- **运行命令**: `cd tests/python && pytest -v`
+- **测试内容**:
+  - 服务启动/停止
+  - HTTP API 请求/响应
+  - SSE 事件流
+  - 热加载机制
+  - 并发场景
+  - 安全性验证
+
+### 测试目录结构
+
+```
+tests/
+├── python/             # Python 系统测试（pytest）
+├── fixtures/           # 测试数据文件
+├── logs/               # 测试运行日志
+├── temp/               # 测试临时文件
+├── reports/            # 测试报告（含 README.md）
+└── abs_path_test/      # 绝对路径测试环境
+```
+
+### 测试用例汇总文档
+
+所有测试用例点汇总保存在: `tests/TEST_CASES.md`
+
+### 禁止的行为
+
+- ❌ 禁止使用其他测试工具（如 Jest、Ruby 等）
+- ❌ 禁止创建新的测试目录结构
+- ❌ 禁止在根目录创建测试文件
+- ❌ 禁止用 Python 测试 internal 包的单元逻辑
+
 ## 代码规范
 
 - Go 代码遵循标准 Go 风格
 - 使用 `gofmt` 格式化代码
-- 测试使用 Python（pytest），放在 `tests/python/`
 
 ## 配置说明
 
