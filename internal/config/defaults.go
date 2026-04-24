@@ -33,6 +33,9 @@ func DefaultConfig() *Config {
 		MCP: MCPConfig{
 			Directory: "mcp",
 		},
+		APITools: APIToolsConfig{
+			Directory: "api",
+		},
 		Memory: MemoryConfig{
 			Directory:       "memory",
 			RetentionDays:   7,
