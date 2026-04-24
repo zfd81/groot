@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/zfd81/groot/internal/apitool"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/llm"
@@ -34,6 +35,7 @@ type Engine struct {
 	llmConfig      config.LLMConfig
 	skillsRegistry *skill.Registry
 	mcpManager     *mcp.Manager
+	apiManager     *apitool.Manager
 	reactConfig    config.ReactConfig
 	log            *logger.Logger
 }
@@ -43,6 +45,7 @@ func NewEngine(
 	cfg config.LLMConfig,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
+	apiMgr *apitool.Manager,
 	reactCfg config.ReactConfig,
 	log *logger.Logger,
 ) *Engine {
@@ -50,6 +53,7 @@ func NewEngine(
 		llmConfig:      cfg,
 		skillsRegistry: skills,
 		mcpManager:     mcpMgr,
+		apiManager:     apiMgr,
 		reactConfig:    reactCfg,
 		log:            log,
 	}
@@ -347,13 +351,22 @@ func convertToolCalls(tcs []schema.ToolCall) []ToolCall {
 	return result
 }
 
-// buildTools creates eino tools from MCP tools
+// buildTools creates eino tools from MCP tools and API tools
 func (e *Engine) buildTools() []tool.BaseTool {
 	tools := []tool.BaseTool{}
 
+	// MCP 工具
 	for _, toolInfo := range e.mcpManager.ListTools() {
 		t := NewMCPToolAdapter(toolInfo, e.mcpManager, e.log)
 		tools = append(tools, t)
+	}
+
+	// API 工具
+	if e.apiManager != nil {
+		for _, apiConfig := range e.apiManager.List() {
+			t := apitool.NewAPIToolAdapter(apiConfig, e.apiManager, e.log)
+			tools = append(tools, t)
+		}
 	}
 
 	return tools
