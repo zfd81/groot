@@ -98,19 +98,36 @@ groot 现有 MCP 工具能力，通过 MCP 协议（stdio/sse/http）调用外�
 
 ### 字段定义
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | ✓ | 工具名称，eino注册时使用，需唯一 |
-| `description` | string | ✓ | 工具描述，LLM决策时使用 |
-| `url` | string | ✓ | 完整请求URL，支持 `${参数}` 和 `$${环境变量}` |
-| `method` | string | ✓ | HTTP方法：GET/POST/PUT/DELETE/PATCH |
-| `auth` | object | | 认证配置，自动注入到请求头 |
-| `headers` | object | | 自定义请求头，值支持固定值、`${参数}`、`$${环境变量}` |
-| `query` | object | | URL查询参数，拼接到URL后面，值支持固定值、`${参数}`、`$${环境变量}` |
-| `body` | object | | 请求体内容，值支持固定值、`${参数}`、`$${环境变量}`，支持嵌套结构 |
-| `bodyType` | string | | 请求体格式：json/form（POST/PUT/PATCH时使用） |
-| `timeout` | int | | 超时秒数，默认30 |
-| `parameters` | array | ✓ | 工具参数列表，对应eino的InputSchema |
+**必填字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 工具名称，eino注册时使用，需唯一 |
+| `description` | string | 工具描述，LLM决策时使用 |
+| `url` | string | 完整请求URL，支持 `${参数}` 和 `$${环境变量}` |
+| `method` | string | HTTP方法：GET/POST/PUT/DELETE/PATCH |
+
+**按需配置字段（根据API实际情况选择）：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `auth` | object | 认证配置，需要认证时填写 |
+| `headers` | object | 自定义请求头，需要特殊请求头时填写，值支持固定值、`${参数}`、`$${环境变量}` |
+| `query` | object | URL查询参数，需要查询参数时填写，值支持固定值、`${参数}`、`$${环境变量}` |
+| `body` | object | 请求体内容，POST/PUT/PATCH时填写，值支持固定值、`${参数}`、`$${环境变量}`，支持嵌套结构 |
+| `bodyType` | string | 请求体格式：json/form，有body时需指定格式 |
+
+**可选字段（有默认值或不写则使用默认行为）：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `timeout` | int | 30 | 超时秒数 |
+| `parameters` | array | 空（无参数） | 工具参数列表，对应eino的InputSchema |
+
+**说明：**
+- `auth`、`headers`、`query`、`body`、`bodyType` 按需填写，API不需要就不用写
+- `timeout` 不写默认30秒
+- `parameters` 不写表示该工具没有参数，直接调用API获取返回值
 
 ### 认证配置
 
