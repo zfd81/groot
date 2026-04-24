@@ -360,10 +360,7 @@ LLM 不需要预定义返回值结构，它会直接理解返回的 string 内�
 
 ### 1. 配置加载
 
-- 创建 `internal/api` 包（注意：与现有的 `internal/api` 目录区分，现有的是 API Server）
-- 由于已有 `internal/api` 目录（HTTP 服务），需要考虑命名：
-  - 方案A：在现有 `internal/api` 包中添加 API 工具相关代码
-  - 方案B：使用新目录名如 `internal/apitool` 或 `internal/resttool`
+- 创建 `internal/apitool` 包，处理 API 工具相关逻辑
 - 加载 `~/.groot/api/*.json` 配置文件
 - 解析配置结构
 
