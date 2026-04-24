@@ -66,7 +66,7 @@ func NewServer(
 	sessionH := handler.NewSessionHandler(mem)
 	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, mem, exec)
 	skillsH := handler.NewSkillsHandler(skills)
-	toolsH := handler.NewToolsHandler(mcpMgr)
+	toolsH := handler.NewToolsHandler(mcpMgr, apiMgr)
 
 	// Register routes
 	RegisterRoutes(h, authMW,
