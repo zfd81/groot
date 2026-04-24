@@ -244,6 +244,17 @@
 | TestSessionHandlingDetails | test_supplementary.py | 会话处理详细 |
 | TestMetricsInHealth | test_supplementary.py | 健康检查指标 |
 
+### 2.18 API 工具测试
+
+| 测试类 | 测试文件 | 测试内容 |
+|-------|---------|---------|
+| TestAPIToolConfigLoading | test_apitool.py | 配置加载（单个/多个/无效 JSON） |
+| TestAPIToolEnvVarValidation | test_apitool.py | 环境变量验证（缺失/设置/URL/Body） |
+| TestAPIToolNameConflict | test_apitool.py | 名称冲突（同名覆盖） |
+| TestAPIToolParameters | test_apitool.py | 参数定义（有参数/无参数） |
+| TestAPIToolAuthTypes | test_apitool.py | 认证类型（bearer/basic/apikey/无认证） |
+| TestAPIToolDirectory | test_apitool.py | 目录处理（空目录/目录不存在） |
+
 ---
 
 ## 三、运行测试
@@ -277,4 +288,4 @@ cd tests/python && pytest test_api_endpoints.py -v
 | Go 单元测试 | 30 个函数 / 78 个测试点 | 5 |
 | Python 系统测试 | 99 个类 | 24 |
 
-**总计**: 约 177+ 个测试点覆盖核心功能。
+**总计**: 约 193+ 个测试点覆盖核心功能。
