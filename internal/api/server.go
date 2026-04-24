@@ -10,6 +10,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
+	"github.com/zfd81/groot/internal/apitool"
 	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
@@ -34,6 +35,7 @@ func NewServer(
 	runtime *agent.RuntimeState,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
+	apiMgr *apitool.Manager,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -51,7 +53,7 @@ func NewServer(
 	attHandler := attachment.NewHandler(cfg.Attachment, homeDir)
 
 	// Create executor
-	exec := agent.NewExecutor(mem, skills, mcpMgr, cfg, log)
+	exec := agent.NewExecutor(mem, skills, mcpMgr, apiMgr, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
