@@ -104,6 +104,8 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │   └── {skill-name}/SKILL.md      # Skill 定义文件
 ├── mcp/                           # MCP 配置目录
 │   └── {mcp-name}.json            # MCP 配置文件
+├── api/                           # API 工具配置目录
+│   └── {tool-name}.json           # API 工具配置文件
 ├── memory/                        # 记忆模块目录
 │   └── {session_id}/              # 会话目录
 │       ├── history.json           # 对话历史（含执行元数据摘要）
@@ -123,6 +125,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
 | `skills/` | Skills 定义目录，支持热插拔 |
 | `mcp/` | MCP 工具配置目录，修改需重启服务 |
+| `api/` | API 工具配置目录，定义 HTTP API 工具，修改需重启服务 |
 | `memory/` | 会话数据目录（JSON 存储） |
 | `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
 | `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
@@ -302,15 +305,35 @@ mv groot-darwin-amd64 /usr/local/bin/groot
 git clone https://github.com/zfd81/groot.git
 cd groot
 
-# 编译
-go build -o bin/groot cmd/groot/main.go
+# 编译当前平台
+go build -o bin/groot ./cmd/groot
 
-# 或者使用 Makefile
-make build
+# 或使用 Makefile
+make build            # 编译当前平台
+make build-all        # 编译所有平台（macOS/Linux/Windows）
 
 # 运行
 ./bin/groot
 ```
+
+**Makefile 编译命令：**
+
+| 命令 | 说明 |
+|------|------|
+| `make build` | 编译当前平台可执行文件 |
+| `make build-all` | 编译三个平台可执行文件 |
+| `make build-darwin` | 编译 macOS ARM64 |
+| `make build-linux` | 编译 Linux AMD64 |
+| `make build-windows` | 编译 Windows AMD64 |
+| `make clean` | 清理编译产物 |
+
+**编译产物：**
+
+| 文件 | 平台 |
+|------|------|
+| `bin/groot-darwin-arm64` | macOS ARM64 |
+| `bin/groot-linux-amd64` | Linux AMD64 |
+| `bin/groot-windows-amd64.exe` | Windows AMD64 |
 
 ### 3.4 启动服务
 
@@ -700,6 +723,7 @@ logging:
 
 **不支持热更新的配置：**
 - LLM 配置、Server 配置、Security 配置、Memory 配置、Logging 配置需重启服务
+- API 工具配置：修改 `api/*.json` 文件需重启服务
 
 ---
 
@@ -864,6 +888,132 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 | `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
 | `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
 | `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
+
+---
+
+## 六（续）、API 工具配置
+
+API 工具是 MCP 工具的补充，提供更直接的 HTTP API 集成方式。适合简单的 API 调用场景，无需 MCP 协议的复杂性。
+
+### API 工具与 MCP 工具对比
+
+| 特性 | MCP 工具 | API 工具 |
+|------|----------|-----------|
+| 配置位置 | `{GROOT_HOME}/mcp/*.json` | `{GROOT_HOME}/api/*.json` |
+| 执行方式 | MCP 协议（stdio/sse/http） | 直接 HTTP 请求 |
+| 适用场景 | 复杂交互、外部进程、标准化工具 | 简单 API 调用、已有 HTTP 服务 |
+
+### API 工具配置目录
+
+```
+{GROOT_HOME}/api/
+├── get_weather.json      # 天气查询工具
+├── create_order.json     # 订单创建工具
+└── send_email.json       # 邮件发送工具
+```
+
+### API 工具配置示例
+
+**GET 请求示例：**
+
+```json
+{
+  "name": "get_weather",
+  "description": "获取天气信息",
+  "url": "https://api.weather.com/v1/weather/${city}",
+  "method": "GET",
+  "auth": {
+    "type": "bearer",
+    "token": "$${WEATHER_API_KEY}"
+  },
+  "query": {
+    "unit": "${unit}"
+  },
+  "timeout": 30,
+  "parameters": [
+    {"name": "city", "type": "string", "required": true, "description": "城市名称"},
+    {"name": "unit", "type": "string", "required": false, "default": "celsius", "description": "温度单位"}
+  ]
+}
+```
+
+**POST 请求示例：**
+
+```json
+{
+  "name": "create_order",
+  "description": "创建订单",
+  "url": "https://api.example.com/v1/orders",
+  "method": "POST",
+  "auth": {
+    "type": "bearer",
+    "token": "$${API_TOKEN}"
+  },
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "orderId": "${orderId}",
+    "customer": {
+      "name": "${customerName}",
+      "phone": "${customerPhone}"
+    }
+  },
+  "bodyType": "json",
+  "timeout": 30,
+  "parameters": [
+    {"name": "orderId", "type": "string", "required": true, "description": "订单ID"},
+    {"name": "customerName", "type": "string", "required": true, "description": "客户姓名"},
+    {"name": "customerPhone", "type": "string", "required": true, "description": "客户电话"}
+  ]
+}
+```
+
+### 配置字段说明
+
+**必填字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `name` | 工具名称，全局唯一，LLM 调用时使用 |
+| `description` | 工具描述，LLM 决策时展示 |
+| `url` | 完整请求 URL，支持 `${参数}` 和 `$${环境变量}` |
+| `method` | HTTP 方法：GET/POST/PUT/DELETE/PATCH |
+
+**可选字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `auth` | 认证配置（bearer/basic/apikey/none） |
+| `headers` | 自定义请求头 |
+| `query` | URL 查询参数 |
+| `body` | 请求体内容（POST/PUT/PATCH） |
+| `bodyType` | 请求体格式：`json` 或 `form` |
+| `timeout` | 超时秒数，默认 30 |
+| `parameters` | 工具参数列表 |
+
+### 变量语法
+
+| 语法 | 来源 | 示例 |
+|------|------|------|
+| `${参数名}` | 工具调用时传入的参数 | `${city}` → 用户传入的 city 参数值 |
+| `$${环境变量}` | 系统环境变量 | `$${WEATHER_API_KEY}` → 系统环境变量值 |
+
+### 认证类型
+
+| auth.type | 自动注入内容 |
+|-----------|--------------|
+| `bearer` | Header: `Authorization: Bearer <token>` |
+| `basic` | Header: `Authorization: Basic <base64(username:password)>` |
+| `apikey` | 根据 `location` 注入到 header 或 query |
+| `none` | 不注入认证信息 |
+
+### 启动检查
+
+系统启动时自动检查：
+
+1. **环境变量检查**：`$${环境变量}` 引用的环境变量是否存在，不存在则启动失败
+2. **工具名称冲突检查**：API 工具名称与 MCP 工具名称冲突则启动失败
 
 ---
 
@@ -1354,19 +1504,45 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.11 GET /tools - 列出可用 MCP 工具
+### 7.11 GET /tools - 列出可用工具
+
+列出所有可用工具（MCP 工具和 API 工具），按来源分组返回。
 
 **响应示例：**
 ```json
 {
-  "tools": [
-    {"name": "file_read", "description": "读取文件内容", "mcp": "file_operations"},
-    {"name": "file_write", "description": "写入文件内容", "mcp": "file_operations"},
-    {"name": "http_get", "description": "发送HTTP GET请求", "mcp": "http_request"}
-  ],
-  "total": 3
+  "filesystem": {
+    "tools": [
+      {"name": "file_read", "description": "读取文件内容"},
+      {"name": "file_write", "description": "写入文件内容"}
+    ],
+    "total": 2
+  },
+  "http_request": {
+    "tools": [
+      {"name": "http_get", "description": "发送HTTP GET请求"}
+    ],
+    "total": 1
+  },
+  "api": {
+    "tools": [
+      {"name": "get_weather", "description": "获取天气信息"},
+      {"name": "create_order", "description": "创建订单"}
+    ],
+    "total": 2
+  }
 }
 ```
+
+**响应结构说明：**
+
+| 字段 | 说明 |
+|------|------|
+| 顶层 key | 工具来源名称（`"api"` 表示 API 工具，MCP 名称表示 MCP 工具） |
+| `tools` | 工具列表数组 |
+| `tools[].name` | 工具名称 |
+| `tools[].description` | 工具描述 |
+| `total` | 该组工具数量 |
 
 ---
 
@@ -1497,7 +1673,7 @@ class GrootClient:
         return response.json()
     
     def list_tools(self) -> dict:
-        """列出可用 MCP 工具"""
+        """列出可用工具（MCP 和 API 工具）"""
         response = requests.get(
             f"{self.base_url}/tools",
             headers=self.headers
@@ -1663,6 +1839,7 @@ export OPENAI_API_KEY="sk-xxxxx"
 | `{GROOT_HOME}/config.yaml` | 配置文件 |
 | `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
 | `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件 |
+| `{GROOT_HOME}/api/{name}.json` | API 工具配置文件 |
 | `{GROOT_HOME}/memory/{session_id}/history.json` | 对话历史 |
 | `{GROOT_HOME}/memory/{session_id}/attachments/` | 附件目录 |
 | `{GROOT_HOME}/memory/{session_id}/chats/{chat_id}.json` | 详细执行记录 |
