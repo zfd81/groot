@@ -203,33 +203,74 @@ GROOT.md（缓存）
 | 内存 | 建议 512MB+ |
 | 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
 
-### 3.2 环境准备
+### 3.2 初始化工作目录
 
-#### 配置文件
+Groot 使用前需要先初始化工作目录，创建必要的目录结构和配置文件。
 
-Groot 首次启动时会自动生成默认配置文件 `{GROOT_HOME}/config.yaml`。
+**初始化命令：**
 
-**配置项概览：**
+```bash
+# 初始化默认工作目录 ~/.groot
+groot init
 
-| 配置项 | 必需性 | 说明 |
-|------|------|------|
-| `llm` | **必需** | LLM 配置，必须至少配置一个可用模型 |
-| 其他配置项 | 可选 | 均有默认值，详见第四章"配置文件详解" |
+# 初始化指定目录
+groot init -H /opt/groot
+```
 
-> **重点：** 只有 `llm` 配置是必需的，其他配置项均可使用默认值。
+**初始化输出示例：**
 
-#### LLM 配置示例
+```
+初始化 Groot 工作目录...
 
-LLM 配置决定 Agent 使用哪个大模型执行任务。以下是一个最小配置示例：
+工作目录 ~/.groot 创建成功
+目录 skills ~/.groot/skills 创建成功
+目录 mcp ~/.groot/mcp 创建成功
+目录 memory ~/.groot/memory 创建成功
+目录 logs ~/.groot/logs 创建成功
+配置文件 config.yaml 创建成功
+
+初始化完成
+
+下一步：
+  1. 编辑配置文件，填写 LLM API 信息
+     vim ~/.groot/config.yaml
+  2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）
+     export OPENAI_API_KEY="your-api-key"
+  3. 启动服务
+     groot
+```
+
+**初始化参数：**
+
+| 参数 | 缩写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--home` | `-H` | 工作目录 | `~/.groot` |
+| `--help` | `-h` | 显示帮助 | - |
+
+**创建的目录结构：**
+
+| 目录 | 说明 |
+|------|------|
+| `skills/` | Skills 定义目录 |
+| `mcp/` | MCP 配置目录 |
+| `memory/` | 会话数据目录 |
+| `logs/` | 日志文件目录 |
+| `config.yaml` | 主配置文件 |
+
+### 3.3 配置文件说明
+
+初始化后生成的 `config.yaml` 包含完整配置模板，其中 **LLM 配置为必填项**，其他配置已注释并标注默认值。
+
+**必填配置（LLM）：**
 
 ```yaml
 llm:
-  default_model: gpt-4o           # 默认模型
+  default_model: gpt-4o           # 默认模型名称
   models:
     gpt-4o:
-      base_url: https://api.openai.com/v1
-      api_key: xxx                          # API 密钥
-      model: gpt-4o
+      base_url: https://api.openai.com/v1    # API 地址
+      api_key: ${OPENAI_API_KEY}             # API 密钥（建议使用环境变量）
+      model: gpt-4o                          # 模型名称
 ```
 
 `api_key` 支持两种写法：
@@ -242,33 +283,23 @@ api_key: ${OPENAI_API_KEY}
 api_key: sk-xxxxxxxxxxxx
 ```
 
-> **推荐环境变量：** 避免密钥硬编码，便于环境切换。若使用 `${VAR_NAME}`，需设置对应环境变量；若直接写密钥，则不需要。
+> **推荐环境变量：** 避免密钥硬编码，便于环境切换。
 
-#### 多模型配置示例
+**可选配置：**
 
-可配置多个模型，通过 `default_model` 指定默认使用的模型（需重启）：
+配置模板中已注释展示所有可选配置项及其默认值，包括：
+- `agent` - Agent 基础信息
+- `server` - HTTP 服务配置
+- `skills` - Skills 热插拔配置
+- `react` - ReAct 执行配置
+- `attachment` - 附件处理配置
+- `memory` - 记忆模块配置
+- `security` - 安全认证配置
+- `logging` - 日志配置
 
-```yaml
-llm:
-  default_model: gpt-4o
-  models:
-    gpt-4o:
-      base_url: https://api.openai.com/v1
-      api_key: ${OPENAI_API_KEY}
-      model: gpt-4o
-    
-    claude-3.5:
-      base_url: https://api.anthropic.com/v1
-      api_key: ${ANTHROPIC_API_KEY}
-      model: claude-3-5-sonnet-20241022
-    
-    qwen-plus:
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api_key: ${DASHSCOPE_API_KEY}
-      model: qwen-plus
-```
+如需修改，取消对应配置的注释即可。
 
-#### 环境变量
+### 3.4 环境变量
 
 **固定环境变量：**
 
@@ -288,7 +319,7 @@ export ANTHROPIC_API_KEY="sk-ant-xxxx"
 
 > **判断方法：** 配置文件有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
 
-### 3.3 安装方式
+### 3.5 安装方式
 
 #### 方式一：直接运行（推荐）
 
@@ -343,7 +374,9 @@ make build-all        # 编译所有平台（macOS/Linux/Windows）
 | `bin/groot-linux-amd64` | Linux AMD64 |
 | `bin/groot-windows-amd64.exe` | Windows AMD64 |
 
-### 3.4 启动服务
+### 3.6 启动服务
+
+**前置条件：** 请确保已完成初始化（运行 `groot init`）并正确配置了 LLM 信息。
 
 ```bash
 # 方式一：预编译二进制
@@ -386,7 +419,15 @@ API 服务启动
   port: 8080
 ```
 
-### 3.5 验证安装
+**常见启动错误：**
+
+| 错误信息 | 原因 | 解决方法 |
+|----------|------|----------|
+| `配置文件不存在，请先运行 'groot init' 初始化` | 未执行初始化 | 运行 `groot init` |
+| `环境变量 OPENAI_API_KEY 未设置` | API Key 使用环境变量引用但未设置 | `export OPENAI_API_KEY="your-key"` 或直接填写 |
+| `模型 gpt-4o 的 api_key 为空` | 配置文件中 api_key 未填写 | 编辑 config.yaml 填写 api_key |
+
+### 3.7 验证安装
 
 ```bash
 # 健康检查
@@ -406,7 +447,7 @@ curl http://localhost:8080/health
 }
 ```
 
-### 3.6 停止服务
+### 3.8 停止服务
 
 ```bash
 # 发送终止信号
@@ -423,7 +464,7 @@ kill -SIGTERM <pid>
 - 刷新日志
 - 退出程序
 
-### 3.7 日志查看命令（groot tail）
+### 3.9 日志查看命令（groot tail）
 
 Groot 提供了类似 `tail -f` 的实时日志查看命令，方便开发调试和运维监控。
 
@@ -1620,19 +1661,30 @@ result3 = groot.execute_chat(
 
 ## 十、常见问题
 
-### Q1: 启动时报错 "OPENAI_API_KEY not set"
+### Q1: 启动时报错 "配置文件不存在，请先运行 'groot init' 初始化"
 
-**原因：** 未配置 LLM API 密钥。
+**原因：** 未初始化工作目录。
 
 **解决：**
 ```bash
-export OPENAI_API_KEY="sk-xxxxx"
+groot init
 ```
-或在配置文件中直接写入密钥。
 
 ---
 
-### Q2: 多轮对话时 Agent 没记住之前的内容
+### Q2: 启动时报错 "环境变量 OPENAI_API_KEY 未设置"
+
+**原因：** 配置文件中 api_key 使用环境变量引用 `${OPENAI_API_KEY}`，但环境变量未设置。
+
+**解决：**
+```bash
+export OPENAI_API_KEY="your-api-key"
+```
+或在配置文件中直接填写 api_key（不使用环境变量引用）。
+
+---
+
+### Q3: 多轮对话时 Agent 没记住之前的内容
 
 **原因：** session_id 传错或会话不存在。
 
@@ -1640,7 +1692,7 @@ export OPENAI_API_KEY="sk-xxxxx"
 
 ---
 
-### Q3: 同一会话并发调用报错
+### Q4: 同一会话并发调用报错
 
 **原因：** 同一会话只能有一个活跃对话，防止执行冲突。
 
@@ -1648,7 +1700,7 @@ export OPENAI_API_KEY="sk-xxxxx"
 
 ---
 
-### Q4: 附件上传失败
+### Q5: 附件上传失败
 
 **原因：** 附件类型不允许或大小超限。
 
@@ -1656,7 +1708,7 @@ export OPENAI_API_KEY="sk-xxxxx"
 
 ---
 
-### Q5: 认证失败 401 Unauthorized
+### Q6: 认证失败 401 Unauthorized
 
 **原因：** API Key 无效或未携带。
 
@@ -1666,7 +1718,7 @@ export OPENAI_API_KEY="sk-xxxxx"
 
 ---
 
-### Q6: 会话数据如何清理
+### Q7: 会话数据如何清理
 
 **说明：** 会话数据会自动清理。
 
