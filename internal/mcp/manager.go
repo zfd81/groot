@@ -16,11 +16,12 @@ import (
 
 // Manager manages all MCP configurations and tool registry
 type Manager struct {
-	mcps     map[string]*MCPConfig
-	tools    map[string]*ToolInfo
-	executor *ToolExecutor
-	logger   *logger.Logger
-	mu       sync.RWMutex
+	mcps      map[string]*MCPConfig
+	tools     map[string]*ToolInfo
+	errors    map[string]string // MCP discovery errors
+	executor  *ToolExecutor
+	logger    *logger.Logger
+	mu        sync.RWMutex
 }
 
 // NewManager creates a new MCP manager
@@ -28,6 +29,7 @@ func NewManager(log *logger.Logger) *Manager {
 	return &Manager{
 		mcps:     make(map[string]*MCPConfig),
 		tools:    make(map[string]*ToolInfo),
+		errors:   make(map[string]string),
 		executor: NewToolExecutor(log),
 		logger:   log,
 	}
@@ -39,11 +41,18 @@ func (m *Manager) GetExecutor() *ToolExecutor {
 }
 
 // Register adds an MCP configuration with tools
-func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition) {
+func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryError string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.mcps[config.Name] = config
+
+	// Store error if any
+	if discoveryError != "" {
+		m.errors[config.Name] = discoveryError
+	} else {
+		delete(m.errors, config.Name)
+	}
 
 	// Register tools
 	for _, tool := range tools {
@@ -113,6 +122,49 @@ func (m *Manager) ListTools() []*ToolInfo {
 	return result
 }
 
+// MCPInfo represents MCP status with tool count
+type MCPInfo struct {
+	Name        string
+	Type        MCPType
+	Description string
+	IsActive    bool
+	ToolCount   int
+	Error       string // Discovery error if any
+}
+
+// ListWithToolCount returns all MCPs with their tool counts
+func (m *Manager) ListWithToolCount() []MCPInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]MCPInfo, 0, len(m.mcps))
+	for _, config := range m.mcps {
+		// Count tools from this MCP
+		toolCount := 0
+		for _, tool := range m.tools {
+			if tool.MCP == config.Name {
+				toolCount++
+			}
+		}
+		result = append(result, MCPInfo{
+			Name:        config.Name,
+			Type:        config.Type,
+			Description: config.Description,
+			IsActive:    config.IsActive,
+			ToolCount:   toolCount,
+			Error:       m.errors[config.Name],
+		})
+	}
+	return result
+}
+
+// GetError returns the discovery error for an MCP
+func (m *Manager) GetError(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.errors[name]
+}
+
 // Count returns the number of registered MCPs
 func (m *Manager) Count() int {
 	m.mu.RLock()
@@ -173,6 +225,7 @@ func (m *Manager) Load(path string) error {
 
 	// Discover tools if not specified in config
 	tools := config.Tools
+	var discoveryError string
 	if len(tools) == 0 {
 		// Auto-discover tools via tools/list
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -180,15 +233,16 @@ func (m *Manager) Load(path string) error {
 
 		discoveredTools, err := m.executor.DiscoverTools(ctx, &config)
 		if err != nil {
-			m.logger.Info("Failed to discover tools, using empty tool list",
+			m.logger.Error("Failed to discover tools from MCP",
 				zap.String("name", config.Name),
 				zap.Error(err))
 			tools = []ToolDefinition{}
+			discoveryError = err.Error()
 		} else {
 			tools = discoveredTools
 		}
 	}
 
-	m.Register(&config, tools)
+	m.Register(&config, tools, discoveryError)
 	return nil
 }
