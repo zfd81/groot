@@ -139,7 +139,21 @@ func (e *ToolExecutor) discoverStdio(ctx context.Context, config *MCPConfig) ([]
 	if !ok {
 		// Use context.Background() for the process to avoid being killed when discovery context is cancelled
 		// The process should persist for tool execution after discovery
-		cmd := exec.CommandContext(context.Background(), config.Command, config.Args...)
+
+		// Expand environment variables and home directory in args
+		expandedArgs := make([]string, len(config.Args))
+		for i, arg := range config.Args {
+			// First expand environment variables like ${VAR} or $VAR
+			expanded := os.ExpandEnv(arg)
+			// Then expand home directory ~
+			if strings.HasPrefix(expanded, "~") {
+				homeDir, _ := os.UserHomeDir()
+				expanded = homeDir + expanded[1:]
+			}
+			expandedArgs[i] = expanded
+		}
+
+		cmd := exec.CommandContext(context.Background(), config.Command, expandedArgs...)
 
 		cmd.Env = os.Environ()
 		if config.Env != nil {
@@ -426,7 +440,21 @@ func (e *ToolExecutor) ExecuteStdio(ctx context.Context, config *MCPConfig, tool
 	if !ok {
 		// Start new process if discovery process doesn't exist
 		// Use context.Background() to avoid process being killed by request context
-		cmd := exec.CommandContext(context.Background(), config.Command, config.Args...)
+
+		// Expand environment variables and home directory in args
+		expandedArgs := make([]string, len(config.Args))
+		for i, arg := range config.Args {
+			// First expand environment variables like ${VAR} or $VAR
+			expanded := os.ExpandEnv(arg)
+			// Then expand home directory ~
+			if strings.HasPrefix(expanded, "~") {
+				homeDir, _ := os.UserHomeDir()
+				expanded = homeDir + expanded[1:]
+			}
+			expandedArgs[i] = expanded
+		}
+
+		cmd := exec.CommandContext(context.Background(), config.Command, expandedArgs...)
 
 		cmd.Env = os.Environ()
 		if config.Env != nil {
