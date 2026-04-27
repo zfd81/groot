@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/zfd81/groot/internal/config"
 )
@@ -60,7 +61,7 @@ func createDir(path string, name string, isRoot bool) error {
 func shortenPath(path string, isRoot bool) string {
 	if isRoot {
 		home := os.Getenv("HOME")
-		if home != "" && filepath.HasPrefix(path, home) {
+		if home != "" && strings.HasPrefix(path, home) {
 			return "~" + path[len(home):]
 		}
 	}
