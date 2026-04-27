@@ -14,16 +14,7 @@ func Load(homeDir string) (*Config, error) {
 
 	// Check if config file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// No config file: generate default config
-		cfg := DefaultConfig()
-		if err := generateDefaultConfig(configPath, cfg); err != nil {
-			return nil, fmt.Errorf("failed to generate default config: %w", err)
-		}
-		// Validate default config
-		if err := ValidateLLMConfig(&cfg.LLM); err != nil {
-			return nil, fmt.Errorf("LLM 配置验证失败: %w", err)
-		}
-		return cfg, nil
+		return nil, fmt.Errorf("配置文件不存在，请先运行 'groot init' 初始化\n\n提示: groot init -H %s", homeDir)
 	}
 
 	// Config file exists: parse user config (don't merge with defaults)
@@ -135,18 +126,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.Logging.File.MaxAge == 0 {
 		cfg.Logging.File.MaxAge = 7
 	}
-}
-
-// generateDefaultConfig writes default config to file
-func generateDefaultConfig(path string, cfg *Config) error {
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-
-	header := "# Groot Agent 配置文件\n# 生成时间: " + cfg.Agent.Version + "\n\n"
-
-	return os.WriteFile(path, []byte(header+string(data)), 0644)
 }
 
 // expandConfigEnvVars expands environment variables in config
