@@ -15,7 +15,6 @@ import (
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api"
-	"github.com/zfd81/groot/internal/apitool"
 	"github.com/zfd81/groot/internal/cmd"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/grootmd"
@@ -156,24 +155,6 @@ func startServer(homeDir string, port int) {
 	}
 	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()), zap.String("dir", mcpDir))
 
-	// Initialize API tool manager
-	apiMgr := apitool.NewManager(log)
-
-	// Load API tool configs (fixed directory: {GROOT_HOME}/api)
-	apiDir := filepath.Join(homeDir, "api")
-	// 先获取MCP工具名称列表用于冲突检查
-	mcpToolNames := []string{}
-	for _, tool := range mcpMgr.ListTools() {
-		mcpToolNames = append(mcpToolNames, tool.Name)
-	}
-	// 校验并加载API工具
-	if err := apiMgr.ValidateAndLoad(apiDir, mcpToolNames); err != nil {
-		log.Error("无法加载API工具配置", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "加载API工具失败: %s\n", err)
-		os.Exit(1)
-	}
-	log.Info("API工具 加载完成", zap.Int("count", apiMgr.Count()), zap.String("dir", apiDir))
-
 	// Initialize memory manager
 	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
 	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
@@ -194,7 +175,7 @@ func startServer(homeDir string, port int) {
 	log.Info("清理调度器已启动", zap.String("schedule", cfg.Memory.CleanupSchedule))
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr, apiMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

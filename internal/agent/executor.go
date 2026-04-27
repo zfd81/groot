@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zfd81/groot/internal/apitool"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -91,7 +90,6 @@ type Executor struct {
 	memoryManager *memory.Manager
 	skillRegistry *skill.Registry
 	mcpManager    *mcp.Manager
-	apiManager    *apitool.Manager
 	config        config.Config
 	logger        *logger.Logger
 	runningTasks  sync.Map
@@ -102,7 +100,6 @@ func NewExecutor(
 	memMgr *memory.Manager,
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
-	apiMgr *apitool.Manager,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
@@ -110,7 +107,6 @@ func NewExecutor(
 		memoryManager: memMgr,
 		skillRegistry: skills,
 		mcpManager:    mcpMgr,
-		apiManager:    apiMgr,
 		config:        cfg,
 		logger:        log,
 	}
@@ -139,7 +135,6 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		e.config.LLM,
 		e.skillRegistry,
 		e.mcpManager,
-		e.apiManager,
 		e.config.React,
 		e.logger,
 	)

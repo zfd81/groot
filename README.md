@@ -104,8 +104,6 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │   └── {skill-name}/SKILL.md      # Skill 定义文件
 ├── mcp/                           # MCP 配置目录
 │   └── {mcp-name}.json            # MCP 配置文件
-├── api/                           # API 工具配置目录
-│   └── {tool-name}.json           # API 工具配置文件
 ├── memory/                        # 记忆模块目录
 │   ├── temp/                      # 附件处理临时目录
 │   └── {session_id}/              # 会话目录
@@ -128,7 +126,6 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
 | `skills/` | Skills 定义目录（固定位置），支持热插拔 |
 | `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
-| `api/` | API 工具配置目录（固定位置），定义 HTTP API 工具，修改需重启服务 |
 
 **可配置目录（支持相对/绝对路径）：**
 
@@ -140,7 +137,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
 | `logs/` | 日志存储目录（默认位置），可通过 `logging.file.directory` 配置 |
 
-> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见第四章"配置文件详解"。固定目录（skills/mcp/api/temp）位置不可更改。
+> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见第四章"配置文件详解"。固定目录（skills/mcp/temp）位置不可更改。
 
 ### 2.3 ID 格式说明
 
@@ -617,7 +614,6 @@ logging:
 |------|------|------|
 | `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
 | `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
-| `api` | `{GROOT_HOME}/api` | API 工具配置目录 |
 | `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
 
 ### 4.4 配置字段详解
@@ -718,7 +714,7 @@ logging:
 | `session` | GET /sess/{sid} | 查询会话详情 |
 | `history` | GET /sess/history | 查询会话列表 |
 | `skills` | GET /skills | 查看 Skills 列表 |
-| `tools` | GET /tools | 查看工具列表（MCP 和 API 工具） |
+| `tools` | GET /tools | 查看工具列表（MCP 工具） |
 | `health` | GET /health | 健康检查 |
 | `all` | 以上全部 | 全部权限 |
 
@@ -730,7 +726,6 @@ logging:
 **不支持热更新的配置：**
 - LLM 配置、Server 配置、Security 配置、Memory 配置、Logging 配置需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
-- API 工具配置：修改 `{GROOT_HOME}/api/*.json` 文件需重启服务
 
 ---
 
@@ -892,272 +887,11 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 | `baseUrl` | 远程服务的 API 地址 |
 | `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
 
-**连接类型对比：**
-
-| 类型 | 说明 | 适用场景 |
-|------|------|---------|
-| `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
-| `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
-| `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
-
 ---
 
-## 七、API 工具配置
+## 七、API 详细说明
 
-API 工具是 MCP 工具的补充，提供更直接的 HTTP API 集成方式。适合简单的 API 调用场景，无需 MCP 协议的复杂性。
-
-### 7.1 API 工具与 MCP 工具对比
-
-| 特性 | MCP 工具 | API 工具 |
-|------|----------|-----------|
-| 配置位置 | `{GROOT_HOME}/mcp/*.json` | `{GROOT_HOME}/api/*.json` |
-| 执行方式 | MCP 协议（stdio/sse/http） | 直接 HTTP 请求 |
-| 适用场景 | 复杂交互、外部进程、标准化工具 | 简单 API 调用、已有 HTTP 服务 |
-
-### 7.2 API 工具配置目录（固定位置）
-
-API 工具配置目录固定位于 `{GROOT_HOME}/api`，无需在配置文件中指定。
-
-```
-{GROOT_HOME}/api/
-├── get_weather.json      # 天气查询工具
-├── create_order.json     # 订单创建工具
-└── send_email.json       # 邮件发送工具
-```
-
-### 7.3 API 工具配置示例
-
-**GET 请求示例：**
-
-```json
-{
-  "name": "get_weather",
-  "description": "获取天气信息",
-  "url": "https://api.weather.com/v1/weather/${city}",
-  "method": "GET",
-  "auth": {
-    "type": "bearer",
-    "token": "$${WEATHER_API_KEY}"
-  },
-  "query": {
-    "unit": "${unit}"
-  },
-  "timeout": 30,
-  "parameters": [
-    {"name": "city", "type": "string", "required": true, "description": "城市名称"},
-    {"name": "unit", "type": "string", "required": false, "default": "celsius", "description": "温度单位"}
-  ]
-}
-```
-
-**POST 请求示例（JSON 格式）：**
-
-```json
-{
-  "name": "create_order",
-  "description": "创建订单",
-  "url": "https://api.example.com/v1/orders",
-  "method": "POST",
-  "auth": {
-    "type": "bearer",
-    "token": "$${API_TOKEN}"
-  },
-  "headers": {
-    "Content-Type": "application/json"
-  },
-  "body": {
-    "orderId": "${orderId}",
-    "customer": {
-      "name": "${customerName}",
-      "phone": "${customerPhone}"
-    }
-  },
-  "bodyType": "json",
-  "timeout": 30,
-  "parameters": [
-    {"name": "orderId", "type": "string", "required": true, "description": "订单ID"},
-    {"name": "customerName", "type": "string", "required": true, "description": "客户姓名"},
-    {"name": "customerPhone", "type": "string", "required": true, "description": "客户电话"}
-  ]
-}
-```
-
-**POST 请求示例（Form 格式）：**
-
-```json
-{
-  "name": "submit_form",
-  "description": "提交表单数据",
-  "url": "https://api.example.com/v1/submit",
-  "method": "POST",
-  "auth": {
-    "type": "apikey",
-    "key": "$${FORM_API_KEY}",
-    "location": "header",
-    "header_name": "X-API-Key"
-  },
-  "headers": {
-    "Content-Type": "application/x-www-form-urlencoded"
-  },
-  "body": {
-    "title": "${title}",
-    "content": "${content}",
-    "category": "${category}"
-  },
-  "bodyType": "form",
-  "timeout": 30,
-  "parameters": [
-    {"name": "title", "type": "string", "required": true, "description": "标题"},
-    {"name": "content", "type": "string", "required": true, "description": "内容"},
-    {"name": "category", "type": "string", "required": false, "default": "general", "description": "分类"}
-  ]
-}
-```
-
-> **说明：** `bodyType` 为 `form` 时，body 中的数据会被编码为 `application/x-www-form-urlencoded` 格式发送。
-
-### 7.4 配置字段说明
-
-**必填字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `name` | 工具名称，全局唯一，LLM 调用时使用 |
-| `description` | 工具描述，LLM 决策时展示 |
-| `url` | 完整请求 URL，支持 `${参数}` 和 `$${环境变量}` |
-| `method` | HTTP 方法：GET/POST/PUT/DELETE/PATCH |
-
-**可选字段：**
-
-| 字段 | 说明 |
-|------|------|
-| `auth` | 认证配置（bearer/basic/apikey/none） |
-| `headers` | 自定义请求头 |
-| `query` | URL 查询参数 |
-| `body` | 请求体内容（POST/PUT/PATCH） |
-| `bodyType` | 请求体格式：`json` 或 `form` |
-| `timeout` | 超时秒数，默认 30 |
-| `parameters` | 工具参数列表 |
-
-### 7.5 变量语法
-
-| 语法 | 来源 | 示例 |
-|------|------|------|
-| `${参数名}` | 工具调用时传入的参数 | `${city}` → 用户传入的 city 参数值 |
-| `$${环境变量}` | 系统环境变量 | `$${WEATHER_API_KEY}` → 系统环境变量值 |
-
-### 7.6 认证类型
-
-API 工具支持四种认证类型，通过 `auth` 字段配置。
-
-#### 7.6.1 Bearer 认证（Token 认证）
-
-**配置示例：**
-
-```json
-{
-  "auth": {
-    "type": "bearer",
-    "token": "$${API_TOKEN}"
-  }
-}
-```
-
-**自动注入：** `Authorization: Bearer <token>`
-
-**适用场景：** OAuth 2.0、JWT Token 等标准 Token 认证
-
-#### 7.6.2 Basic 认证（用户名密码）
-
-**配置示例：**
-
-```json
-{
-  "auth": {
-    "type": "basic",
-    "username": "$${API_USER}",
-    "password": "$${API_PASSWORD}"
-  }
-}
-```
-
-**自动注入：** `Authorization: Basic <base64(username:password)>`
-
-**适用场景：** HTTP Basic Auth 传统认证方式
-
-#### 7.6.3 API Key 认证（自定义 Key）
-
-API Key 认证支持两种注入位置：`header`（请求头）和 `query`（URL 参数）。
-
-**方式一：注入到 Header**
-
-```json
-{
-  "auth": {
-    "type": "apikey",
-    "key": "$${API_KEY}",
-    "location": "header",
-    "header_name": "X-API-Key"
-  }
-}
-```
-
-**自动注入：** Header `X-API-Key: <key>`
-
-**方式二：注入到 Query 参数**
-
-```json
-{
-  "auth": {
-    "type": "apikey",
-    "key": "$${API_KEY}",
-    "location": "query",
-    "query_name": "api_key"
-  }
-}
-```
-
-**自动注入：** URL 参数 `?api_key=<key>`
-
-**适用场景：** 自定义 Header 名称的 Key 认证、URL Query 参数认证
-
-#### 7.6.4 无认证
-
-**配置示例：**
-
-```json
-{
-  "auth": {
-    "type": "none"
-  }
-}
-```
-
-或直接不配置 `auth` 字段。
-
-**适用场景：** 公开 API、无需认证的服务
-
-#### 7.6.5 认证类型对比
-
-| auth.type | 必填字段 | 自动注入位置 |
-|-----------|---------|-------------|
-| `bearer` | `token` | Header: `Authorization` |
-| `basic` | `username`, `password` | Header: `Authorization` |
-| `apikey` | `key`, `location`, `header_name` 或 `query_name` | Header 或 Query |
-| `none` | 无 | 无 |
-
-### 7.7 启动检查
-
-系统启动时自动检查：
-
-1. **环境变量检查**：`$${环境变量}` 引用的环境变量是否存在，不存在则启动失败
-2. **工具名称冲突检查**：API 工具名称与 MCP 工具名称冲突则启动失败
-
----
-
-## 八、API 详细说明
-
-### 8.1 API 列表
+### 7.1 API 列表
 
 | API | 方法 | 用途 |
 |-----|------|------|
@@ -1171,7 +905,7 @@ API Key 认证支持两种注入位置：`header`（请求头）和 `query`（UR
 | `/skills` | GET | 列出可用 Skills |
 | `/tools` | GET | 列出可用 MCP 工具 |
 
-### 8.2 认证方式
+### 7.2 认证方式
 
 如果启用了认证（`security.auth.enabled: true`），需要在请求头携带 API Key：
 
@@ -1183,7 +917,7 @@ Header 名称可在配置文件中自定义。
 
 ---
 
-### 8.3 POST /chat - 执行对话（核心接口）
+### 7.3 POST /chat - 执行对话（核心接口）
 
 **请求 Header：**
 
@@ -1397,7 +1131,7 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 8.4 DELETE /chat/{sid} - 取消对话
+### 7.4 DELETE /chat/{sid} - 取消对话
 
 取消指定会话中正在执行的对话。
 
@@ -1434,7 +1168,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.5 GET /chat/status/{sid} - 查询对话状态
+### 7.5 GET /chat/status/{sid} - 查询对话状态
 
 查询指定会话中最近一次对话的运行状态。
 
@@ -1475,7 +1209,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.6 GET /chat/{sid}/{cid} - 查询对话详情
+### 7.6 GET /chat/{sid}/{cid} - 查询对话详情
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。
 
@@ -1517,7 +1251,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.7 GET /sess/{sid} - 查询会话详情
+### 7.7 GET /sess/{sid} - 查询会话详情
 
 查询会话详情，包括完整对话历史（所有轮次）。
 
@@ -1564,7 +1298,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.8 GET /sess/history - 查询会话列表
+### 7.8 GET /sess/history - 查询会话列表
 
 查询所有会话列表，支持分页。参数通过 URL Query String 传递。
 
@@ -1602,7 +1336,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.9 GET /health - 健康检查
+### 7.9 GET /health - 健康检查
 
 查询服务健康状态。
 
@@ -1627,7 +1361,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.10 GET /skills - 列出可用 Skills
+### 7.10 GET /skills - 列出可用 Skills
 
 **响应示例：**
 ```json
@@ -1642,9 +1376,9 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.11 GET /tools - 列出可用工具
+### 7.11 GET /tools - 列出可用工具
 
-列出所有可用工具（MCP 工具和 API 工具），按来源分组返回。
+列出所有可用 MCP 工具，按来源分组返回。
 
 **响应示例：**
 ```json
@@ -1661,13 +1395,6 @@ X-API-Key: your-secret-key
       {"name": "http_get", "description": "发送HTTP GET请求"}
     ],
     "total": 1
-  },
-  "api": {
-    "tools": [
-      {"name": "get_weather", "description": "获取天气信息"},
-      {"name": "create_order", "description": "创建订单"}
-    ],
-    "total": 2
   }
 }
 ```
@@ -1676,7 +1403,7 @@ X-API-Key: your-secret-key
 
 | 字段 | 说明 |
 |------|------|
-| 顶层 key | 工具来源名称（`"api"` 表示 API 工具，MCP 名称表示 MCP 工具） |
+| 顶层 key | MCP 服务名称 |
 | `tools` | 工具列表数组 |
 | `tools[].name` | 工具名称 |
 | `tools[].description` | 工具描述 |
@@ -1684,9 +1411,9 @@ X-API-Key: your-secret-key
 
 ---
 
-## 九、客户端代码示例
+## 八、客户端代码示例
 
-### 9.1 Python 客户端
+### 8.1 Python 客户端
 
 ```python
 import requests
@@ -1811,7 +1538,7 @@ class GrootClient:
         return response.json()
     
     def list_tools(self) -> dict:
-        """列出可用工具（MCP 和 API 工具）"""
+        """列出可用工具（MCP 工具）"""
         response = requests.get(
             f"{self.base_url}/tools",
             headers=self.headers
@@ -1841,9 +1568,9 @@ print(f"第2轮结果: {result2['result']}")
 
 ---
 
-## 十、使用场景示例
+## 九、使用场景示例
 
-### 10.1 多轮文档分析
+### 9.1 多轮文档分析
 
 ```python
 # 第1轮：上传文档并分析
@@ -1866,7 +1593,7 @@ result3 = groot.execute_chat(
 )
 ```
 
-### 10.2 渐进式代码开发
+### 9.2 渐进式代码开发
 
 ```python
 # 第1轮：基础功能
@@ -1891,7 +1618,7 @@ result3 = groot.execute_chat(
 
 ---
 
-## 十一、常见问题
+## 十、常见问题
 
 ### Q1: 启动时报错 "OPENAI_API_KEY not set"
 
@@ -1980,7 +1707,6 @@ export OPENAI_API_KEY="sk-xxxxx"
 | `{GROOT_HOME}/GROOT.md` | 项目规范文件 |
 | `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
 | `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件 |
-| `{GROOT_HOME}/api/{name}.json` | API 工具配置文件 |
 
 **可配置目录（默认位置）：**
 

@@ -8,45 +8,6 @@
 
 位于 `internal/` 各包目录下的 `*_test.go` 文件。
 
-### 1.1 apitool 包测试
-
-**文件**: `internal/apitool/`
-
-| 测试文件 | 测试函数 | 测试点数 | 测试内容 |
-|---------|---------|---------|---------|
-| config_test.go | TestAPIToolConfig_GetTimeout | 4 | 超时配置（默认值、负数、自定义、最小值） |
-| config_test.go | TestAuthTypeConstants | 4 | 认证类型常量（none、bearer、basic、apikey） |
-| config_test.go | TestParameterDefaults | 1 | 参数默认值验证 |
-| adapter_test.go | TestNewAPIToolAdapter | 1 | 适配器创建 |
-| adapter_test.go | TestAPIToolAdapter_convertType | 11 | 类型转换（string、int、integer、float、number、bool、boolean、array、object、未知、空） |
-| adapter_test.go | TestAPIToolAdapter_convertParameters | 1 | 参数转换 |
-| adapter_test.go | TestAPIToolAdapter_convertParametersEmpty | 1 | 空参数转换 |
-| executor_test.go | TestExecutor_validateParameters | 5 | 参数验证（已提供、缺失、有默认值、非必填、无定义） |
-| executor_test.go | TestExecutor_mergeParameters | 3 | 参数合并（合并默认值、覆盖默认值、空参数） |
-| executor_test.go | TestExecutor_replaceVariables | 3 | 变量替换（替换参数、未找到保留、空参数） |
-| executor_test.go | TestExecutor_replaceVariablesInMap | 1 | Map 变量替换 |
-| executor_test.go | TestExecutor_replaceVariablesInBody | 2 | Body 变量替换（嵌套替换、nil 处理） |
-| executor_test.go | TestExecutor_replaceInArrayRecursive | 1 | 数组递归替换 |
-| executor_test.go | TestExecutor_buildQueryString | 1 | Query 字符串构建 |
-| executor_test.go | TestExecutor_buildBody | 3 | Body 构建（JSON、Form、默认） |
-| manager_test.go | TestNewManager | 1 | 管理器创建 |
-| manager_test.go | TestManager_Register | 1 | 工具注册 |
-| manager_test.go | TestManager_RegisterMultiple | 1 | 多工具注册 |
-| manager_test.go | TestManager_Get | 2 | 工具获取（已注册、未注册） |
-| manager_test.go | TestManager_List | 1 | 工具列表 |
-| manager_test.go | TestManager_ListToolNames | 1 | 工具名称列表 |
-| manager_test.go | TestManager_Count | 1 | 工具计数 |
-| manager_test.go | TestManager_GetExecutor | 1 | 获取执行器 |
-| manager_test.go | TestManager_SameNameOverride | 1 | 同名覆盖 |
-| validator_test.go | TestExtractEnvVars | 7 | 环境变量提取（URL、Headers、Query、Body、Auth、无变量、去重） |
-| validator_test.go | TestExtractEnvVarsFromBodyWithArray | 1 | 数组 Body 环境变量提取 |
-| validator_test.go | TestValidateEnvVars | 2 | 环境变量验证（已设置、未设置） |
-| validator_test.go | TestCheckToolNameConflict | 3 | 工具名冲突检查（无冲突、有冲突、空列表） |
-| validator_test.go | TestValidateAllEnvVars | 2 | 批量环境变量验证（全部已设置、部分未设置） |
-| validator_test.go | TestUniqueStrings | 3 | 字符串去重（空列表、无重复、有重复） |
-
-**小计**: 30 个测试函数，78 个测试点
-
 ---
 
 ## 二、系统测试（Python）
@@ -244,17 +205,6 @@
 | TestSessionHandlingDetails | test_supplementary.py | 会话处理详细 |
 | TestMetricsInHealth | test_supplementary.py | 健康检查指标 |
 
-### 2.18 API 工具测试
-
-| 测试类 | 测试文件 | 测试内容 |
-|-------|---------|---------|
-| TestAPIToolConfigLoading | test_apitool.py | 配置加载（单个/多个/无效 JSON） |
-| TestAPIToolEnvVarValidation | test_apitool.py | 环境变量验证（缺失/设置/URL/Body） |
-| TestAPIToolNameConflict | test_apitool.py | 名称冲突（同名覆盖） |
-| TestAPIToolParameters | test_apitool.py | 参数定义（有参数/无参数） |
-| TestAPIToolAuthTypes | test_apitool.py | 认证类型（bearer/basic/apikey/无认证） |
-| TestAPIToolDirectory | test_apitool.py | 目录处理（空目录/目录不存在） |
-
 ---
 
 ## 三、运行测试
@@ -264,9 +214,6 @@
 ```bash
 # 运行所有 internal 包单元测试
 go test ./internal/... -v
-
-# 运行指定包测试
-go test ./internal/apitool/... -v
 ```
 
 ### Python 系统测试
@@ -285,10 +232,9 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Go 单元测试 | 30 个函数 / 78 个测试点 | 5 |
-| Python 系统测试 | 99 个类 | 24 |
+| Python 系统测试 | 93 个类 | 23 |
 
-**总计**: 约 193+ 个测试点覆盖核心功能。
+**总计**: 约 115+ 个测试点覆盖核心功能。
 
 ---
 
