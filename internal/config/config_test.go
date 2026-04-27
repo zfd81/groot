@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -252,7 +253,7 @@ func TestValidateLLMConfig(t *testing.T) {
 			cfg: &LLMConfig{
 				DefaultModel: "model1",
 				Models: map[string]ModelConfig{
-					"model1": {},
+					"model1": {BaseURL: "https://api.openai.com/v1", APIKey: "test-key"},
 				},
 			},
 			expectError: false,
@@ -270,7 +271,7 @@ func TestValidateLLMConfig(t *testing.T) {
 			cfg: &LLMConfig{
 				DefaultModel: "nonexistent",
 				Models: map[string]ModelConfig{
-					"model1": {},
+					"model1": {BaseURL: "https://api.openai.com/v1", APIKey: "test-key"},
 				},
 			},
 			expectError: true,
@@ -280,7 +281,7 @@ func TestValidateLLMConfig(t *testing.T) {
 			cfg: &LLMConfig{
 				DefaultModel: "",
 				Models: map[string]ModelConfig{
-					"model1": {},
+					"model1": {BaseURL: "https://api.openai.com/v1", APIKey: "test-key"},
 				},
 			},
 			expectError: false,
@@ -307,8 +308,8 @@ func TestValidateLLMConfig_SetsDefaultModel(t *testing.T) {
 	cfg := &LLMConfig{
 		DefaultModel: "",
 		Models: map[string]ModelConfig{
-			"model1": {},
-			"model2": {},
+			"model1": {BaseURL: "https://api.openai.com/v1", APIKey: "test-key"},
+			"model2": {BaseURL: "https://api.openai.com/v1", APIKey: "test-key"},
 		},
 	}
 
@@ -324,5 +325,84 @@ func TestValidateLLMConfig_SetsDefaultModel(t *testing.T) {
 	// DefaultModel 应设置为第一个模型（map 返回顺序不确定，但至少应该设置一个存在的）
 	if !cfg.ValidateModel(cfg.DefaultModel) {
 		t.Errorf("DefaultModel '%s' 应存在于 Models 中", cfg.DefaultModel)
+	}
+}
+
+func TestValidateLLMConfigEmptyModels(t *testing.T) {
+	cfg := &LLMConfig{Models: map[string]ModelConfig{}}
+	err := ValidateLLMConfig(cfg)
+	if err == nil {
+		t.Fatal("空 models 应返回错误")
+	}
+	if !strings.Contains(err.Error(), "models 配置为空") {
+		t.Errorf("错误信息不符合预期: %s", err.Error())
+	}
+}
+
+func TestValidateLLMConfigEmptyAPIKey(t *testing.T) {
+	cfg := &LLMConfig{
+		DefaultModel: "gpt-4o",
+		Models: map[string]ModelConfig{
+			"gpt-4o": {BaseURL: "https://api.openai.com/v1", APIKey: ""},
+		},
+	}
+	err := ValidateLLMConfig(cfg)
+	if err == nil {
+		t.Fatal("空 api_key 应返回错误")
+	}
+	if !strings.Contains(err.Error(), "api_key 为空") {
+		t.Errorf("错误信息不符合预期: %s", err.Error())
+	}
+}
+
+func TestValidateLLMConfigEnvVarNotSet(t *testing.T) {
+	// 确保环境变量未设置
+	os.Unsetenv("TEST_API_KEY_FOR_UNIT_TEST")
+
+	cfg := &LLMConfig{
+		DefaultModel: "gpt-4o",
+		Models: map[string]ModelConfig{
+			"gpt-4o": {BaseURL: "https://api.openai.com/v1", APIKey: "${TEST_API_KEY_FOR_UNIT_TEST}"},
+		},
+	}
+	err := ValidateLLMConfig(cfg)
+	if err == nil {
+		t.Fatal("环境变量未设置应返回错误")
+	}
+	if !strings.Contains(err.Error(), "TEST_API_KEY_FOR_UNIT_TEST 未设置") {
+		t.Errorf("错误信息不符合预期: %s", err.Error())
+	}
+}
+
+func TestValidateLLMConfigEmptyBaseURL(t *testing.T) {
+	cfg := &LLMConfig{
+		DefaultModel: "gpt-4o",
+		Models: map[string]ModelConfig{
+			"gpt-4o": {BaseURL: "", APIKey: "test-key"},
+		},
+	}
+	err := ValidateLLMConfig(cfg)
+	if err == nil {
+		t.Fatal("空 base_url 应返回错误")
+	}
+	if !strings.Contains(err.Error(), "base_url 为空") {
+		t.Errorf("错误信息不符合预期: %s", err.Error())
+	}
+}
+
+func TestValidateLLMConfigEnvVarSet(t *testing.T) {
+	// 设置环境变量
+	os.Setenv("TEST_API_KEY_SET", "test-value")
+	defer os.Unsetenv("TEST_API_KEY_SET")
+
+	cfg := &LLMConfig{
+		DefaultModel: "gpt-4o",
+		Models: map[string]ModelConfig{
+			"gpt-4o": {BaseURL: "https://api.openai.com/v1", APIKey: "${TEST_API_KEY_SET}"},
+		},
+	}
+	err := ValidateLLMConfig(cfg)
+	if err != nil {
+		t.Fatalf("环境变量已设置时不应返回错误: %v", err)
 	}
 }

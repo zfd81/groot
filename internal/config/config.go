@@ -165,10 +165,10 @@ func (c *LLMConfig) ValidateModel(name string) bool {
 }
 
 // ValidateLLMConfig validates LLM configuration at startup.
-// If DefaultModel is empty, it sets DefaultModel to the first model in Models map.
+// Returns detailed error messages to help users fix configuration issues.
 func ValidateLLMConfig(cfg *LLMConfig) error {
 	if len(cfg.Models) == 0 {
-		return fmt.Errorf("models 配置不能为空")
+		return fmt.Errorf("LLM models 配置为空，请编辑 config.yaml 添加模型配置")
 	}
 
 	if cfg.DefaultModel == "" {
@@ -181,6 +181,23 @@ func ValidateLLMConfig(cfg *LLMConfig) error {
 
 	if !cfg.ValidateModel(cfg.DefaultModel) {
 		return fmt.Errorf("default_model '%s' 不存在于 models 配置中", cfg.DefaultModel)
+	}
+
+	// Check each model's configuration
+	for name, model := range cfg.Models {
+		if model.BaseURL == "" {
+			return fmt.Errorf("模型 %s 的 base_url 为空，请编辑 config.yaml", name)
+		}
+		if model.APIKey == "" {
+			return fmt.Errorf("模型 %s 的 api_key 为空，请编辑 config.yaml 或设置对应的环境变量", name)
+		}
+		// Check if APIKey is an env var reference that's not set
+		if strings.HasPrefix(model.APIKey, "${") && strings.HasSuffix(model.APIKey, "}") {
+			envVar := model.APIKey[2 : len(model.APIKey)-1]
+			if os.Getenv(envVar) == "" {
+				return fmt.Errorf("环境变量 %s 未设置，请设置后重试\n\n提示: export %s=\"your-api-key\"\n      或在 config.yaml 中直接填写 api_key", envVar, envVar)
+			}
+		}
 	}
 
 	return nil
