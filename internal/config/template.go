@@ -17,7 +17,69 @@ llm:
       max_tokens: 4096                       # 最大 Token 数
       temperature: 0.7                       # 温度参数
 
-# 其他配置项均有默认值，可按需修改
+# ============================================================
+# 以下配置项均有默认值，如需修改请取消注释并编辑
+# ============================================================
+
+# Agent 基础配置
+#agent:
+#  name: groot                      # Agent 名称
+#  version: 1.0.0                   # Agent 版本号
+
+# HTTP 服务配置
+#server:
+#  host: 0.0.0.0                    # 服务监听地址
+#  port: 8080                       # 服务监听端口
+
+# Skills 热插拔配置
+#skills:
+#  hot_reload:
+#    enabled: true                  # 是否启用热插拔
+#    debounce_delay: 2              # 防抖延迟（秒）
+
+# ReAct 执行配置
+#react:
+#  max_iterations: 20               # 最大循环次数
+#  max_tokens: 100000               # 最大 Token 消耗
+#  step_timeout: 60                 # 单步执行超时（秒）
+#  error_retry: 2                   # 单步失败重试次数
+#  nesting_max_depth: 3             # Skills 嵌套最大深度
+
+# 附件处理配置
+#attachment:
+#  max_size: 50                     # 单个附件最大大小（MB）
+#  max_total_size: 100              # 附件总大小上限（MB）
+#  max_count: 10                    # 附件数量上限
+#  allowed_types: []                # 允许的附件类型（空数组表示允许所有）
+
+# 记忆模块配置
+#memory:
+#  directory: memory                # 记忆目录
+#  retention_days: 7                # 会话保留天数
+#  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
+
+# 安全配置
+#security:
+#  auth:
+#    enabled: false                 # 是否开启认证
+#    type: api_key                  # 认证类型
+#    api_key:
+#      header_name: X-API-Key       # 认证 Header 名称
+#      keys:
+#        - name: default            # Key 名称
+#          key: ${GROOT_API_KEY}    # Key 值（建议使用环境变量）
+#          permissions: [all]       # 权限范围
+
+# 日志配置
+#logging:
+#  level: info                      # 日志级别：debug/info/warn/error
+#  format: json                     # 日志格式：json/text
+#  output: [stdout, file]           # 输出目标
+#  file:
+#    directory: logs                # 日志文件目录
+#    filename_pattern: groot-{date}.log  # 文件名模式
+#    max_age: 7                     # 日志保留天数
+
 # 完整配置说明请参考：https://github.com/zfd81/groot
 `
 }
