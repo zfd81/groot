@@ -101,51 +101,16 @@ func handleTailCommand(args []string) {
 }
 
 func handleInitCommand(args []string) {
-	// Parse init-specific flags
-	initFlags := flag.NewFlagSet("init", flag.ExitOnError)
-	var initHomeDir string
-	initFlags.StringVar(&initHomeDir, "H", "", "工作目录 (默认 ~/.groot)")
-	initFlags.StringVar(&initHomeDir, "home", "", "工作目录 (默认 ~/.groot)")
-	var initHelp bool
-	initFlags.BoolVar(&initHelp, "h", false, "显示帮助")
-	initFlags.BoolVar(&initHelp, "help", false, "显示帮助")
-
-	if err := initFlags.Parse(args); err != nil {
+	flags, err := cmd.ParseInitFlags(args)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
 
-	if initHelp {
-		printInitHelp()
-		return
-	}
-
-	// Determine home directory
-	if initHomeDir == "" {
-		initHomeDir = os.Getenv("GROOT_HOME")
-		if initHomeDir == "" {
-			initHomeDir = filepath.Join(os.Getenv("HOME"), ".groot")
-		}
-	}
-
-	if err := cmd.RunInit(initHomeDir); err != nil {
+	if err := cmd.RunInit(flags.HomeDir); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
-}
-
-func printInitHelp() {
-	fmt.Println("用法: groot init [选项]")
-	fmt.Println()
-	fmt.Println("初始化 Groot 工作目录和配置文件")
-	fmt.Println()
-	fmt.Println("选项:")
-	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
-	fmt.Println("  -h, --help        显示帮助")
-	fmt.Println()
-	fmt.Println("示例:")
-	fmt.Println("  groot init                    # 初始化默认目录 ~/.groot")
-	fmt.Println("  groot init -H /opt/groot      # 初始化指定目录")
 }
 
 func startServer(homeDir string, port int) {

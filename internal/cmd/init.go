@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,67 @@ import (
 
 	"github.com/zfd81/groot/internal/config"
 )
+
+// InitFlags holds the parsed flags for the init command
+type InitFlags struct {
+	HomeDir string // -H/--home: Working directory
+}
+
+// ParseInitFlags parses command line arguments for the init command
+// args should be the arguments after "init" subcommand (e.g., ["-H", "/opt/groot"])
+func ParseInitFlags(args []string) (*InitFlags, error) {
+	flags := &InitFlags{
+		HomeDir: "", // will be set by getDefaultHome if not specified
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+
+		switch arg {
+		case "-H", "--home":
+			if i+1 >= len(args) {
+				return nil, errors.New("-H/--home requires a value")
+			}
+			i++
+			flags.HomeDir = args[i]
+
+		case "-h", "--help":
+			PrintInitHelp()
+			os.Exit(0)
+
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return nil, fmt.Errorf("unknown flag: %s", arg)
+			}
+			// Unknown positional argument
+			return nil, fmt.Errorf("unexpected argument: %s", arg)
+		}
+		i++
+	}
+
+	// Set default home directory if not specified
+	if flags.HomeDir == "" {
+		flags.HomeDir = getDefaultHome()
+	}
+
+	return flags, nil
+}
+
+// PrintInitHelp prints the help message for the init command
+func PrintInitHelp() {
+	fmt.Println("用法: groot init [选项]")
+	fmt.Println()
+	fmt.Println("初始化 Groot 工作目录和配置文件")
+	fmt.Println()
+	fmt.Println("选项:")
+	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
+	fmt.Println("  -h, --help        显示帮助")
+	fmt.Println()
+	fmt.Println("示例:")
+	fmt.Println("  groot init                    # 初始化默认目录 ~/.groot")
+	fmt.Println("  groot init -H /opt/groot      # 初始化指定目录")
+}
 
 // RunInit initializes the Groot working directory
 func RunInit(homeDir string) error {
