@@ -561,8 +561,8 @@ llm:
       base_url: https://api.openai.com/v1    # LLM API 地址
       api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
       model: gpt-4o                          # 实际调用时的模型名称
-      max_tokens: 4096                       # 单次调用最大 Token 数
-      temperature: 0.7                       # 输出随机性（0-1，越高越随机）
+      max_tokens: 4096                       # 单次LLM调用输出的最大Token数（传给API）
+      temperature: 0.7                       # 输出随机性（0-2，越高越随机）
     claude-3.5:
       base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
@@ -579,7 +579,7 @@ skills:
 # ReAct 执行配置
 react:
   max_iterations: 20               # 最大循环次数，-1 表示不限制
-  max_tokens: 100000               # 最大Token消耗，-1 表示不限制
+  max_tokens: 100000               # 整个对话所有LLM调用的总Token消耗上限
   step_timeout: 60                 # 单步执行超时（秒），-1 表示不限制
   error_retry: 2                   # 单步失败重试次数
   nesting_max_depth: 3             # Skills嵌套最大深度，-1 表示不限制
@@ -681,8 +681,8 @@ logging:
 | `models.{name}.base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
 | `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
 | `models.{name}.model` | **是** | 实际调用时的模型名称 |
-| `models.{name}.max_tokens` | 否 | 单次调用最大 Token 数，默认 `4096` |
-| `models.{name}.temperature` | 否 | 输出随机性（0-1），默认 `0.7` |
+| `models.{name}.max_tokens` | 否 | 单次LLM调用输出的最大Token数（传给API），默认 `4096` |
+| `models.{name}.temperature` | 否 | 输出随机性（0-2），默认 `0.7` |
 
 #### Skills 配置
 
@@ -698,7 +698,7 @@ logging:
 | 字段 | 必需 | 说明 |
 |------|------|------|
 | `max_iterations` | 否 | 最大循环次数，默认 `20`，`-1` 表示不限 |
-| `max_tokens` | 否 | 最大 Token 消耗，默认 `100000`，`-1` 表示不限 |
+| `max_tokens` | 否 | 整个对话所有LLM调用的总Token消耗上限，默认 `100000`，`-1` 表示不限 |
 | `step_timeout` | 否 | 单步执行超时（秒），默认 `60`，`-1` 表示不限 |
 | `error_retry` | 否 | 单步失败重试次数，默认 `2` |
 | `nesting_max_depth` | 否 | Skills 嵌套最大深度，默认 `3`，`-1` 表示不限 |

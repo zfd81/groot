@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"fmt"
-	"time"
 
 	openai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
@@ -23,17 +22,18 @@ func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string) (
 		return nil, fmt.Errorf("model '%s' not found in config", modelName)
 	}
 
-	// Create OpenAI ChatModel with timeout based on max_tokens
-	timeout := time.Duration(modelCfg.MaxTokens) * time.Second
-	if timeout < 30*time.Second {
-		timeout = 30 * time.Second // minimum 30s
-	}
+	// Prepare parameters for API call
+	// MaxTokens: maximum output tokens for this single LLM call
+	// Temperature: controls randomness of output (0.0-2.0)
+	maxTokens := modelCfg.MaxTokens
+	temperature := float32(modelCfg.Temperature)
 
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		Model:   modelCfg.Model,
-		APIKey:  modelCfg.APIKey,
-		BaseURL: modelCfg.BaseURL,
-		Timeout: timeout,
+		Model:       modelCfg.Model,
+		APIKey:      modelCfg.APIKey,
+		BaseURL:     modelCfg.BaseURL,
+		MaxTokens:   &maxTokens,     // 限制单次调用输出的最大 token 数
+		Temperature: &temperature,    // 控制输出的随机性
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
