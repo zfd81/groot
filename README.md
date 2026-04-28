@@ -748,6 +748,10 @@ logging:
 | `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
 | `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
 
+> **速率限制说明：**
+> - **匿名降级**：认证开启时按 API Key 名称限流；认证关闭（`auth.enabled: false`）时按客户端 IP 限流
+> - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
+
 #### Logging 配置
 
 | 字段 | 必需 | 说明 |
