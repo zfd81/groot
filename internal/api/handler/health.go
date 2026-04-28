@@ -11,6 +11,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
@@ -82,14 +83,21 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		mcpInfos = append(mcpInfos, mcpInfo)
 	}
 
+	// Check LLM connection
+	llmStatus, llmError := llm.CheckConnection(h.config.LLM)
+	llmInfo := map[string]string{"model": h.config.LLM.DefaultModel}
+	if llmError != "" {
+		llmInfo["error"] = llmError
+	}
+
 	resp := types.HealthResponse{
 		Status:  "healthy",
 		Version: h.config.Agent.Version,
 		Uptime:  uptimeStr,
 		Checks: map[string]types.CheckInfo{
 			"llm": {
-				Status: "healthy",
-				Info:   map[string]string{"model": h.config.LLM.DefaultModel},
+				Status: llmStatus,
+				Info:   llmInfo,
 			},
 			"mcp_servers": {
 				Status: "healthy",

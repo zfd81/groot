@@ -439,10 +439,13 @@ curl http://localhost:8080/health
   "version": "1.0.0",
   "uptime": "1m",
   "checks": {
-    "llm": {"status": "healthy", "model": "gpt-4o"},
-    "mcp_servers": {"status": "healthy", "servers": ["file_operations", "http_request"]},
-    "skills": {"status": "healthy", "count": 4},
-    "memory": {"status": "healthy", "used_mb": 256}
+    "llm": {"status": "healthy", "info": {"model": "gpt-4o"}},
+    "mcp_servers": {"status": "healthy", "info": [{"name": "file_operations", "tools_count": 7}]},
+    "skills": {"status": "healthy", "info": {"count": 4}},
+    "memory": {"status": "healthy", "info": {"sessions": 0}}
+  },
+  "metrics": {
+    "chats_running": 0
   }
 }
 ```
@@ -1379,23 +1382,49 @@ X-API-Key: your-secret-key
 
 ### 7.9 GET /health - 健康检查
 
-查询服务健康状态。
+查询服务健康状态，检查各组件运行情况。
 
-**响应示例：**
+**检查项说明：**
+
+| 检查项 | 说明 | 检查内容 |
+|-------|------|---------|
+| `llm` | LLM 服务 | 实际调用 API 检查连接状态 |
+| `mcp_servers` | MCP 工具 | 各 MCP 服务状态和工具数量 |
+| `skills` | Skills | 已加载 Skills 数量 |
+| `memory` | 会话存储 | 当前会话数量 |
+
+**响应示例（健康）：**
 ```json
 {
   "status": "healthy",
   "version": "1.0.0",
   "uptime": "2h30m",
   "checks": {
-    "llm": {"status": "healthy", "model": "gpt-4o"},
-    "mcp_servers": {"status": "healthy", "servers": ["database_tool", "web_parser"]},
-    "skills": {"status": "healthy", "count": 12},
-    "memory": {"status": "healthy", "used_mb": 256}
+    "llm": {"status": "healthy", "info": {"model": "gpt-4o"}},
+    "mcp_servers": {"status": "healthy", "info": [{"name": "file_operations", "tools_count": 7, "isActive": true}]},
+    "skills": {"status": "healthy", "info": {"count": 4}},
+    "memory": {"status": "healthy", "info": {"sessions": 10}}
   },
   "metrics": {
-    "chats_running": 5,
-    "success_rate": 0.98
+    "chats_running": 2
+  }
+}
+```
+
+**响应示例（LLM 异常）：**
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime": "2h30m",
+  "checks": {
+    "llm": {"status": "unhealthy", "info": {"model": "gpt-4o", "error": "connection failed: timeout"}},
+    "mcp_servers": {"status": "healthy", "info": [...]},
+    "skills": {"status": "healthy", "info": {"count": 4}},
+    "memory": {"status": "healthy", "info": {"sessions": 10}}
+  },
+  "metrics": {
+    "chats_running": 0
   }
 }
 ```

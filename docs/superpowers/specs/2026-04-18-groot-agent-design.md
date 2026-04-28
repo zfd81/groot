@@ -1154,23 +1154,49 @@ data: {"status":"cancelled","timestamp":"2026-04-18T10:30:12Z","duration":"12s",
 
 #### 3.1.8 GET /health
 
-健康检查接口。
+健康检查接口，检查各组件运行状态。
 
-**响应：**
+**检查项：**
+
+| 检查项 | 说明 | 检查方式 |
+|-------|------|---------|
+| `llm` | LLM 服务连接 | 调用 API `/models` 端点验证连接和认证 |
+| `mcp_servers` | MCP 工具服务 | 检查各 MCP 状态和工具数量 |
+| `skills` | Skills 加载 | 统计已加载 Skills 数量 |
+| `memory` | 会话存储 | 统计当前会话数量 |
+
+**响应（健康）：**
 ```json
 {
   "status": "healthy",
   "version": "1.0.0",
   "uptime": "2h30m",
   "checks": {
-    "llm": {"status": "healthy", "model": "gpt-4o"},
-    "mcp_servers": {"status": "healthy", "servers": ["file_operations", "http_request"]},
-    "skills": {"status": "healthy", "count": 12},
-    "memory": {"status": "healthy", "used_mb": 256}
+    "llm": {"status": "healthy", "info": {"model": "gpt-4o"}},
+    "mcp_servers": {"status": "healthy", "info": [{"name": "file_operations", "tools_count": 7, "isActive": true}]},
+    "skills": {"status": "healthy", "info": {"count": 4}},
+    "memory": {"status": "healthy", "info": {"sessions": 10}}
   },
   "metrics": {
-    "chats_running": 5,
-    "success_rate": 0.98
+    "chats_running": 2
+  }
+}
+```
+
+**响应（LLM 连接异常）：**
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime": "2h30m",
+  "checks": {
+    "llm": {"status": "unhealthy", "info": {"model": "gpt-4o", "error": "connection failed: timeout"}},
+    "mcp_servers": {"status": "healthy", "info": [...]},
+    "skills": {"status": "healthy", "info": {"count": 4}},
+    "memory": {"status": "healthy", "info": {"sessions": 10}}
+  },
+  "metrics": {
+    "chats_running": 0
   }
 }
 ```
@@ -2160,13 +2186,33 @@ JSON 结构化日志可直接用于监控采集，通过 ELK 或类似日志系�
 
 #### 5.3.3 依赖健康检查
 
+检查各依赖组件的运行状态：
+
+| 检查项 | 检查方式 | 说明 |
+|-------|---------|------|
+| `llm` | 调用 `/models` API | 验证 LLM API 连接和认证有效性 |
+| `mcp_servers` | 遍历已注册 MCP | 检查各 MCP 工具数量和错误状态 |
+| `skills` | 统计 Skills 数量 | 验证 Skills 加载完成 |
+| `memory` | 统计会话数量 | 验证会话存储正常 |
+
+**响应示例：**
 ```json
 {
   "checks": {
-    "llm": {"status": "healthy", "model": "gpt-4o"},
-    "mcp_servers": {"status": "healthy", "servers": [...]},
-    "skills": {"status": "healthy", "count": 12},
-    "memory": {"status": "healthy", "used_mb": 256}
+    "llm": {"status": "healthy", "info": {"model": "gpt-4o"}},
+    "mcp_servers": {"status": "healthy", "info": [{"name": "file_operations", "tools_count": 7, "isActive": true}]},
+    "skills": {"status": "healthy", "info": {"count": 4}},
+    "memory": {"status": "healthy", "info": {"sessions": 10}}
+  }
+}
+```
+
+**LLM 异常时：**
+```json
+{
+  "checks": {
+    "llm": {"status": "unhealthy", "info": {"model": "gpt-4o", "error": "connection failed: timeout"}},
+    ...
   }
 }
 ```
