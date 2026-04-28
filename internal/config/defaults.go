@@ -48,6 +48,14 @@ func DefaultConfig() *Config {
 			AllowedTypes: []string{}, // 空数组表示允许所有类型
 		},
 		Security: SecurityConfig{
+			RateLimit: RateLimitConfig{
+				Enabled:            false,
+				GlobalQPS:          0,
+				GlobalConcurrency:  0,
+				DefaultQPS:         10,
+				DefaultConcurrency: 5,
+				CleanupInterval:    "5m",
+			},
 			Auth: AuthConfig{
 				Enabled: false, // 默认关闭认证，方便测试
 				Type:    "api_key",

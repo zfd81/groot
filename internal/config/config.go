@@ -83,7 +83,18 @@ type AttachmentConfig struct {
 
 // SecurityConfig holds security settings
 type SecurityConfig struct {
-	Auth AuthConfig `yaml:"auth"`
+	Auth      AuthConfig      `yaml:"auth"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
+}
+
+// RateLimitConfig holds rate limiting settings
+type RateLimitConfig struct {
+	Enabled           bool    `yaml:"enabled"`
+	GlobalQPS         float64 `yaml:"global_qps"`
+	GlobalConcurrency int     `yaml:"global_concurrency"`
+	DefaultQPS        float64 `yaml:"default_qps"`
+	DefaultConcurrency int    `yaml:"default_concurrency"`
+	CleanupInterval   string  `yaml:"cleanup_interval"`
 }
 
 // AuthConfig holds authentication settings

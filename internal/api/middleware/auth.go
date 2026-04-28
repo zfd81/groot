@@ -145,7 +145,7 @@ func getRequiredPermission(path, method string) string {
 func GetCaller(rc *app.RequestContext) string {
 	caller, _ := rc.Get("caller")
 	if caller == nil {
-		return "unknown"
+		return "anonymous"
 	}
 	return caller.(string)
 }

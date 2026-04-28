@@ -60,6 +60,13 @@ llm:
 
 # 安全配置
 #security:
+#  rate_limit:
+#    enabled: false                   # 是否启用速率限制
+#    global_qps: 0                    # 全局 QPS 限制（0 表示不限制）
+#    global_concurrency: 0            # 全局并发限制（0 表示不限制）
+#    default_qps: 10                  # 每个 API Key 的默认 QPS
+#    default_concurrency: 5           # 每个 API Key 的默认并发数
+#    cleanup_interval: 5m             # 空闲限流器清理间隔
 #  auth:
 #    enabled: false                 # 是否开启认证
 #    type: api_key                  # 认证类型

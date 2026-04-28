@@ -15,6 +15,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/skill"
 )
 
@@ -57,6 +58,15 @@ func NewServer(
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
 
+	// Create rate limiter (best-effort, errors use default config)
+	rateLimiter, err := ratelimit.New(cfg.Security.RateLimit)
+	if err != nil {
+		log.Info("速率限制器初始化失败，已禁用限流", zap.Error(err))
+		cfg.Security.RateLimit.Enabled = false
+		rateLimiter, _ = ratelimit.New(cfg.Security.RateLimit)
+	}
+	rateLimitMW := middleware.NewRateLimitMiddleware(rateLimiter)
+
 	// Create handlers
 	chatH := handler.NewChatHandler(mem, runtime, exec, skills, mcpMgr, attHandler, cfg, log)
 	cancelH := handler.NewCancelHandler(runtime, mem)
@@ -68,7 +78,7 @@ func NewServer(
 	toolsH := handler.NewToolsHandler(mcpMgr, log)
 
 	// Register routes
-	RegisterRoutes(h, authMW,
+	RegisterRoutes(h, authMW, rateLimitMW,
 		chatH, cancelH, statusH, detailH, sessionH,
 		healthH, skillsH, toolsH)
 

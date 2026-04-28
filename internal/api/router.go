@@ -10,6 +10,7 @@ import (
 // RegisterRoutes registers all API routes
 func RegisterRoutes(h *server.Hertz,
 	authMW *middleware.AuthMiddleware,
+	rateLimitMW *middleware.RateLimitMiddleware,
 	chatH *handler.ChatHandler,
 	cancelH *handler.CancelHandler,
 	statusH *handler.StatusHandler,
@@ -22,9 +23,9 @@ func RegisterRoutes(h *server.Hertz,
 	// Health check (no auth required)
 	h.GET("/health", healthH.Serve)
 
-	// API group with auth
+	// API group with auth + rate limit
 	apiGroup := h.Group("/")
-	apiGroup.Use(authMW.Serve())
+	apiGroup.Use(authMW.Serve(), rateLimitMW.Serve())
 
 	// Chat endpoints - 多轮对话
 	apiGroup.POST("/chat", chatH.Serve)

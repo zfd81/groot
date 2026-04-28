@@ -37,6 +37,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
 | **Skills 嵌套** | 复杂任务自动拆解，子任务递归执行 |
 | **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
+| **速率限制** | 支持按 API Key 的 QPS 和并发数限制，防止滥用 |
 
 ### 1.3 会话与对话
 
@@ -602,6 +603,13 @@ memory:
 
 # 安全配置
 security:
+  rate_limit:
+    enabled: false                 # 是否启用速率限制（默认关闭）
+    global_qps: 0                  # 全局 QPS 限制（0=不限制）
+    global_concurrency: 0          # 全局并发限制（0=不限制）
+    default_qps: 10                # 每 API Key 默认 QPS
+    default_concurrency: 5         # 每 API Key 默认并发数
+    cleanup_interval: 5m           # 空闲限流器清理间隔
   auth:
     enabled: true                  # 是否开启认证
     type: api_key                  # 认证类型
@@ -733,6 +741,12 @@ logging:
 | `auth.api_key.keys[].name` | 否 | Key 名称（唯一标识） |
 | `auth.api_key.keys[].key` | 否 | Key 值，支持 `${VAR_NAME}` 引用 |
 | `auth.api_key.keys[].permissions` | 否 | 权限范围：`all` 或 `[chat, status, ...]` |
+| `rate_limit.enabled` | 否 | 是否启用速率限制，默认 `false` |
+| `rate_limit.global_qps` | 否 | 全局 QPS 限制，`0` 表示不限制 |
+| `rate_limit.global_concurrency` | 否 | 全局并发限制，`0` 表示不限制 |
+| `rate_limit.default_qps` | 否 | 每 API Key 默认 QPS，默认 `10` |
+| `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
+| `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
 
 #### Logging 配置
 
@@ -768,7 +782,7 @@ logging:
 - Skills 配置：修改 SKILL.md 文件自动生效
 
 **不支持热更新的配置：**
-- LLM 配置、Server 配置、Security 配置、Memory 配置、Logging 配置需重启服务
+- LLM 配置、Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
 
 ---
@@ -1721,11 +1735,16 @@ export OPENAI_API_KEY="your-api-key"
 
 ---
 
-### Q4: 同一会话并发调用报错
+### Q4: 请求返回 429 或同一会话并发调用报错
 
-**原因：** 同一会话只能有一个活跃对话，防止执行冲突。
+**原因：**
+- `429 rate_limited`：请求频率超过配置的 QPS 或并发限制（启用 `rate_limit` 时）
+- `409 chat_limit_exceeded`：同一会话只能有一个活跃对话，防止执行冲突
 
-**解决：** 等待当前对话完成后再发起下一轮，或取消当前对话。
+**解决：**
+- 降低请求频率，等待当前请求完成后再发起下一条
+- 可通过配置文件调整 `rate_limit.default_qps` 和 `rate_limit.default_concurrency`
+- 也可以调用 `DELETE /chat/{sid}` 取消当前对话
 
 ---
 
@@ -1812,6 +1831,7 @@ export OPENAI_API_KEY="your-api-key"
 | 401 | `unauthorized` | API Key 无效或缺失 |
 | 403 | `forbidden` | 权限不足 |
 | 409 | `chat_limit_exceeded` | 会话已有对话执行中 |
+| 429 | `rate_limited` | 请求频率超过限制（QPS 或并发超限），稍后重试 |
 | 500 | `config_error` | 配置错误 |
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
