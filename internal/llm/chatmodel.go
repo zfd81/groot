@@ -16,7 +16,8 @@ import (
 
 // NewChatModel creates an OpenAI-compatible ChatModel using eino-ext
 // modelName parameter: if empty, uses default model; otherwise uses specified model
-func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string) (model.BaseChatModel, error) {
+// timeout parameter: per-call timeout for LLM API requests (0 means no timeout)
+func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string, timeout time.Duration) (model.BaseChatModel, error) {
 	// Get model config by name
 	modelCfg := cfg.GetModelByName(modelName)
 	if modelCfg == nil {
@@ -38,6 +39,7 @@ func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string) (
 		BaseURL:     modelCfg.BaseURL,
 		MaxTokens:   &maxTokens,     // 限制单次调用输出的最大 token 数
 		Temperature: &temperature,    // 控制输出的随机性
+		Timeout:     timeout,         // 单次 LLM API 请求超时时间
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)

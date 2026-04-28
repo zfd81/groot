@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -65,8 +66,9 @@ func (e *Engine) Run(
 	modelName string,
 	cb *ProgressCallback,
 ) (*RunResult, error) {
-	// 1. Create ChatModel
-	chatModel, err := llm.NewChatModel(ctx, e.llmConfig, modelName)
+	// 1. Create ChatModel with per-call timeout
+	stepTimeout := time.Duration(e.reactConfig.StepTimeout) * time.Second
+	chatModel, err := llm.NewChatModel(ctx, e.llmConfig, modelName, stepTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
 	}
@@ -94,6 +96,13 @@ func (e *Engine) Run(
 				Tools: tools,
 			},
 		},
+	}
+
+	// Configure retry for transient LLM failures (network jitter, 5xx, timeouts)
+	if e.reactConfig.ErrorRetry > 0 {
+		agentConfig.ModelRetryConfig = &adk.ModelRetryConfig{
+			MaxRetries: e.reactConfig.ErrorRetry,
+		}
 	}
 
 	// 5. Create Agent
