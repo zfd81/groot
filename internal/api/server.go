@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cloudwego/eino/adk"
+	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"go.uber.org/zap"
 
@@ -16,7 +18,6 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/ratelimit"
-	"github.com/zfd81/groot/internal/skill"
 )
 
 // Server represents the API server
@@ -34,7 +35,8 @@ func NewServer(
 	log *logger.Logger,
 	mem *memory.Manager,
 	runtime *agent.RuntimeState,
-	skills *skill.Registry,
+	skillBackend einoskill.Backend,
+	skillMiddleware adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
@@ -53,7 +55,7 @@ func NewServer(
 	attHandler := attachment.NewHandler(cfg.Attachment, memoryDir)
 
 	// Create executor
-	exec := agent.NewExecutor(mem, skills, mcpMgr, cfg, log)
+	exec := agent.NewExecutor(mem, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
@@ -68,13 +70,13 @@ func NewServer(
 	rateLimitMW := middleware.NewRateLimitMiddleware(rateLimiter)
 
 	// Create handlers
-	chatH := handler.NewChatHandler(mem, runtime, exec, skills, mcpMgr, attHandler, cfg, log)
+	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, attHandler, cfg, log)
 	cancelH := handler.NewCancelHandler(runtime, mem)
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
-	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, mem, runtime, log)
-	skillsH := handler.NewSkillsHandler(skills)
+	healthH := handler.NewHealthHandler(cfg, skillBackend, mcpMgr, mem, runtime, log)
+	skillsH := handler.NewSkillsHandler(skillBackend)
 	toolsH := handler.NewToolsHandler(mcpMgr, log)
 
 	// Register routes

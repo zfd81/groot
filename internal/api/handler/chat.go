@@ -10,12 +10,11 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/skill"
 	"github.com/zfd81/groot/internal/mcp"
-	"github.com/zfd81/groot/internal/attachment"
+	"github.com/zfd81/groot/internal/memory"
 )
 
 // ChatHandler 对话处理器
@@ -23,7 +22,6 @@ type ChatHandler struct {
 	memory            *memory.Manager
 	runtimeState      *agent.RuntimeState
 	agentExecutor     *agent.Executor
-	skillRegistry     *skill.Registry
 	mcpManager        *mcp.Manager
 	attachmentHandler *attachment.Handler
 	config            config.Config
@@ -35,7 +33,6 @@ func NewChatHandler(
 	mem *memory.Manager,
 	runtime *agent.RuntimeState,
 	executor *agent.Executor,
-	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 	attHandler *attachment.Handler,
 	cfg config.Config,
@@ -45,7 +42,6 @@ func NewChatHandler(
 		memory:            mem,
 		runtimeState:      runtime,
 		agentExecutor:     executor,
-		skillRegistry:     skills,
 		mcpManager:        mcpMgr,
 		attachmentHandler: attHandler,
 		config:            cfg,

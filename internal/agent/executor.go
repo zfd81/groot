@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cloudwego/eino/adk"
+
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/skill"
 )
 
 // TaskStatus represents task status (temporary definition until memory module)
@@ -70,7 +71,7 @@ type ProgressInfo struct {
 // Executor executes tasks with ReAct mode
 type Executor struct {
 	memoryManager *memory.Manager
-	skillRegistry *skill.Registry
+	middlewares   []adk.ChatModelAgentMiddleware
 	mcpManager    *mcp.Manager
 	config        config.Config
 	logger        *logger.Logger
@@ -79,14 +80,14 @@ type Executor struct {
 // NewExecutor creates a new task executor
 func NewExecutor(
 	memMgr *memory.Manager,
-	skills *skill.Registry,
+	middlewares []adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
 		memoryManager: memMgr,
-		skillRegistry: skills,
+		middlewares:   middlewares,
 		mcpManager:    mcpMgr,
 		config:        cfg,
 		logger:        log,
@@ -107,7 +108,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	// Create engine using eino
 	engine := NewEngine(
 		e.config.LLM,
-		e.skillRegistry,
+		e.middlewares,
 		e.mcpManager,
 		e.config.React,
 		e.logger,

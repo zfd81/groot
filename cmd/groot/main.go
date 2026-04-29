@@ -13,6 +13,9 @@ import (
 
 	"go.uber.org/zap"
 
+	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
+	"github.com/cloudwego/eino-ext/adk/backend/local"
+
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api"
 	"github.com/zfd81/groot/internal/cmd"
@@ -21,7 +24,6 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
-	"github.com/zfd81/groot/internal/skill"
 )
 
 var (
@@ -144,21 +146,38 @@ func startServer(homeDir string, port int) {
 		zap.String("config", filepath.Join(homeDir, "config.yaml")),
 	)
 
-	// Initialize skills registry
-	skillsRegistry := skill.NewRegistry()
-	skillLoader := skill.NewLoader(skillsRegistry)
-
-	// Load skills (fixed directory: {GROOT_HOME}/skills)
+	// Initialize skills via eino skill middleware
 	skillsDir := filepath.Join(homeDir, "skills")
-	if err := skillLoader.LoadAll(skillsDir); err != nil {
-		log.Error("无法加载Skills", zap.Error(err))
-	}
-	log.Info("Skills 加载完成", zap.Int("count", skillsRegistry.Count()), zap.String("dir", skillsDir))
 
-	// Start skills watcher
-	skillWatcher := skill.NewWatcher(skillLoader, cfg.Skills, log)
-	if err := skillWatcher.Start(skillsDir); err != nil {
-		log.Error("无法启动Skills watcher", zap.Error(err))
+	// Create local filesystem backend
+	localBackend, err := local.NewBackend(context.Background(), &local.Config{})
+	if err != nil {
+		log.Error("无法创建文件系统后端", zap.Error(err))
+	}
+
+	// Create skill backend (scans {skillsDir}/*/SKILL.md)
+	skillBackend, err := einoskill.NewBackendFromFilesystem(context.Background(), &einoskill.BackendFromFilesystemConfig{
+		Backend: localBackend,
+		BaseDir: skillsDir,
+	})
+	if err != nil {
+		log.Error("无法创建Skill后端", zap.Error(err))
+	}
+
+	// Create skill middleware (progressive disclosure: skills listed in tool desc, loaded on demand)
+	skillMiddleware, err := einoskill.NewMiddleware(context.Background(), &einoskill.Config{
+		Backend: skillBackend,
+	})
+	if err != nil {
+		log.Error("无法创建Skill中间件", zap.Error(err))
+	}
+
+	// Log skill count
+	if skillBackend != nil {
+		matters, listErr := skillBackend.List(context.Background())
+		if listErr == nil {
+			log.Info("Skills 加载完成", zap.Int("count", len(matters)), zap.String("dir", skillsDir))
+		}
 	}
 
 	// Initialize MCP manager
@@ -191,7 +210,7 @@ func startServer(homeDir string, port int) {
 	log.Info("清理调度器已启动", zap.String("schedule", cfg.Memory.CleanupSchedule))
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillsRegistry, mcpMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -209,7 +228,6 @@ func startServer(homeDir string, port int) {
 
 		// Stop watchers
 		grootMdWatcher.Stop()
-		skillWatcher.Stop()
 
 		// Stop cleanup scheduler
 		cleanupScheduler.Stop()

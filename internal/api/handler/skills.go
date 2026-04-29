@@ -3,38 +3,45 @@ package handler
 import (
 	"context"
 
+	"github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/zfd81/groot/internal/api/types"
-	"github.com/zfd81/groot/internal/skill"
 )
 
 // SkillsHandler handles GET /skills
 type SkillsHandler struct {
-	skillRegistry *skill.Registry
+	backend skill.Backend
 }
 
 // NewSkillsHandler creates a new skills handler
-func NewSkillsHandler(skills *skill.Registry) *SkillsHandler {
-	return &SkillsHandler{skillRegistry: skills}
+func NewSkillsHandler(backend skill.Backend) *SkillsHandler {
+	return &SkillsHandler{backend: backend}
 }
 
 // Serve handles the skills request
 func (h *SkillsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
-	skills := h.skillRegistry.List()
+	if h.backend == nil {
+		rc.JSON(200, types.SkillsResponse{Skills: []types.SkillInfo{}, Total: 0})
+		return
+	}
 
-	skillInfos := make([]types.SkillInfo, len(skills))
-	for i, s := range skills {
+	matters, err := h.backend.List(ctx)
+	if err != nil {
+		rc.JSON(500, types.SkillsResponse{Skills: []types.SkillInfo{}, Total: 0})
+		return
+	}
+
+	skillInfos := make([]types.SkillInfo, len(matters))
+	for i, m := range matters {
 		skillInfos[i] = types.SkillInfo{
-			Name:        s.Name,
-			Description: s.Description,
+			Name:        m.Name,
+			Description: m.Description,
 		}
 	}
 
-	resp := types.SkillsResponse{
+	rc.JSON(200, types.SkillsResponse{
 		Skills: skillInfos,
 		Total:  len(skillInfos),
-	}
-
-	rc.JSON(200, resp)
+	})
 }

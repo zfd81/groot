@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app"
 	"go.uber.org/zap"
 
@@ -15,13 +16,12 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/skill"
 )
 
 // HealthHandler handles GET /health
 type HealthHandler struct {
 	config        config.Config
-	skillRegistry *skill.Registry
+	skillBackend  skill.Backend
 	mcpManager    *mcp.Manager
 	memoryManager *memory.Manager
 	runtimeState  *agent.RuntimeState
@@ -32,7 +32,7 @@ type HealthHandler struct {
 // NewHealthHandler creates a new health handler
 func NewHealthHandler(
 	cfg config.Config,
-	skills *skill.Registry,
+	skillBackend skill.Backend,
 	mcpMgr *mcp.Manager,
 	memMgr *memory.Manager,
 	runtime *agent.RuntimeState,
@@ -40,7 +40,7 @@ func NewHealthHandler(
 ) *HealthHandler {
 	return &HealthHandler{
 		config:        cfg,
-		skillRegistry: skills,
+		skillBackend:  skillBackend,
 		mcpManager:    mcpMgr,
 		memoryManager: memMgr,
 		runtimeState:  runtime,
@@ -62,6 +62,15 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		sessions, total, _ := h.memoryManager.ListSessions(1, 0)
 		sessionCount = total
 		_ = sessions
+	}
+
+	// Get skills count
+	skillsCount := 0
+	if h.skillBackend != nil {
+		matters, err := h.skillBackend.List(context.Background())
+		if err == nil {
+			skillsCount = len(matters)
+		}
 	}
 
 	// Build MCP info with tool count
@@ -105,7 +114,7 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			},
 			"skills": {
 				Status: "healthy",
-				Info:   map[string]int{"count": h.skillRegistry.Count()},
+				Info:   map[string]int{"count": skillsCount},
 			},
 			"memory": {
 				Status: "healthy",

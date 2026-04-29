@@ -17,7 +17,6 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/skill"
 )
 
 // ProgressCallback handles SSE event callbacks with structured data
@@ -32,27 +31,27 @@ type ProgressCallback struct {
 
 // Engine wraps eino's ChatModelAgent for task execution
 type Engine struct {
-	llmConfig      config.LLMConfig
-	skillsRegistry *skill.Registry
-	mcpManager     *mcp.Manager
-	reactConfig    config.ReactConfig
-	log            *logger.Logger
+	llmConfig   config.LLMConfig
+	middlewares []adk.ChatModelAgentMiddleware
+	mcpManager  *mcp.Manager
+	reactConfig config.ReactConfig
+	log         *logger.Logger
 }
 
 // NewEngine creates a new Agent Engine
 func NewEngine(
 	cfg config.LLMConfig,
-	skills *skill.Registry,
+	middlewares []adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
 	reactCfg config.ReactConfig,
 	log *logger.Logger,
 ) *Engine {
 	return &Engine{
-		llmConfig:      cfg,
-		skillsRegistry: skills,
-		mcpManager:     mcpMgr,
-		reactConfig:    reactCfg,
-		log:            log,
+		llmConfig:   cfg,
+		middlewares: middlewares,
+		mcpManager:  mcpMgr,
+		reactConfig: reactCfg,
+		log:         log,
 	}
 }
 
@@ -76,7 +75,7 @@ func (e *Engine) Run(
 	// 2. Build tools from MCP Manager
 	tools := e.buildTools()
 
-	// 3. Build system instruction with Skills
+	// 3. Build system instruction
 	systemInstruction := e.buildSystemInstruction(prompt, sessionMdContent)
 
 	// 4. Create ChatModelAgent config
@@ -103,6 +102,11 @@ func (e *Engine) Run(
 		agentConfig.ModelRetryConfig = &adk.ModelRetryConfig{
 			MaxRetries: e.reactConfig.ErrorRetry,
 		}
+	}
+
+	// Inject middlewares (skill middleware, etc.)
+	if len(e.middlewares) > 0 {
+		agentConfig.Handlers = e.middlewares
 	}
 
 	// 5. Create Agent
@@ -166,14 +170,11 @@ eventLoop:
 			// Process event
 			if event.Err != nil {
 				e.log.Error("Agent event error: " + event.Err.Error())
-				// 检查是否是严重错误（如连接失败），应该返回给调用者
-				// NodeRunError 表示节点执行失败，通常是 LLM 连接问题
 				if strings.Contains(event.Err.Error(), "NodeRunError") ||
 					strings.Contains(event.Err.Error(), "connection refused") ||
 					strings.Contains(event.Err.Error(), "dial tcp") ||
 					strings.Contains(event.Err.Error(), "no such host") ||
 					strings.Contains(event.Err.Error(), "timeout") {
-					// 直接返回错误，让 executor 统一处理 SSE 错误发送
 					return nil, fmt.Errorf("LLM 服务连接失败: %w", event.Err)
 				}
 				continue
@@ -369,7 +370,7 @@ func (e *Engine) buildTools() []tool.BaseTool {
 	return tools
 }
 
-// buildSystemInstruction builds the system prompt with Skills
+// buildSystemInstruction builds the system prompt
 func (e *Engine) buildSystemInstruction(prompt string, sessionMdContent string) string {
 	sb := &strings.Builder{}
 
@@ -391,25 +392,6 @@ func (e *Engine) buildSystemInstruction(prompt string, sessionMdContent string) 
 		sb.WriteString(prompt)
 		sb.WriteString("\n\n")
 	}
-
-	// 4. Skills 指令
-	if e.skillsRegistry.Count() > 0 {
-		sb.WriteString("可用技能 (专用任务模板):\n")
-		for _, skill := range e.skillsRegistry.List() {
-			sb.WriteString(fmt.Sprintf("\n## %s\n", skill.Name))
-			sb.WriteString(fmt.Sprintf("描述: %s\n", skill.Description))
-			sb.WriteString(fmt.Sprintf("\n指令:\n%s\n", skill.Instructions))
-		}
-		sb.WriteString("\n")
-	}
-
-	// 5. 执行规则
-	sb.WriteString("执行规则:\n")
-	sb.WriteString("1. 分析用户请求，判断需要使用哪个技能或工具\n")
-	sb.WriteString("2. 如果有匹配的技能，按照技能指令执行\n")
-	sb.WriteString("3. 使用工具时，按工具定义的参数格式传入参数\n")
-	sb.WriteString("4. 观察执行结果，必要时继续调用工具\n")
-	sb.WriteString("5. 完成任务后给出最终答案\n")
 
 	return sb.String()
 }
