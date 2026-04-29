@@ -1026,105 +1026,70 @@ Header 名称可在配置文件中自定义。
 
 **SSE 响应格式：**
 
-所有事件使用标准 SSE `data:` 格式：
+所有事件使用标准 SSE `data:` 格式，流结束时发送 `[DONE]`。
 
 ```
 data: <JSON内容>\n\n
-```
-
-流结束时发送：
-
-```
 data: [DONE]
 ```
 
-**事件类型：**
+---
 
-| 事件类型 | role 字段 | 说明 |
-|---------|----------|------|
-| thinking | `assistant` | AI 思考过程，逐步流式输出（`reasoning_content` 字段） |
-| message | `assistant` | AI 回答内容，逐步流式输出（`content` 字段） |
-| tool_calls | `assistant` | AI 决定调用工具（`tool_calls` 字段） |
-| finish | `assistant` | 当前响应阶段结束（`finish_reason` 字段） |
-| tool_result | `tool` | 工具执行结果 |
-| done | - | 整体对话结束标记 `[DONE]` |
+### 事件识别规则
 
-**事件流示例：**
+每个事件通过 JSON 中的 **`role` 字段 + 特征字段** 组合来识别。前端解析策略：
 
 ```
-data: {"role":"assistant","reasoning_content":"用户"}
-data: {"role":"assistant","reasoning_content":"要求"}
-data: {"role":"assistant","reasoning_content":"读取文件"}
-data: {"role":"assistant","tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]}
-data: {"role":"assistant","finish_reason":"tool_calls"}
-data: {"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost"}
-data: {"role":"assistant","reasoning_content":"好的"}
-data: {"role":"assistant","content":"文件内容如下："}
-data: {"role":"assistant","content":"127.0.0.1 localhost"}
-data: {"role":"assistant","finish_reason":"stop"}
-data: [DONE]
+解析 data JSON →
+  role == "tool"       → tool_result 事件
+  role == "assistant":
+    有 tool_calls      → tool_calls 事件
+    有 finish_reason   → finish 事件
+    有 reasoning_content → thinking 事件
+    有 content         → message 事件
 ```
 
-**finish_reason 值说明：**
+### 事件类型与处理方式
 
-| 值 | 含义 | 后续事件 |
-|---|------|---------|
-| `tool_calls` | AI 需要调用工具 | 后续有 `tool_result` 事件，然后 AI 继续响应 |
-| `stop` | 对话完成 | 后续为 `[DONE]` |
+| 事件 | role | 特征字段 | 内容字段 | 客户端处理 |
+|------|------|---------|---------|-----------|
+| `thinking` | `assistant` | `reasoning_content` | `reasoning_content` | 思考过程区（折叠/灰色），**不放入正文** |
+| `message` | `assistant` | `content`（无 tool_calls 无 finish） | `content` | **正文区逐字追加渲染** |
+| `tool_calls` | `assistant` | `tool_calls` | `tool_calls[].function.name` | 「正在调用 xxx」提示 |
+| `finish` | `assistant` | `finish_reason` | `finish_reason` | 阶段结束标记，不展示 |
+| `tool_result` | `tool` | — | `content` + `tool_name` | **工具调用结果区（调用详情面板）**，不放入正文 |
+| `done` | — | — | — | 对话流结束 |
 
-**事件可选性说明：**
+**关键规则：**
 
-| 事件类型 | 是否必须 | 说明 |
-|---------|---------|------|
-| thinking (`reasoning_content`) | 可选 | 仅当 AI 输出思考内容时发送 |
-| message (`content`) | **必须** | 最终回答内容，至少发送一次 |
-| tool_calls | 可选 | 仅当调用工具时发送 |
-| finish (`finish_reason`) | **必须** | 每个响应阶段结束时发送 |
-| tool_result | 可选 | 仅当调用工具时发送（紧跟 tool_calls） |
-| `[DONE]` | **必须** | 整体对话结束标记 |
+- `message` 事件 —— **唯一放入正文区的内容**，逐 chunk 拼接
+- `tool_result` 事件 —— **不应出现在正文区**，放入独立的调用详情面板（含 tool_name、status、content）
+- `thinking` 事件 —— 放入思考过程折叠区，用户可选展开
+- `finish` 事件 —— 只用于判断 `stop` / `tool_calls`，不展示
 
-**不同场景的事件流：**
+---
 
-**场景1：纯 LLM 回答（无 thinking）：**
+### 事件 JSON 结构
 
-```
-data: {"role":"assistant","content":"回答内容..."}
-data: {"role":"assistant","finish_reason":"stop"}
-data: [DONE]
-```
-
-**场景2：LLM 回答带 thinking：**
-
-```
-data: {"role":"assistant","reasoning_content":"思考..."}
-data: {"role":"assistant","content":"回答内容..."}
-data: {"role":"assistant","finish_reason":"stop"}
-data: [DONE]
-```
-
-**场景3：工具调用：**
-
-```
-data: {"role":"assistant","reasoning_content":"我需要调用工具..."}
-data: {"role":"assistant","tool_calls":[...]}
-data: {"role":"assistant","finish_reason":"tool_calls"}
-data: {"role":"tool","tool_call_id":"xxx","tool_name":"file_read","content":"结果"}
-data: {"role":"assistant","content":"最终回答..."}
-data: {"role":"assistant","finish_reason":"stop"}
-data: [DONE]
-```
-
-**数据结构定义：**
-
-**thinking / message：**
+**thinking：**
 
 ```json
 {
   "role": "assistant",
-  "reasoning_content": "思考内容（可选）",
-  "content": "回答内容（可选）"
+  "reasoning_content": "思考内容"
 }
 ```
+
+**message：**
+
+```json
+{
+  "role": "assistant",
+  "content": "回答内容"
+}
+```
+
+注意：thinking 和 message 是独立的两个 chunk，不会在同一条中出现 `reasoning_content` + `content`。
 
 **tool_calls：**
 
@@ -1137,35 +1102,107 @@ data: [DONE]
       "type": "function",
       "function": {
         "name": "工具名称",
-        "arguments": "JSON格式参数字符串"
+        "arguments": "JSON 格式参数字符串"
       }
     }
   ]
 }
 ```
 
+**finish：**
+
+```json
+{
+  "role": "assistant",
+  "finish_reason": "stop"
+}
+```
+
+| finish_reason | 含义 | 后续事件 |
+|--------------|------|---------|
+| `tool_calls` | LLM 决定调用工具 | 下一个事件为 `tool_result` |
+| `stop` | 当前回答完成 | 可能继续下一轮 tool_calls，最终 `[DONE]` |
+
 **tool_result：**
 
 ```json
 {
   "role": "tool",
-  "tool_call_id": "对应 tool_calls 中的 id",
-  "tool_name": "工具名称",
-  "content": "执行结果"
+  "tool_call_id": "call_xxx",
+  "tool_name": "list_directory",
+  "content": "执行结果（可能是纯文本或 JSON 字符串）"
 }
 ```
 
-工具执行失败时：
+工具执行失败：
 
 ```json
 {
   "role": "tool",
   "tool_call_id": "call_xxx",
-  "tool_name": "file_read",
+  "tool_name": "文件读取",
   "content": "",
   "error": "文件不存在"
 }
 ```
+
+---
+
+### 事件流示例
+
+**场景1：纯 LLM 回答（无 thinking）**
+
+```
+data: {"role":"assistant","content":"回答内容..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**场景2：LLM 回答带 thinking**
+
+```
+data: {"role":"assistant","reasoning_content":"思考过程..."}
+data: {"role":"assistant","content":"回答内容..."}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+**场景3：工具调用**
+
+```
+data: {"role":"assistant","reasoning_content":"我需要读取文件"}
+data: {"role":"assistant","tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]}
+data: {"role":"assistant","finish_reason":"tool_calls"}
+data: {"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost"}
+data: {"role":"assistant","content":"文件内容如下：127.0.0.1 localhost"}
+data: {"role":"assistant","finish_reason":"stop"}
+data: [DONE]
+```
+
+### 前端实现伪代码
+
+```javascript
+eventSource.onmessage = (e) => {
+  const data = JSON.parse(e.data);
+  
+  if (data.role === "tool") {
+    // tool_result → 工具调用详情面板，不放入正文
+    showToolResult(data.tool_name, data.content);
+  } else if (data.role === "assistant") {
+    if (data.reasoning_content) {
+      // thinking → 思考区折叠显示
+      appendThinking(data.reasoning_content);
+    } else if (data.tool_calls) {
+      // tool_calls → 工具调用中提示
+      data.tool_calls.forEach(c => showToolCalling(c.function.name));
+    } else if (data.content) {
+      // message → 唯一放入正文区的内容
+      appendMessage(data.content);
+    }
+    // finish → 内部判断，不展示
+    if (data.finish_reason === "stop") { /* 阶段结束 */ }
+  }
+};
 
 **请求示例：**
 

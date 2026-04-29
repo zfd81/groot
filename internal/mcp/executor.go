@@ -582,8 +582,15 @@ func (e *ToolExecutor) ExecuteStdio(ctx context.Context, config *MCPConfig, tool
 						if content, ok := resultMap["content"]; ok {
 							if contentList, ok := content.([]interface{}); ok && len(contentList) > 0 {
 								if firstContent, ok := contentList[0].(map[string]interface{}); ok {
+									// text 类型
 									if text, ok := firstContent["text"].(string); ok {
 										return text, nil
+									}
+									// resource 类型
+									if resource, ok := firstContent["resource"].(map[string]interface{}); ok {
+										if text, ok := resource["text"].(string); ok {
+											return text, nil
+										}
 									}
 								}
 							}
