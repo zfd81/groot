@@ -240,34 +240,6 @@ func TestHandler_Validate_SizeExceeded(t *testing.T) {
 	}
 }
 
-func TestHandler_Validate_URLType(t *testing.T) {
-	tmpDir := t.TempDir()
-	handler := NewHandler(config.AttachmentConfig{MaxCount: 10}, tmpDir)
-
-	attachments := []Attachment{
-		{Name: "link", Type: "url", Content: "https://example.com"},
-	}
-
-	err := handler.Validate(attachments)
-	if err != nil {
-		t.Errorf("Validate() should pass for URL type: %v", err)
-	}
-}
-
-func TestHandler_Validate_TextType(t *testing.T) {
-	tmpDir := t.TempDir()
-	handler := NewHandler(config.AttachmentConfig{MaxCount: 10}, tmpDir)
-
-	attachments := []Attachment{
-		{Name: "text", Type: "text", Content: "hello world"},
-	}
-
-	err := handler.Validate(attachments)
-	if err != nil {
-		t.Errorf("Validate() should pass for text type: %v", err)
-	}
-}
-
 func TestHandler_Process_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := NewHandler(config.AttachmentConfig{}, tmpDir)
@@ -338,50 +310,6 @@ func TestHandler_Process_Image(t *testing.T) {
 
 	if results[0].ContentType != "image/png" {
 		t.Errorf("ContentType = %s, want image/png", results[0].ContentType)
-	}
-}
-
-func TestHandler_Process_URL(t *testing.T) {
-	tmpDir := t.TempDir()
-	handler := NewHandler(config.AttachmentConfig{MaxCount: 10}, tmpDir)
-
-	attachments := []Attachment{
-		{Name: "link", Type: "url", Content: "https://example.com"},
-	}
-
-	results, err := handler.Process("task_003", attachments)
-	if err != nil {
-		t.Fatalf("Process() failed: %v", err)
-	}
-
-	if results[0].Path != "https://example.com" {
-		t.Errorf("Path = %s, want https://example.com", results[0].Path)
-	}
-
-	if results[0].ContentType != "url" {
-		t.Errorf("ContentType = %s, want url", results[0].ContentType)
-	}
-}
-
-func TestHandler_Process_Text(t *testing.T) {
-	tmpDir := t.TempDir()
-	handler := NewHandler(config.AttachmentConfig{MaxCount: 10}, tmpDir)
-
-	attachments := []Attachment{
-		{Name: "text", Type: "text", Content: "hello world"},
-	}
-
-	results, err := handler.Process("task_004", attachments)
-	if err != nil {
-		t.Fatalf("Process() failed: %v", err)
-	}
-
-	if results[0].ContentType != "text/plain" {
-		t.Errorf("ContentType = %s, want text/plain", results[0].ContentType)
-	}
-
-	if results[0].Size != int64(len("hello world")) {
-		t.Errorf("Size = %d, want %d", results[0].Size, len("hello world"))
 	}
 }
 
@@ -549,7 +477,6 @@ func TestHandler_Process_Multiple(t *testing.T) {
 	attachments := []Attachment{
 		{Name: "file1.txt", Type: "file", Content: encoded1},
 		{Name: "file2.txt", Type: "file", Content: encoded2},
-		{Name: "link", Type: "url", Content: "https://example.com"},
 	}
 
 	results, err := handler.Process("task_multi", attachments)
@@ -557,8 +484,8 @@ func TestHandler_Process_Multiple(t *testing.T) {
 		t.Fatalf("Process() failed: %v", err)
 	}
 
-	if len(results) != 3 {
-		t.Errorf("Process() returned %d results, want 3", len(results))
+	if len(results) != 2 {
+		t.Errorf("Process() returned %d results, want 2", len(results))
 	}
 
 	// 验证所有文件已保存

@@ -62,10 +62,9 @@ type ChatRequest struct {
 
 // Attachment 附件
 type Attachment struct {
-	Type    string `json:"type"`    // file/url/image/text
+	Type    string `json:"type"`    // file/image
 	Name    string `json:"name"`
-	Content string `json:"content"` // Base64 content (for file/image/text)
-	URL     string `json:"url"`     // URL (for url type)
+	Content string `json:"content"` // Base64 content (for file/image)
 }
 
 // Handle 处理 POST /chat 请求
@@ -118,7 +117,6 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 				Type:    att.Type,
 				Name:    att.Name,
 				Content: att.Content,
-				URL:     att.URL,
 			}
 		}
 		if err := h.attachmentHandler.Validate(attInput); err != nil {
@@ -146,13 +144,13 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	} else {
 		// 继续会话
 		isNew = false
-		history, err := h.memory.GetHistory(sessionID)
+		round = h.memory.GetRoundCount(sessionID) + 1
+		var err error
+		historyMessages, err = h.memory.GetContextMessages(sessionID, h.config.Memory.HistoryWindow)
 		if err != nil {
-			rc.JSON(500, utils.H{"status": "error", "message": "获取历史失败"})
+			rc.JSON(500, utils.H{"status": "error", "message": "获取上下文失败"})
 			return
 		}
-		historyMessages = history.Messages
-		round = len(historyMessages) + 1
 	}
 
 	// 7. 生成 chat_id
@@ -192,7 +190,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	sseWriter := agent.NewSSEWriter(rc, sessionID, chatID, round)
 
 	// 12. 处理附件
-	var attachmentPaths []memory.AttachmentPath
+	var attachmentNames []string
 	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
 		for _, att := range req.Attachments {
 			switch att.Type {
@@ -209,49 +207,13 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 				}
 
 				// 保存附件
-				path, err := h.memory.SaveAttachment(sessionID, att.Name, content)
+				_, err = h.memory.SaveAttachment(sessionID, att.Name, content)
 				if err != nil {
 					rc.JSON(500, utils.H{"status": "error", "message": "附件保存失败: " + att.Name})
 					return
 				}
 
-				attachmentPaths = append(attachmentPaths, memory.AttachmentPath{
-					OriginalName: att.Name,
-					Type:         att.Type,
-					FullPath:     path,
-					RelativePath: path,
-					Size:         int64(len(content)),
-					ContentType:  "application/octet-stream",
-				})
-
-			case "url":
-				// URL可以是Content字段或URL字段
-				urlValue := att.Content
-				if att.URL != "" {
-					urlValue = att.URL
-				}
-				if urlValue == "" {
-					rc.JSON(400, utils.H{"status": "attachment_missing_url", "message": "URL附件缺少URL地址: " + att.Name})
-					return
-				}
-				attachmentPaths = append(attachmentPaths, memory.AttachmentPath{
-					OriginalName: att.Name,
-					Type:         att.Type,
-					FullPath:     urlValue,
-					RelativePath: urlValue,
-					Size:         0,
-					ContentType:  "url",
-				})
-
-			case "text":
-				attachmentPaths = append(attachmentPaths, memory.AttachmentPath{
-					OriginalName: att.Name,
-					Type:         att.Type,
-					FullPath:     "",
-					RelativePath: "",
-					Size:         int64(len(att.Content)),
-					ContentType:  "text/plain",
-				})
+				attachmentNames = append(attachmentNames, att.Name)
 
 			default:
 				rc.JSON(400, utils.H{"status": "attachment_invalid_type", "message": "无效的附件类型: " + att.Type})
@@ -268,21 +230,11 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		Status:          agent.StatusRunning,
 		StartTime:       time.Now(),
 		Steps:           []agent.StepRecord{},
+		Attachments:     attachmentNames,
 		Progress:        &agent.ProgressInfo{},
 		Round:           round,
 		HistoryMessages: historyMessages,
 		ModelName:       modelName,
-	}
-
-	// 转换附件
-	if len(attachmentPaths) > 0 {
-		for _, ap := range attachmentPaths {
-			task.Attachments = append(task.Attachments, agent.Attachment{
-				Type:    ap.Type,
-				Name:    ap.OriginalName,
-				Content: ap.FullPath,
-			})
-		}
 	}
 
 	// 14. 执行 Agent (同步执行以保持 SSE 连接)

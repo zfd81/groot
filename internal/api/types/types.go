@@ -13,9 +13,9 @@ type ExecuteRequest struct {
 
 // Attachment represents file attachment
 type Attachment struct {
-	Type    string `json:"type"` // file, url
+	Type    string `json:"type"` // file, image
 	Name    string `json:"name"`
-	Content string `json:"content"` // Base64 or URL
+	Content string `json:"content"` // Base64
 }
 
 // ExecuteResponse represents SSE event response

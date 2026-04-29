@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/zfd81/groot/internal/config"
@@ -35,7 +34,7 @@ type Task struct {
 	Result          string
 	Error           *TaskError
 	Steps           []StepRecord
-	Attachments     []Attachment
+	Attachments     []string
 	Caller          string
 	Progress        *ProgressInfo
 	Round           int
@@ -47,23 +46,6 @@ type Task struct {
 type TaskError struct {
 	Code    string
 	Message string
-}
-
-// Attachment represents attachment data
-type Attachment struct {
-	Type    string
-	Name    string
-	Content string
-}
-
-// AttachmentPath represents attachment path info
-type AttachmentPath struct {
-	OriginalName string
-	Type         string
-	FullPath     string
-	RelativePath string
-	Size         int64
-	ContentType  string
 }
 
 // StepRecord represents execution step
@@ -92,7 +74,6 @@ type Executor struct {
 	mcpManager    *mcp.Manager
 	config        config.Config
 	logger        *logger.Logger
-	runningTasks  sync.Map
 }
 
 // NewExecutor creates a new task executor
@@ -114,20 +95,13 @@ func NewExecutor(
 
 // Execute starts task execution
 func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelCh chan struct{}) {
-	e.runningTasks.Store(task.ID, true)
-	defer e.runningTasks.Delete(task.ID)
-
-	// Build attachment paths from already-processed attachments
-	var attachmentPaths []AttachmentPath
-	for _, att := range task.Attachments {
-		attachmentPaths = append(attachmentPaths, AttachmentPath{
-			OriginalName: att.Name,
-			Type:         att.Type,
-			FullPath:     att.Content,
-			RelativePath: att.Content,
-			Size:         0,
-			ContentType:  getContentTypeFromType(att.Type),
-		})
+	// Read SESSION.md content
+	sessionMdContent := ""
+	if e.memoryManager != nil {
+		content, err := e.memoryManager.GetSessionMdContent(sessionID)
+		if err == nil {
+			sessionMdContent = content
+		}
 	}
 
 	// Create engine using eino
@@ -158,7 +132,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		ctx,
 		task.Instruction,
 		task.Prompt,
-		attachmentPaths,
+		sessionMdContent,
 		task.HistoryMessages,
 		task.ModelName,
 		&ProgressCallback{
@@ -230,11 +204,31 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 
 	// Save chat record to memory
 	if e.memoryManager != nil {
-		attachments := []string{}
-		for _, att := range task.Attachments {
-			attachments = append(attachments, att.Name)
+		attachments := task.Attachments
+
+		// 统一的状态判断（只判断一次）
+		var chatStatus string
+		var chatResult string
+		var chatSteps []memory.Step
+		var chatError *memory.Error
+
+		if ctxCancelled {
+			chatStatus = "cancelled"
+		} else if err != nil {
+			chatStatus = "failed"
+			chatError = &memory.Error{Code: "execution_error", Message: err.Error()}
+		} else if result != nil && result.Cancelled {
+			chatStatus = "cancelled"
+		} else if result != nil {
+			chatStatus = "completed"
+			chatResult = result.Content
+			chatSteps = convertSteps(result.Steps)
+		} else {
+			chatStatus = "failed"
+			chatError = &memory.Error{Code: "unknown_error", Message: "执行完成但无结果"}
 		}
 
+		// 构建 ChatRecord
 		record := &memory.ChatRecord{
 			ChatID:      task.ID,
 			SessionID:   sessionID,
@@ -245,35 +239,17 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 			Instruction: task.Instruction,
 			Duration:    int(duration.Seconds()),
 			Attachments: attachments,
-		}
-
-		if ctxCancelled {
-			record.Status = "cancelled"
-		} else if err != nil {
-			record.Status = "failed"
-			record.Error = &memory.Error{
-				Code:    "execution_error",
-				Message: err.Error(),
-			}
-		} else if result != nil && result.Cancelled {
-			record.Status = "cancelled"
-		} else if result != nil {
-			record.Status = "completed"
-			record.Result = result.Content
-			record.Steps = convertSteps(result.Steps)
-		} else {
-			record.Status = "failed"
-			record.Error = &memory.Error{
-				Code:    "unknown_error",
-				Message: "执行完成但无结果",
-			}
+			Status:      chatStatus,
+			Result:      chatResult,
+			Steps:       chatSteps,
+			Error:       chatError,
 		}
 
 		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
 			e.logger.Error("保存对话记录失败: " + saveErr.Error())
 		}
 
-		// Append message to history
+		// 构建 Message（status 等字段直接从 record 拷贝）
 		var stepsCount int
 		if result != nil {
 			stepsCount = len(result.Steps)
@@ -287,27 +263,9 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 			Attachments: attachments,
 			Duration:    int(duration.Seconds()),
 			StepsCount:  stepsCount,
-		}
-
-		if ctxCancelled {
-			msg.Status = "cancelled"
-		} else if err != nil {
-			msg.Status = "failed"
-			msg.Error = &memory.Error{
-				Code:    "execution_error",
-				Message: err.Error(),
-			}
-		} else if result != nil && result.Cancelled {
-			msg.Status = "cancelled"
-		} else if result != nil {
-			msg.Status = "completed"
-			msg.Result = result.Content
-		} else {
-			msg.Status = "failed"
-			msg.Error = &memory.Error{
-				Code:    "unknown_error",
-				Message: "执行完成但无结果",
-			}
+			Status:      chatStatus,
+			Result:      chatResult,
+			Error:       chatError,
 		}
 
 		if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
@@ -343,37 +301,6 @@ func convertSteps(steps []StepRecord) []memory.Step {
 	return result
 }
 
-// IsRunning checks if task is currently running
-func (e *Executor) IsRunning(taskID string) bool {
-	_, ok := e.runningTasks.Load(taskID)
-	return ok
-}
-
-// RunningCount returns count of running tasks
-func (e *Executor) RunningCount() int {
-	count := 0
-	e.runningTasks.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	return count
-}
-
-// getContentTypeFromType returns content type based on attachment type
-func getContentTypeFromType(attType string) string {
-	switch attType {
-	case "file":
-		return "application/octet-stream"
-	case "image":
-		return "image/png"
-	case "url":
-		return "url"
-	case "text":
-		return "text/plain"
-	default:
-		return "application/octet-stream"
-	}
-}
 
 // formatDuration formats duration for display
 func formatDuration(d time.Duration) string {

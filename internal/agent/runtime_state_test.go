@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -175,51 +173,6 @@ func TestRuntimeState_Cancel_Nonexistent(t *testing.T) {
 	}
 }
 
-func TestRuntimeState_Complete(t *testing.T) {
-	state := NewRuntimeState()
-
-	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
-
-	result := &ChatResult{
-		Status:            "completed",
-		Result:            "test result",
-		ResultAttachments: []string{"file1.txt"},
-		Duration:          1000,
-		Steps:             []memory.Step{},
-	}
-
-	record, err := state.Complete(sessionID, result)
-	if err != nil {
-		t.Fatalf("Complete() failed: %v", err)
-	}
-
-	if record.ChatID != "chat_001" {
-		t.Errorf("Complete().ChatID = %s, want chat_001", record.ChatID)
-	}
-
-	if record.Result != "test result" {
-		t.Errorf("Complete().Result = %s, want test result", record.Result)
-	}
-
-	// 验证会话已从活跃列表删除
-	_, ok := state.Get(sessionID)
-	if ok {
-		t.Error("Complete() should remove session from activeChats")
-	}
-}
-
-func TestRuntimeState_Complete_Nonexistent(t *testing.T) {
-	state := NewRuntimeState()
-
-	result := &ChatResult{Status: "completed"}
-
-	_, err := state.Complete("nonexistent", result)
-	if err == nil {
-		t.Error("Complete() should fail for nonexistent session")
-	}
-}
-
 func TestRuntimeState_Delete(t *testing.T) {
 	state := NewRuntimeState()
 
@@ -257,11 +210,11 @@ func TestRuntimeState_IsRunning(t *testing.T) {
 		t.Error("IsRunning() should return true for registered session")
 	}
 
-	// Complete 后不应 running
-	state.Complete(sessionID, &ChatResult{Status: "completed"})
+	// Delete 后不应 running
+	state.Delete(sessionID)
 
 	if state.IsRunning(sessionID) {
-		t.Error("IsRunning() should return false after Complete()")
+		t.Error("IsRunning() should return false after Delete()")
 	}
 }
 
@@ -283,250 +236,11 @@ func TestRuntimeState_RunningCount(t *testing.T) {
 		t.Errorf("RunningCount() after 5 registers = %d, want 5", state.RunningCount())
 	}
 
-	// Complete 一个
-	state.Complete("session_1", &ChatResult{Status: "completed"})
+	// Delete 一个
+	state.Delete("session_1")
 
 	if state.RunningCount() != 4 {
-		t.Errorf("RunningCount() after 1 complete = %d, want 4", state.RunningCount())
-	}
-}
-
-func TestGenerateTaskID(t *testing.T) {
-	id := GenerateTaskID()
-
-	// 验证格式: task-{YYYYMMDD}-{HHMMSSmmm}-{random4}
-	if !strings.HasPrefix(id, "task-") {
-		t.Errorf("GenerateTaskID() = %s, should start with 'task-'", id)
-	}
-
-	parts := strings.Split(id, "-")
-	if len(parts) != 4 {
-		t.Errorf("GenerateTaskID() format error: should have 4 parts, got %d", len(parts))
-	}
-
-	// 日期部分 8 位
-	if len(parts[1]) != 8 {
-		t.Errorf("GenerateTaskID() date part length = %d, want 8", len(parts[1]))
-	}
-
-	// 时间部分 9 位 (HHMMSSmmm)
-	if len(parts[2]) != 9 {
-		t.Errorf("GenerateTaskID() time part length = %d, want 9", len(parts[2]))
-	}
-
-	// 随机部分 4 位
-	if len(parts[3]) != 4 {
-		t.Errorf("GenerateTaskID() random part length = %d, want 4", len(parts[3]))
-	}
-}
-
-func TestGenerateTaskID_Uniqueness(t *testing.T) {
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		id := GenerateTaskID()
-		if ids[id] {
-			t.Errorf("GenerateTaskID() generated duplicate ID: %s", id)
-		}
-		ids[id] = true
-		time.Sleep(1 * time.Millisecond) // 确保时间戳不同
-	}
-}
-
-func TestGenerateStepID(t *testing.T) {
-	id := GenerateStepID()
-
-	// 验证格式: {YYYYMMDD}-{HHMMSSmmm}-{random6}
-	parts := strings.Split(id, "-")
-	if len(parts) != 3 {
-		t.Errorf("GenerateStepID() format error: should have 3 parts, got %d", len(parts))
-	}
-
-	// 日期部分 8 位
-	if len(parts[0]) != 8 {
-		t.Errorf("GenerateStepID() date part length = %d, want 8", len(parts[0]))
-	}
-
-	// 时间部分 9 位
-	if len(parts[1]) != 9 {
-		t.Errorf("GenerateStepID() time part length = %d, want 9", len(parts[1]))
-	}
-
-	// 随机部分 6 位
-	if len(parts[2]) != 6 {
-		t.Errorf("GenerateStepID() random part length = %d, want 6", len(parts[2]))
-	}
-}
-
-func TestGenerateStepID_Uniqueness(t *testing.T) {
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		id := GenerateStepID()
-		if ids[id] {
-			t.Errorf("GenerateStepID() generated duplicate ID: %s", id)
-		}
-		ids[id] = true
-		time.Sleep(1 * time.Millisecond) // 确保时间戳不同
-	}
-}
-
-func TestCancelManager_Register(t *testing.T) {
-	mgr := NewCancelManager()
-
-	taskID := "task_001"
-	ch := mgr.Register(taskID)
-
-	if ch == nil {
-		t.Error("Register() returned nil channel")
-	}
-
-	if mgr.Count() != 1 {
-		t.Errorf("Count() after register = %d, want 1", mgr.Count())
-	}
-}
-
-func TestCancelManager_Cancel(t *testing.T) {
-	mgr := NewCancelManager()
-
-	taskID := "task_001"
-	ch := mgr.Register(taskID)
-
-	// 取消任务
-	result := mgr.Cancel(taskID)
-	if !result {
-		t.Error("Cancel() should return true for registered task")
-	}
-
-	// 验证 channel 已关闭
-	select {
-	case <-ch:
-		// 正常
-	default:
-		t.Error("Channel should be closed after Cancel()")
-	}
-
-	// 任务应从 map 中删除
-	if mgr.Count() != 0 {
-		t.Errorf("Count() after cancel = %d, want 0", mgr.Count())
-	}
-}
-
-func TestCancelManager_Cancel_Nonexistent(t *testing.T) {
-	mgr := NewCancelManager()
-
-	result := mgr.Cancel("nonexistent")
-	if result {
-		t.Error("Cancel() should return false for nonexistent task")
-	}
-}
-
-func TestCancelManager_Unregister(t *testing.T) {
-	mgr := NewCancelManager()
-
-	taskID := "task_001"
-	ch := mgr.Register(taskID)
-
-	// Unregister 不关闭 channel
-	mgr.Unregister(taskID)
-
-	// Channel 仍开放
-	select {
-	case <-ch:
-		t.Error("Channel should still be open after Unregister()")
-	default:
-		// 正常
-	}
-
-	// 任务已删除
-	if mgr.Count() != 0 {
-		t.Errorf("Count() after unregister = %d, want 0", mgr.Count())
-	}
-}
-
-func TestCancelManager_IsCancelled(t *testing.T) {
-	mgr := NewCancelManager()
-
-	taskID := "task_001"
-	mgr.Register(taskID)
-
-	// 注册后，任务在 map 中，IsCancelled 返回 false
-	if mgr.IsCancelled(taskID) {
-		t.Error("IsCancelled() should return false for registered task")
-	}
-
-	// 取消后，任务不在 map 中，IsCancelled 返回 true
-	mgr.Cancel(taskID)
-	if !mgr.IsCancelled(taskID) {
-		t.Error("IsCancelled() should return true after Cancel()")
-	}
-}
-
-func TestCancelManager_Count(t *testing.T) {
-	mgr := NewCancelManager()
-
-	// 初始为 0
-	if mgr.Count() != 0 {
-		t.Errorf("Count() initial = %d, want 0", mgr.Count())
-	}
-
-	// 注册多个
-	for i := 1; i <= 5; i++ {
-		mgr.Register("task_" + string(rune('0'+i)))
-	}
-
-	if mgr.Count() != 5 {
-		t.Errorf("Count() after 5 registers = %d, want 5", mgr.Count())
-	}
-
-	// 取消一个
-	mgr.Cancel("task_1")
-
-	if mgr.Count() != 4 {
-		t.Errorf("Count() after 1 cancel = %d, want 4", mgr.Count())
-	}
-
-	// Unregister 一个
-	mgr.Unregister("task_2")
-
-	if mgr.Count() != 3 {
-		t.Errorf("Count() after 1 unregister = %d, want 3", mgr.Count())
-	}
-}
-
-func TestCancelManager_Concurrent(t *testing.T) {
-	mgr := NewCancelManager()
-
-	var wg sync.WaitGroup
-
-	// 并发注册 10 个任务
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			taskID := "task_" + string(rune('0'+idx))
-			mgr.Register(taskID)
-		}(i)
-	}
-
-	wg.Wait()
-
-	if mgr.Count() != 10 {
-		t.Errorf("Count() after concurrent registers = %d, want 10", mgr.Count())
-	}
-
-	// 并发取消 5 个
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			taskID := "task_" + string(rune('0'+idx))
-			mgr.Cancel(taskID)
-		}(i)
-	}
-
-	wg.Wait()
-
-	if mgr.Count() != 5 {
-		t.Errorf("Count() after concurrent cancels = %d, want 5", mgr.Count())
+		t.Errorf("RunningCount() after 1 delete = %d, want 4", state.RunningCount())
 	}
 }
 

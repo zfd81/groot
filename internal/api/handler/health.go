@@ -24,7 +24,7 @@ type HealthHandler struct {
 	skillRegistry *skill.Registry
 	mcpManager    *mcp.Manager
 	memoryManager *memory.Manager
-	executor      *agent.Executor
+	runtimeState  *agent.RuntimeState
 	startTime     time.Time
 	logger        *logger.Logger
 }
@@ -35,7 +35,7 @@ func NewHealthHandler(
 	skills *skill.Registry,
 	mcpMgr *mcp.Manager,
 	memMgr *memory.Manager,
-	exec *agent.Executor,
+	runtime *agent.RuntimeState,
 	log *logger.Logger,
 ) *HealthHandler {
 	return &HealthHandler{
@@ -43,7 +43,7 @@ func NewHealthHandler(
 		skillRegistry: skills,
 		mcpManager:    mcpMgr,
 		memoryManager: memMgr,
-		executor:      exec,
+		runtimeState:  runtime,
 		startTime:     time.Now(),
 		logger:        log,
 	}
@@ -113,7 +113,7 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			},
 		},
 		Metrics: map[string]interface{}{
-			"chats_running": h.executor.RunningCount(),
+			"chats_running": h.runtimeState.RunningCount(),
 		},
 	}
 

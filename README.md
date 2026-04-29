@@ -1001,11 +1001,6 @@ Header 名称可在配置文件中自定义。
       "type": "file",
       "name": "filename.ext",
       "content": "base64编码内容"
-    },
-    {
-      "type": "url",
-      "name": "filename.ext",
-      "url": "https://example.com/file"
     }
   ]
 }
@@ -1017,7 +1012,7 @@ Header 名称可在配置文件中自定义。
 |------|------|------|
 | `instruction` | 是 | 用户任务指令 |
 | `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
-| `attachments` | 否 | 附件列表（Base64编码或URL）|
+| `attachments` | 否 | 附件列表（Base64编码）|
 
 **响应 Header：**
 
@@ -1533,8 +1528,6 @@ class GrootClient:
                     with open(att["path"], "rb") as f:
                         content = base64.b64encode(f.read()).decode()
                     processed.append({"type": "file", "name": att["name"], "content": content})
-                elif att["type"] == "url":
-                    processed.append({"type": "url", "name": att["name"], "url": att["url"]})
             body["attachments"] = processed
         
         headers = self.headers.copy()

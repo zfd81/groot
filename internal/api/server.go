@@ -73,7 +73,7 @@ func NewServer(
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
-	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, mem, exec, log)
+	healthH := handler.NewHealthHandler(cfg, skills, mcpMgr, mem, runtime, log)
 	skillsH := handler.NewSkillsHandler(skills)
 	toolsH := handler.NewToolsHandler(mcpMgr, log)
 

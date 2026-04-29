@@ -77,6 +77,13 @@ func (m *Manager) CreateSession(sessionID string) error {
 		return fmt.Errorf("创建 attachments 目录失败: %w", err)
 	}
 
+	// 写入 SESSION.md（告知 LLM 附件目录位置）
+	sessionMdPath := filepath.Join(sessionDir, "SESSION.md")
+	sessionMdContent := fmt.Sprintf("本会话涉及的文件均存放在以下目录：%s\n如需读取文件内容，请从该目录中查找对应的文件名。\n", m.attachmentsDir(sessionID))
+	if err := os.WriteFile(sessionMdPath, []byte(sessionMdContent), 0644); err != nil {
+		return fmt.Errorf("创建 SESSION.md 失败: %w", err)
+	}
+
 	// 创建初始 history.json
 	history := &History{
 		SessionID: sessionID,
@@ -129,6 +136,9 @@ func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
 			continue
 		}
 		sessionID := entry.Name()
+		if !m.ExistsSession(sessionID) {
+			continue
+		}
 		info, err := m.GetSessionInfo(sessionID)
 		if err != nil {
 			m.log.Info("获取会话信息失败: " + sessionID + ", error: " + err.Error())
@@ -156,14 +166,19 @@ func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
 	return sessions[offset:end], total, nil
 }
 
-// saveHistory 保存 history.json
+// saveHistory 保存 history.json（原子写入：tmp + rename）
 func (m *Manager) saveHistory(sessionID string, history *History) error {
 	data, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化 history 失败: %w", err)
 	}
 
-	return os.WriteFile(m.historyPath(sessionID), data, 0644)
+	tmpPath := m.historyPath(sessionID) + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("写入临时文件失败: %w", err)
+	}
+
+	return os.Rename(tmpPath, m.historyPath(sessionID))
 }
 
 // GetHistory 获取会话历史
@@ -205,7 +220,22 @@ func (m *Manager) GetRoundCount(sessionID string) int {
 	return len(history.Messages)
 }
 
-// SaveChatRecord 保存详细对话记录
+// GetContextMessages 返回用于 LLM 上下文构建的历史消息（截断后）
+// windowSize: 保留最近 N 轮，<= 0 表示不限制
+func (m *Manager) GetContextMessages(sessionID string, windowSize int) ([]Message, error) {
+	history, err := m.GetHistory(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if windowSize <= 0 || len(history.Messages) <= windowSize {
+		return history.Messages, nil
+	}
+
+	return history.Messages[len(history.Messages)-windowSize:], nil
+}
+
+// SaveChatRecord 保存详细对话记录（原子写入：tmp + rename）
 func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
 	// 确保 chats 目录存在
 	os.MkdirAll(m.chatsDir(sessionID), 0755)
@@ -215,7 +245,12 @@ func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
 		return fmt.Errorf("序列化 chat record 失败: %w", err)
 	}
 
-	return os.WriteFile(m.chatPath(sessionID, record.ChatID), data, 0644)
+	tmpPath := m.chatPath(sessionID, record.ChatID) + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("写入临时文件失败: %w", err)
+	}
+
+	return os.Rename(tmpPath, m.chatPath(sessionID, record.ChatID))
 }
 
 // GetChatRecord 获取单次对话详情
@@ -273,6 +308,16 @@ func (m *Manager) GetAttachmentPath(sessionID string, filename string) string {
 	return filepath.Join(m.attachmentsDir(sessionID), sanitizeFilename(filename))
 }
 
+// GetSessionMdContent 获取 SESSION.md 内容
+func (m *Manager) GetSessionMdContent(sessionID string) (string, error) {
+	path := filepath.Join(m.sessionDir(sessionID), "SESSION.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // sanitizeFilename 文件名安全处理
 func sanitizeFilename(name string) string {
 	name = strings.ReplaceAll(name, "/", "_")
@@ -305,22 +350,26 @@ func (m *Manager) Cleanup(ctx context.Context) (int, error) {
 		}
 
 		sessionID := entry.Name()
-		sessionDir := m.sessionDir(sessionID)
 
-		info, err := entry.Info()
-		if err != nil {
+		if !m.ExistsSession(sessionID) {
 			continue
 		}
 
-		// 检查创建时间
-		if info.ModTime().Before(cutoff) {
-			// 删除整个会话目录
+		// 读取 history.json 获取真实创建时间
+		history, err := m.GetHistory(sessionID)
+		if err != nil {
+			m.log.Info("跳过会话（无法读取 history）: " + sessionID + ", error: " + err.Error())
+			continue
+		}
+
+		if history.CreatedAt.Before(cutoff) {
+			sessionDir := m.sessionDir(sessionID)
 			if err := os.RemoveAll(sessionDir); err != nil {
 				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
 				continue
 			}
 			deleted++
-			m.log.Info("清理会话: " + sessionID + ", 创建时间: " + info.ModTime().Format("2006-01-02"))
+			m.log.Info("清理会话: " + sessionID + ", 创建时间: " + history.CreatedAt.Format("2006-01-02") + ", 轮数: " + fmt.Sprintf("%d", len(history.Messages)))
 		}
 	}
 

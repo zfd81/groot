@@ -1,8 +1,8 @@
 package memory
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"time"
 )
 
@@ -37,8 +37,10 @@ func GenerateStepID() string {
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
+	randBytes := make([]byte, n)
+	_, _ = rand.Read(randBytes)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = letters[int(randBytes[i])%len(letters)]
 	}
 	return string(b)
 }

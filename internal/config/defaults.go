@@ -33,6 +33,7 @@ func DefaultConfig() *Config {
 			Directory:       "memory",
 			RetentionDays:   7,
 			CleanupSchedule: "02:00",
+			HistoryWindow:   20,
 		},
 		React: ReactConfig{
 			MaxIterations:   20,

@@ -67,7 +67,7 @@ func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
 // ProcessedAttachment represents a processed attachment
 type ProcessedAttachment struct {
 	OriginalName string    // Original file name
-	Type         string    // Attachment type (file, url)
+	Type         string    // Attachment type (file, image)
 	Path         string    // Saved file path (relative to taskDir)
 	FullPath     string    // Absolute path
 	Size         int64     // File size in bytes
@@ -96,7 +96,7 @@ func (h *Handler) Validate(attachments []Attachment) error {
 		}
 
 		// Check type is valid
-		if att.Type != "file" && att.Type != "image" && att.Type != "url" && att.Type != "text" {
+		if att.Type != "file" && att.Type != "image" {
 			return &AttachmentError{
 				Code:    ErrCodeInvalidType,
 				Message: fmt.Sprintf("无效的附件类型：%s", att.Type),
@@ -108,14 +108,6 @@ func (h *Handler) Validate(attachments []Attachment) error {
 			return &AttachmentError{
 				Code:    ErrCodeMissingContent,
 				Message: fmt.Sprintf("附件 %s 缺少内容", att.Name),
-			}
-		}
-
-		// Check URL is present for url type
-		if att.Type == "url" && att.Content == "" && att.URL == "" {
-			return &AttachmentError{
-				Code:    ErrCodeMissingContent,
-				Message: fmt.Sprintf("URL附件 %s 缺少URL地址", att.Name),
 			}
 		}
 
@@ -221,13 +213,6 @@ func (h *Handler) processSingle(taskDir string, att Attachment) (*ProcessedAttac
 		result.Size = int64(len(content))
 		result.ContentType = getContentType(att.Name)
 
-	case "url":
-		// URL type - just record the URL, no file saving
-		result.Path = att.Content // URL is stored in Content field
-		result.FullPath = att.Content
-		result.Size = 0
-		result.ContentType = "url"
-
 	case "text":
 		// Text type - store content directly, no file saving
 		result.Path = ""
@@ -329,8 +314,7 @@ func getContentType(filename string) string {
 
 // Attachment represents an incoming attachment
 type Attachment struct {
-	Type    string `json:"type"`    // file, image, url, text
+	Type    string `json:"type"`    // file, image
 	Name    string `json:"name"`    // filename
-	Content string `json:"content"` // Base64 content (for file/image/text)
-	URL     string `json:"url"`     // URL (for url type)
+	Content string `json:"content"` // Base64 content (for file/image)
 }

@@ -61,7 +61,7 @@ func (e *Engine) Run(
 	ctx context.Context,
 	instruction string,
 	prompt string,
-	attachmentPaths []AttachmentPath,
+	sessionMdContent string,
 	historyMessages []memory.Message,
 	modelName string,
 	cb *ProgressCallback,
@@ -77,7 +77,7 @@ func (e *Engine) Run(
 	tools := e.buildTools()
 
 	// 3. Build system instruction with Skills
-	systemInstruction := e.buildSystemInstruction(prompt)
+	systemInstruction := e.buildSystemInstruction(prompt, sessionMdContent)
 
 	// 4. Create ChatModelAgent config
 	maxIter := e.reactConfig.MaxIterations
@@ -118,7 +118,7 @@ func (e *Engine) Run(
 	})
 
 	// 7. Build message list with history context
-	msgs := e.buildMessageList(instruction, attachmentPaths, historyMessages)
+	msgs := e.buildMessageList(instruction, historyMessages)
 
 	// 8. Run agent and collect events
 	iter := runner.Run(ctx, msgs)
@@ -370,7 +370,7 @@ func (e *Engine) buildTools() []tool.BaseTool {
 }
 
 // buildSystemInstruction builds the system prompt with Skills
-func (e *Engine) buildSystemInstruction(prompt string) string {
+func (e *Engine) buildSystemInstruction(prompt string, sessionMdContent string) string {
 	sb := &strings.Builder{}
 
 	// 1. GROOT.md（从全局缓存读取，放在最前面）
@@ -380,13 +380,19 @@ func (e *Engine) buildSystemInstruction(prompt string) string {
 		sb.WriteString("\n\n")
 	}
 
-	// 2. prompt（用户传入）
+	// 2. SESSION.md（会话文件目录提示）
+	if sessionMdContent != "" {
+		sb.WriteString(sessionMdContent)
+		sb.WriteString("\n\n")
+	}
+
+	// 3. prompt（用户传入）
 	if prompt != "" {
 		sb.WriteString(prompt)
 		sb.WriteString("\n\n")
 	}
 
-	// 3. Skills 指令
+	// 4. Skills 指令
 	if e.skillsRegistry.Count() > 0 {
 		sb.WriteString("可用技能 (专用任务模板):\n")
 		for _, skill := range e.skillsRegistry.List() {
@@ -397,7 +403,7 @@ func (e *Engine) buildSystemInstruction(prompt string) string {
 		sb.WriteString("\n")
 	}
 
-	// 4. 执行规则
+	// 5. 执行规则
 	sb.WriteString("执行规则:\n")
 	sb.WriteString("1. 分析用户请求，判断需要使用哪个技能或工具\n")
 	sb.WriteString("2. 如果有匹配的技能，按照技能指令执行\n")
@@ -408,27 +414,8 @@ func (e *Engine) buildSystemInstruction(prompt string) string {
 	return sb.String()
 }
 
-// buildUserMessage builds user message with attachment paths
-func (e *Engine) buildUserMessage(instruction string, attachmentPaths []AttachmentPath) string {
-	msg := instruction
-	if len(attachmentPaths) > 0 {
-		msg += "\n\n附件:\n"
-		for _, att := range attachmentPaths {
-			if att.FullPath != "" {
-				msg += fmt.Sprintf("- %s (%s)\n  路径: %s\n  类型: %s\n  大小: %d bytes\n",
-					att.OriginalName, att.Type, att.FullPath, att.ContentType, att.Size)
-			} else if att.Type == "url" {
-				msg += fmt.Sprintf("- %s (url)\n  URL: %s\n", att.OriginalName, att.RelativePath)
-			} else {
-				msg += fmt.Sprintf("- %s (%s)\n", att.OriginalName, att.Type)
-			}
-		}
-	}
-	return msg
-}
-
 // buildMessageList builds message list with history context
-func (e *Engine) buildMessageList(instruction string, attachmentPaths []AttachmentPath, historyMessages []memory.Message) []adk.Message {
+func (e *Engine) buildMessageList(instruction string, historyMessages []memory.Message) []adk.Message {
 	msgs := []adk.Message{}
 
 	for _, hMsg := range historyMessages {
@@ -440,8 +427,7 @@ func (e *Engine) buildMessageList(instruction string, attachmentPaths []Attachme
 		}
 	}
 
-	userMessage := e.buildUserMessage(instruction, attachmentPaths)
-	msgs = append(msgs, schema.UserMessage(userMessage))
+	msgs = append(msgs, schema.UserMessage(instruction))
 
 	return msgs
 }

@@ -69,13 +69,3 @@ type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
-
-// AttachmentPath 附件路径信息（传递给 Agent）
-type AttachmentPath struct {
-	OriginalName string
-	Type         string // file/url
-	FullPath     string
-	RelativePath string
-	Size         int64
-	ContentType  string
-}

@@ -57,6 +57,7 @@ llm:
 #  directory: memory                # 记忆目录
 #  retention_days: 7                # 会话保留天数
 #  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
+#  history_window: 20               # LLM 上下文窗口（轮次），-1 不限制
 
 # 安全配置
 #security:

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,6 +198,44 @@ func TestManager_CreateSession(t *testing.T) {
 	historyPath := filepath.Join(sessionDir, "history.json")
 	if _, err := os.Stat(historyPath); os.IsNotExist(err) {
 		t.Error("CreateSession() 未创建 history.json")
+	}
+}
+
+func TestManager_CreateSession_WritesSessionMd(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log)
+
+	sessionID := "test_session_md"
+	err := mgr.CreateSession(sessionID)
+	if err != nil {
+		t.Fatalf("CreateSession() 失败: %v", err)
+	}
+
+	// 验证 SESSION.md 已创建在会话根目录
+	sessionMdPath := filepath.Join(tmpDir, sessionID, "SESSION.md")
+	data, err := os.ReadFile(sessionMdPath)
+	if err != nil {
+		t.Fatalf("SESSION.md 未创建: %v", err)
+	}
+
+	content := string(data)
+	attachmentsDir := filepath.Join(tmpDir, sessionID, "attachments")
+
+	if !strings.Contains(content, "本会话涉及的文件均存放在以下目录") {
+		t.Error("SESSION.md 应包含引导文本")
+	}
+	if !strings.Contains(content, attachmentsDir) {
+		t.Errorf("SESSION.md 应包含 attachments 目录路径: %s, 内容: %s", attachmentsDir, content)
+	}
+
+	// 验证 GetSessionMdContent 可读取
+	mdContent, err := mgr.GetSessionMdContent(sessionID)
+	if err != nil {
+		t.Fatalf("GetSessionMdContent() 失败: %v", err)
+	}
+	if mdContent != content {
+		t.Error("GetSessionMdContent() 返回内容与文件内容不一致")
 	}
 }
 
@@ -468,14 +507,14 @@ func TestManager_Cleanup(t *testing.T) {
 	log := initTestLogger()
 	mgr := NewManager(tmpDir, 1, log) // 保留 1 天
 
-	// 创建会话
+	// 创建旧会话，然后修改 history.json 中的 created_at 为 2 天前
 	sessionID := "test_session_old"
 	mgr.CreateSession(sessionID)
-
-	// 修改目录修改时间为 2 天前
-	sessionDir := filepath.Join(tmpDir, sessionID)
 	oldTime := time.Now().AddDate(0, 0, -2)
-	os.Chtimes(sessionDir, oldTime, oldTime)
+	history, _ := mgr.GetHistory(sessionID)
+	history.CreatedAt = oldTime
+	// 直接写入文件（绕过 saveHistory 的 AppendMessage 流程）
+	mgr.saveHistory(sessionID, history)
 
 	// 创建一个新会话（不会被清理）
 	newSessionID := "test_session_new"
@@ -499,5 +538,131 @@ func TestManager_Cleanup(t *testing.T) {
 	// 验证新会话保留
 	if !mgr.ExistsSession(newSessionID) {
 		t.Error("Cleanup() 不应删除未过期会话")
+	}
+}
+
+func TestManager_GetContextMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log)
+
+	sessionID := "test_session_context"
+	mgr.CreateSession(sessionID)
+
+	// 追加 5 条消息
+	for i := 1; i <= 5; i++ {
+		mgr.AppendMessage(sessionID, &Message{
+			Round:       i,
+			ChatID:      fmt.Sprintf("chat_%03d", i),
+			Instruction: fmt.Sprintf("指令 %d", i),
+			Result:      fmt.Sprintf("结果 %d", i),
+			Status:      "completed",
+		})
+	}
+
+	t.Run("窗口内全部返回", func(t *testing.T) {
+		msgs, err := mgr.GetContextMessages(sessionID, 10)
+		if err != nil {
+			t.Fatalf("GetContextMessages() 失败: %v", err)
+		}
+		if len(msgs) != 5 {
+			t.Errorf("windowSize=10 时应返回全部 5 条, got %d", len(msgs))
+		}
+	})
+
+	t.Run("窗口截断", func(t *testing.T) {
+		msgs, err := mgr.GetContextMessages(sessionID, 3)
+		if err != nil {
+			t.Fatalf("GetContextMessages() 失败: %v", err)
+		}
+		if len(msgs) != 3 {
+			t.Errorf("windowSize=3 时应返回 3 条, got %d", len(msgs))
+		}
+		if msgs[0].Round != 3 {
+			t.Errorf("截断后第一条应为 round=3, got %d", msgs[0].Round)
+		}
+		if msgs[2].Round != 5 {
+			t.Errorf("截断后最后一条应为 round=5, got %d", msgs[2].Round)
+		}
+	})
+
+	t.Run("windowSize=0 不限制", func(t *testing.T) {
+		msgs, err := mgr.GetContextMessages(sessionID, 0)
+		if err != nil {
+			t.Fatalf("GetContextMessages() 失败: %v", err)
+		}
+		if len(msgs) != 5 {
+			t.Errorf("windowSize=0 时应返回全部, got %d", len(msgs))
+		}
+	})
+
+	t.Run("windowSize=-1 不限制", func(t *testing.T) {
+		msgs, err := mgr.GetContextMessages(sessionID, -1)
+		if err != nil {
+			t.Fatalf("GetContextMessages() 失败: %v", err)
+		}
+		if len(msgs) != 5 {
+			t.Errorf("windowSize=-1 时应返回全部, got %d", len(msgs))
+		}
+	})
+
+	t.Run("会话不存在", func(t *testing.T) {
+		_, err := mgr.GetContextMessages("nonexistent", 10)
+		if err == nil {
+			t.Error("GetContextMessages() 应对不存在的会话返回错误")
+		}
+	})
+}
+
+func TestManager_SaveHistory_AtomicWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log)
+
+	sessionID := "test_session_atomic"
+	mgr.CreateSession(sessionID)
+
+	// 追加消息（触发 saveHistory）
+	msg := &Message{Round: 1, Status: "completed"}
+	mgr.AppendMessage(sessionID, msg)
+
+	// 验证 .tmp 文件不存在（rename 后应清理）
+	tmpPath := filepath.Join(tmpDir, sessionID, "history.json.tmp")
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Error("原子写入后 .tmp 文件应不存在")
+	}
+
+	// 验证正式文件存在且内容正确
+	history, _ := mgr.GetHistory(sessionID)
+	if len(history.Messages) != 1 {
+		t.Errorf("原子写入后消息数应为 1, got %d", len(history.Messages))
+	}
+}
+
+func TestManager_SaveChatRecord_AtomicWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log)
+
+	sessionID := "test_session_chat_atomic"
+	mgr.CreateSession(sessionID)
+
+	record := &ChatRecord{
+		ChatID:    "chat_atomic_001",
+		SessionID: sessionID,
+		Status:    "completed",
+	}
+	mgr.SaveChatRecord(sessionID, record)
+
+	// 验证 .tmp 文件不存在
+	tmpPath := filepath.Join(tmpDir, sessionID, "chats", "chat_atomic_001.json.tmp")
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Error("原子写入后 .tmp 文件应不存在")
+	}
+
+	// 验证内容正确
+	got, _ := mgr.GetChatRecord(sessionID, "chat_atomic_001")
+	if got.Status != "completed" {
+		t.Errorf("原子写入后 status 应为 completed, got %s", got.Status)
 	}
 }

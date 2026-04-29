@@ -14,6 +14,7 @@ type Memory interface {
 	AppendMessage(sessionID string, message *Message) error
 	GetHistory(sessionID string) (*History, error)
 	GetRoundCount(sessionID string) int
+	GetContextMessages(sessionID string, windowSize int) ([]Message, error)
 
 	// Chat 记录管理
 	SaveChatRecord(sessionID string, record *ChatRecord) error
@@ -23,6 +24,9 @@ type Memory interface {
 	// 附件管理
 	SaveAttachment(sessionID string, filename string, content []byte) (string, error)
 	GetAttachmentPath(sessionID string, filename string) string
+
+	// 会话文件目录提示
+	GetSessionMdContent(sessionID string) (string, error)
 
 	// 清理
 	Cleanup(ctx context.Context) (int, error)

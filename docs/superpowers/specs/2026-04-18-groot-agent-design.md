@@ -167,7 +167,7 @@ llm:
 | ReAct Agent Engine | Reasoning（LLM调用/决策）、Acting（Skill/MCP/直接回答）、Observation（结果处理）、循环终止控制 |
 | Skills | Skills 加载、指令解析、注册给 Agent、热插拔管理、依赖解析 |
 | MCP | 外部 MCP 加载、工具调用执行 |
-| Memory | Session 管理（创建/查询）、History 管理（多轮对话上下文）、Chat Recorder（执行记录持久化）、Runtime State（活跃状态/进度/取消）、Attachment Store、Cleanup Scheduler |
+| Memory | Session 管理（创建/查询）、History 索引（全量保存）、LLM 上下文构建（窗口截断）、Chat 详情持久化、Attachment Store、Cleanup Scheduler（基于 created_at） |
 
 **System Layer（系统层）**
 
@@ -225,6 +225,7 @@ llm:
 ├── {memoryDir}/                   # 记忆模块目录（可配置位置，默认 memory）
 │   ├── temp/                      # 附件处理临时目录（固定在 memory 目录下）
 │   └── {session_id}/              # 会话目录
+│       ├── SESSION.md              # 会话文件目录提示（LLM 上下文注入）
 │       ├── history.json           # 对话历史（含执行元数据摘要）
 │       ├── attachments/           # 附件目录
 │       │   └── {filename}         # 附件文件
@@ -281,11 +282,6 @@ llm:
       "type": "file",
       "name": "filename.ext",
       "content": "base64编码内容"
-    },
-    {
-      "type": "url",
-      "name": "filename.ext",
-      "url": "https://example.com/file"
     }
   ]
 }
@@ -297,7 +293,7 @@ llm:
 |------|------|------|
 | `instruction` | 是 | 用户任务指令 |
 | `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
-| `attachments` | 否 | 附件列表（Base64编码或URL）|
+| `attachments` | 否 | 附件列表（Base64编码）|
 
 **ID 生成规则：**
 
@@ -557,33 +553,29 @@ data: [DONE]
 │   │   ├─ 文件名安全处理（替换 /、\、.. 等危险字符）
 │   │   ├─ memory.SaveAttachment(session_id, filename, content)
 │   │   │   └─ 保存到 memory/{session_id}/attachments/{filename}
-│   │   ├─ 记录文件信息（路径、大小、类型）
+│   │   ├─ 收集文件名列表（用于 history.json 记录）
 │   │   └─ 同名文件会覆盖
-│   ├─ 构建附件信息文本：
-│   │   格式：
-│   │   ```
-│   │   附件:
-│   │   - {原始文件名} (file)
-│   │     路径: {绝对路径}
-│   │     类型: {MIME类型}
-│   │     大小: {文件大小} bytes
-│   │   ```
-│   ├─ 拼接到用户消息中（instruction + 附件信息）
 │   ├─ 处理失败 → SSE 推送错误，终止
 │   └─ 处理成功 → 继续
 │
 ├─ 6. 构建 Agent 上下文
-│   ├─ 系统提示词（prompt + Skills 指令）
+│   ├─ 系统指令（buildSystemInstruction），按序拼接：
+│   │   ├─ 1. GROOT.md（项目规范）
+│   │   ├─ 2. SESSION.md（会话文件目录提示，新会话首轮由 CreateSession 写入）
+│   │   ├─ 3. prompt（用户传入的系统提示词）
+│   │   ├─ 4. Skills 指令
+│   │   └─ 5. 执行规则
 │   ├─ 历史消息（historyMessages，继续会话时）
+│   │   ├─ 通过 GetContextMessages(sid, history_window) 获取最近 N 轮
 │   │   ├─ 每轮对话：instruction + result
-│   │   ├─ 附件信息：attachments 文件名列表
 │   │   └─ 构建为 schema.Message 格式
-│   ├─ 当前用户消息（instruction + 附件路径信息）
+│   ├─ 当前用户消息（instruction 原文，不再拼接附件路径）
 │   ├─ 注册的工具列表（MCP 工具）
 │   ├─ 执行限制配置（max_iterations、max_tokens 等）
 │   └─ 附件路径：
-│       ├─ memory/{session_id}/attachments/{filename}
-│       └─ Agent 通过 MCP file_read 工具读取
+│       ├─ SESSION.md 告知 LLM 附件目录位置
+│       ├─ 文件保存在 memory/{session_id}/attachments/{filename}
+│       └─ LLM 根据对话上下文中的文件名 + SESSION.md 路径自行读取
 │
 ├─ 7. Agent 执行（SSE 流式转发）
 │   │
@@ -661,16 +653,20 @@ data: [DONE]
 ```
 {GROOT_HOME}/memory/
 ├── 20260418103000523_a1b2/     # 会话A
+│   ├── SESSION.md                    # 会话文件目录提示
 │   ├── history.json                 # 对话历史
-│   └── attachments/                 # 附件目录
-│       ├── report.pdf               # 第1轮上传
-│       ├── data.csv                 # 第1轮上传
-│       ├── data.csv                 # 第3轮上传（覆盖第1轮）
-│       └── chart.png                # 第3轮上传
+│   ├── attachments/                 # 附件目录
+│   │   ├── report.pdf               # 第1轮上传
+│   │   ├── data.csv                 # 第1轮上传
+│   │   ├── data.csv                 # 第3轮上传（覆盖第1轮）
+│   │   └── chart.png                # 第3轮上传
+│   └── chats/                       # 详细执行记录
 ├── 20260418103500123_b2c3/     # 会话B
+│   ├── SESSION.md
 │   ├── history.json
-│   └── attachments/
-│       └── config.json
+│   ├── attachments/
+│   │   └── config.json
+│   └── chats/
 └── ...
 ```
 
@@ -679,46 +675,42 @@ data: [DONE]
 - 保留原始文件名，同名文件会覆盖
 - 附件随会话清理而删除（memory 清理任务）
 
-**附件路径传递方式：**
+**会话文件目录提示（SESSION.md）：**
 
-附件信息以结构化文本形式嵌入用户消息，Agent 解析后调用 MCP `file_read` 工具读取：
+新会话创建时，在会话根目录生成 `SESSION.md` 文件，内容：
 
 ```
-用户指令内容
-
-附件:
-- report.pdf (file)
-  路径: /home/groot/memory/20260418103000523_a1b2/attachments/report.pdf
-  类型: application/pdf
-  大小: 1024000 bytes
-- data.csv (file)
-  路径: /home/groot/memory/20260418103000523_a1b2/attachments/data.csv
-  类型: text/csv
-  大小: 512000 bytes
+本会话涉及的文件均存放在以下目录：/home/groot/memory/20260418103000523_a1b2/attachments
+如需读取文件内容，请从该目录中查找对应的文件名。
 ```
+
+引擎启动时，`buildSystemInstruction` 读取 SESSION.md 并注入系统指令（位于 GROOT.md 之后、prompt 之前）。LLM 从系统指令获知附件目录位置，结合对话上下文中的文件名，自行构建路径并通过 MCP `file_read` 工具读取。
+
+不再将附件路径拼接进用户消息中。
 
 **历史消息传递方式：**
 
-继续会话时，历史消息构建为 schema.Message 格式传递给 Agent：
+继续会话时，通过 `GetContextMessages(sid, history_window)` 获取最近 N 轮历史消息，构建为 schema.Message 格式传递给 Agent：
 
 ```
 历史构建逻辑：
-  1. 遍历 historyMessages
-  2. 每轮对话构建两条消息：
-     - UserMessage：instruction + 附件文件名列表
+  1. 调用 GetContextMessages(sid, history_window) 获取最近 N 轮消息
+  2. 遍历截断后的 historyMessages
+  3. 每轮对话构建两条消息：
+     - UserMessage：instruction
      - AssistantMessage：result
-  3. 添加当前用户消息
-  4. 传递给 Agent 的 messages 数组
+  4. 添加当前用户消息
+  5. 传递给 Agent 的 messages 数组
 
-示例消息结构：
+示例（history_window=2，会话共4轮，仅最近2轮进入上下文）：
   [
-    UserMessage("帮我分析数据\n\n附件:\n- data.csv"),
-    AssistantMessage("分析结果如下..."),
-    UserMessage("再画个图表"),
-    AssistantMessage("图表已生成..."),
-    UserMessage("继续分析")  // 当前指令
+    UserMessage("再画个图表"),          ← 第3轮
+    AssistantMessage("图表已生成..."),   ← 第3轮
+    UserMessage("继续分析"),             ← 当前指令（第4轮）
   ]
 ```
+
+> **注意：** `GET /sess/{sid}` API 返回全部历史（不受 history_window 影响），只有传递给 LLM 的上下文才进行窗口截断。
 
 **关键节点说明：**
 
@@ -1290,10 +1282,6 @@ attachment:
 │   ├─ 返回完整路径供 Agent 读取
 │   └─ 同名文件会覆盖
 │
-├─ URL 类型（type=url）
-│   ├─ 记录 URL 地址
-│   └─ Agent 需自行调用 http_get 工具获取内容
-│
 └─ 处理完成 → 构建附件信息文本 → 添加到用户消息
 ```
 
@@ -1755,9 +1743,47 @@ MCP 工具支持自动发现，无需手动配置工具列表。
 
 ### 4.4 Memory
 
-#### 4.4.1 数据结构
+#### 4.4.1 设计概述
 
-**history.json 格式：**
+Memory 模块负责会话数据的持久化存储。核心设计原则：
+
+- **两级存储**：`history.json`（会话索引） + `chats/{chat_id}.json`（单轮详情）
+- **全量保存、按需截断**：history.json 保存全部轮次，但传递给 LLM 的上下文只取最近 N 轮
+- **原子写入**：所有 JSON 文件写入采用 tmp + rename 模式，防止进程崩溃导致数据损坏
+
+**核心概念层级：**
+
+```
+Session（会话）
+  └─ Round / Chat（轮次，一次请求-响应）
+       └─ Step（步骤，一次工具调用或 LLM 输出）
+```
+
+#### 4.4.2 目录结构
+
+```
+{memoryDir}/
+├── 20260418100000523_abc123/          ← Session A 目录
+│   ├── history.json                   ← 会话索引（全部轮次摘要）
+│   ├── chats/
+│   │   ├── chat_20260418100000523.json  ← 第1轮详细记录
+│   │   └── chat_20260418100500123.json  ← 第2轮详细记录
+│   └── attachments/
+│       ├── report.pdf
+│       └── data.csv
+├── 20260419103000523_c3d4/            ← Session B 目录
+│   ├── history.json
+│   ├── chats/
+│   │   └── chat_20260419103000523.json
+│   └── attachments/
+└── ...
+```
+
+**一个 Session 一个目录，目录名即 SessionID。**
+
+#### 4.4.3 数据结构
+
+**history.json — 会话索引（目录页）：**
 
 ```json
 {
@@ -1781,7 +1807,7 @@ MCP 工具支持自动发现，无需手动配置工具列表。
 }
 ```
 
-**chats/{chat_id}.json 格式：**
+**chats/{chat_id}.json — 单轮执行档案（正文）：**
 
 ```json
 {
@@ -1789,6 +1815,8 @@ MCP 工具支持自动发现，无需手动配置工具列表。
   "session_id": "20260418100000523_abc123",
   "round": 1,
   "timestamp": "2026-04-18T10:00:00Z",
+  "started_at": "2026-04-18T10:00:00Z",
+  "ended_at": "2026-04-18T10:00:45Z",
   "instruction": "帮我分析这份PDF报告",
   "attachments": ["report.pdf"],
   "result": "分析结果如下...",
@@ -1811,24 +1839,54 @@ MCP 工具支持自动发现，无需手动配置工具列表。
 }
 ```
 
-#### 4.4.2 会话管理
+**两者关系：**
 
-**目录结构：**
+- `history.json` 是目录页，存全部轮次的摘要信息（含 instruction 和 result），看一眼就知道会话全貌
+- `chats/{chat_id}.json` 是正文，存单轮的完整执行详情（含所有 steps、caller 等）
+- 通过 `chat_id` 关联，`history.json` 中的每条 Message 对应 `chats/` 下一个文件
+- instruction 和 result 在两个文件中都有存储，这是有意为之——避免只看目录页时还需要逐个打开 chat 文件
+
+#### 4.4.4 两条读路径
+
+Memory 有两个消费者，需求不同：
 
 ```
-memory/
-├── 20260418100000523_abc123/
-│   ├── history.json
-│   ├── attachments/
-│   │   ├── data.csv
-│   │   └── report.pdf
-│   └── chats/
-│       ├── chat_20260418100000523.json
-│       └── chat_20260418100500123.json
-└── 20260418100500123_def456/
-    ├── history.json
-    └── ...
+                     ┌──────────────────┐
+                     │    Memory 模块    │
+                     │   history.json    │  ← 存全部轮次
+                     └──────┬───────────┘
+                            │
+               ┌────────────┴────────────┐
+               │                         │
+               ▼                         ▼
+     ┌──────────────────┐      ┌──────────────────────┐
+     │   API 查询路径     │      │   LLM 上下文路径       │
+     │                  │      │                      │
+     │  GetHistory()    │      │  GetContextMessages() │
+     │  返回全部轮次      │      │  返回最近 N 轮（截断）   │
+     │                  │      │                      │
+     │  消费者：调用方应用 │      │  消费者：LLM 模型       │
+     └──────────────────┘      └──────────────────────┘
 ```
+
+- **API 路径**（`GET /sess/{sid}`、`GET /chat/{sid}`）：调用 `GetHistory`，返回全部历史，用户可查看完整对话
+- **LLM 上下文路径**（构建 Agent 消息列表时）：调用 `GetContextMessages`，只取最后 N 轮，N 由 `history_window` 配置
+
+两条路径读的是**同一份 history.json**，区别只是返回时是否截断。
+
+**为什么 LLM 上下文需要截断：**
+
+- 长会话的全部历史会撑爆 LLM 上下文窗口
+- 过早的对话轮次对当前任务帮助有限
+- 每轮都传全量历史导致 API 延迟线性增长
+
+**截断策略：纯窗口截断（当前方案）**
+
+取最近 N 轮原文，窗口外的直接丢弃。简单有效，零额外成本。
+
+> **未来扩展方向：** 如果纯截断导致早期重要上下文丢失，可在窗口外轮次上叠加「摘要压缩」——将窗口外的轮次用 LLM 压缩为一段摘要，拼在窗口内消息前面。当前版本不实现此功能。
+
+#### 4.4.5 会话管理
 
 **核心能力：**
 
@@ -1836,20 +1894,38 @@ memory/
 |------|------|
 | CreateSession | 创建会话目录和 history.json |
 | ExistsSession | 检查会话是否存在 |
-| GetSessionInfo | 获取会话信息 |
-| ListSessions | 查询会话列表 |
+| GetSessionInfo | 获取会话信息（含 last_active_at） |
+| ListSessions | 查询会话列表（支持分页） |
 
-#### 4.4.3 历史持久化
+#### 4.4.6 历史持久化
 
 | 能力 | 说明 |
 |------|------|
-| AppendMessage | 向会话追加新一轮对话记录 |
-| GetHistory | 读取指定会话的历史消息列表 |
+| AppendMessage | 向 history.json 追加新一轮记录 |
+| GetHistory | 读取全部历史消息（API 查询用） |
+| GetContextMessages | 读取最近 N 轮消息（LLM 上下文用） |
 | GetRoundCount | 获取对话轮数 |
 | SaveChatRecord | 保存详细执行记录到 chats/{chat_id}.json |
 | GetChatRecord | 获取单次对话详情 |
+| GetLatestChatRecord | 获取最近一次对话详情 |
 
-#### 4.4.4 附件存储
+**GetContextMessages 说明：**
+
+```
+输入：sessionID, windowSize
+输出：history.Messages 的最后 windowSize 条
+规则：windowSize <= 0 表示不限制，返回全部
+```
+
+**对话完成后持久化流程：**
+
+```
+Executor 执行完成 →
+  1. SaveChatRecord(sessionID, chatRecord)  → 写入 chats/{chat_id}.json
+  2. AppendMessage(sessionID, message)       → 追加到 history.json
+```
+
+#### 4.4.7 附件存储
 
 | 能力 | 说明 |
 |------|------|
@@ -1861,7 +1937,7 @@ memory/
 - 同名文件会覆盖
 - 文件名记录在 history.json 的 `attachments` 字段
 
-#### 4.4.5 定时清理
+#### 4.4.8 定时清理
 
 **配置项：**
 
@@ -1870,6 +1946,7 @@ memory:
   directory: memory               # 记忆目录
   retention_days: 7               # 会话保留天数
   cleanup_schedule: "02:00"       # 清理时间（HH:MM）
+  history_window: 20              # LLM 上下文窗口（轮次数），-1 不限制
 ```
 
 **清理逻辑：**
@@ -1878,22 +1955,45 @@ memory:
 触发：每天 cleanup_schedule 时间
 流程：
   1. 遍历 memory 目录下所有子目录
-  2. 获取每个目录的创建时间
-  3. 计算年龄 = 当前时间 - 创建时间
+  2. 读取每个会话 history.json 中的 created_at 字段
+  3. 计算年龄 = 当前时间 - created_at
   4. 如果年龄 >= retention_days * 24小时：
-     - 删除整个会话目录（history.json + attachments）
+     - 删除整个会话目录（history.json + chats/ + attachments）
      - 删除成功后记录日志：[INFO] [memory] 清理会话 {sessionID}，创建时间：{createdAt}，轮数：{roundCount}
      - 删除失败记录日志：[ERROR] [memory] 清理会话 {sessionID} 失败：{error}
   5. 汇总日志：[INFO] [memory] 清理完成，删除 {count} 个会话，剩余 {remain} 个
 ```
 
-#### 4.4.6 附件处理流程
+> **设计决策：** 使用 history.json 中的 `created_at` 字段判断过期，而非目录 ModTime。`created_at` 语义更精确——它代表会话真正的创建时间，不受目录下文件修改的影响。
+
+#### 4.4.9 数据安全
+
+**原子写入（所有 JSON 文件写入必须遵循）：**
+
+```
+写入流程：
+  1. 序列化 JSON
+  2. 写入 {filename}.tmp 临时文件
+  3. os.Rename({filename}.tmp, {filename})
+
+保证：任何时候进程崩溃，要么旧文件完好，要么已成功替换为新文件。不存在半截文件。
+```
+
+**适用方法：**
+- `saveHistory` — 写入 history.json
+- `SaveChatRecord` — 写入 chats/{chat_id}.json
+
+**并发说明：**
+- 同一 Session 同一时间只有一个活跃对话（RuntimeState 保证），因此不存在同一 Session 的并发写入
+- 不同 Session 之间的写入天然隔离（不同目录），无竞争
+
+#### 4.4.10 附件处理流程
 
 ```
 用户上传附件 → attachment 模块校验（大小、类型、数量）
             → 校验通过后，memory 模块保存到 memory/{sessionID}/attachments/{filename}
             → Agent 执行时从 memory 目录读取附件
-            → 执行完成后，RuntimeState 调用 Memory.SaveChatRecord 持久化
+            → 执行完成后，持久化 ChatRecord 和 Message
 ```
 
 **说明：**
@@ -1901,7 +2001,7 @@ memory:
 - 同名附件会覆盖，保证文件名一致性
 - 对话失败时附件已存在，下次可重新上传覆盖，最终随会话清理删除
 
-#### 4.4.7 启动与停止流程
+#### 4.4.11 启动与停止流程
 
 **Groot 启动时：**
 
@@ -1912,7 +2012,7 @@ memory:
      - 绝对路径：直接使用
      - 相对路径：拼接 homeDir
   2. 确保 memory 目录存在，不存在则创建
-  3. 初始化 Memory
+  3. 初始化 Memory Manager
   4. 启动清理调度器（注册定时任务）
 ```
 
@@ -1925,7 +2025,7 @@ memory:
   3. 释放资源
 ```
 
-#### 4.4.8 目录路径解析
+#### 4.4.12 目录路径解析
 
 ```go
 // resolveMemoryDir 解析记忆目录路径
@@ -1951,7 +2051,7 @@ func resolveMemoryDir(memoryDir string, homeDir string) string {
 | `memory` | `/home/groot` | `/home/groot/memory` |
 | `./memory` | `/home/groot` | `/home/groot/memory` |
 
-#### 4.4.9 清理日志
+#### 4.4.13 清理日志
 
 清理操作使用系统统一日志记录，级别 INFO：
 
@@ -1962,7 +2062,7 @@ func resolveMemoryDir(memoryDir string, homeDir string) string {
 2026-04-18 02:00:05 [INFO] [memory] 清理完成，删除 2 个会话，剩余 13 个
 ```
 
-#### 4.4.10 错误处理
+#### 4.4.14 错误处理
 
 | 场景 | 处理 |
 |------|------|
@@ -1971,16 +2071,81 @@ func resolveMemoryDir(memoryDir string, homeDir string) string {
 | history.json 解析失败 | 记录 ERROR 日志，返回错误 |
 | 附件写入失败 | 记录 ERROR 日志，返回错误 |
 | 清理时目录读取失败 | 记录 ERROR 日志，跳过该目录继续清理 |
+| 清理时某会话 history.json 损坏 | 记录 ERROR 日志，跳过该会话继续清理 |
+| 原子写入时 rename 失败 | 返回错误，.tmp 文件残留（下次写入覆盖） |
 
-#### 4.4.11 实现文件
+#### 4.4.15 配置参考
+
+```yaml
+memory:
+  directory: memory               # 记忆目录（相对路径或绝对路径）
+  retention_days: 7               # 会话保留天数
+  cleanup_schedule: "02:00"       # 清理时间（HH:MM）
+  history_window: 20              # LLM 上下文窗口（轮次数），-1 表示不限制
+```
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `directory` | string | `memory` | 存储目录，支持相对/绝对路径 |
+| `retention_days` | int | `7` | 会话保留天数，超过则清理 |
+| `cleanup_schedule` | string | `02:00` | 每日清理时间（HH:MM 格式） |
+| `history_window` | int | `20` | LLM 上下文最大轮次数，`-1` 不限制，`0` 使用默认值 |
+
+#### 4.4.16 实现文件
 
 | 文件 | 说明 |
 |------|------|
-| `internal/memory/types.go` | 数据结构定义（SessionInfo, Message, History） |
+| `internal/memory/types.go` | 数据结构定义（SessionInfo, Message, History, ChatRecord） |
 | `internal/memory/memory.go` | Memory 接口定义 |
 | `internal/memory/manager.go` | Manager 实现类，核心业务逻辑 |
+| `internal/memory/idgen.go` | ID 生成器（session_id, chat_id, step_id） |
 | `internal/memory/cleanup.go` | 定时清理调度器 |
-| `internal/config/config.go` | 添加 MemoryConfig 配置项 |
+| `internal/config/config.go` | MemoryConfig 配置项 |
+
+#### 4.4.17 设计决策记录
+
+| 决策 | 结论 | 原因 |
+|------|------|------|
+| 存储引擎 | 文件系统（JSON） | 单机部署，无需数据库依赖 |
+| history.json 是否截断存储 | 不截断，全量保存 | API 需要返回完整历史 |
+| LLM 上下文如何控制 | 读取时按轮次截断 | 简单有效，无需 token 计数 |
+| 是否做摘要压缩 | 当前不做 | 先上纯截断看效果，后续按需迭代 |
+| JSON 写入方式 | 原子写入（tmp + rename） | 防止进程崩溃导致数据损坏 |
+| 清理时间判断 | history.created_at | 语义精确，不受目录 ModTime 影响 |
+| 是否做文件锁 | 不做 | 同一 Session 无并发（RuntimeState 保证） |
+| 多租户隔离 | 不做 | 一个实例服务一个企业应用 |
+
+#### 4.4.18 实现约束
+
+以下约束在设计文档中不易体现，但编码时必须遵守，防止代码腐化。
+
+**类型归属**
+
+- `AttachmentPath` 只在 `memory/types.go` 中定义，`agent` 包直接引用 `memory.AttachmentPath`，**不得在 agent 包中重复定义同名结构体**
+- `ChatRecord`、`Message`、`Step`、`Error` 等核心数据结构同理，统一归属 `memory` 包，其他包通过 `import` 引用
+
+**ID 生成**
+
+- 所有 ID 生成函数统一收敛到 `memory/idgen.go`：`GenerateSessionID`、`GenerateChatID`、`GenerateStepID`
+- `agent/runtime_state.go` 中的 `GenerateTaskID`、`GenerateStepID` 应删除，改用 memory 包函数
+- 随机源统一使用 `crypto/rand`
+
+**活跃状态管理**
+
+- 活跃对话状态（是否 running）**唯一数据源**是 `RuntimeState.activeChats`
+- `Executor.runningTasks` 应删除，状态查询统一走 `RuntimeState.IsRunning()` / `RunningCount()`
+
+**状态映射规则**
+
+Executor 执行完成后，同时写入 `ChatRecord`（`chats/` 详情）和 `Message`（`history.json` 索引）。两者的 `status` 字段映射必须一致。**映射逻辑在 executor 中只应出现一次，Message 的 status 从 ChatRecord 拷贝，避免两处重复判断。**
+
+| 执行结果条件 | status 值 |
+|------------|----------|
+| `ctx.Err() == context.Canceled` | `cancelled` |
+| `err != nil`（执行异常） | `failed` |
+| `result.Cancelled == true`（Agent 内部取消） | `cancelled` |
+| `result != nil`（正常完成） | `completed` |
+| 其他未知情况 | `failed` |
 
 ### 4.5 Runtime State
 
@@ -2013,11 +2178,25 @@ type RuntimeStateManager interface {
     Get(sessionID string) (*ActiveChat, bool)
     UpdateProgress(sessionID string, progress *ChatProgress) error
     Cancel(sessionID string) error
-    Complete(sessionID string, result *ChatResult) (*ChatRecord, error)
+    Delete(sessionID string)                // 移除活跃状态（对话完成后调用）
     IsRunning(sessionID string) bool
     RunningCount() int
 }
 ```
+
+**职责边界：**
+
+RuntimeState 只负责**活跃对话状态管理**（注册、查询、取消、删除），**不参与数据持久化**。对话结果持久化到 Memory 由 Executor 直接完成。
+
+| 方法 | 说明 |
+|------|------|
+| `Register` | 原子注册活跃对话，已存在则返回错误 |
+| `Get` | 获取活跃对话状态 |
+| `UpdateProgress` | 更新执行进度 |
+| `Cancel` | 取消对话（close CancelCh，使用 sync.Once 防 panic） |
+| `Delete` | 移除活跃状态（对话完成后清理） |
+| `IsRunning` | 检查会话是否有活跃对话 |
+| `RunningCount` | 返回当前活跃对话总数 |
 
 #### 4.5.3 并发控制
 
@@ -2043,21 +2222,26 @@ POST /chat (sid=xxx):
 对话生命周期：
   │
   ├─ 1. POST /chat 请求
-  │     ├─ RuntimeState.Register(session_id, chat_id)
+  │     ├─ RuntimeState.IsRunning(sid) 检查并发
+  │     ├─ RuntimeState.Register(session_id, chat_id)  ← LoadOrStore 原子操作
   │     └─ 开始执行
   │
   ├─ 2. 执行过程
   │     ├─ RuntimeState.UpdateProgress() 更新进度
-  │     └─ DELETE /chat/{sid} → RuntimeState.Cancel()
+  │     └─ DELETE /chat/{sid} → RuntimeState.Cancel() → close(CancelCh)
   │
-  ├─ 3. 执行完成
-  │     ├─ RuntimeState.Complete() 返回 ChatRecord
-  │     ├─ Memory.AppendMessage(ChatRecord)
-  │     └─ RuntimeState 移除活跃状态
+  ├─ 3. 执行完成（由 Executor 处理）
+  │     ├─ Executor 构建 ChatRecord、Message
+  │     ├─ Memory.SaveChatRecord() → 写入 chats/{chat_id}.json
+  │     ├─ Memory.AppendMessage()  → 追加到 history.json
+  │     └─ RuntimeState.Delete(sid)  → 移除活跃状态
   │
   └─ 4. 查询历史
-        └─ GET /sess/{sid} → Memory.GetHistory()
+        ├─ GET /sess/{sid}     → Memory.GetHistory()         （全量）
+        └─ GET /chat/{sid}    → Memory.GetChatRecord()       （单轮）
 ```
+
+> **注意：** 当前代码中 Executor 直接构建 ChatRecord 并调用 Memory 持久化，RuntimeState 只在步骤 1-2 做并发控制和取消，步骤 3 用 Delete 清理。这里不存在 `RuntimeState.Complete()` 方法，不引入中间层。详见 4.4.18 实现约束。
 
 ---
 
@@ -2355,6 +2539,7 @@ memory:
   directory: memory                # 记忆目录（相对路径或绝对路径）
   retention_days: 7                # 会话保留天数
   cleanup_schedule: "02:00"        # 清理时间（HH:MM）
+  history_window: 20               # LLM 上下文窗口（轮次数），-1 不限制
 
 # 安全配置
 security:
