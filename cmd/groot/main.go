@@ -20,6 +20,7 @@ import (
 	"github.com/zfd81/groot/internal/api"
 	"github.com/zfd81/groot/internal/cmd"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/filesystem"
 	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
@@ -156,8 +157,10 @@ func startServer(homeDir string, port int) {
 	}
 
 	// Create skill backend (scans {skillsDir}/*/SKILL.md)
+	// Wrap local backend with symlink support for skill directories
+	symlinkBackend := filesystem.NewSymlinkBackend(localBackend)
 	skillBackend, err := einoskill.NewBackendFromFilesystem(context.Background(), &einoskill.BackendFromFilesystemConfig{
-		Backend: localBackend,
+		Backend: symlinkBackend,
 		BaseDir: skillsDir,
 	})
 	if err != nil {
