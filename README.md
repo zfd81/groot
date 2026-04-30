@@ -998,8 +998,8 @@ Header 名称可在配置文件中自定义。
   "prompt": "系统提示词，设定Agent角色和行为约束（可选）",
   "attachments": [
     {
-      "type": "file",
-      "name": "filename.ext",
+      "type": "image",
+      "name": "screenshot.png",
       "content": "base64编码内容"
     }
   ]
@@ -1013,6 +1013,14 @@ Header 名称可在配置文件中自定义。
 | `instruction` | 是 | 用户任务指令 |
 | `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
 | `attachments` | 否 | 附件列表（Base64编码）|
+
+**附件字段说明：**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `type` | 是 | 附件类型：`file`（文件）、`image`（图片）、`audio`（音频）、`video`（视频）|
+| `name` | 是 | 附件文件名（含扩展名）|
+| `content` | 否 | Base64 编码的附件内容。所有类型均以 Base64 data URL 透传给 LLM |
 
 **响应 Header：**
 

@@ -23,24 +23,34 @@ const (
 	StatusCancelled  TaskStatus = "cancelled"
 )
 
+// MultimodalContent carries attachment data for multimodal LLM processing
+type MultimodalContent struct {
+	Type           string // image, audio, video, file
+	Name           string
+	MIMEType       string // e.g. "image/png", "audio/wav"
+	Base64Data     string // Base64 encoded binary data (for image/audio/video)
+	DecodedContent string // decoded text content (for file type, already base64-decoded)
+}
+
 // Task represents a task (temporary definition until memory module)
 type Task struct {
-	ID              string
-	Instruction     string
-	Prompt          string
-	Status          TaskStatus
-	StartTime       time.Time
-	EndTime         *time.Time
-	Duration        int
-	Result          string
-	Error           *TaskError
-	Steps           []StepRecord
-	Attachments     []string
-	Caller          string
-	Progress        *ProgressInfo
-	Round           int
-	HistoryMessages []memory.Message
-	ModelName       string
+	ID                  string
+	Instruction         string
+	Prompt              string
+	Status              TaskStatus
+	StartTime           time.Time
+	EndTime             *time.Time
+	Duration            int
+	Result              string
+	Error               *TaskError
+	Steps               []StepRecord
+	Attachments         []string
+	MultiModalContents  []MultimodalContent // carried for multimodal LLM processing
+	Caller              string
+	Progress            *ProgressInfo
+	Round               int
+	HistoryMessages     []memory.Message
+	ModelName           string
 }
 
 // TaskError represents task error
@@ -136,6 +146,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		sessionMdContent,
 		task.HistoryMessages,
 		task.ModelName,
+		task.MultiModalContents,
 		&ProgressCallback{
 			WriteThinking: func(content string) error {
 				select {

@@ -279,8 +279,8 @@ llm:
   "prompt": "系统提示词，设定Agent角色和行为约束（可选）",
   "attachments": [
     {
-      "type": "file",
-      "name": "filename.ext",
+      "type": "image",
+      "name": "screenshot.png",
       "content": "base64编码内容"
     }
   ]
@@ -294,6 +294,14 @@ llm:
 | `instruction` | 是 | 用户任务指令 |
 | `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
 | `attachments` | 否 | 附件列表（Base64编码）|
+
+**附件字段说明：**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `type` | 是 | 附件类型：`file`（文件）、`image`（图片）、`audio`（音频）、`video`（视频）|
+| `name` | 是 | 附件文件名（含扩展名）|
+| `content` | 否 | Base64 编码的附件内容。不同类型透传方式不同，详见"附件到 LLM 的透传方式" |
 
 **ID 生成规则：**
 
@@ -549,14 +557,14 @@ data: [DONE]
 │
 ├─ 5. 附件处理（如有附件）
 │   ├─ 遍历每个附件：
-│   │   ├─ Base64 解码
+│   │   ├─ Base64 解码 → []byte
 │   │   ├─ 文件名安全处理（替换 /、\、.. 等危险字符）
 │   │   ├─ memory.SaveAttachment(session_id, filename, content)
 │   │   │   └─ 保存到 memory/{session_id}/attachments/{filename}
 │   │   ├─ 收集文件名列表（用于 history.json 记录）
 │   │   └─ 同名文件会覆盖
 │   ├─ 处理失败 → SSE 推送错误，终止
-│   └─ 处理成功 → 继续
+│   └─ 处理成功 → 继续，构建 MultimodalContent 传递给 LLM（详见下方"附件到 LLM 的透传方式"）
 │
 ├─ 6. 构建 Agent 上下文
 │   ├─ 系统指令（buildSystemInstruction），按序拼接：
@@ -569,13 +577,9 @@ data: [DONE]
 │   │   ├─ 通过 GetContextMessages(sid, history_window) 获取最近 N 轮
 │   │   ├─ 每轮对话：instruction + result
 │   │   └─ 构建为 schema.Message 格式
-│   ├─ 当前用户消息（instruction 原文，不再拼接附件路径）
+│   ├─ 当前用户消息（buildUserMessage 构建，根据附件类型不同处理）
 │   ├─ 注册的工具列表（MCP 工具）
-│   ├─ 执行限制配置（max_iterations、max_tokens 等）
-│   └─ 附件路径：
-│       ├─ SESSION.md 告知 LLM 附件目录位置
-│       ├─ 文件保存在 memory/{session_id}/attachments/{filename}
-│       └─ LLM 根据对话上下文中的文件名 + SESSION.md 路径自行读取
+│   └─ 执行限制配置（max_iterations、max_tokens 等）
 │
 ├─ 7. Agent 执行（SSE 流式转发）
 │   │
@@ -647,6 +651,61 @@ data: [DONE]
 - 附件处理（如有）
 
 只有准备工作全部成功后，才推送 `intent` 事件。如果准备工作失败（如附件解码失败），直接返回错误响应并终止，不会建立 SSE 连接。
+
+### 附件到 LLM 的透传方式
+
+附件在服务端的处理分两步：**先落盘，再透传**。两者在同一请求中串行执行，先保存到磁盘，再构建消息发送给 LLM。
+
+因 eino 框架不支持 `file_url` 类型的消息部分，不同附件类型采用不同的透传方式：
+
+#### image / audio / video — Base64 data URL 透传
+
+对于图片、音频、视频附件，通过 OpenAI 的 `UserInputMultiContent` 消息格式，以 Base64 data URL 方式直接发送给 LLM：
+
+```
+用户指令 + 附件 → buildUserMessage()
+  ├─ image  → ChatMessagePartTypeImageURL  → data:image/png;base64,{data}
+  ├─ audio  → ChatMessagePartTypeAudioURL  → data:audio/wav;base64,{data}
+  └─ video  → ChatMessagePartTypeVideoURL  → data:video/mp4;base64,{data}
+```
+
+LLM 直接解析 data URL 获取二进制内容。此方式依赖 LLM 模型本身支持多模态输入（如 Qwen3.5、GPT-4o 等视觉/音频模型）。
+
+#### file — 解码后拼入指令
+
+对于文件附件，eino 不支持 `file_url` 类型（会报 `unsupported chat message part type: file_url`），因此采用服务端解码后拼入 instruction 的方式：
+
+```
+用户指令 + 附件 → buildUserMessage()
+  ├─ Base64 解码 → 原文（string）
+  └─ 拼接为："{原指令}\n\n{文件名} 的文件内容如下：\n{原文}"
+```
+
+发送给 LLM 的消息示例：
+
+```
+帮我看看文件内容是什么
+
+数据文件.txt 的文件内容如下：
+Hello from test file
+Line 2: test data
+```
+
+LLM 收到的是自然可读的文本，无需自身解码 Base64。
+
+#### 混合附件
+
+当同时存在 image/audio/video 和 file 附件时：
+
+```
+buildUserMessage()
+  ├─ instruction 文本部分 = 原指令 + file 解码内容
+  ├─ image/audio/video → UserInputMultiContent 的 data URL 部分
+  └─ 消息类型 → schema.User（UserInputMultiContent）
+```
+
+- file 解码内容拼接在 instruction 文本中
+- image/audio/video 以 data URL 附带在消息的额外部分
 
 **附件存储目录结构：**
 

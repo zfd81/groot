@@ -96,15 +96,15 @@ func (h *Handler) Validate(attachments []Attachment) error {
 		}
 
 		// Check type is valid
-		if att.Type != "file" && att.Type != "image" {
+		if att.Type != "file" && att.Type != "image" && att.Type != "audio" && att.Type != "video" {
 			return &AttachmentError{
 				Code:    ErrCodeInvalidType,
 				Message: fmt.Sprintf("无效的附件类型：%s", att.Type),
 			}
 		}
 
-		// Check content is present for file/image types
-		if (att.Type == "file" || att.Type == "image") && att.Content == "" {
+		// Check content is present
+		if att.Content == "" {
 			return &AttachmentError{
 				Code:    ErrCodeMissingContent,
 				Message: fmt.Sprintf("附件 %s 缺少内容", att.Name),

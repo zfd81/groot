@@ -187,10 +187,11 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 12. 处理附件
 	var attachmentNames []string
+	var multimodalContents []agent.MultimodalContent
 	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
 		for _, att := range req.Attachments {
 			switch att.Type {
-			case "file", "image":
+			case "file", "image", "audio", "video":
 				if att.Content == "" {
 					rc.JSON(400, utils.H{"status": "attachment_missing_content", "message": "附件缺少内容: " + att.Name})
 					return
@@ -211,6 +212,18 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 				attachmentNames = append(attachmentNames, att.Name)
 
+				// 构建 MultimodalContent 传递给 LLM
+				mc := agent.MultimodalContent{
+					Type:       att.Type,
+					Name:       att.Name,
+					Base64Data: att.Content,
+				}
+				// file 类型：服务端先解码，把原文传给 LLM（避免 Base64 乱码）
+				if att.Type == "file" {
+					mc.DecodedContent = string(content)
+				}
+				multimodalContents = append(multimodalContents, mc)
+
 			default:
 				rc.JSON(400, utils.H{"status": "attachment_invalid_type", "message": "无效的附件类型: " + att.Type})
 				return
@@ -226,8 +239,9 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		Status:          agent.StatusRunning,
 		StartTime:       time.Now(),
 		Steps:           []agent.StepRecord{},
-		Attachments:     attachmentNames,
-		Progress:        &agent.ProgressInfo{},
+		Attachments:        attachmentNames,
+		MultiModalContents: multimodalContents,
+		Progress:           &agent.ProgressInfo{},
 		Round:           round,
 		HistoryMessages: historyMessages,
 		ModelName:       modelName,

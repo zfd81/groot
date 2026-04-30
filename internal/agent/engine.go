@@ -63,6 +63,7 @@ func (e *Engine) Run(
 	sessionMdContent string,
 	historyMessages []memory.Message,
 	modelName string,
+	attachments []MultimodalContent,
 	cb *ProgressCallback,
 ) (*RunResult, error) {
 	// 1. Create ChatModel with per-call timeout
@@ -122,7 +123,7 @@ func (e *Engine) Run(
 	})
 
 	// 7. Build message list with history context
-	msgs := e.buildMessageList(instruction, historyMessages)
+	msgs := e.buildMessageList(instruction, historyMessages, attachments)
 
 	// 8. Run agent and collect events
 	iter := runner.Run(ctx, msgs)
@@ -137,6 +138,11 @@ func (e *Engine) Run(
 
 	go func() {
 		defer close(eventCh)
+		defer func() {
+			if r := recover(); r != nil {
+				e.log.Error(fmt.Sprintf("Agent event reader panic: %v", r))
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
@@ -389,7 +395,8 @@ func (e *Engine) buildSystemInstruction(prompt string, sessionMdContent string) 
 }
 
 // buildMessageList builds message list with history context
-func (e *Engine) buildMessageList(instruction string, historyMessages []memory.Message) []adk.Message {
+// For multimodal attachments (image/audio/video), constructs UserInputMultiContent messages
+func (e *Engine) buildMessageList(instruction string, historyMessages []memory.Message, attachments []MultimodalContent) []adk.Message {
 	msgs := []adk.Message{}
 
 	for _, hMsg := range historyMessages {
@@ -401,9 +408,114 @@ func (e *Engine) buildMessageList(instruction string, historyMessages []memory.M
 		}
 	}
 
-	msgs = append(msgs, schema.UserMessage(instruction))
+	msgs = append(msgs, e.buildUserMessage(instruction, attachments))
 
 	return msgs
+}
+
+// buildUserMessage builds a user message.
+// When attachments exist, all are sent as Base64 data URLs to the LLM via UserInputMultiContent.
+func (e *Engine) buildUserMessage(instruction string, attachments []MultimodalContent) *schema.Message {
+	// If no attachments, return plain text message
+	if len(attachments) == 0 {
+		return schema.UserMessage(instruction)
+	}
+
+	// Separate attachments into multimodal (image/audio/video) and text-based (file)
+	multimodalAtts := make([]MultimodalContent, 0, len(attachments))
+	fileAtts := make([]MultimodalContent, 0, len(attachments))
+	for _, att := range attachments {
+		switch att.Type {
+		case "image", "audio", "video":
+			multimodalAtts = append(multimodalAtts, att)
+		default:
+			fileAtts = append(fileAtts, att)
+		}
+	}
+
+	// If no multimodal attachments, return plain text with file contents appended
+	if len(multimodalAtts) == 0 {
+		text := instruction
+		for _, att := range fileAtts {
+			text += "\n\n" + att.Name + " 的文件内容如下：\n" + att.DecodedContent
+		}
+		return schema.UserMessage(text)
+	}
+
+	// Build multimodal message with UserInputMultiContent
+	parts := make([]schema.MessageInputPart, 0, len(multimodalAtts)+len(fileAtts)+1)
+
+	// Add instruction text first, with any file contents appended
+	instructionText := instruction
+	for _, att := range fileAtts {
+		instructionText += "\n\n" + att.Name + " 的文件内容如下：\n" + att.DecodedContent
+	}
+	parts = append(parts, schema.MessageInputPart{
+		Type: schema.ChatMessagePartTypeText,
+		Text: instructionText,
+	})
+
+	// Add each multimodal attachment as Base64 data URL
+	for _, att := range multimodalAtts {
+		mimeType := att.MIMEType
+		if mimeType == "" {
+			mimeType = defaultMIMEType(att.Type)
+		}
+		dataURL := "data:" + mimeType + ";base64," + att.Base64Data
+
+		switch att.Type {
+		case "image":
+			parts = append(parts, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeImageURL,
+				Image: &schema.MessageInputImage{
+					MessagePartCommon: schema.MessagePartCommon{
+						URL: toPtr(dataURL),
+					},
+					Detail: schema.ImageURLDetailAuto,
+				},
+			})
+		case "audio":
+			parts = append(parts, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeAudioURL,
+				Audio: &schema.MessageInputAudio{
+					MessagePartCommon: schema.MessagePartCommon{
+						URL: toPtr(dataURL),
+					},
+				},
+			})
+		case "video":
+			parts = append(parts, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeVideoURL,
+				Video: &schema.MessageInputVideo{
+					MessagePartCommon: schema.MessagePartCommon{
+						URL: toPtr(dataURL),
+					},
+				},
+			})
+		}
+	}
+
+	return &schema.Message{
+		Role:                  schema.User,
+		UserInputMultiContent: parts,
+	}
+}
+
+func defaultMIMEType(attType string) string {
+	switch attType {
+	case "image":
+		return "image/png"
+	case "audio":
+		return "audio/wav"
+	case "video":
+		return "video/mp4"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func toPtr(s string) *string {
+	return &s
 }
 
 // truncate truncates a string to max length
