@@ -222,7 +222,7 @@ func TestManager_CreateSession_WritesSessionMd(t *testing.T) {
 	content := string(data)
 	attachmentsDir := filepath.Join(tmpDir, sessionID, "attachments")
 
-	if !strings.Contains(content, "本会话涉及的文件均存放在以下目录") {
+	if !strings.Contains(content, "当前会话文件目录") {
 		t.Error("SESSION.md 应包含引导文本")
 	}
 	if !strings.Contains(content, attachmentsDir) {

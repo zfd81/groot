@@ -79,7 +79,8 @@ func (m *Manager) CreateSession(sessionID string) error {
 
 	// 写入 SESSION.md（告知 LLM 附件目录位置）
 	sessionMdPath := filepath.Join(sessionDir, "SESSION.md")
-	sessionMdContent := fmt.Sprintf("本会话涉及的文件均存放在以下目录：%s\n如需读取文件内容，请从该目录中查找对应的文件名。\n", m.attachmentsDir(sessionID))
+	sessionMdContent := fmt.Sprintf("当前会话文件目录：%s\n", m.attachmentsDir(sessionID)) +
+			"用户提到的文件名直接拼接此目录即为完整路径。例如用户说「打开 report.pdf」，路径为 " + m.attachmentsDir(sessionID) + "/report.pdf\n"
 	if err := os.WriteFile(sessionMdPath, []byte(sessionMdContent), 0644); err != nil {
 		return fmt.Errorf("创建 SESSION.md 失败: %w", err)
 	}
