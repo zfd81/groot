@@ -357,17 +357,9 @@ func convertToolCalls(tcs []schema.ToolCall) []ToolCall {
 	return result
 }
 
-// buildTools creates eino tools from MCP tools
+// buildTools returns all eino tools from the MCP manager (via eino-ext)
 func (e *Engine) buildTools() []tool.BaseTool {
-	tools := []tool.BaseTool{}
-
-	// MCP 工具
-	for _, toolInfo := range e.mcpManager.ListTools() {
-		t := NewMCPToolAdapter(toolInfo, e.mcpManager, e.log)
-		tools = append(tools, t)
-	}
-
-	return tools
+	return e.mcpManager.GetTools()
 }
 
 // buildSystemInstruction builds the system prompt

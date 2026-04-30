@@ -6,10 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
+
+	"github.com/cloudwego/eino/components/tool"
+	mcpp "github.com/cloudwego/eino-ext/components/tool/mcp"
 
 	"github.com/zfd81/groot/internal/logger"
 )
@@ -17,9 +24,10 @@ import (
 // Manager manages all MCP configurations and tool registry
 type Manager struct {
 	mcps      map[string]*MCPConfig
-	tools     map[string]*ToolInfo
-	errors    map[string]string // MCP discovery errors
-	executor  *ToolExecutor
+	clients   map[string]client.MCPClient    // mcp-go clients per MCP
+	einoTools map[string]tool.BaseTool       // eino tools (for engine)
+	toolInfos map[string]*ToolInfo           // tool metadata (for API)
+	errors    map[string]string              // MCP discovery errors
 	logger    *logger.Logger
 	mu        sync.RWMutex
 }
@@ -27,17 +35,25 @@ type Manager struct {
 // NewManager creates a new MCP manager
 func NewManager(log *logger.Logger) *Manager {
 	return &Manager{
-		mcps:     make(map[string]*MCPConfig),
-		tools:    make(map[string]*ToolInfo),
-		errors:   make(map[string]string),
-		executor: NewToolExecutor(log),
-		logger:   log,
+		mcps:      make(map[string]*MCPConfig),
+		clients:   make(map[string]client.MCPClient),
+		einoTools: make(map[string]tool.BaseTool),
+		toolInfos: make(map[string]*ToolInfo),
+		errors:    make(map[string]string),
+		logger:    log,
 	}
 }
 
-// GetExecutor returns the tool executor
-func (m *Manager) GetExecutor() *ToolExecutor {
-	return m.executor
+// GetTools returns all eino tools for engine usage
+func (m *Manager) GetTools() []tool.BaseTool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]tool.BaseTool, 0, len(m.einoTools))
+	for _, t := range m.einoTools {
+		result = append(result, t)
+	}
+	return result
 }
 
 // Register adds an MCP configuration with tools
@@ -47,24 +63,23 @@ func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryE
 
 	m.mcps[config.Name] = config
 
-	// Store error if any
 	if discoveryError != "" {
 		m.errors[config.Name] = discoveryError
 	} else {
 		delete(m.errors, config.Name)
 	}
 
-	// Register tools
-	for _, tool := range tools {
-		m.tools[tool.Name] = &ToolInfo{
-			Name:        tool.Name,
-			Description: tool.Description,
-			InputSchema: tool.InputSchema,
+	// Store tool metadata
+	for _, td := range tools {
+		m.toolInfos[td.Name] = &ToolInfo{
+			Name:        td.Name,
+			Description: td.Description,
+			InputSchema: td.InputSchema,
 			MCP:         config.Name,
 		}
 	}
 
-	m.logger.Info("Registered MCP", zap.String("name", config.Name), zap.Int("tools", len(tools)))
+	m.logger.Info("Registered MCP tools", zap.String("name", config.Name), zap.Int("tools", len(tools)))
 }
 
 // Unregister removes an MCP configuration
@@ -74,8 +89,14 @@ func (m *Manager) Unregister(name string) {
 
 	if config, ok := m.mcps[name]; ok {
 		// Remove tools from this MCP
-		for _, tool := range config.Tools {
-			delete(m.tools, tool.Name)
+		for _, toolDef := range config.Tools {
+			delete(m.einoTools, toolDef.Name)
+			delete(m.toolInfos, toolDef.Name)
+		}
+		// Close client
+		if cli, ok := m.clients[name]; ok {
+			cli.Close()
+			delete(m.clients, name)
 		}
 		delete(m.mcps, name)
 		m.logger.Info("Unregistered MCP", zap.String("name", name))
@@ -94,7 +115,7 @@ func (m *Manager) Get(name string) (*MCPConfig, bool) {
 func (m *Manager) GetTool(name string) (*ToolInfo, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	tool, ok := m.tools[name]
+	tool, ok := m.toolInfos[name]
 	return tool, ok
 }
 
@@ -110,13 +131,13 @@ func (m *Manager) List() []*MCPConfig {
 	return result
 }
 
-// ListTools returns all registered tools
+// ListTools returns all registered tools metadata
 func (m *Manager) ListTools() []*ToolInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make([]*ToolInfo, 0, len(m.tools))
-	for _, tool := range m.tools {
+	result := make([]*ToolInfo, 0, len(m.toolInfos))
+	for _, tool := range m.toolInfos {
 		result = append(result, tool)
 	}
 	return result
@@ -129,7 +150,7 @@ type MCPInfo struct {
 	Description string
 	IsActive    bool
 	ToolCount   int
-	Error       string // Discovery error if any
+	Error       string
 }
 
 // ListWithToolCount returns all MCPs with their tool counts
@@ -139,9 +160,8 @@ func (m *Manager) ListWithToolCount() []MCPInfo {
 
 	result := make([]MCPInfo, 0, len(m.mcps))
 	for _, config := range m.mcps {
-		// Count tools from this MCP
 		toolCount := 0
-		for _, tool := range m.tools {
+		for _, tool := range m.toolInfos {
 			if tool.MCP == config.Name {
 				toolCount++
 			}
@@ -176,7 +196,7 @@ func (m *Manager) Count() int {
 func (m *Manager) ToolCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.tools)
+	return len(m.toolInfos)
 }
 
 // LoadAll loads all MCP configs from directory
@@ -194,7 +214,6 @@ func (m *Manager) LoadAll(dir string) error {
 			path := filepath.Join(dir, entry.Name())
 			if err := m.Load(path); err != nil {
 				m.logger.Error("Failed to load MCP config", zap.String("path", path), zap.Error(err))
-				// Continue loading other configs instead of failing
 			}
 		}
 	}
@@ -202,7 +221,7 @@ func (m *Manager) LoadAll(dir string) error {
 	return nil
 }
 
-// Load parses a single MCP config file and discovers tools
+// Load parses a single MCP config file, creates client, and discovers tools via eino-ext
 func (m *Manager) Load(path string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -223,26 +242,173 @@ func (m *Manager) Load(path string) error {
 		return nil
 	}
 
-	// Discover tools if not specified in config
-	tools := config.Tools
-	var discoveryError string
-	if len(tools) == 0 {
-		// Auto-discover tools via tools/list
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	// If tools are pre-defined in config, register them directly (built-in style)
+	if len(config.Tools) > 0 {
+		m.Register(&config, config.Tools, "")
+		return nil
+	}
 
-		discoveredTools, err := m.executor.DiscoverTools(ctx, &config)
-		if err != nil {
-			m.logger.Error("Failed to discover tools from MCP",
-				zap.String("name", config.Name),
-				zap.Error(err))
-			tools = []ToolDefinition{}
-			discoveryError = err.Error()
-		} else {
-			tools = discoveredTools
+	// Otherwise, discover tools via mcp-go client + eino-ext
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cli, err := m.createAndInitClient(ctx, &config)
+	if err != nil {
+		m.Register(&config, nil, err.Error())
+		return nil // Don't fail, just record the error
+	}
+
+	// Discover tools via eino-ext GetTools
+	einoTools, err := mcpp.GetTools(ctx, &mcpp.Config{
+		Cli:           cli,
+		CustomHeaders: config.Headers,
+	})
+	if err != nil {
+		m.Register(&config, nil, err.Error())
+		return nil
+	}
+
+	// Extract tool metadata from eino tools
+	toolDefs := make([]ToolDefinition, 0, len(einoTools))
+	for _, t := range einoTools {
+		info, _ := t.Info(ctx)
+		if info != nil {
+			toolDefs = append(toolDefs, ToolDefinition{
+				Name:        info.Name,
+				Description: info.Desc,
+			})
 		}
 	}
 
-	m.Register(&config, tools, discoveryError)
+	// Store everything
+	m.mu.Lock()
+	m.mcps[config.Name] = &config
+	m.clients[config.Name] = cli
+	delete(m.errors, config.Name)
+
+	for i, t := range einoTools {
+		toolName := toolDefs[i].Name
+		m.einoTools[toolName] = t
+		m.toolInfos[toolName] = &ToolInfo{
+			Name:        toolName,
+			Description: toolDefs[i].Description,
+			MCP:         config.Name,
+		}
+	}
+	m.mu.Unlock()
+
+	m.logger.Info("MCP loaded via eino-ext", zap.String("name", config.Name), zap.Int("tools", len(einoTools)))
 	return nil
+}
+
+// createAndInitClient creates a mcp-go client and performs initialization handshake
+func (m *Manager) createAndInitClient(ctx context.Context, config *MCPConfig) (client.MCPClient, error) {
+	var cli *client.Client
+	var err error
+
+	switch config.Type {
+	case MCPTypeStdio:
+		cli, err = m.createStdioClient(config)
+	case MCPTypeSSE:
+		cli, err = m.createSSEClient(ctx, config)
+	case MCPTypeStreamableHTTP:
+		cli, err = m.createStreamableHTTPClient(ctx, config)
+	default:
+		return nil, fmt.Errorf("unsupported MCP type: %s", config.Type)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create MCP client: %w", err)
+	}
+
+	// Initialize handshake
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{
+		Name:    "groot",
+		Version: "1.0.0",
+	}
+
+	_, err = cli.Initialize(ctx, initReq)
+	if err != nil {
+		cli.Close()
+		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
+	}
+
+	return cli, nil
+}
+
+// createStdioClient creates a stdio-based MCP client
+func (m *Manager) createStdioClient(config *MCPConfig) (*client.Client, error) {
+	expandedArgs := expandArgs(config.Args)
+	env := buildEnv(config.Env)
+	return client.NewStdioMCPClient(config.Command, env, expandedArgs...)
+}
+
+// createSSEClient creates an SSE-based MCP client
+func (m *Manager) createSSEClient(ctx context.Context, config *MCPConfig) (*client.Client, error) {
+	cli, err := client.NewSSEMCPClient(config.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := cli.Start(ctx); err != nil {
+		return nil, fmt.Errorf("failed to start SSE client: %w", err)
+	}
+	return cli, nil
+}
+
+// createStreamableHTTPClient creates a streamable HTTP MCP client
+func (m *Manager) createStreamableHTTPClient(ctx context.Context, config *MCPConfig) (*client.Client, error) {
+	cli, err := client.NewStreamableHttpClient(config.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := cli.Start(ctx); err != nil {
+		return nil, fmt.Errorf("failed to start streamable HTTP client: %w", err)
+	}
+	return cli, nil
+}
+
+// Close closes all MCP clients
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for name, cli := range m.clients {
+		if err := cli.Close(); err != nil {
+			m.logger.Error("Failed to close MCP client", zap.String("name", name), zap.Error(err))
+		}
+	}
+	m.clients = make(map[string]client.MCPClient)
+}
+
+// expandArgs expands environment variables and home dir in args
+func expandArgs(args []string) []string {
+	expanded := make([]string, len(args))
+	for i, arg := range args {
+		s := os.ExpandEnv(arg)
+		if strings.HasPrefix(s, "~") {
+			homeDir, _ := os.UserHomeDir()
+			s = homeDir + s[1:]
+		}
+		expanded[i] = s
+	}
+	return expanded
+}
+
+// buildEnv converts env map to []string format (merged with OS env)
+func buildEnv(envMap map[string]string) []string {
+	if len(envMap) == 0 {
+		return nil
+	}
+	result := os.Environ()
+	keys := make([]string, 0, len(envMap))
+	for k := range envMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		result = append(result, k+"="+os.ExpandEnv(envMap[k]))
+	}
+	return result
 }

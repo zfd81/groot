@@ -259,8 +259,8 @@ func startServer(homeDir string, port int) {
 		// Stop cleanup scheduler
 		cleanupScheduler.Stop()
 
-		// Close MCP executor (terminate running processes)
-		mcpMgr.GetExecutor().Close()
+		// Close MCP clients
+		mcpMgr.Close()
 
 		log.Info("Groot Agent 已关闭")
 	}()
