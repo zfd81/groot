@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -167,9 +168,32 @@ func startServer(homeDir string, port int) {
 		log.Error("无法创建Skill后端", zap.Error(err))
 	}
 
-	// Create skill middleware (progressive disclosure: skills listed in tool desc, loaded on demand)
+	// Create skill middleware with custom system prompt
+	// Skill metadata (name + description) is injected into the system prompt so the LLM
+	// always sees available skills. Full skill content is still loaded on demand via the
+	// skill tool, preserving progressive disclosure.
 	skillMiddleware, err := einoskill.NewMiddleware(context.Background(), &einoskill.Config{
 		Backend: skillBackend,
+		CustomSystemPrompt: func(ctx context.Context, toolName string) string {
+			matters, err := skillBackend.List(ctx)
+			if err != nil || len(matters) == 0 {
+				return ""
+			}
+
+			var b strings.Builder
+			b.WriteString("## 可用 Skill\n\n")
+			b.WriteString("以下 Skill 提供专业能力和结构化工作流程。")
+			b.WriteString("当用户请求与某个 Skill 描述匹配时，必须使用 `" + toolName + "` 工具加载完整指令后执行。\n\n")
+			b.WriteString("| Skill | 描述 |\n")
+			b.WriteString("|-------|------|\n")
+			for _, m := range matters {
+				b.WriteString("| **" + m.Name + "** | " + m.Description + " |\n")
+			}
+			b.WriteString("\n")
+			b.WriteString("**重要**：以上仅为概要，完整操作指令需通过 `" + toolName + "(\"<名称>\")` 工具获取。")
+			b.WriteString("匹配到 Skill 时必须先加载再执行，不要跳过。\n")
+			return b.String()
+		},
 	})
 	if err != nil {
 		log.Error("无法创建Skill中间件", zap.Error(err))
