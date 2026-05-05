@@ -2,7 +2,7 @@
 
 <br><br>
 
-**<span style="font-size: 32px;">Groot AI Agent</span>**
+<h1 style="border-bottom: none;">Groot AI Agent</h1>
 
 **面向业务系统的 AI Agent 服务**
 
