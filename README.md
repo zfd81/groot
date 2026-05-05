@@ -1,21 +1,19 @@
-<table style="border: none; border-collapse: collapse;">
-  <tr style="border: none;">
-    <td width="200" valign="middle" style="border: none; padding: 10px;">
-      <img src="groot.jpg" alt="Groot Logo" width="180">
-    </td>
-    <td valign="middle" style="border: none; padding: 10px;">
-      <h1>Groot AI Agent</h1>
-      <p><strong>面向业务系统的 AI Agent 服务</strong></p>
-      <p>通过 REST API 接入，让你的系统立刻拥有智能任务执行能力<br>
-      理解指令 · 调用工具 · 自主完成任务</p>
-      <p>
-        <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue">
-        <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-        <img alt="Go" src="https://img.shields.io/badge/Go-1.21+-00ADD8">
-      </p>
-    </td>
-  </tr>
-</table>
+<div style="display: flex; align-items: center; gap: 20px; margin: 20px 0;">
+  <div style="flex-shrink: 0;">
+    <img src="groot.jpg" alt="Groot Logo" width="180">
+  </div>
+  <div>
+    <h1 style="margin-top: 0;">Groot AI Agent</h1>
+    <p><strong>面向业务系统的 AI Agent 服务</strong></p>
+    <p>通过 REST API 接入，让你的系统立刻拥有智能任务执行能力<br>
+    理解指令 · 调用工具 · 自主完成任务</p>
+    <p>
+      <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue">
+      <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+      <img alt="Go" src="https://img.shields.io/badge/Go-1.21+-00ADD8">
+    </p>
+  </div>
+</div>
 
 ---
 
