@@ -105,7 +105,7 @@ func NewExecutor(
 }
 
 // Execute starts task execution
-func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelCh chan struct{}) {
+func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Task, sse *SSEWriter, cancelCh chan struct{}) {
 	// Read SESSION.md content
 	sessionMdContent := ""
 	if e.memoryManager != nil {
@@ -125,7 +125,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 	)
 
 	// Create context with cancellation support
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	// Handle cancellation in separate goroutine
@@ -173,12 +173,7 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 				}
 			},
 			WriteFinish: func(reason string) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return sse.WriteFinish(reason)
-				}
+				return sse.WriteFinish(reason)
 			},
 			WriteToolResult: func(toolCallID, toolName, content string) error {
 				select {
@@ -283,6 +278,9 @@ func (e *Executor) Execute(sessionID string, task *Task, sse *SSEWriter, cancelC
 		if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
 			e.logger.Error("追加历史消息失败: " + appendErr.Error())
 		}
+
+		// 回写最终状态到 task，供调用方（chat handler）查询
+		task.Status = TaskStatus(chatStatus)
 	}
 }
 

@@ -164,12 +164,12 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		})
 		return
 	}
+	// 确保 Register 之后任何退出路径都会清理活跃状态，防止 session 永久锁定
+	defer h.runtimeState.Delete(sessionID)
 
 	// 9. 注册成功后，再创建 session（如果是新会话）
-	// 注意：此时 Register 已成功，后续步骤出错时需要 Delete
 	if isNew {
 		if err := h.memory.CreateSession(sessionID); err != nil {
-			h.runtimeState.Delete(sessionID) // 创建失败时清理
 			rc.JSON(500, utils.H{"status": "error", "message": "创建会话失败"})
 			return
 		}
@@ -248,13 +248,28 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	// 14. 执行 Agent (同步执行以保持 SSE 连接)
-	h.agentExecutor.Execute(sessionID, task, sseWriter, activeChat.CancelCh)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				h.log.Error(fmt.Sprintf("Agent 执行异常(panic): %v", r))
+				task.Status = agent.StatusFailed
+				sseWriter.WriteError("internal_error", fmt.Sprintf("执行异常: %v", r))
+				sseWriter.WriteDone()
+			}
+		}()
+		h.agentExecutor.Execute(ctx, sessionID, task, sseWriter, activeChat.CancelCh)
+	}()
 
-	// 15. 清理活跃状态 (确保后续请求可以继续)
-	h.runtimeState.Delete(sessionID)
-
-	// 记录日志
-	h.log.Info(fmt.Sprintf("完成对话: session=%s, chat=%s, round=%d, isNew=%v", sessionID, chatID, round, isNew))
+	// 记录日志（区分完成/取消/失败）
+	statusText := string(task.Status)
+	if task.Status == agent.StatusCompleted {
+		statusText = "完成对话"
+	} else if task.Status == agent.StatusCancelled {
+		statusText = "对话被取消"
+	} else if task.Status == agent.StatusFailed {
+		statusText = "对话失败"
+	}
+	h.log.Info(fmt.Sprintf("%s: session=%s, chat=%s, round=%d, isNew=%v", statusText, sessionID, chatID, round, isNew))
 }
 
 // Serve 实现 handler 接口，路由到 Handle

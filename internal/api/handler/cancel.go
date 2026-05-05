@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
@@ -51,13 +50,8 @@ func (h *CancelHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 执行取消
-	if err := h.runtimeState.Cancel(sessionID); err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"error","session_id":"%s","message":"取消失败: %s"}`, sessionID, err.Error())))
-		return
-	}
+	// 执行取消（直接操作 ActiveChat，无 TOCTOU 竞态）
+	activeChat.Cancel()
 
 	rc.JSON(200, utils.H{
 		"status":     "success",

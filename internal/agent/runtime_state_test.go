@@ -115,18 +115,18 @@ func TestRuntimeState_UpdateProgress_Nonexistent(t *testing.T) {
 	}
 }
 
-func TestRuntimeState_Cancel(t *testing.T) {
+func TestActiveChat_Cancel(t *testing.T) {
 	state := NewRuntimeState()
 
 	sessionID := "session_001"
 	state.Register(sessionID, "chat_001")
 
-	err := state.Cancel(sessionID)
-	if err != nil {
-		t.Fatalf("Cancel() failed: %v", err)
+	chat, ok := state.Get(sessionID)
+	if !ok {
+		t.Fatal("Get() should return true for registered session")
 	}
+	chat.Cancel()
 
-	chat, _ := state.Get(sessionID)
 	if chat.Status != "cancelled" {
 		t.Errorf("Cancel().Status = %s, want cancelled", chat.Status)
 	}
@@ -140,36 +140,33 @@ func TestRuntimeState_Cancel(t *testing.T) {
 	}
 }
 
-func TestRuntimeState_Cancel_MultipleCalls(t *testing.T) {
+func TestActiveChat_Cancel_MultipleCalls(t *testing.T) {
 	state := NewRuntimeState()
 
 	sessionID := "session_001"
 	state.Register(sessionID, "chat_001")
 
+	chat, ok := state.Get(sessionID)
+	if !ok {
+		t.Fatal("Get() should return true for registered session")
+	}
+
 	// 第一次取消
-	err := state.Cancel(sessionID)
-	if err != nil {
-		t.Fatalf("First Cancel() failed: %v", err)
-	}
-
+	chat.Cancel()
 	// 第二次取消同一 session（使用 sync.Once，不应 panic）
-	err = state.Cancel(sessionID)
-	if err != nil {
-		t.Fatalf("Second Cancel() failed: %v", err)
-	}
+	chat.Cancel()
 
-	chat, _ := state.Get(sessionID)
 	if chat.Status != "cancelled" {
 		t.Errorf("Status after multiple Cancel() = %s, want cancelled", chat.Status)
 	}
 }
 
-func TestRuntimeState_Cancel_Nonexistent(t *testing.T) {
+func TestRuntimeState_Get_Nonexistent(t *testing.T) {
 	state := NewRuntimeState()
 
-	err := state.Cancel("nonexistent")
-	if err == nil {
-		t.Error("Cancel() should fail for nonexistent session")
+	_, ok := state.Get("nonexistent")
+	if ok {
+		t.Error("Get() should return false for nonexistent session")
 	}
 }
 

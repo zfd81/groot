@@ -90,19 +90,13 @@ func (r *RuntimeState) UpdateProgress(sessionID string, progress *ChatProgress) 
 	return nil
 }
 
-// Cancel 取消对话
-func (r *RuntimeState) Cancel(sessionID string) error {
-	chat, ok := r.Get(sessionID)
-	if !ok {
-		return fmt.Errorf("session %s not running", sessionID)
-	}
-
-	chat.Status = "cancelled"
+// Cancel 取消对话（直接操作 ActiveChat，调用方已通过 Get 获取引用）
+func (a *ActiveChat) Cancel() {
+	a.Status = "cancelled"
 	// 使用 sync.Once 确保 channel 只被 close 一次，防止重复调用导致 panic
-	chat.cancelOnce.Do(func() {
-		close(chat.CancelCh)
+	a.cancelOnce.Do(func() {
+		close(a.CancelCh)
 	})
-	return nil
 }
 
 // Delete removes active chat state for a session

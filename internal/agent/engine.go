@@ -297,14 +297,20 @@ eventLoop:
 		}
 	}
 
-	// Send [DONE] at the end
-	if cb.WriteDone != nil {
-		cb.WriteDone()
+	// Handle cancellation: send cancelled event + [DONE], then return
+	if agentCancelled || ctx.Err() == context.Canceled {
+		if cb.WriteFinish != nil {
+			cb.WriteFinish("cancel")
+		}
+		if cb.WriteDone != nil {
+			cb.WriteDone()
+		}
+		return &RunResult{Content: "", Steps: steps, Cancelled: true}, nil
 	}
 
-	// Handle cancellation
-	if agentCancelled || ctx.Err() == context.Canceled {
-		return &RunResult{Content: "", Steps: steps, Cancelled: true}, nil
+	// Send [DONE] for normal completion
+	if cb.WriteDone != nil {
+		cb.WriteDone()
 	}
 
 	if finalResult == "" {
