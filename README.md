@@ -1,19 +1,21 @@
-<p>
-  <img src="groot.jpg" alt="Groot Logo" width="180" align="left" style="margin-right: 20px;">
-</p>
-
-# Groot AI Agent
-
-**面向业务系统的 AI Agent 服务**
-
-通过 REST API 接入，让你的系统立刻拥有智能任务执行能力  
-理解指令 · 调用工具 · 自主完成任务
-
-<img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue">
-<img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-<img alt="Go" src="https://img.shields.io/badge/Go-1.21+-00ADD8">
-
-<br clear="left">
+<table border="0">
+  <tr>
+    <td valign="bottom">
+      <img src="groot.jpg" alt="Groot Logo" width="180">
+    </td>
+    <td valign="bottom">
+      <h1>Groot AI Agent</h1>
+      <p><strong>面向业务系统的 AI Agent 服务</strong></p>
+      <p>通过 REST API 接入，让你的系统立刻拥有智能任务执行能力<br>
+      理解指令 · 调用工具 · 自主完成任务</p>
+      <p>
+        <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue">
+        <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+        <img alt="Go" src="https://img.shields.io/badge/Go-1.21+-00ADD8">
+      </p>
+    </td>
+  </tr>
+</table>
 
 ---
 
