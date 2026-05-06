@@ -85,8 +85,14 @@ llm:
       base_url: https://api.openai.com/v1    # API 地址
       api_key: ${OPENAI_API_KEY}             # API 密钥（建议使用环境变量）
       model: gpt-4o                          # 模型名称
-      max_tokens: 4096                       # 最大 Token 数
-      temperature: 0.7                       # 温度参数
+      max_completion_tokens: 4096                       # 最大 Token 数
+      temperature: 0.7                       # 温度参数（0.0~2.0）
+      top_p: 1.0                             # 核采样系数（0.0~1.0）
+      frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
+      presence_penalty: 0.0                  # 存在惩罚（-2.0~2.0）
+      seed: 0                                # 随机种子（0 表示不设置）
+      stop: []                               # 停止序列
+      thinking: false                        # 深度思考模式（Qwen/DeepSeek 等模型）
 
 # 其他配置项均有默认值，可按需修改
 # 完整配置说明请参考：https://github.com/zfd81/groot

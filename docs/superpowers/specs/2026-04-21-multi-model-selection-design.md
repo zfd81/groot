@@ -40,13 +40,13 @@ llm:
       base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o               # 实际调用时的模型名称
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
     claude-3.5:
       base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-3-5-sonnet-20241022
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
 ```
 

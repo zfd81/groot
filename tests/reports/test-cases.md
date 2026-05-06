@@ -85,7 +85,7 @@ llm:
       base_url: http://localhost:8888/mock
       api_key: mock-key
       model: mock
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
 
 security:

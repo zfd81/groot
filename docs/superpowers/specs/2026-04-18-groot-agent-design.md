@@ -45,13 +45,13 @@ llm:
       base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o              # 实际模型名称
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
     claude-3.5:
       base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-3-5-sonnet-20241022
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
 ```
 
@@ -63,8 +63,14 @@ llm:
 | `base_url` | LLM API 地址（OpenAI 兼容协议） |
 | `api_key` | API 密钥，支持环境变量引用 `${VAR_NAME}` |
 | `model` | 实际调用时的模型名称 |
-| `max_tokens` | 单次调用最大 Token 数 |
-| `temperature` | 输出随机性（0-1，越高越随机） |
+| `max_completion_tokens` | 最大输出 Token 数，默认 4096 |
+| `temperature` | 输出随机性（0.0~2.0），默认 0.7 |
+| `top_p` | 核采样系数（0.0~1.0），默认 1.0 |
+| `frequency_penalty` | 频率惩罚（-2.0~2.0），默认 0.0 |
+| `presence_penalty` | 存在惩罚（-2.0~2.0），默认 0.0 |
+| `seed` | 随机种子，0 表示不设置 |
+| `stop` | 停止序列列表，默认空 |
+| `thinking` | 深度思考模式（Qwen/DeepSeek 等），默认 false |
 
 **模型切换：**
 
@@ -2563,13 +2569,19 @@ llm:
       base_url: https://api.openai.com/v1    # LLM API 地址
       api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
       model: gpt-4o                          # 实际调用时的模型名称
-      max_tokens: 4096                       # 单次调用最大 Token 数
-      temperature: 0.7                       # 输出随机性（0-1，越高越随机）
+      max_completion_tokens: 4096            # 最大输出 Token 数
+      temperature: 0.7                       # 输出随机性（0.0~2.0）
+      top_p: 1.0                             # 核采样系数（0.0~1.0）
+      frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
+      presence_penalty: 0.0                  # 存在惩罚（-2.0~2.0）
+      seed: 0                                # 随机种子（0 表示不设置）
+      stop: []                               # 停止序列
+      thinking: false                        # 深度思考模式（Qwen/DeepSeek 等模型）
     claude-3.5:
       base_url: https://api.anthropic.com/v1
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-3-5-sonnet-20241022
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
 
 # Skills 热插拔配置
