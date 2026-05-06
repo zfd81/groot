@@ -39,11 +39,17 @@ type LLMConfig struct {
 
 // ModelConfig holds individual model settings
 type ModelConfig struct {
-	BaseURL     string  `yaml:"base_url"`
-	APIKey      string  `yaml:"api_key"`
-	Model       string  `yaml:"model"`
-	MaxTokens   int     `yaml:"max_tokens"`
-	Temperature float64 `yaml:"temperature"`
+	BaseURL             string   `yaml:"base_url"`
+	APIKey              string   `yaml:"api_key"`
+	Model               string   `yaml:"model"`
+	MaxCompletionTokens int      `yaml:"max_completion_tokens"`
+	Temperature         float64  `yaml:"temperature"`
+	TopP                float64  `yaml:"top_p"`
+	FrequencyPenalty    float64  `yaml:"frequency_penalty"`
+	PresencePenalty     float64  `yaml:"presence_penalty"`
+	Seed                int      `yaml:"seed"`
+	Stop                []string `yaml:"stop"`
+	Thinking            bool     `yaml:"thinking"`
 }
 
 // SkillsConfig holds Skills hot-reload settings
@@ -176,6 +182,23 @@ func (c *LLMConfig) ValidateModel(name string) bool {
 	return exists
 }
 
+// validateModelParams checks parameter ranges for a model configuration
+func validateModelParams(name string, model *ModelConfig) error {
+	if model.Temperature < 0.0 || model.Temperature > 2.0 {
+		return fmt.Errorf("模型 %s 的 temperature 超出范围：%.1f（有效范围 0.0~2.0）", name, model.Temperature)
+	}
+	if model.TopP < 0.0 || model.TopP > 1.0 {
+		return fmt.Errorf("模型 %s 的 top_p 超出范围：%.1f（有效范围 0.0~1.0）", name, model.TopP)
+	}
+	if model.FrequencyPenalty < -2.0 || model.FrequencyPenalty > 2.0 {
+		return fmt.Errorf("模型 %s 的 frequency_penalty 超出范围：%.1f（有效范围 -2.0~2.0）", name, model.FrequencyPenalty)
+	}
+	if model.PresencePenalty < -2.0 || model.PresencePenalty > 2.0 {
+		return fmt.Errorf("模型 %s 的 presence_penalty 超出范围：%.1f（有效范围 -2.0~2.0）", name, model.PresencePenalty)
+	}
+	return nil
+}
+
 // ValidateLLMConfig validates LLM configuration at startup.
 // Returns detailed error messages to help users fix configuration issues.
 func ValidateLLMConfig(cfg *LLMConfig) error {
@@ -209,6 +232,10 @@ func ValidateLLMConfig(cfg *LLMConfig) error {
 			if os.Getenv(envVar) == "" {
 				return fmt.Errorf("环境变量 %s 未设置，请设置后重试\n\n提示: export %s=\"your-api-key\"\n      或在 config.yaml 中直接填写 api_key", envVar, envVar)
 			}
+		}
+		// Validate parameter ranges
+		if err := validateModelParams(name, &model); err != nil {
+			return err
 		}
 	}
 

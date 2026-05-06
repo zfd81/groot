@@ -614,7 +614,7 @@ llm:
       endpoint: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o
-      max_tokens: 4096
+      max_completion_tokens: 4096
       temperature: 0.7
 
 # Skills 热插拔配置

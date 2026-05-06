@@ -32,6 +32,23 @@ func TestDefaultConfig(t *testing.T) {
 	if len(cfg.LLM.Models) == 0 {
 		t.Error("LLM.Models 默认值不能为空")
 	}
+	// 验证 LLM 模型默认值
+	defaultModel := cfg.LLM.Models["gpt-4o"]
+	if defaultModel.MaxCompletionTokens != 4096 {
+		t.Errorf("ModelConfig.MaxCompletionTokens 默认值错误: got %d, want 4096", defaultModel.MaxCompletionTokens)
+	}
+	if defaultModel.Temperature != 0.7 {
+		t.Errorf("ModelConfig.Temperature 默认值错误: got %f, want 0.7", defaultModel.Temperature)
+	}
+	if defaultModel.TopP != 1.0 {
+		t.Errorf("ModelConfig.TopP 默认值错误: got %f, want 1.0", defaultModel.TopP)
+	}
+	if defaultModel.FrequencyPenalty != 0.0 {
+		t.Errorf("ModelConfig.FrequencyPenalty 默认值错误: got %f, want 0.0", defaultModel.FrequencyPenalty)
+	}
+	if defaultModel.PresencePenalty != 0.0 {
+		t.Errorf("ModelConfig.PresencePenalty 默认值错误: got %f, want 0.0", defaultModel.PresencePenalty)
+	}
 
 	// 验证 Skills 默认值
 	if !cfg.Skills.HotReload.Enabled {
@@ -404,5 +421,138 @@ func TestValidateLLMConfigEnvVarSet(t *testing.T) {
 	err := ValidateLLMConfig(cfg)
 	if err != nil {
 		t.Fatalf("环境变量已设置时不应返回错误: %v", err)
+	}
+}
+
+func TestValidateModelParams_Ranges(t *testing.T) {
+	validModel := ModelConfig{
+		BaseURL:          "https://api.openai.com/v1",
+		APIKey:           "test-key",
+		Temperature:      0.7,
+		TopP:             1.0,
+		FrequencyPenalty: 0.0,
+		PresencePenalty:  0.0,
+	}
+
+	tests := []struct {
+		name       string
+		model      ModelConfig
+		expectErr  bool
+		errKeyword string
+	}{
+		{
+			name:      "正常参数",
+			model:     validModel,
+			expectErr: false,
+		},
+		{
+			name: "temperature 低于下限",
+			model: func() ModelConfig {
+				m := validModel
+				m.Temperature = -0.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "temperature 超出范围",
+		},
+		{
+			name: "temperature 超出上限",
+			model: func() ModelConfig {
+				m := validModel
+				m.Temperature = 2.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "temperature 超出范围",
+		},
+		{
+			name: "top_p 低于下限",
+			model: func() ModelConfig {
+				m := validModel
+				m.TopP = -0.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "top_p 超出范围",
+		},
+		{
+			name: "top_p 超出上限",
+			model: func() ModelConfig {
+				m := validModel
+				m.TopP = 1.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "top_p 超出范围",
+		},
+		{
+			name: "frequency_penalty 低于下限",
+			model: func() ModelConfig {
+				m := validModel
+				m.FrequencyPenalty = -2.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "frequency_penalty 超出范围",
+		},
+		{
+			name: "frequency_penalty 超出上限",
+			model: func() ModelConfig {
+				m := validModel
+				m.FrequencyPenalty = 2.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "frequency_penalty 超出范围",
+		},
+		{
+			name: "presence_penalty 低于下限",
+			model: func() ModelConfig {
+				m := validModel
+				m.PresencePenalty = -2.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "presence_penalty 超出范围",
+		},
+		{
+			name: "presence_penalty 超出上限",
+			model: func() ModelConfig {
+				m := validModel
+				m.PresencePenalty = 2.1
+				return m
+			}(),
+			expectErr:  true,
+			errKeyword: "presence_penalty 超出范围",
+		},
+		{
+			name: "边界值 - 全部在有效范围内",
+			model: ModelConfig{
+				BaseURL:          "https://api.openai.com/v1",
+				APIKey:           "test-key",
+				Temperature:      0.0,
+				TopP:             0.0,
+				FrequencyPenalty: -2.0,
+				PresencePenalty:  2.0,
+			},
+			expectErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateModelParams("test-model", &tt.model)
+			if tt.expectErr {
+				if err == nil {
+					t.Error("应返回错误但返回 nil")
+				} else if !strings.Contains(err.Error(), tt.errKeyword) {
+					t.Errorf("错误信息不符合预期: got %s, want containing %s", err.Error(), tt.errKeyword)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("不应返回错误: %v", err)
+				}
+			}
+		})
 	}
 }

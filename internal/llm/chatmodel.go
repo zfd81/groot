@@ -28,19 +28,42 @@ func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string, t
 	}
 
 	// Prepare parameters for API call
-	// MaxTokens: maximum output tokens for this single LLM call
-	// Temperature: controls randomness of output (0.0-2.0)
-	maxTokens := modelCfg.MaxTokens
+	maxTokens := modelCfg.MaxCompletionTokens
 	temperature := float32(modelCfg.Temperature)
+	topP := float32(modelCfg.TopP)
+	frequencyPenalty := float32(modelCfg.FrequencyPenalty)
+	presencePenalty := float32(modelCfg.PresencePenalty)
 
-	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		Model:       modelCfg.Model,
-		APIKey:      modelCfg.APIKey,
-		BaseURL:     modelCfg.BaseURL,
-		MaxTokens:   &maxTokens,     // 限制单次调用输出的最大 token 数
-		Temperature: &temperature,    // 控制输出的随机性
-		Timeout:     timeout,         // 单次 LLM API 请求超时时间
-	})
+	chatCfg := &openai.ChatModelConfig{
+		Model:              modelCfg.Model,
+		APIKey:             modelCfg.APIKey,
+		BaseURL:            modelCfg.BaseURL,
+		MaxCompletionTokens: &maxTokens,
+		Temperature:        &temperature,
+		TopP:               &topP,
+		FrequencyPenalty:   &frequencyPenalty,
+		PresencePenalty:    &presencePenalty,
+		Timeout:            timeout,
+	}
+
+	// Seed: only set when > 0 (0 means not specified)
+	if modelCfg.Seed > 0 {
+		chatCfg.Seed = &modelCfg.Seed
+	}
+
+	// Stop: only set when non-empty
+	if len(modelCfg.Stop) > 0 {
+		chatCfg.Stop = modelCfg.Stop
+	}
+
+	// Thinking: pass via extra_fields for models like Qwen/DeepSeek
+	if modelCfg.Thinking {
+		chatCfg.ExtraFields = map[string]any{
+			"thinking": map[string]any{"type": "enabled"},
+		}
+	}
+
+	chatModel, err := openai.NewChatModel(ctx, chatCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
 	}
