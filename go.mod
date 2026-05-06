@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
-	github.com/cloudwego/eino v0.9.0-alpha.18
+	github.com/cloudwego/eino v0.9.0-alpha.18 
 	github.com/cloudwego/eino-ext/adk/backend/local v0.2.4
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/cloudwego/eino-ext/components/tool/mcp v0.0.8
