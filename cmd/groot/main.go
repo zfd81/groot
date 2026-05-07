@@ -66,6 +66,9 @@ func main() {
 		case "init":
 			handleInitCommand(args[1:])
 			return
+		case "status":
+			handleStatusCommand(args[1:])
+			return
 		case "tail":
 			handleTailCommand(args[1:])
 		default:
@@ -78,6 +81,19 @@ func main() {
 
 	// No subcommand, start server
 	startServer(cmd.GetDefaultHome(), port)
+}
+
+func handleStatusCommand(args []string) {
+	flags, err := cmd.ParseStatusFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+
+	if err := cmd.RunStatus(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
 }
 
 func handleTailCommand(args []string) {
@@ -283,6 +299,7 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("子命令:")
 	fmt.Println("  init              初始化工作目录")
+	fmt.Println("  status            查看运行中实例的状态")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
@@ -292,6 +309,10 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("init 子命令选项:")
 	fmt.Println("  -h, --help        显示 init 子命令帮助")
+	fmt.Println()
+	fmt.Println("status 子命令选项:")
+	fmt.Println("  -p <port>        指定 Groot 服务端口")
+	fmt.Println("  -h, --help        显示 status 子命令帮助")
 	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
@@ -305,6 +326,8 @@ func printHelp() {
 	fmt.Println("示例:")
 	fmt.Println("  groot                         # 使用默认配置启动服务")
 	fmt.Println("  groot init                    # 初始化默认工作目录 ~/.groot")
+	fmt.Println("  groot status                  # 查看实例状态")
+	fmt.Println("  groot status -p 9090         # 查看 9090 端口实例状态")
 	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
 	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")

@@ -421,8 +421,12 @@ API 服务启动
 ### 3.7 验证安装
 
 ```bash
-# 健康检查
+# 使用内置命令查看实例状态（推荐）
+groot status
+
+# 或使用 curl 手动调用健康检查 API
 curl http://localhost:8080/health
+```
 
 # 预期响应
 {
@@ -522,6 +526,67 @@ logging:
     directory: logs                # 日志目录
     filename_pattern: groot-{date}.log  # 文件名模式
 ```
+
+### 3.10 实例状态查看命令（groot status）
+
+Groot 提供了 `status` 子命令，用于查看运行中 Groot 实例的运行状态和组件健康信息。
+
+**基本用法：**
+
+```bash
+# 查看默认端口实例状态
+groot status
+
+# 查看指定端口实例状态
+groot status -p 9090
+```
+
+**命令参数：**
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `-p port` | 指定 Groot 服务端口 | `groot status -p 9090` |
+| `-h, --help` | 显示帮助 | `groot status -h` |
+
+**输出示例（实例运行中）：**
+
+```
+Groot 实例状态
+
+状态:      healthy
+版本:      1.0.0
+运行时间:  2h35m
+端口:      8080
+
+组件状态:
+  LLM:          healthy (gpt-4o)
+  MCP Servers:  healthy (3 个)
+  Skills:       healthy (5 个)
+  Memory:       healthy (12 个会话)
+
+活跃对话:  1
+```
+
+**输出示例（实例未运行）：**
+
+```
+未检测到运行中的 Groot 实例（端口 8080）
+提示: 请确认 Groot 是否已启动，或使用 -p 指定其他端口
+```
+
+**显示信息说明：**
+
+| 字段 | 说明 |
+|------|------|
+| 状态 | 实例整体健康状态（healthy/unhealthy） |
+| 版本 | Groot 版本号 |
+| 运行时间 | 实例已运行时长 |
+| 端口 | 服务监听端口 |
+| LLM | LLM 连接状态及当前模型名称 |
+| MCP Servers | MCP 服务数量 |
+| Skills | 已加载 Skills 数量 |
+| Memory | 会话存储中的会话数量 |
+| 活跃对话 | 当前正在执行的对话数 |
 
 ---
 
