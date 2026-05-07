@@ -14,7 +14,7 @@ func Load(homeDir string) (*Config, error) {
 
 	// Check if config file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("配置文件不存在，请先运行 'groot init' 初始化\n\n提示: groot init -H %s", homeDir)
+		return nil, fmt.Errorf("配置文件不存在，请先运行 'groot init' 初始化")
 	}
 
 	// Config file exists: parse user config (don't merge with defaults)

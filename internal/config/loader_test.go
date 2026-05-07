@@ -19,9 +19,4 @@ func TestLoadConfigNotExists(t *testing.T) {
 	if !strings.Contains(err.Error(), "groot init") {
 		t.Errorf("错误信息应包含 'groot init' 提示，实际: %s", err.Error())
 	}
-
-	// 检查错误信息包含正确的 homeDir 路径提示
-	if !strings.Contains(err.Error(), homeDir) {
-		t.Errorf("错误信息应包含 homeDir 路径提示，实际: %s", err.Error())
-	}
 }

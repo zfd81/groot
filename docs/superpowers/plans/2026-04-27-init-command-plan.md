@@ -388,7 +388,6 @@ func printInitHelp() {
 	fmt.Println("初始化 Groot 工作目录和配置文件")
 	fmt.Println()
 	fmt.Println("选项:")
-	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
 	fmt.Println("  -h, --help        显示帮助")
 	fmt.Println()
 	fmt.Println("示例:")

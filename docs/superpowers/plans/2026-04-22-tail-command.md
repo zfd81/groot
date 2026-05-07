@@ -840,7 +840,6 @@ func printHelp() {
 	fmt.Println("  tail              实时查看日志")
 	fmt.Println()
 	fmt.Println("选项:")
-	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
 	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
 	fmt.Println("  -h, --help        显示帮助")
 	fmt.Println("  -v, --version     显示版本")

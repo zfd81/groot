@@ -29,15 +29,12 @@ import (
 )
 
 var (
-	homeDir     string
 	port        int
 	showHelp    bool
 	showVersion bool
 )
 
 func init() {
-	flag.StringVar(&homeDir, "H", "", "工作目录 (默认 ~/.groot)")
-	flag.StringVar(&homeDir, "home", "", "工作目录 (默认 ~/.groot)")
 	flag.IntVar(&port, "p", 0, "HTTP端口 (默认配置文件值)")
 	flag.IntVar(&port, "port", 0, "HTTP端口 (默认配置文件值)")
 	flag.BoolVar(&showHelp, "h", false, "显示帮助")
@@ -80,15 +77,7 @@ func main() {
 	}
 
 	// No subcommand, start server
-	// Determine home directory
-	if homeDir == "" {
-		homeDir = os.Getenv("GROOT_HOME")
-		if homeDir == "" {
-			homeDir = filepath.Join(os.Getenv("HOME"), ".groot")
-		}
-	}
-
-	startServer(homeDir, port)
+	startServer(cmd.GetDefaultHome(), port)
 }
 
 func handleTailCommand(args []string) {
@@ -105,13 +94,13 @@ func handleTailCommand(args []string) {
 }
 
 func handleInitCommand(args []string) {
-	flags, err := cmd.ParseInitFlags(args)
+	_, err := cmd.ParseInitFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
 
-	if err := cmd.RunInit(flags.HomeDir); err != nil {
+	if err := cmd.RunInit(cmd.GetDefaultHome()); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -297,20 +286,17 @@ func printHelp() {
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
-	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
 	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
 	fmt.Println("  -h, --help        显示帮助")
 	fmt.Println("  -v, --version     显示版本")
 	fmt.Println()
 	fmt.Println("init 子命令选项:")
-	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
 	fmt.Println("  -h, --help        显示 init 子命令帮助")
 	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
 	fmt.Println("  -l <level>        按日志级别过滤 (error/warn/info/debug)")
 	fmt.Println("  -k <keyword>      按关键词过滤")
-	fmt.Println("  -H, --home <dir>  工作目录 (默认 ~/.groot)")
 	fmt.Println("  -h, --help        显示 tail 子命令帮助")
 	fmt.Println()
 	fmt.Println("环境变量:")
@@ -319,9 +305,7 @@ func printHelp() {
 	fmt.Println("示例:")
 	fmt.Println("  groot                         # 使用默认配置启动服务")
 	fmt.Println("  groot init                    # 初始化默认工作目录 ~/.groot")
-	fmt.Println("  groot init -H /opt/groot      # 初始化指定工作目录")
-	fmt.Println("  groot -H /opt/groot            # 指定工作目录启动服务")
-	fmt.Println("  groot -p 9090                  # 指定端口启动服务")
-	fmt.Println("  groot tail                     # 显示最近 100 行日志")
+	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
+	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")
 }

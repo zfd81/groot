@@ -38,7 +38,7 @@ groot tail -n 20 -k "session"               # 显示最近20行包含session的�
 日志目录从配置文件读取，而非固定路径：
 
 流程：
-1. 确定 groot 工作目录（默认 `~/.groot`，可通过 `-H` 参数或 `GROOT_HOME` 环境变量指定）
+1. 确定 groot 工作目录（默认 `~/.groot`，可通过 `GROOT_HOME` 环境变量指定）
 2. 加载配置文件 `~/.groot/config.yaml`
 3. 读取 `logging.file.directory` 配置项
 4. 使用 `config.ResolvePath()` 解析为绝对路径（支持相对路径如 `logs`）

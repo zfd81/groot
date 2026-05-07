@@ -19,7 +19,6 @@ type TailFlags struct {
 	NLines  int    // -n: Number of lines to display
 	Level   string // -l: Log level filter (error/warn/info/debug)
 	Keyword string // -k: Keyword filter
-	HomeDir string // -H/--home: Working directory
 }
 
 // ParseTailFlags parses command line arguments for the tail command
@@ -29,7 +28,6 @@ func ParseTailFlags(args []string) (*TailFlags, error) {
 		NLines:  100, // default to 100 lines
 		Level:   "",  // no level filter by default
 		Keyword: "",  // no keyword filter by default
-		HomeDir: "",  // will be set by getDefaultHome if not specified
 	}
 
 	i := 0
@@ -70,13 +68,6 @@ func ParseTailFlags(args []string) (*TailFlags, error) {
 			i++
 			flags.Keyword = args[i]
 
-		case "-H", "--home":
-			if i+1 >= len(args) {
-				return nil, errors.New("-H/--home requires a value")
-			}
-			i++
-			flags.HomeDir = args[i]
-
 		case "-h", "--help":
 			PrintTailHelp()
 			os.Exit(0)
@@ -89,11 +80,6 @@ func ParseTailFlags(args []string) (*TailFlags, error) {
 			return nil, fmt.Errorf("unexpected argument: %s", arg)
 		}
 		i++
-	}
-
-	// Set default home directory if not specified
-	if flags.HomeDir == "" {
-		flags.HomeDir = getDefaultHome()
 	}
 
 	return flags, nil
@@ -176,9 +162,9 @@ func resolveLogDir(cfg *LogConfig, homeDir string) string {
 	return config.ResolvePath(dir, homeDir)
 }
 
-// getDefaultHome returns the default groot home directory
+// GetDefaultHome returns the default groot home directory
 // Priority: GROOT_HOME env var > ~/.groot
-func getDefaultHome() string {
+func GetDefaultHome() string {
 	homeDir := os.Getenv("GROOT_HOME")
 	if homeDir != "" {
 		return homeDir
@@ -200,14 +186,16 @@ func getDefaultHome() string {
 // RunTail is the main entry point for the tail command
 // It reads log files, applies filters, and displays formatted output
 func RunTail(flags *TailFlags) error {
+	homeDir := GetDefaultHome()
+
 	// 1. Load config
-	cfg, err := loadConfig(flags.HomeDir)
+	cfg, err := loadConfig(homeDir)
 	if err != nil {
 		return fmt.Errorf("无法加载配置: %w", err)
 	}
 
 	// 2. Get log directory
-	logDir := resolveLogDir(cfg, flags.HomeDir)
+	logDir := resolveLogDir(cfg, homeDir)
 
 	// 3. Find latest log file
 	logFile, err := findLatestLogFile(logDir)
@@ -261,7 +249,6 @@ func PrintTailHelp() {
 	fmt.Println("  -n <N>           显示最近 N 行日志 (默认 100)")
 	fmt.Println("  -l <level>       按日志级别过滤 (error/warn/info/debug)")
 	fmt.Println("  -k <keyword>     按关键词过滤")
-	fmt.Println("  -H, --home <dir> 工作目录 (默认 ~/.groot)")
 	fmt.Println("  -h, --help       显示帮助")
 	fmt.Println()
 	fmt.Println("日志级别:")

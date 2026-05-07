@@ -61,7 +61,7 @@ else
     echo "启动服务示例:"
     echo "  export GROOT_HOME=$GROOT_HOME"
     echo "  export GROOT_API_KEY=$GROOT_API_KEY"
-    echo "  groot -H $GROOT_HOME -p $GROOT_PORT"
+    echo "  groot -p $GROOT_PORT"
     echo ""
     read -p "是否继续测试？测试将尝试启动服务。 [y/N] " -n 1 -r
     echo

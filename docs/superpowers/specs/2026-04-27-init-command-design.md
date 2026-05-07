@@ -29,11 +29,9 @@ groot tail [选项]         # 实时日志查看（已有）
 
 子命令选项：
   init:
-    -H, --home <dir>      # 指定工作目录（默认 ~/.groot）
     -h, --help            # 显示 init 帮助
 
 全局选项：
-  -H, --home <dir>        # 工作目录
   -p, --port <port>       # HTTP端口（仅启动服务时有效）
   -h, --help              # 显示帮助
   -v, --version           # 显示版本
@@ -43,7 +41,7 @@ groot tail [选项]         # 实时日志查看（已有）
 
 **执行流程**：
 
-1. 确定工作目录（通过 `-H` 参数或默认 `~/.groot`）
+1. 确定工作目录（通过 `GROOT_HOME` 环境变量或默认 `~/.groot`）
 2. 检查并创建目录（每个目录单独处理）：
    - 工作目录根目录
    - `skills/` 子目录
@@ -144,7 +142,7 @@ llm:
 ```
 错误: 配置文件不存在，请先运行 'groot init' 初始化
 
-提示: groot init -H ~/.groot
+提示: groot init
 ```
 
 环境变量未设置：

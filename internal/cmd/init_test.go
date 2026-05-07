@@ -10,36 +10,13 @@ func TestParseInitFlags(t *testing.T) {
 	tests := []struct {
 		name      string
 		args      []string
-		wantHome  string
 		wantError bool
 		errMsg    string
 	}{
 		{
-			name:     "default values",
-			args:     []string{},
-			wantHome: "", // will be set by getDefaultHome()
-		},
-		{
-			name:     "short flag -H",
-			args:     []string{"-H", "/opt/groot"},
-			wantHome: "/opt/groot",
-		},
-		{
-			name:     "long flag --home",
-			args:     []string{"--home", "/opt/groot"},
-			wantHome: "/opt/groot",
-		},
-		{
-			name:      "missing value for -H",
-			args:      []string{"-H"},
-			wantError: true,
-			errMsg:    "-H/--home requires a value",
-		},
-		{
-			name:      "missing value for --home",
-			args:      []string{"--home"},
-			wantError: true,
-			errMsg:    "-H/--home requires a value",
+			name:      "default values",
+			args:      []string{},
+			wantError: false,
 		},
 		{
 			name:      "unknown flag",
@@ -57,7 +34,7 @@ func TestParseInitFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			flags, err := ParseInitFlags(tt.args)
+			_, err := ParseInitFlags(tt.args)
 
 			if tt.wantError {
 				if err == nil {
@@ -72,26 +49,19 @@ func TestParseInitFlags(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 				return
 			}
-
-			if tt.wantHome != "" && flags.HomeDir != tt.wantHome {
-				t.Errorf("expected HomeDir '%s' but got '%s'", tt.wantHome, flags.HomeDir)
-			}
 		})
 	}
 }
 
-func TestParseInitFlagsWithEnvVar(t *testing.T) {
+func TestGetDefaultHome(t *testing.T) {
 	// Test that GROOT_HOME env var is used as default
 	os.Setenv("GROOT_HOME", "/custom/groot")
 	defer os.Unsetenv("GROOT_HOME")
 
-	flags, err := ParseInitFlags([]string{})
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	homeDir := GetDefaultHome()
 
-	if flags.HomeDir != "/custom/groot" {
-		t.Errorf("expected HomeDir '/custom/groot' but got '%s'", flags.HomeDir)
+	if homeDir != "/custom/groot" {
+		t.Errorf("expected HomeDir '/custom/groot' but got '%s'", homeDir)
 	}
 }
 

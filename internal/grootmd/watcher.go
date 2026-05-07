@@ -45,7 +45,7 @@ func (w *Watcher) Start() error {
 
 	// 监听 homeDir 目录（文件可能不存在，监听目录以感知文件创建）
 	if err := watcher.Add(w.homeDir); err != nil {
-		w.log.Error("无法监听 GROOT_HOME 目录", zap.String("dir", w.homeDir), zap.Error(err))
+		w.log.Error("无法监听工作目录", zap.String("dir", w.homeDir), zap.Error(err))
 		return err
 	}
 
