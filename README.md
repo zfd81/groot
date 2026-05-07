@@ -1608,156 +1608,41 @@ X-API-Key: your-secret-key
 
 ## 八、客户端代码示例
 
-### 8.1 Python 客户端
+完整的客户端代码及测试见 [`examples/`](examples/) 目录。
+
+### 8.1 Python
 
 ```python
-import requests
-import json
-import base64
-from pathlib import Path
+from groot_client import GrootClient
 
-class GrootClient:
-    """Groot AI Agent 客户端"""
-    
-    def __init__(self, base_url: str, api_key: str = None):
-        self.base_url = base_url.rstrip('/')
-        self.headers = {"Content-Type": "application/json"}
-        if api_key:
-            self.headers["X-API-Key"] = api_key
-    
-    def execute_chat(self, instruction: str, attachments: list = None, 
-                     session_id: str = None, prompt: str = None,
-                     callback: callable = None) -> dict:
-        """执行对话（SSE 流式返回）"""
-        body = {"instruction": instruction}
-        if prompt:
-            body["prompt"] = prompt
-        
-        if attachments:
-            processed = []
-            for att in attachments:
-                if att["type"] == "file":
-                    with open(att["path"], "rb") as f:
-                        content = base64.b64encode(f.read()).decode()
-                    processed.append({"type": "file", "name": att["name"], "content": content})
-            body["attachments"] = processed
-        
-        headers = self.headers.copy()
-        if session_id:
-            headers["X-Session-ID"] = session_id
-        
-        response = requests.post(
-            f"{self.base_url}/chat",
-            headers=headers,
-            json=body,
-            stream=True
-        )
-        
-        result = {
-            "session_id": response.headers.get("X-Session-ID"),
-            "chat_id": response.headers.get("X-Chat-ID"),
-        }
-        
-        event_type = None
-        for line in response.iter_lines():
-            if line:
-                line = line.decode()
-                if line.startswith("event:"):
-                    event_type = line[6:].strip()
-                elif line.startswith("data:"):
-                    data = line[5:].strip()
-                    if callback:
-                        callback(event_type, data)
-                    if event_type == "completed":
-                        parsed = json.loads(data)
-                        result["status"] = parsed.get("status")
-                        if parsed.get("status") == "success":
-                            result["result"] = parsed.get("result")
-        
-        return result
-    
-    def cancel_chat(self, session_id: str) -> dict:
-        """取消对话"""
-        response = requests.delete(
-            f"{self.base_url}/chat/{session_id}",
-            headers=self.headers
-        )
-        return response.json()
-    
-    def get_chat_status(self, session_id: str) -> dict:
-        """查询对话状态"""
-        response = requests.get(
-            f"{self.base_url}/chat/status/{session_id}",
-            headers=self.headers
-        )
-        return response.json()
-    
-    def get_chat_detail(self, session_id: str, chat_id: str) -> dict:
-        """查询对话详情"""
-        response = requests.get(
-            f"{self.base_url}/chat/{session_id}/{chat_id}",
-            headers=self.headers
-        )
-        return response.json()
-    
-    def get_session(self, session_id: str) -> dict:
-        """查询会话详情"""
-        response = requests.get(
-            f"{self.base_url}/sess/{session_id}",
-            headers=self.headers
-        )
-        return response.json()
-    
-    def list_sessions(self, limit: int = 20, offset: int = 0) -> dict:
-        """查询会话列表"""
-        response = requests.get(
-            f"{self.base_url}/sess/history",
-            headers=self.headers,
-            params={"limit": limit, "offset": offset}
-        )
-        return response.json()
-    
-    def health_check(self) -> dict:
-        """健康检查"""
-        response = requests.get(f"{self.base_url}/health")
-        return response.json()
-    
-    def list_skills(self) -> dict:
-        """列出可用 Skills"""
-        response = requests.get(
-            f"{self.base_url}/skills",
-            headers=self.headers
-        )
-        return response.json()
-    
-    def list_tools(self) -> dict:
-        """列出可用工具（MCP 工具）"""
-        response = requests.get(
-            f"{self.base_url}/tools",
-            headers=self.headers
-        )
-        return response.json()
-
-
-# 使用示例
-groot = GrootClient("http://localhost:8080", "your-api-key")
+client = GrootClient("http://localhost:8080", "your-api-key")
 
 # 新会话
-result1 = groot.execute_chat(
-    instruction="分析这份PDF报告",
-    attachments=[{"type": "file", "name": "report.pdf", "path": "./report.pdf"}],
-    callback=lambda e, d: print(f"[{e}] {d}")
-)
-print(f"会话ID: {result1['session_id']}")
+result = client.execute_chat("分析这份财报", callback=lambda t, d: print(f"[{t}] {d}"))
+print(f"会话ID: {result['session_id']}")
 
-# 继续会话（多轮）
-result2 = groot.execute_chat(
-    instruction="生成分析摘要",
-    session_id=result1['session_id'],
-    callback=lambda e, d: print(f"[{e}] {d}")
-)
-print(f"第2轮结果: {result2['result']}")
+# 继续会话
+result2 = client.execute_chat("生成摘要", session_id=result["session_id"])
 ```
+
+> 完整代码及 15 个测试用例：[examples/python/](examples/python/)
+
+### 8.2 Java
+
+```java
+GrootClient client = new GrootClient("http://localhost:8080", "your-api-key");
+
+// 新会话
+ChatResult result = client.executeChat("分析这份财报", (type, data) -> {
+    System.out.println("[" + type + "] " + data);
+});
+System.out.println("会话ID: " + result.getSessionId());
+
+// 继续会话
+ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), null);
+```
+
+> 完整代码及 16 个测试用例：[examples/java/](examples/java/)
 
 ---
 
@@ -1766,47 +1651,30 @@ print(f"第2轮结果: {result2['result']}")
 ### 9.1 多轮文档分析
 
 ```python
+client = GrootClient("http://localhost:8080", "your-api-key")
+
 # 第1轮：上传文档并分析
-result1 = groot.execute_chat(
-    instruction="分析这份财报，提取营收、利润、增长率等关键指标",
-    attachments=[{"type": "file", "name": "Q3_Report.pdf", "path": "Q3_Report.pdf"}]
-)
-session_id = result1['session_id']
+result1 = client.execute_chat("分析这份财报，提取营收、利润等关键指标")
+sid = result1["session_id"]
 
 # 第2轮：追问细节
-result2 = groot.execute_chat(
-    instruction="重点分析利润增长的主要原因",
-    session_id=session_id
-)
+result2 = client.execute_chat("重点分析利润增长的主要原因", session_id=sid)
 
 # 第3轮：生成报告
-result3 = groot.execute_chat(
-    instruction="生成一份分析报告摘要",
-    session_id=session_id
-)
+result3 = client.execute_chat("生成一份分析报告摘要", session_id=sid)
 ```
 
 ### 9.2 渐进式代码开发
 
 ```python
-# 第1轮：基础功能
-result1 = groot.execute_chat(
-    instruction="写一个 Python 数据处理工具类，包含 CSV 读取功能",
-    prompt="你是资深 Python 开发者"
-)
-session_id = result1['session_id']
+client = GrootClient("http://localhost:8080", "your-api-key")
 
-# 第2轮：添加功能
-result2 = groot.execute_chat(
-    instruction="添加数据清洗功能（处理缺失值、异常值）",
-    session_id=session_id
-)
+result1 = client.execute_chat("写一个 Python 数据处理工具类，包含 CSV 读取功能",
+                              prompt="你是资深 Python 开发者")
+sid = result1["session_id"]
 
-# 第3轮：添加测试
-result3 = groot.execute_chat(
-    instruction="写单元测试代码",
-    session_id=session_id
-)
+result2 = client.execute_chat("添加数据清洗功能", session_id=sid)
+result3 = client.execute_chat("写单元测试代码", session_id=sid)
 ```
 
 ---

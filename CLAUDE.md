@@ -10,8 +10,14 @@ groot/
 ├── internal/               # 内部模块（核心源码，不对外暴露）
 ├── pkg/                    # 公共工具包（可被外部项目引用）
 ├── docs/                   # 设计文档、开发计划等（不含用户手册）
+├── examples/               # 客户端代码示例（按语言分子目录）
+│   ├── python/             # Python 示例
+│   └── java/               # Java 示例（Maven 项目）
 ├── tests/                  # 测试目录（测试相关所有内容）
-│   ├── python/             # Python 测试程序
+│   ├── python/             # Python 系统测试
+│   ├── examples/           # 示例代码的测试
+│   │   ├── python/         # Python 示例测试
+│   │   └── java/           # Java 示例测试
 │   ├── logs/               # 测试运行日志
 │   ├── temp/               # 测试临时文件
 │   ├── reports/            # 测试报告（含测试说明 README.md）
@@ -25,8 +31,11 @@ groot/
 1. **源码目录**: `cmd/`、`internal/`、`pkg/` - 只放 Go 源码
 2. **用户手册**: `README.md`（根目录） - 用户使用说明，**每次更新使用手册必须修改此文件**
 3. **设计文档**: `docs/` - 设计文档、开发计划等内部文档
-4. **测试目录**: `tests/` - 测试程序、测试产物、临时文件、测试报告都放在这里
-5. **编译输出**: `bin/` - 编译产物放在这里，目录保留但内容被 gitignore
+4. **示例代码**: `examples/` - 客户端代码示例，按语言分子目录（`python/`、`java/` 等）
+5. **测试目录**: `tests/` - 所有测试代码和产物
+   - 示例的测试代码放在 `tests/examples/<语言>/`，**不允许放在 examples/ 目录下**
+   - 对于 Maven/Java 项目，需在 `pom.xml` 中配置 `<testSourceDirectory>` 指向 `tests/examples/java/`
+6. **编译输出**: `bin/` - 编译产物放在这里，目录保留但内容被 gitignore
 
 ### 禁止的行为
 
@@ -34,6 +43,7 @@ groot/
 - ❌ 不要在项目根目录创建 `logs/` 目录
 - ❌ 不要创建 `docs/user-guide.md` - 用户手册就是根目录的 `README.md`
 - ❌ 不要创建奇怪的目录名（如 `~/`）
+- ❌ 不要在 `examples/<语言>/` 目录下创建测试文件 - 测试一律放 `tests/examples/<语言>/`
 
 ## 开发工作流程
 
@@ -89,6 +99,9 @@ Plan → 编写代码 → 编写单元测试 → 运行单元测试 → 提交
 ```
 tests/
 ├── python/             # Python 系统测试（pytest）
+├── examples/           # 示例代码的测试
+│   ├── python/         # Python 示例测试
+│   └── java/           # Java 示例测试
 ├── fixtures/           # 测试数据文件
 ├── logs/               # 测试运行日志
 ├── temp/               # 测试临时文件

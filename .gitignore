@@ -28,6 +28,13 @@ go.work.sum
 .AppleDouble
 .LSOverride
 
+# Java 示例编译产物
+examples/java/target/
+
+# Python 示例测试缓存
+examples/python/__pycache__/
+tests/examples/python/__pycache__/
+
 # Python 测试环境（根目录 - 临时调试）
 /.venv/
 /.pytest_cache/
