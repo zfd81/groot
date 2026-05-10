@@ -134,7 +134,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
 | `logs/` | 日志存储目录（默认位置），可通过 `logging.file.directory` 配置 |
 
-> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见第四章"配置文件详解"。固定目录（skills/mcp/temp）位置不可更改。
+> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见第五章"配置文件详解"。固定目录（skills/mcp/temp）位置不可更改。
 
 ### 2.3 ID 格式说明
 
@@ -188,58 +188,48 @@ GROOT.md（缓存）
 
 ---
 
-## 三、安装部署
+## 三、CLI 命令参考
 
-### 3.1 系统要求
+Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 
-| 要求 | 说明 |
+### 3.1 命令总览
+
+| 命令 | 说明 |
 |------|------|
-| 操作系统 | Linux / macOS / Windows |
-| Go 版本 | Go 1.21+（仅源码编译需要） |
-| 内存 | 建议 512MB+ |
-| 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
+| `groot` | 启动 Groot 服务 |
+| `groot init` | 初始化工作目录 |
+| `groot status` | 查看运行中实例的状态 |
+| `groot skills list` | 列出所有已安装的 Skills |
+| `groot skills install <path>` | 安装 Skill |
+| `groot skills uninstall <name>` | 卸载 Skill |
+| `groot tail` | 实时日志查看 |
 
-### 3.2 初始化工作目录
+**全局选项：**
 
-Groot 使用前需要先初始化工作目录，创建必要的目录结构和配置文件。
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `-p, --port` | HTTP 端口 | 配置文件值 |
+| `-h, --help` | 显示帮助 | - |
+| `-v, --version` | 显示版本 | - |
 
-**初始化命令：**
+### 3.2 启动服务（groot）
+
+启动 Groot AI Agent 服务。
 
 ```bash
-# 初始化默认工作目录 ~/.groot
+groot                      # 使用默认配置启动
+groot -p 9090              # 指定端口启动
+```
+
+### 3.3 初始化工作目录（groot init）
+
+初始化工作目录，创建必要的目录结构和配置文件。
+
+```bash
 groot init
 ```
 
-**初始化输出示例：**
-
-```
-初始化 Groot 工作目录...
-
-工作目录 ~/.groot 创建成功
-目录 skills ~/.groot/skills 创建成功
-目录 mcp ~/.groot/mcp 创建成功
-目录 memory ~/.groot/memory 创建成功
-目录 logs ~/.groot/logs 创建成功
-配置文件 config.yaml 创建成功
-
-初始化完成
-
-下一步：
-  1. 编辑配置文件，填写 LLM API 信息
-     vim ~/.groot/config.yaml
-  2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）
-     export OPENAI_API_KEY="your-api-key"
-  3. 启动服务
-     groot
-```
-
-**初始化参数：**
-
-| 参数 | 缩写 | 说明 | 默认值 |
-|------|------|------|--------|
-| `--help` | `-h` | 显示帮助 | - |
-
-**创建的目录结构：**
+创建的目录结构：
 
 | 目录 | 说明 |
 |------|------|
@@ -249,7 +239,111 @@ groot init
 | `logs/` | 日志文件目录 |
 | `config.yaml` | 主配置文件 |
 
-### 3.3 配置文件说明
+### 3.4 查看实例状态（groot status）
+
+查看运行中 Groot 实例的状态和组件健康信息。
+
+```bash
+groot status                # 查看默认端口实例
+groot status -p 9090        # 查看指定端口实例
+```
+
+| 选项 | 说明 |
+|------|------|
+| `-p <port>` | 指定服务端口 |
+| `-h, --help` | 显示帮助 |
+
+**输出示例（实例运行中）：**
+
+```
+Groot 实例状态
+
+状态:      healthy
+版本:      1.0.0
+运行时间:  2h35m
+端口:      8080
+
+组件状态:
+  LLM:          healthy (gpt-4o)
+  MCP Servers:  healthy (3 个)
+  Skills:       healthy (5 个)
+  Memory:       healthy (12 个会话)
+
+活跃对话: 1
+```
+
+**输出示例（实例未运行）：**
+
+```
+未检测到运行中的 Groot 实例（端口 8080）
+提示: 请确认 Groot 是否已启动，或使用 -p 指定其他端口
+```
+
+### 3.5 管理 Skills（groot skills）
+
+管理 Groot 的 Skills 安装、卸载和查看。
+
+```bash
+groot skills list                          # 列出已安装的 Skills
+groot skills install /path/to/skill        # 安装 Skill（绝对路径）
+groot skills install ./my-skill            # 安装 Skill（相对路径）
+groot skills uninstall my-skill            # 卸载 Skill
+```
+
+**子命令说明：**
+
+| 子命令 | 说明 |
+|--------|------|
+| `list` | 列出 `{GROOT_HOME}/skills/` 下所有 Skill，含名称和描述 |
+| `install <path>` | 拷贝源目录到 skills 目录，重名则覆盖 |
+| `uninstall <name>` | 删除指定的 Skill 目录 |
+
+**`list` 输出示例：**
+
+```
+已安装的 Skills:
+
+  pdf_analyzer      分析PDF文档并生成摘要
+  code_generator    根据需求生成代码
+  broken_skill      ⚠ 无效
+
+共 2 个 Skill
+```
+
+### 3.6 日志查看（groot tail）
+
+实时查看 Groot 日志，类似 `tail -f`，支持格式化和过滤。
+
+```bash
+groot tail                  # 实时查看日志
+groot tail -n 50            # 查看最近 50 行后实时跟踪
+groot tail -l error         # 只查看错误级别日志
+groot tail -k "api_request" # 过滤包含关键词的日志
+```
+
+| 选项 | 说明 |
+|------|------|
+| `-n <N>` | 显示最后 N 行历史日志，默认 100 |
+| `-l <level>` | 按级别过滤：error/warn/info/debug |
+| `-k <keyword>` | 按关键词过滤 |
+| `-h, --help` | 显示帮助 |
+
+退出方式：按 `Ctrl+C`。
+
+---
+
+## 四、安装部署
+
+### 4.1 系统要求
+
+| 要求 | 说明 |
+|------|------|
+| 操作系统 | Linux / macOS / Windows |
+| Go 版本 | Go 1.21+（仅源码编译需要） |
+| 内存 | 建议 512MB+ |
+| 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
+
+### 4.2 配置文件说明
 
 初始化后生成的 `config.yaml` 包含完整配置模板，其中 **LLM 配置为必填项**，其他配置已注释并标注默认值。
 
@@ -291,7 +385,7 @@ api_key: sk-xxxxxxxxxxxx
 
 如需修改，取消对应配置的注释即可。
 
-### 3.4 环境变量
+### 4.3 环境变量
 
 **固定环境变量：**
 
@@ -311,7 +405,7 @@ export ANTHROPIC_API_KEY="sk-ant-xxxx"
 
 > **判断方法：** 配置文件有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
 
-### 3.5 安装方式
+### 4.4 安装方式
 
 #### 方式一：直接运行（推荐）
 
@@ -366,86 +460,7 @@ make build-all        # 编译所有平台（macOS/Linux/Windows）
 | `bin/groot-linux-amd64` | Linux AMD64 |
 | `bin/groot-windows-amd64.exe` | Windows AMD64 |
 
-### 3.6 启动服务
-
-**前置条件：** 请确保已完成初始化（运行 `groot init`）并正确配置了 LLM 信息。
-
-```bash
-# 方式一：预编译二进制
-groot
-
-# 方式二：源码编译
-./bin/groot
-
-# 指定端口
-groot -p 9090
-
-# 查看帮助
-groot --help
-
-# 查看版本
-groot --version
-```
-
-**启动参数：**
-
-| 参数 | 缩写 | 说明 | 默认值 |
-|------|------|------|--------|
-| `--port` | `-p` | HTTP端口 | 配置文件值 |
-| `--help` | `-h` | 显示帮助 | - |
-| `--version` | `-v` | 显示版本 | - |
-
-**启动输出示例：**
-
-```
-Groot Agent 启动中...
-  home: ~/.groot
-  config: ~/.groot/config.yaml
-
-Skills 加载完成  count=4
-MCP 加载完成  count=2
-
-API 服务启动
-  host: 0.0.0.0
-  port: 8080
-```
-
-**常见启动错误：**
-
-| 错误信息 | 原因 | 解决方法 |
-|----------|------|----------|
-| `配置文件不存在，请先运行 'groot init' 初始化` | 未执行初始化 | 运行 `groot init` |
-| `环境变量 OPENAI_API_KEY 未设置` | API Key 使用环境变量引用但未设置 | `export OPENAI_API_KEY="your-key"` 或直接填写 |
-| `模型 gpt-4o 的 api_key 为空` | 配置文件中 api_key 未填写 | 编辑 config.yaml 填写 api_key |
-
-### 3.7 验证安装
-
-```bash
-# 使用内置命令查看实例状态（推荐）
-groot status
-
-# 或使用 curl 手动调用健康检查 API
-curl http://localhost:8080/health
-```
-
-# 预期响应
-{
-  "status": "healthy",
-  "version": "1.0.0",
-  "uptime": "1m",
-  "checks": {
-    "llm": {"status": "healthy", "info": {"model": "gpt-4o"}},
-    "mcp_servers": {"status": "healthy", "info": [{"name": "file_operations", "tools_count": 7}]},
-    "skills": {"status": "healthy", "info": {"count": 4}},
-    "memory": {"status": "healthy", "info": {"sessions": 0}}
-  },
-  "metrics": {
-    "chats_running": 0
-  }
-}
-```
-
-### 3.8 停止服务
+### 4.5 停止服务
 
 ```bash
 # 发送终止信号
@@ -462,141 +477,13 @@ kill -SIGTERM <pid>
 - 刷新日志
 - 退出程序
 
-### 3.9 日志查看命令（groot tail）
+## 五、配置文件详解
 
-Groot 提供了类似 `tail -f` 的实时日志查看命令，方便开发调试和运维监控。
-
-**基本用法：**
-
-```bash
-# 实时查看日志（类似 tail -f）
-groot tail
-
-# 查看最近 50 行日志后实时跟踪
-groot tail -n 50
-
-# 只查看错误级别日志
-groot tail -l error
-
-# 过滤包含特定关键词的日志
-groot tail -k "api_request"
-
-# 组合使用：查看最近 100 行错误日志并实时跟踪
-groot tail -n 100 -l error
-```
-
-**命令参数：**
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `-n N` | 显示最后 N 行历史日志后实时跟踪 | `groot tail -n 50` |
-| `-l level` | 按级别过滤，可选值：error/warn/info/debug | `groot tail -l error` |
-| `-k keyword` | 关键词过滤，只显示包含关键词的日志 | `groot tail -k "connection"` |
-
-**输出格式：**
-
-日志以易读格式输出，带颜色高亮：
-
-```
-2026-04-21T19:18:38+08:00 INFO   api/server.go:42  API 服务启动  event=api_request  port=8080
-2026-04-21T19:18:40+08:00 WARN   system/memory.go:8  内存使用率偏高  usage=85%
-2026-04-21T19:18:42+08:00 ERROR  service/connection.go:15  服务连接失败  error="connection refused"
-```
-
-**颜色说明：**
-
-| 级别 | 颜色 | 说明 |
-|------|------|------|
-| ERROR | 红色 | 错误日志，需要关注 |
-| WARN | 黄色 | 警告日志，可能有问题 |
-| INFO | 绿色 | 正常信息日志 |
-| DEBUG | 灰色 | 调试日志，默认不显示 |
-
-**退出方式：**
-
-按 `Ctrl+C` 退出实时跟踪。
-
-**日志文件位置：**
-
-日志文件默认存放在 `{GROOT_HOME}/logs/groot-{YYYY-MM-DD}.log`，可通过配置文件修改：
-
-```yaml
-logging:
-  file:
-    directory: logs                # 日志目录
-    filename_pattern: groot-{date}.log  # 文件名模式
-```
-
-### 3.10 实例状态查看命令（groot status）
-
-Groot 提供了 `status` 子命令，用于查看运行中 Groot 实例的运行状态和组件健康信息。
-
-**基本用法：**
-
-```bash
-# 查看默认端口实例状态
-groot status
-
-# 查看指定端口实例状态
-groot status -p 9090
-```
-
-**命令参数：**
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `-p port` | 指定 Groot 服务端口 | `groot status -p 9090` |
-| `-h, --help` | 显示帮助 | `groot status -h` |
-
-**输出示例（实例运行中）：**
-
-```
-Groot 实例状态
-
-状态:      healthy
-版本:      1.0.0
-运行时间:  2h35m
-端口:      8080
-
-组件状态:
-  LLM:          healthy (gpt-4o)
-  MCP Servers:  healthy (3 个)
-  Skills:       healthy (5 个)
-  Memory:       healthy (12 个会话)
-
-活跃对话:  1
-```
-
-**输出示例（实例未运行）：**
-
-```
-未检测到运行中的 Groot 实例（端口 8080）
-提示: 请确认 Groot 是否已启动，或使用 -p 指定其他端口
-```
-
-**显示信息说明：**
-
-| 字段 | 说明 |
-|------|------|
-| 状态 | 实例整体健康状态（healthy/unhealthy） |
-| 版本 | Groot 版本号 |
-| 运行时间 | 实例已运行时长 |
-| 端口 | 服务监听端口 |
-| LLM | LLM 连接状态及当前模型名称 |
-| MCP Servers | MCP 服务数量 |
-| Skills | 已加载 Skills 数量 |
-| Memory | 会话存储中的会话数量 |
-| 活跃对话 | 当前正在执行的对话数 |
-
----
-
-## 四、配置文件详解
-
-### 4.1 配置文件位置
+### 5.1 配置文件位置
 
 首次启动时，Groot 会自动生成默认配置文件 `{GROOT_HOME}/config.yaml`。
 
-### 4.2 完整配置文件示例
+### 5.2 完整配置文件示例
 
 ```yaml
 # Groot Agent 配置文件
@@ -694,7 +581,7 @@ logging:
     compress: false                # 是否压缩旧日志文件
 ```
 
-### 4.3 目录配置说明
+### 5.3 目录配置说明
 
 所有目录配置支持相对路径和绝对路径：
 
@@ -729,7 +616,7 @@ logging:
 | `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
 | `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
 
-### 4.4 配置字段详解
+### 5.4 配置字段详解
 
 #### Agent 配置
 
@@ -832,7 +719,7 @@ logging:
 | `file.max_size` | 否 | 单个日志文件最大大小（MB），默认 `100` |
 | `file.compress` | 否 | 是否压缩旧日志文件，默认 `false` |
 
-### 4.5 权限说明
+### 5.5 权限说明
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
@@ -847,7 +734,7 @@ logging:
 | `health` | GET /health | 健康检查 |
 | `all` | 以上全部 | 全部权限 |
 
-### 4.6 配置热更新
+### 5.6 配置热更新
 
 **支持热更新的配置：**
 - Skills 配置：修改 SKILL.md 文件自动生效
@@ -858,11 +745,11 @@ logging:
 
 ---
 
-## 五、Skills 配置（固定目录）
+## 六、Skills 配置（固定目录）
 
 Skills 目录固定位于 `{GROOT_HOME}/skills`，无需在配置文件中指定。
 
-### 5.1 Skills 目录结构
+### 6.1 Skills 目录结构
 
 ```
 {GROOT_HOME}/skills/
@@ -874,7 +761,7 @@ Skills 目录固定位于 `{GROOT_HOME}/skills`，无需在配置文件中指定
     └── SKILL.md
 ```
 
-### 5.2 Skill 文件格式
+### 6.2 Skill 文件格式
 
 每个 Skill 是一个目录，包含一个 `SKILL.md` 文件，采用 YAML frontmatter + Markdown 格式：
 
@@ -907,7 +794,7 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 }
 ```
 
-### 5.3 热插拔机制
+### 6.3 热插拔机制
 
 - 启用 `skills.hot_reload.enabled: true` 后，修改 `SKILL.md` 自动生效
 - 防抖延迟 `debounce_delay` 防止编辑过程中频繁触发加载
@@ -917,9 +804,9 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 
 ---
 
-## 六、MCP 工具配置
+## 七、MCP 工具配置
 
-### 6.1 MCP 配置目录（固定位置）
+### 7.1 MCP 配置目录（固定位置）
 
 MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定。
 
@@ -932,7 +819,7 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 
 每个 MCP 工具使用独立的 JSON 配置文件。添加、修改或删除 MCP 配置后需要重启服务才能生效。
 
-### 6.2 连接类型
+### 7.2 连接类型
 
 | 类型 | 说明 | 适用场景 |
 |------|------|---------|
@@ -940,7 +827,7 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 | `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
 | `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
 
-### 6.3 MCP 配置示例
+### 7.3 MCP 配置示例
 
 **stdio 类型（本地命令行工具）：**
 
@@ -1018,9 +905,9 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 
 ---
 
-## 七、API 详细说明
+## 八、API 详细说明
 
-### 7.1 API 列表
+### 8.1 API 列表
 
 | API | 方法 | 用途 |
 |-----|------|------|
@@ -1034,7 +921,7 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 | `/skills` | GET | 列出可用 Skills |
 | `/tools` | GET | 列出可用 MCP 工具 |
 
-### 7.2 认证方式
+### 8.2 认证方式
 
 如果启用了认证（`security.auth.enabled: true`），需要在请求头携带 API Key：
 
@@ -1046,7 +933,7 @@ Header 名称可在配置文件中自定义。
 
 ---
 
-### 7.3 POST /chat - 执行对话（核心接口）
+### 8.3 POST /chat - 执行对话（核心接口）
 
 **请求 Header：**
 
@@ -1300,7 +1187,7 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 7.4 DELETE /chat/{sid} - 取消对话
+### 8.4 DELETE /chat/{sid} - 取消对话
 
 取消指定会话中正在执行的对话。
 
@@ -1337,7 +1224,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 7.5 GET /chat/status/{sid} - 查询对话状态
+### 8.5 GET /chat/status/{sid} - 查询对话状态
 
 查询指定会话中最近一次对话的运行状态。
 
@@ -1378,7 +1265,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 7.6 GET /chat/{sid}/{cid} - 查询对话详情
+### 8.6 GET /chat/{sid}/{cid} - 查询对话详情
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。
 
@@ -1420,7 +1307,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 7.7 GET /sess/{sid} - 查询会话详情
+### 8.7 GET /sess/{sid} - 查询会话详情
 
 查询会话详情，包括完整对话历史（所有轮次）。
 
@@ -1467,7 +1354,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 7.8 GET /sess/history - 查询会话列表
+### 8.8 GET /sess/history - 查询会话列表
 
 查询所有会话列表，支持分页。参数通过 URL Query String 传递。
 
@@ -1505,7 +1392,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.9 GET /health - 健康检查
+### 8.9 GET /health - 健康检查
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -1556,7 +1443,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.10 GET /skills - 列出可用 Skills
+### 8.10 GET /skills - 列出可用 Skills
 
 **响应示例：**
 ```json
@@ -1571,7 +1458,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.11 GET /tools - 列出可用工具
+### 8.11 GET /tools - 列出可用工具
 
 列出所有可用 MCP 工具，按来源分组返回。
 
@@ -1606,11 +1493,11 @@ X-API-Key: your-secret-key
 
 ---
 
-## 八、客户端代码示例
+## 九、客户端代码示例
 
 完整的客户端代码及测试见 [`examples/`](examples/) 目录。
 
-### 8.1 Python
+### 9.1 Python
 
 ```python
 from groot_client import GrootClient
@@ -1627,7 +1514,7 @@ result2 = client.execute_chat("生成摘要", session_id=result["session_id"])
 
 > 完整代码及 15 个测试用例：[examples/python/](examples/python/)
 
-### 8.2 Java
+### 9.2 Java
 
 ```java
 GrootClient client = new GrootClient("http://localhost:8080", "your-api-key");
@@ -1646,9 +1533,9 @@ ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), n
 
 ---
 
-## 九、使用场景示例
+## 十、使用场景示例
 
-### 9.1 多轮文档分析
+### 10.1 多轮文档分析
 
 ```python
 client = GrootClient("http://localhost:8080", "your-api-key")
@@ -1664,7 +1551,7 @@ result2 = client.execute_chat("重点分析利润增长的主要原因", session
 result3 = client.execute_chat("生成一份分析报告摘要", session_id=sid)
 ```
 
-### 9.2 渐进式代码开发
+### 10.2 渐进式代码开发
 
 ```python
 client = GrootClient("http://localhost:8080", "your-api-key")
@@ -1679,7 +1566,7 @@ result3 = client.execute_chat("写单元测试代码", session_id=sid)
 
 ---
 
-## 十、常见问题
+## 十一、常见问题
 
 ### Q1: 启动时报错 "配置文件不存在，请先运行 'groot init' 初始化"
 
