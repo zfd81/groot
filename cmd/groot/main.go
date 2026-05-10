@@ -72,6 +72,9 @@ func main() {
 		case "skills":
 			handleSkillsCommand(args[1:])
 			return
+		case "mcp":
+				handleMcpCommand(args[1:])
+				return
 		case "tail":
 			handleTailCommand(args[1:])
 		default:
@@ -107,6 +110,19 @@ func handleSkillsCommand(args []string) {
 	}
 
 	if err := cmd.RunSkills(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleMcpCommand(args []string) {
+	flags, err := cmd.ParseMcpFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+
+	if err := cmd.RunMcp(flags); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -317,6 +333,7 @@ func printHelp() {
 	fmt.Println("  init              初始化工作目录")
 	fmt.Println("  status            查看运行中实例的状态")
 	fmt.Println("  skills            管理 Skills（list/install/uninstall）")
+	fmt.Println("  mcp               管理 MCP Servers（list）")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
@@ -336,6 +353,9 @@ func printHelp() {
 	fmt.Println("  install <path>    安装 Skill")
 	fmt.Println("  uninstall <name>  卸载 Skill")
 	fmt.Println()
+	fmt.Println("mcp 子命令:")
+	fmt.Println("  list              列出所有已配置的 MCP Servers")
+	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
 	fmt.Println("  -l <level>        按日志级别过滤 (error/warn/info/debug)")
@@ -353,6 +373,7 @@ func printHelp() {
 	fmt.Println("  groot skills list             # 列出所有 Skills")
 	fmt.Println("  groot skills install ./my-skill  # 安装 Skill")
 	fmt.Println("  groot skills uninstall my-skill  # 卸载 Skill")
+	fmt.Println("  groot mcp list                  # 列出所有 MCP Servers")
 	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
 	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")

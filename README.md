@@ -202,6 +202,7 @@ Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 | `groot skills list` | 列出所有已安装的 Skills |
 | `groot skills install <path>` | 安装 Skill |
 | `groot skills uninstall <name>` | 卸载 Skill |
+| `groot mcp list` | 列出所有已配置的 MCP Servers |
 | `groot tail` | 实时日志查看 |
 
 **全局选项：**
@@ -310,7 +311,34 @@ groot skills uninstall my-skill            # 卸载 Skill
 共 2 个 Skill
 ```
 
-### 3.6 日志查看（groot tail）
+### 3.6 管理 MCP Servers（groot mcp）
+
+管理 Groot 的 MCP Servers 配置查看。
+
+```bash
+groot mcp list               # 列出所有已配置的 MCP Servers
+```
+
+**子命令说明：**
+
+| 子命令 | 说明 |
+|--------|------|
+| `list` | 列出 `{GROOT_HOME}/mcp/` 下所有 MCP 配置，含名称、类型、状态和描述 |
+
+**`list` 输出示例：**
+
+```
+NAME             TYPE              STATUS    LAST_UPDATED         DESCRIPTION
+---------------  ----------------  --------  -------------------  --------------------
+web-search       stdio             active     2026-05-01 10:30     基于 SearXNG 的网页搜索
+filesystem       stdio             active     2026-05-08 14:22     本地文件系统操作
+database         streamable_http   inactive   2026-05-09 09:15     数据库查询服务
+broken-config    -                 -          -                    ⚠ 配置解析失败
+
+共 4 个 MCP Server（2 个活跃，1 个未激活，1 个异常）
+```
+
+### 3.7 日志查看（groot tail）
 
 实时查看 Groot 日志，类似 `tail -f`，支持格式化和过滤。
 
