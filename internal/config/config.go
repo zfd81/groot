@@ -15,8 +15,10 @@ type Config struct {
 	Memory     MemoryConfig     `yaml:"memory"`
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
-	Security   SecurityConfig   `yaml:"security"`
-	Logging    LoggingConfig    `yaml:"logging"`
+	Schedule  ScheduleConfig  `yaml:"schedule"`
+	Message   MessageConfig   `yaml:"message"`
+	Security  SecurityConfig  `yaml:"security"`
+	Logging   LoggingConfig   `yaml:"logging"`
 }
 
 // AgentConfig holds agent metadata
@@ -69,6 +71,30 @@ type MemoryConfig struct {
 	RetentionDays   int    `yaml:"retention_days"`   // 保留天数
 	CleanupSchedule string `yaml:"cleanup_schedule"` // 清理时间 HH:MM
 	HistoryWindow   int    `yaml:"history_window"`   // LLM 上下文窗口（轮次），-1 不限制
+}
+
+// ScheduleConfig 定时任务调度配置
+type ScheduleConfig struct {
+	MaxConcurrentTasks int    `yaml:"max_concurrent_tasks"` // 最大并发执行数
+	SyncInterval       string `yaml:"sync_interval"`        // 目录同步间隔
+}
+
+// MessageConfig 消息通知配置
+type MessageConfig struct {
+	QueueSize int                   `yaml:"queue_size"` // 发送队列容量
+	Workers   int                   `yaml:"workers"`    // 发送工作协程数
+	Senders   map[string]SenderConf `yaml:"senders"`    // 发送器配置
+}
+
+// SenderConf 单个发送器配置
+type SenderConf struct {
+	Enabled  bool   `yaml:"enabled"`
+	URL      string `yaml:"url,omitempty"`
+	SMTPHost string `yaml:"smtp_host,omitempty"`
+	SMTPPort int    `yaml:"smtp_port,omitempty"`
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	From     string `yaml:"from,omitempty"`
 }
 
 // ReactConfig holds ReAct execution limits

@@ -184,7 +184,36 @@
 | TestSSEStreamingOutput | test_sse_flow.py | SSE 流式输出 |
 | TestSSEPrintDebug | test_sse_flow.py | SSE 调试输出 |
 
-### 2.17 补充测试
+### 2.17 调度 API 测试
+
+| 测试类 | 测试文件 | 测试内容 |
+|-------|---------|---------|
+| TestScheduleListAPI | test_schedule_api.py | 列出定时任务（空列表、有数据、状态过滤） |
+| TestScheduleGetAPI | test_schedule_api.py | 查询任务详情（存在、不存在） |
+| TestScheduleDeleteAPI | test_schedule_api.py | 删除定时任务 |
+| TestScheduleDisableAPI | test_schedule_api.py | 禁用定时任务（active → disabled） |
+| TestScheduleEnableAPI | test_schedule_api.py | 启用定时任务（disabled → active） |
+| TestScheduleArchiveAPI | test_schedule_api.py | 归档定时任务（active/disabled → archive） |
+| TestScheduleHistoryAPI | test_schedule_api.py | 查询执行历史（空、有记录） |
+| TestScheduleAPIAuth | test_schedule_api.py | 调度 API 认证（401 验证） |
+| TestScheduleAPIResponseFormat | test_schedule_api.py | 调度 API 响应格式验证 |
+| TestScheduleToolsVisible | test_schedule_api.py | 调度工具在 /tools 中可见 |
+
+### 2.18 调度 CLI 测试
+
+| 测试类 | 测试文件 | 测试内容 |
+|-------|---------|---------|
+| TestScheduleCLIList | test_schedule_cli.py | CLI 列出任务（空、有数据、表头） |
+| TestScheduleCLIInspect | test_schedule_cli.py | CLI 查看任务详情（JSON 格式） |
+| TestScheduleCLIHistory | test_schedule_cli.py | CLI 查看执行历史（空、有记录） |
+| TestScheduleCLIDelete | test_schedule_cli.py | CLI 删除任务 |
+| TestScheduleCLIDisable | test_schedule_cli.py | CLI 禁用任务 |
+| TestScheduleCLIEnable | test_schedule_cli.py | CLI 启用任务 |
+| TestScheduleCLIArchive | test_schedule_cli.py | CLI 归档任务 |
+| TestScheduleCLIHelp | test_schedule_cli.py | CLI 帮助信息（--help、子命令帮助） |
+| TestScheduleCLIEdgeCases | test_schedule_cli.py | CLI 边界条件（长名称、特殊字符、调度格式） |
+
+### 2.19 补充测试
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
@@ -232,9 +261,9 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Python 系统测试 | 93 个类 | 23 |
+| Python 系统测试 | 112 个类 | 25 |
 
-**总计**: 约 115+ 个测试点覆盖核心功能。
+**总计**: 约 135+ 个测试点覆盖核心功能。
 
 ---
 

@@ -356,21 +356,21 @@ func (m *Manager) Cleanup(ctx context.Context) (int, error) {
 			continue
 		}
 
-		// 读取 history.json 获取真实创建时间
-		history, err := m.GetHistory(sessionID)
+		sessionDir := m.sessionDir(sessionID)
+		info, err := os.Stat(sessionDir)
 		if err != nil {
-			m.log.Info("跳过会话（无法读取 history）: " + sessionID + ", error: " + err.Error())
+			m.log.Info("跳过会话（无法获取目录信息）: " + sessionID + ", error: " + err.Error())
 			continue
 		}
 
-		if history.CreatedAt.Before(cutoff) {
-			sessionDir := m.sessionDir(sessionID)
+		if info.ModTime().Before(cutoff) {
 			if err := os.RemoveAll(sessionDir); err != nil {
 				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
 				continue
 			}
 			deleted++
-			m.log.Info("清理会话: " + sessionID + ", 创建时间: " + history.CreatedAt.Format("2006-01-02") + ", 轮数: " + fmt.Sprintf("%d", len(history.Messages)))
+			roundCount := m.GetRoundCount(sessionID)
+			m.log.Info("清理会话: " + sessionID + ", 最后活跃: " + info.ModTime().Format("2006-01-02") + ", 轮数: " + fmt.Sprintf("%d", roundCount))
 		}
 	}
 

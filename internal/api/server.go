@@ -18,6 +18,7 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/ratelimit"
+	"github.com/zfd81/groot/internal/schedule"
 )
 
 // Server represents the API server
@@ -38,6 +39,8 @@ func NewServer(
 	skillBackend einoskill.Backend,
 	skillMiddleware adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
+	exec *agent.Executor,
+	scheduleMgr *schedule.Manager,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -53,9 +56,6 @@ func NewServer(
 
 	// Create attachment handler (temp directory is fixed at {memoryDir}/temp)
 	attHandler := attachment.NewHandler(cfg.Attachment, memoryDir)
-
-	// Create executor
-	exec := agent.NewExecutor(mem, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, cfg, log)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
@@ -78,11 +78,15 @@ func NewServer(
 	healthH := handler.NewHealthHandler(cfg, skillBackend, mcpMgr, mem, runtime, log)
 	skillsH := handler.NewSkillsHandler(skillBackend)
 	toolsH := handler.NewToolsHandler(mcpMgr, log)
+	var scheduleH *handler.ScheduleHandler
+	if scheduleMgr != nil {
+		scheduleH = handler.NewScheduleHandler(scheduleMgr, log)
+	}
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW,
 		chatH, cancelH, statusH, detailH, sessionH,
-		healthH, skillsH, toolsH)
+		healthH, skillsH, toolsH, scheduleH)
 
 	return &Server{
 		hertz:  h,

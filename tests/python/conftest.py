@@ -201,6 +201,10 @@ def server():
     os.makedirs(f"{TEST_HOME}/api", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/memory", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/logs", exist_ok=True)
+    os.makedirs(f"{TEST_HOME}/schedules/active", exist_ok=True)
+    os.makedirs(f"{TEST_HOME}/schedules/disabled", exist_ok=True)
+    os.makedirs(f"{TEST_HOME}/schedules/archive", exist_ok=True)
+    os.makedirs(f"{TEST_HOME}/schedules/executions", exist_ok=True)
 
     # 写入测试配置（无论服务器是否已运行，确保配置正确）
     # 使用本地 LLM 配置
@@ -243,6 +247,18 @@ def server():
             "retention_days": 1,
             "cleanup_schedule": "02:00"
         },
+        "schedule": {
+            "max_concurrent_tasks": 10,
+            "sync_interval": "30s"
+        },
+        "message": {
+            "queue_size": 10,
+            "workers": 1,
+            "senders": {
+                "webhook": {"enabled": false, "url": ""},
+                "email": {"enabled": false, "smtp_host": "", "smtp_port": 587, "username": "", "password": "", "from": ""}
+            }
+        },
         "logging": {"level": "debug", "format": "json", "output": ["stdout"]},
         "attachment": {
             "max_size": 50,
@@ -279,7 +295,7 @@ def server():
     env["GROOT_API_KEY"] = TEST_API_KEY
 
     process = subprocess.Popen(
-        [GROOT_BIN, "-H", TEST_HOME, "-p", TEST_PORT],
+        [GROOT_BIN, "-p", TEST_PORT],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE

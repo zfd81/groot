@@ -14,6 +14,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/go-co-op/gocron/v2"
+
+	"github.com/cloudwego/eino/adk"
 	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/eino-ext/adk/backend/local"
 
@@ -26,6 +29,10 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/message"
+	"github.com/zfd81/groot/internal/message/senders"
+	"github.com/zfd81/groot/internal/schedule"
+	"github.com/zfd81/groot/internal/scheduler"
 )
 
 var (
@@ -75,6 +82,9 @@ func main() {
 		case "mcp":
 				handleMcpCommand(args[1:])
 				return
+		case "schedule":
+			handleScheduleCommand(args[1:])
+			return
 		case "tail":
 			handleTailCommand(args[1:])
 		default:
@@ -123,6 +133,19 @@ func handleMcpCommand(args []string) {
 	}
 
 	if err := cmd.RunMcp(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleScheduleCommand(args []string) {
+	flags, err := cmd.ParseScheduleFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+
+	if err := cmd.RunSchedule(flags); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -268,13 +291,82 @@ func startServer(homeDir string, port int) {
 		log.Error("无法启动 GROOT.md watcher", zap.Error(err))
 	}
 
-	// Start cleanup scheduler
-	cleanupScheduler := memory.NewCleanupScheduler(memMgr, cfg.Memory.CleanupSchedule, log)
-	cleanupScheduler.Start()
-	log.Info("清理调度器已启动", zap.String("schedule", cfg.Memory.CleanupSchedule))
+	// Initialize message layer
+	msgLayer := message.NewLayer(cfg.Message, log)
+	// Register all senders
+	if cfg.Message.Senders["webhook"].Enabled {
+		msgLayer.Register("webhook", senders.NewWebhook(cfg.Message.Senders["webhook"].URL), cfg.Message.Senders["webhook"])
+	}
+	if cfg.Message.Senders["email"].Enabled {
+		sc := cfg.Message.Senders["email"]
+		msgLayer.Register("email", senders.NewEmail(sc.SMTPHost, sc.SMTPPort, sc.Username, sc.Password, sc.From), sc)
+	}
+	msgLayer.Register("stdout", senders.NewStdout(), config.SenderConf{Enabled: true})
+	msgLayer.Start()
+	log.Info("消息层已启动")
+
+	// Create executor (used by both API server and schedule runner)
+	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, *cfg, log)
+
+	// Create unified scheduler
+	maxConcurrent := cfg.Schedule.MaxConcurrentTasks
+	if maxConcurrent <= 0 {
+		maxConcurrent = 10
+	}
+	sched, err := scheduler.New(log, maxConcurrent)
+
+	// Declare scheduleMgr outside if block for use in api.NewServer
+	var scheduleMgr *schedule.Manager
+
+	if err != nil {
+		log.Error("无法创建调度器", zap.Error(err))
+	} else {
+		// Initialize schedule module
+		scheduleDir := filepath.Join(homeDir, "schedules")
+		scheduleStorage := schedule.NewStorage(scheduleDir, log)
+		if err := scheduleStorage.EnsureDirs(); err != nil {
+			log.Error("无法创建调度目录", zap.Error(err))
+		}
+
+		// Create runner
+		scheduleRunner := schedule.NewRunner(exec, memMgr, msgLayer, scheduleStorage, log)
+
+		// Create engine and load active tasks
+		scheduleEngine := schedule.NewEngine(sched, scheduleRunner, scheduleStorage, log)
+		if err := scheduleEngine.Start(); err != nil {
+			log.Error("无法启动调度引擎", zap.Error(err))
+		}
+
+		// Create manager
+		scheduleMgr = schedule.NewManager(scheduleStorage, scheduleEngine, scheduleRunner, log)
+
+		// Register built-in schedule tools
+		scheduleTools := schedule.NewScheduleTools(scheduleMgr)
+		mcpMgr.RegisterBuiltinTools(scheduleTools)
+		log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
+
+		// Register cleanup task
+		cleanupHour, cleanupMinute := schedule.ParseCleanupTime(cfg.Memory.CleanupSchedule)
+		sched.AddDaily(cleanupHour, cleanupMinute, gocron.NewTask(memory.NewCleanupTask(memMgr, log)), "system-cleanup", "cleanup")
+
+		// Register sync task
+		syncInterval, _ := time.ParseDuration(cfg.Schedule.SyncInterval)
+		if syncInterval <= 0 {
+			syncInterval = 30 * time.Second
+		}
+		sched.AddDuration(syncInterval, gocron.NewTask(schedule.NewSyncTask(scheduleEngine, scheduleStorage, log)), "system-sync", "sync")
+
+		// Start scheduler
+		sched.Start()
+		log.Info("统一调度器已启动",
+			zap.Int("max_concurrent", maxConcurrent),
+			zap.Int("cleanup_hour", cleanupHour),
+			zap.Int("cleanup_minute", cleanupMinute),
+		)
+	}
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, scheduleMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -293,8 +385,13 @@ func startServer(homeDir string, port int) {
 		// Stop watchers
 		grootMdWatcher.Stop()
 
-		// Stop cleanup scheduler
-		cleanupScheduler.Stop()
+		// Stop scheduler
+		if sched != nil {
+			sched.Stop()
+		}
+
+		// Stop message layer
+		msgLayer.Stop()
 
 		// Close MCP clients
 		mcpMgr.Close()
@@ -334,6 +431,7 @@ func printHelp() {
 	fmt.Println("  status            查看运行中实例的状态")
 	fmt.Println("  skills            管理 Skills（list/install/uninstall）")
 	fmt.Println("  mcp               管理 MCP Servers（list）")
+	fmt.Println("  schedule          管理定时任务（list/inspect/history 等）")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
@@ -355,6 +453,15 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("mcp 子命令:")
 	fmt.Println("  list              列出所有已配置的 MCP Servers")
+	fmt.Println()
+	fmt.Println("schedule 子命令:")
+	fmt.Println("  list              列出所有定时任务")
+	fmt.Println("  inspect <id>      查看任务详情")
+	fmt.Println("  history <id>      查看执行历史")
+	fmt.Println("  delete <id>       删除任务")
+	fmt.Println("  disable <id>      禁用任务")
+	fmt.Println("  enable <id>       启用任务")
+	fmt.Println("  archive <id>      归档任务")
 	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")

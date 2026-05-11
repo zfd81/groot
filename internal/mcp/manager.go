@@ -23,37 +23,63 @@ import (
 
 // Manager manages all MCP configurations and tool registry
 type Manager struct {
-	mcps      map[string]*MCPConfig
-	clients   map[string]client.MCPClient    // mcp-go clients per MCP
-	einoTools map[string]tool.BaseTool       // eino tools (for engine)
-	toolInfos map[string]*ToolInfo           // tool metadata (for API)
-	errors    map[string]string              // MCP discovery errors
-	logger    *logger.Logger
-	mu        sync.RWMutex
+	mcps         map[string]*MCPConfig
+	clients      map[string]client.MCPClient    // mcp-go clients per MCP
+	einoTools    map[string]tool.BaseTool       // eino tools from MCP servers
+	builtinTools map[string]tool.BaseTool       // built-in tools (e.g., schedule)
+	toolInfos    map[string]*ToolInfo           // tool metadata (for API)
+	errors       map[string]string              // MCP discovery errors
+	logger       *logger.Logger
+	mu           sync.RWMutex
 }
 
 // NewManager creates a new MCP manager
 func NewManager(log *logger.Logger) *Manager {
 	return &Manager{
-		mcps:      make(map[string]*MCPConfig),
-		clients:   make(map[string]client.MCPClient),
-		einoTools: make(map[string]tool.BaseTool),
-		toolInfos: make(map[string]*ToolInfo),
-		errors:    make(map[string]string),
-		logger:    log,
+		mcps:         make(map[string]*MCPConfig),
+		clients:      make(map[string]client.MCPClient),
+		einoTools:    make(map[string]tool.BaseTool),
+		builtinTools: make(map[string]tool.BaseTool),
+		toolInfos:    make(map[string]*ToolInfo),
+		errors:       make(map[string]string),
+		logger:       log,
 	}
 }
 
-// GetTools returns all eino tools for engine usage
+// GetTools returns all eino tools (MCP + builtin) for engine usage
 func (m *Manager) GetTools() []tool.BaseTool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make([]tool.BaseTool, 0, len(m.einoTools))
+	result := make([]tool.BaseTool, 0, len(m.einoTools)+len(m.builtinTools))
 	for _, t := range m.einoTools {
 		result = append(result, t)
 	}
+	for _, t := range m.builtinTools {
+		result = append(result, t)
+	}
 	return result
+}
+
+// RegisterBuiltinTools registers built-in tools (e.g., schedule tools)
+func (m *Manager) RegisterBuiltinTools(tools map[string]tool.BaseTool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for name, t := range tools {
+		m.builtinTools[name] = t
+		info, err := t.Info(context.Background())
+		if err != nil || info == nil {
+			continue
+		}
+		m.toolInfos[name] = &ToolInfo{
+			Name:        info.Name,
+			Description: info.Desc,
+			MCP:         "schedule",
+		}
+	}
+
+	m.logger.Info("注册内置工具", zap.Int("count", len(tools)))
 }
 
 // Register adds an MCP configuration with tools

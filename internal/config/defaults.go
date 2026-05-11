@@ -38,6 +38,18 @@ func DefaultConfig() *Config {
 			CleanupSchedule: "02:00",
 			HistoryWindow:   20,
 		},
+		Schedule: ScheduleConfig{
+			MaxConcurrentTasks: 3,
+			SyncInterval:       "30s",
+		},
+		Message: MessageConfig{
+			QueueSize: 256,
+			Workers:   2,
+			Senders: map[string]SenderConf{
+				"webhook": {Enabled: false},
+				"email":   {Enabled: false, SMTPPort: 587},
+			},
+		},
 		React: ReactConfig{
 			MaxIterations:   20,
 			MaxTokens:       100000,

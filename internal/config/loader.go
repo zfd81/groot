@@ -79,6 +79,22 @@ func applyDefaults(cfg *Config) {
 		cfg.Memory.CleanupSchedule = "02:00"
 	}
 
+	// Schedule defaults
+	if cfg.Schedule.MaxConcurrentTasks == 0 {
+		cfg.Schedule.MaxConcurrentTasks = 3
+	}
+	if cfg.Schedule.SyncInterval == "" {
+		cfg.Schedule.SyncInterval = "30s"
+	}
+
+	// Message defaults
+	if cfg.Message.QueueSize == 0 {
+		cfg.Message.QueueSize = 256
+	}
+	if cfg.Message.Workers == 0 {
+		cfg.Message.Workers = 2
+	}
+
 	// React defaults
 	if cfg.React.MaxIterations == 0 {
 		cfg.React.MaxIterations = 20

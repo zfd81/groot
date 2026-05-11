@@ -19,6 +19,7 @@ func RegisterRoutes(h *server.Hertz,
 	healthH *handler.HealthHandler,
 	skillsH *handler.SkillsHandler,
 	toolsH *handler.ToolsHandler,
+	scheduleH *handler.ScheduleHandler,
 ) {
 	// Health check (no auth required)
 	h.GET("/health", healthH.Serve)
@@ -41,4 +42,16 @@ func RegisterRoutes(h *server.Hertz,
 	// Info endpoints
 	apiGroup.GET("/skills", skillsH.Serve)
 	apiGroup.GET("/tools", toolsH.Serve)
+
+	// Schedule endpoints
+	if scheduleH != nil {
+		scheduleGroup := apiGroup.Group("/schedule")
+		scheduleGroup.GET("/", scheduleH.List)
+		scheduleGroup.GET("/:id", scheduleH.Get)
+		scheduleGroup.DELETE("/:id", scheduleH.Delete)
+		scheduleGroup.POST("/:id/disable", scheduleH.Disable)
+		scheduleGroup.POST("/:id/enable", scheduleH.Enable)
+		scheduleGroup.POST("/:id/archive", scheduleH.Archive)
+		scheduleGroup.GET("/:id/history", scheduleH.History)
+	}
 }

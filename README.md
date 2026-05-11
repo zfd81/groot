@@ -31,6 +31,8 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **自然语言交互** | 接收指令 + 附件，无需编写代码逻辑，AI 自动理解意图 |
 | **智能决策执行** | 自动判断意图，自主选择调用 Skills 或 MCP 工具完成任务 |
 | **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
+| **定时任务调度** | 通过对话创建定时任务，系统在指定时间自动执行并推送通知 |
+| **消息通知** | 支持 webhook / email / stdout 多渠道通知，任务完成/失败自动推送 |
 | **Skills 嵌套** | 复杂任务自动拆解，子任务递归执行 |
 | **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
 | **速率限制** | 支持按 API Key 的 QPS 和并发数限制，防止滥用 |
@@ -73,10 +75,15 @@ Session（会话）
 │  │ (SSE流式)   │→ │ (ReAct模式) │→ │ (文件/HTTP) │          │
 │  └─────────────┘  └─────────────┘  └─────────────┘          │
 │                              ↓                               │
-│  ┌─────────────┐  ┌─────────────┐                            │
-│  │ Memory 存储 │  │ Skills 注册 │                            │
-│  │ (JSON文件)  │  │             │                            │
-│  └─────────────┘  └─────────────┘                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
+│  │ Memory 存储 │  │ Skills 注册 │  │ 定时调度    │          │
+│  │ (JSON文件)  │  │             │  │ (gocron)    │          │
+│  └─────────────┘  └─────────────┘  └─────────────┘          │
+│                                           ↓                  │
+│                          ┌─────────────────────┐            │
+│                          │ 消息通知层           │            │
+│                          │ (webhook/email/stdout)│           │
+│                          └─────────────────────┘            │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -111,6 +118,15 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │           └── chat_{timestamp}.json  # 单次对话完整记录
 ├── logs/                          # 日志目录
 │   └── groot-{date}.log           # 日志文件
+├── schedules/                     # 定时任务目录
+│   ├── active/                    # 活跃任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   ├── disabled/                  # 已禁用任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   ├── archive/                   # 已归档任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   └── executions/                # 执行记录
+│       └── {task-id}.json         # 历史执行记录
 ```
 
 ### 2.2 目录说明
@@ -123,6 +139,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
 | `skills/` | Skills 定义目录（固定位置），支持热插拔 |
 | `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
+| `schedules/` | 定时任务存储目录（固定位置），active/disabled/archive 三目录状态流转 |
 
 **可配置目录（支持相对/绝对路径）：**
 
@@ -142,10 +159,13 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 |---------|------|------|
 | `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260419103000523_a1b2` |
 | `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260419103000523` |
+| `task_id` | `task-{kebab-case-name}` | `task-每日报表生成` |
 
 **说明：**
 - `session_id`：会话唯一标识，毫秒级时间戳 + 4位随机字符
 - `chat_id`：单次对话标识，固定前缀 `chat_` + 毫秒级时间戳
+- `task_id`：定时任务唯一标识，固定前缀 `task-` + 名称转 kebab-case
+- 调度执行的会话 ID 格式：`{task_id}-{timestamp}-sched`（后缀区分标识）
 
 ### 2.4 工作目录配置方式
 
@@ -203,6 +223,7 @@ Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 | `groot skills install <path>` | 安装 Skill |
 | `groot skills uninstall <name>` | 卸载 Skill |
 | `groot mcp list` | 列出所有已配置的 MCP Servers |
+| `groot schedule list` | 列出所有定时任务 |
 | `groot tail` | 实时日志查看 |
 
 **全局选项：**
@@ -238,6 +259,7 @@ groot init
 | `mcp/` | MCP 配置目录 |
 | `memory/` | 会话数据目录 |
 | `logs/` | 日志文件目录 |
+| `schedules/` | 定时任务存储目录（含 active/disabled/archive/executions） |
 | `config.yaml` | 主配置文件 |
 
 ### 3.4 查看实例状态（groot status）
@@ -338,7 +360,57 @@ broken-config    -                 -          -                    ⚠ 配置解
 共 4 个 MCP Server（2 个活跃，1 个未激活，1 个异常）
 ```
 
-### 3.7 日志查看（groot tail）
+### 3.7 管理定时任务（groot schedule）
+
+管理 Groot 的定时任务，支持查看、详情、历史、删除、禁用、启用和归档操作。
+
+```bash
+groot schedule list                          # 列出所有定时任务
+groot schedule inspect task-xxx              # 查看任务详情（JSON 格式）
+groot schedule history task-xxx              # 查看任务执行历史
+groot schedule delete task-xxx               # 删除任务
+groot schedule disable task-xxx              # 禁用任务（active → disabled）
+groot schedule enable task-xxx               # 启用任务（disabled → active）
+groot schedule archive task-xxx              # 归档任务（→ archive）
+```
+
+**子命令说明：**
+
+| 子命令 | 说明 |
+|--------|------|
+| `list` | 列出所有任务（active/disabled/archive），含名称、调度表达式和状态 |
+| `inspect <id>` | 查看任务完整定义（JSON 格式） |
+| `history <id>` | 查看任务执行历史，含时间、触发类型、状态、耗时 |
+| `delete <id>` | 物理删除任务及相关执行记录 |
+| `disable <id>` | 禁用活跃任务，从调度器中移除 |
+| `enable <id>` | 启用已禁用的任务，重新注册到调度器 |
+| `archive <id>` | 归档任务（从任意状态） |
+
+**`list` 输出示例：**
+
+```
+ID                                       NAME                          SCHEDULE              STATUS
+----------------------------------------  ----------------------------  --------------------  ----------
+task-每日报表生成                        每日报表生成                   0 9 * * *             active
+task-每周数据清理                        每周数据清理                   0 2 * * 0             disabled
+task-一次性提醒                          一次性提醒                    2026-06-01T09:00:00Z  archive
+
+共 3 个任务（活跃: 1, 禁用: 1, 归档: 1）
+```
+
+**`history` 输出示例：**
+
+```
+EXEC_TIME            TRIGGER          STATUS      DURATION    STEPS
+--------------------  ---------------  ----------  ----------  ----------
+2026-05-11 09:00:05  cron             completed   1234ms      3
+2026-05-10 09:00:02  cron             completed   1156ms      3
+2026-05-09 09:00:08  cron             failed      5002ms      1
+
+共 3 条记录
+```
+
+### 3.8 日志查看（groot tail）
 
 实时查看 Groot 日志，类似 `tail -f`，支持格式化和过滤。
 
@@ -500,7 +572,8 @@ kill -SIGTERM <pid>
 服务会优雅关闭：
 - 停止接受新请求
 - 等待当前对话完成（超时 30 秒）
-- 停止清理调度器
+- 停止统一调度器（gocron）
+- 停止消息通知层
 - 关闭 MCP 连接
 - 刷新日志
 - 退出程序
@@ -577,6 +650,27 @@ memory:
   retention_days: 7                # 会话保留天数
   cleanup_schedule: "02:00"        # 清理时间（HH:MM）
 
+# 定时任务调度配置
+schedule:
+  max_concurrent_tasks: 10         # 最大并发执行任务数
+  sync_interval: 30s               # 定期同步间隔（对比 active/ 目录与调度器状态，修复不一致）
+
+# 消息通知配置
+message:
+  queue_size: 100                  # 消息队列容量
+  workers: 3                       # 消息发送 worker 数量
+  senders:
+    webhook:
+      enabled: false               # 是否启用 webhook 通知
+      url: ""                      # Webhook URL（接收 POST JSON）
+    email:
+      enabled: false               # 是否启用邮件通知
+      smtp_host: ""                # SMTP 服务器地址
+      smtp_port: 587               # SMTP 端口
+      username: ""                 # SMTP 用户名
+      password: ""                 # SMTP 密码
+      from: ""                     # 发件人地址
+
 # 安全配置
 security:
   rate_limit:
@@ -642,6 +736,7 @@ logging:
 |------|------|------|
 | `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
 | `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
+| `schedules` | `{GROOT_HOME}/schedules` | 定时任务存储目录 |
 | `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
 
 ### 5.4 配置字段详解
@@ -710,8 +805,32 @@ logging:
 | 字段 | 必需 | 说明 |
 |------|------|------|
 | `directory` | 否 | 记忆目录，相对路径拼接工作目录，绝对路径直接使用，默认 `memory` |
-| `retention_days` | 否 | 会话保留天数，超过后自动清理，默认 `7` |
-| `cleanup_schedule` | 否 | 清理任务执行时间（HH:MM），默认 `02:00` |
+| `retention_days` | 否 | 会话保留天数，超过后自动清理，默认 `7`。清理依据目录最后修改时间（非创建时间） |
+| `cleanup_schedule` | 否 | 清理任务执行时间（HH:MM），默认 `02:00`，由统一调度器按天执行 |
+
+#### Schedule 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `max_concurrent_tasks` | 否 | 最大并发执行任务数，超出的任务跳过当次执行，默认 `10` |
+| `sync_interval` | 否 | 定期同步间隔（Go duration 格式，如 `30s`/`1m`），对比 active/ 目录与调度器状态，自动修复不一致，默认 `30s` |
+
+#### Message 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `100` |
+| `workers` | 否 | 消息发送 worker 数量，默认 `3` |
+| `senders.webhook.enabled` | 否 | 是否启用 webhook 通知，默认 `false` |
+| `senders.webhook.url` | 否 | Webhook URL，任务完成/失败时 POST JSON 到该地址 |
+| `senders.email.enabled` | 否 | 是否启用邮件通知，默认 `false` |
+| `senders.email.smtp_host` | 否 | SMTP 服务器地址 |
+| `senders.email.smtp_port` | 否 | SMTP 端口，默认 `587` |
+| `senders.email.username` | 否 | SMTP 认证用户名 |
+| `senders.email.password` | 否 | SMTP 认证密码 |
+| `senders.email.from` | 否 | 发件人邮箱地址 |
+
+> **说明：** stdout sender 始终启用，无需配置。webhook 和 email sender 按需配置。定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道。
 
 #### Security 配置
 
@@ -758,7 +877,8 @@ logging:
 | `session` | GET /sess/{sid} | 查询会话详情 |
 | `history` | GET /sess/history | 查询会话列表 |
 | `skills` | GET /skills | 查看 Skills 列表 |
-| `tools` | GET /tools | 查看工具列表（MCP 工具） |
+| `tools` | GET /tools | 查看工具列表（MCP 工具 + 调度工具） |
+| `schedule` | GET/POST/DELETE /schedule | 管理定时任务 |
 | `health` | GET /health | 健康检查 |
 | `all` | 以上全部 | 全部权限 |
 
@@ -768,7 +888,7 @@ logging:
 - Skills 配置：修改 SKILL.md 文件自动生效
 
 **不支持热更新的配置：**
-- LLM 配置、Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置需重启服务
+- LLM 配置、Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置、Schedule 配置、Message 配置需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
 
 ---
@@ -948,6 +1068,13 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 | `/health` | GET | 健康检查 |
 | `/skills` | GET | 列出可用 Skills |
 | `/tools` | GET | 列出可用 MCP 工具 |
+| `/schedule` | GET | 列出所有定时任务 |
+| `/schedule/:id` | GET | 查询任务详情 |
+| `/schedule/:id` | DELETE | 删除定时任务 |
+| `/schedule/:id/disable` | POST | 禁用定时任务 |
+| `/schedule/:id/enable` | POST | 启用定时任务 |
+| `/schedule/:id/archive` | POST | 归档定时任务 |
+| `/schedule/:id/history` | GET | 查询任务执行历史 |
 
 ### 8.2 认证方式
 
@@ -1519,6 +1646,164 @@ X-API-Key: your-secret-key
 | `tools[].description` | 工具描述 |
 | `total` | 该组工具数量 |
 
+> **注意：** `GET /tools` 返回所有工具，包括 MCP 工具和内置调度工具（`schedule_create`、`schedule_list` 等 8 个）。
+
+---
+
+### 8.12 GET /schedule - 列出定时任务
+
+查询所有定时任务，支持按状态过滤。
+
+**Query 参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `status` | string | 否 | 状态过滤：`active`/`disabled`/`archive`/`all`（默认 `all`） |
+
+**响应示例：**
+```json
+[
+  {
+    "id": "task-每日报表生成",
+    "name": "每日报表生成",
+    "schedule": "0 9 * * *",
+    "instruction": "使用数据分析 skill 生成昨日报表，发送到 #report 频道",
+    "missed_policy": "run_once",
+    "status": "active",
+    "created_at": "2026-05-11T09:00:00Z",
+    "updated_at": "2026-05-11T09:00:00Z"
+  }
+]
+```
+
+**任务状态说明：**
+
+| 状态 | 说明 |
+|------|------|
+| `active` | 活跃，调度器定时执行 |
+| `disabled` | 已禁用，从调度器移除 |
+| `archive` | 已归档，保留记录但不再执行 |
+
+---
+
+### 8.13 GET /schedule/:id - 查询任务详情
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 任务 ID（路径参数） |
+
+**响应：** 返回完整任务定义，格式同 8.12 中单条任务。
+
+---
+
+### 8.14 DELETE /schedule/:id - 删除任务
+
+物理删除任务及关联文件。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 任务 ID（路径参数） |
+
+**响应示例：**
+```json
+{
+  "status": "deleted",
+  "id": "task-每日报表生成"
+}
+```
+
+---
+
+### 8.15 POST /schedule/:id/disable - 禁用任务
+
+将任务从 `active` 移入 `disabled`，并从调度器移除。
+
+**响应示例：**
+```json
+{
+  "status": "disabled",
+  "id": "task-每日报表生成"
+}
+```
+
+---
+
+### 8.16 POST /schedule/:id/enable - 启用任务
+
+将任务从 `disabled` 移入 `active`，重新注册到调度器。
+
+**响应示例：**
+```json
+{
+  "status": "enabled",
+  "id": "task-每日报表生成"
+}
+```
+
+---
+
+### 8.17 POST /schedule/:id/archive - 归档任务
+
+将任务移入 `archive`（从任意状态）。
+
+**响应示例：**
+```json
+{
+  "status": "archived",
+  "id": "task-每日报表生成"
+}
+```
+
+---
+
+### 8.18 GET /schedule/:id/history - 执行历史
+
+查询某任务的执行记录。
+
+**响应示例：**
+```json
+[
+  {
+    "task_id": "task-每日报表生成",
+    "exec_time": "2026-05-11T09:00:05Z",
+    "trigger_type": "cron",
+    "session_id": "task-每日报表生成-20260511T090005-sched",
+    "status": "completed",
+    "duration_ms": 1234,
+    "step_count": 3
+  }
+]
+```
+
+| 字段 | 说明 |
+|------|------|
+| `trigger_type` | 触发类型：`cron`（定时）/ `once`（一次性）/ `interval`（间隔）/ `manual`（手动重跑） |
+| `session_id` | 调度执行使用的会话 ID，以 `-sched` 后缀区分 |
+| `status` | 执行状态：`completed` / `failed` |
+| `duration_ms` | 执行耗时（毫秒） |
+
+---
+
+### 8.19 定时任务创建（通过对话）
+
+定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
+
+```
+用户：「每天早上 9 点帮我生成销售报表并通过 webhook 通知我」
+
+Agent 自动调用 schedule_create 工具创建任务：
+- name: "每日销售报表"
+- schedule: "0 9 * * *"
+- instruction: "生成销售报表并通过 webhook 通知我"
+- notify_on_success: ["webhook"]
+```
+
+内置的 8 个调度工具（`schedule_create`、`schedule_list` 等）会自动注册到 Agent，可通过 `GET /tools` 查看。
+
 ---
 
 ## 九、客户端代码示例
@@ -1592,6 +1877,57 @@ result2 = client.execute_chat("添加数据清洗功能", session_id=sid)
 result3 = client.execute_chat("写单元测试代码", session_id=sid)
 ```
 
+### 10.3 定时任务自动化
+
+通过对话创建定时任务，让 Agent 在指定时间自动执行并推送结果。
+
+**1. 配置消息通知（config.yaml）：**
+
+```yaml
+message:
+  senders:
+    webhook:
+      enabled: true
+      url: "https://hooks.slack.com/services/xxx"
+```
+
+**2. 通过对话创建任务：**
+
+```python
+client = GrootClient("http://localhost:8080", "your-api-key")
+
+# 创建定时任务
+client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报表，结果发送到 webhook")
+
+# Agent 会自动调用 schedule_create 工具，创建 cron 任务
+# 生成的 task.json 会保存到 schedules/active/ 目录
+```
+
+**3. 管理任务（CLI / API）：**
+
+```bash
+# CLI 查看任务列表
+groot schedule list
+
+# CLI 查看执行历史
+groot schedule history task-每日销售报表
+
+# 禁用/启用任务
+groot schedule disable task-每日销售报表
+groot schedule enable task-每日销售报表
+```
+
+```bash
+# API 管理
+curl -X POST http://localhost:8080/schedule/task-每日销售报表/disable   -H "X-API-Key: your-api-key"
+```
+
+**4. 执行结果通知：**
+
+任务执行完成后，系统自动向配置的通知渠道推送结果：
+- **成功** → `notify_on_success` 列表中的渠道
+- **失败** → `notify_on_failure` 列表中的渠道
+
 ---
 
 ## 十一、常见问题
@@ -1663,7 +1999,61 @@ export OPENAI_API_KEY="your-api-key"
 **说明：** 会话数据会自动清理。
 
 - 每天在 `cleanup_schedule` 时间执行清理
-- 清理超过 `retention_days` 天的会话
+- 清理超过 `retention_days` 天的会话（依据目录最后修改时间）
+
+---
+
+### Q8: 如何创建定时任务
+
+**说明：** 定时任务通过对话创建，不使用 API 直接创建。
+
+- 在对话中用自然语言描述需求（如「每天早上 9 点帮我生成报表」）
+- Agent 自动调用 `schedule_create` 工具创建任务
+- 创建的任务保存到 `schedules/active/` 目录，自动注册到调度器
+- 可使用 CLI 或 REST API 管理已创建的任务（查看/禁用/启用/归档/删除）
+
+---
+
+### Q9: 定时任务支持哪些调度格式
+
+**三种调度格式：**
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| Cron 表达式 | `0 9 * * *` | 每天 9 点执行 |
+| ISO8601 时间戳 | `2026-06-01T09:00:00Z` | 一次性任务，指定时间执行一次后自动归档 |
+| Go Duration | `30m` / `1h` / `2h30m` | 间隔重复执行，从启动时开始计时 |
+
+---
+
+### Q10: 定时任务执行时如何与普通对话区分
+
+- 调度执行的会话 ID 以 `-sched` 为后缀：`{task_id}-{timestamp}-sched`
+- 执行记录中 `trigger_type` 字段标识触发方式：`cron`/`once`/`interval`/`manual`
+- 通过 `GET /sess/history` 可查看所有会话，含定时任务产生的会话
+
+---
+
+### Q11: 通知渠道如何配置
+
+1. 在 `config.yaml` 中启用所需 sender（webhook / email）
+2. 创建任务时通过 `notify_on_success` / `notify_on_failure` 指定渠道
+3. stdout sender 始终启用，无需配置
+
+示例：任务成功时推送到 webhook，失败时推送到 webhook + email
+
+---
+
+### Q12: 配置修改后需要重启吗
+
+**需要重启的配置：**
+- LLM、Server、Security、Rate Limit、Memory、Logging、Schedule、Message 配置
+- MCP 配置文件（`mcp/*.json`）
+
+**不需要重启的配置：**
+- Skills（`SKILL.md`）：支持热加载
+- GROOT.md：支持热加载
+- 定时任务（`schedules/active/*.json`）：由 sync 机制自动同步，无需重启
 
 ---
 
@@ -1699,6 +2089,10 @@ export OPENAI_API_KEY="your-api-key"
 | `{GROOT_HOME}/GROOT.md` | 项目规范文件 |
 | `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
 | `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件 |
+| `{GROOT_HOME}/schedules/active/{id}.json` | 活跃定时任务 |
+| `{GROOT_HOME}/schedules/disabled/{id}.json` | 已禁用定时任务 |
+| `{GROOT_HOME}/schedules/archive/{id}.json` | 已归档定时任务 |
+| `{GROOT_HOME}/schedules/executions/{id}.json` | 任务执行记录 |
 
 **可配置目录（默认位置）：**
 
@@ -1727,6 +2121,8 @@ export OPENAI_API_KEY="your-api-key"
 | 500 | `config_error` | 配置错误 |
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
+| 404 | `task_not_found` | 定时任务不存在 |
+| 500 | `schedule_error` | 定时任务操作失败 |
 
 ### D. 联系与支持
 

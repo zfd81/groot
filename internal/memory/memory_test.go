@@ -507,14 +507,12 @@ func TestManager_Cleanup(t *testing.T) {
 	log := initTestLogger()
 	mgr := NewManager(tmpDir, 1, log) // 保留 1 天
 
-	// 创建旧会话，然后修改 history.json 中的 created_at 为 2 天前
+	// 创建旧会话，然后修改目录 ModTime 为 2 天前
 	sessionID := "test_session_old"
 	mgr.CreateSession(sessionID)
 	oldTime := time.Now().AddDate(0, 0, -2)
-	history, _ := mgr.GetHistory(sessionID)
-	history.CreatedAt = oldTime
-	// 直接写入文件（绕过 saveHistory 的 AppendMessage 流程）
-	mgr.saveHistory(sessionID, history)
+	sessionDir := mgr.sessionDir(sessionID)
+	os.Chtimes(sessionDir, oldTime, oldTime)
 
 	// 创建一个新会话（不会被清理）
 	newSessionID := "test_session_new"
