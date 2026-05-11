@@ -196,6 +196,11 @@ func (l *Logger) Error(msg string, fields ...zap.Field) {
 	l.zap.Error(msg, fields...)
 }
 
+// NewNop creates a no-op logger for testing
+func NewNop() *Logger {
+	return &Logger{zap: zap.NewNop()}
+}
+
 // Sync flushes any buffered log entries
 func (l *Logger) Sync() error {
 	return l.zap.Sync()

@@ -17,7 +17,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 - 智能决策执行：自动判断意图，自主选择调用 Skills 或 MCP 工具完成任务
 - 流式进度反馈：实时返回执行过程和结果，调用方全程可见
 - Skills 嵌套：复杂任务自动拆解，子任务递归执行
-- 热插拔扩展：Skills 和 MCP 工具支持动态添加，无需重启服务
+- 热插拔扩展：Skills 支持动态添加，无需重启服务
 - 定时任务调度：通过对话创建定时任务，系统定时自动执行并推送结果
 - 消息通知推送：执行结果通过消息层统一路由到飞书/钉钉/邮件/Webhook 等渠道
 
@@ -133,7 +133,7 @@ llm:
 │  │  Skills加载           ││  MCP加载              ││  Session管理      │ │
 │  │  指令解析             ││  工具调用              ││  History管理      │ │
 │  │  注册给Agent          ││  权限检查              ││  ChatRecorder     │ │
-│  │  热插拔               ││  热插拔                ││  RuntimeState     │ │
+│  │  热插拔               ││                       ││  RuntimeState     │ │
 │  │                       ││                       ││  AttachmentStore  │ │
 │  └───────────────────────┘└───────────────────────┘└───────────────────┘ │
 │                                                                           │
@@ -1607,237 +1607,34 @@ DELETE /chat/{sid} →
 
 ### 4.2 Skills
 
-#### 4.2.1 Skill 定义格式
+Skills 是 Groot 的核心扩展机制，通过 SKILL.md 文件以自然语言定义技能，支持声明式定义、自动注册、热插拔、依赖嵌套和 CLI 管理。
 
-遵循 Claude Code 官方标准（YAML frontmatter + Markdown）。
+**核心能力：**
 
-**SKILL.md 结构：**
+| 能力 | 说明 |
+|------|------|
+| 声明式定义 | 通过 SKILL.md（YAML frontmatter + Markdown）描述技能 |
+| 自动注册 | 启动时扫描 `{GROOT_HOME}/skills/` 目录，解析并注册为 Agent 工具 |
+| 热插拔 | fsnotify 监听目录变化，运行时动态增删改，无需重启 |
+| 依赖嵌套 | Skill 声明 dependencies 后，Agent 执行时自动递归调用 |
+| CLI 管理 | `groot skills list/install/uninstall` 命令管理 Skills |
 
-```markdown
----
-name: skill_name
-description: "技能描述，用于 Agent 工具列表展示"
-dependencies: [other_skill]  # 可选，依赖的其他 Skill
----
-
-# Skill 标题
-
-技能的详细指令和说明内容...
-```
-
-**Frontmatter 字段说明：**
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | 是 | Skill 名称（全局唯一） |
-| `description` | string | 是 | Skill 描述，用于 Agent 工具列表 |
-| `dependencies` | array | 否 | 依赖的其他 Skill 名称列表 |
-
-#### 4.2.2 目录结构
-
-```
-{GROOT_HOME}/skills/
-├── pdf_analyzer/
-│   └── SKILL.md
-├── code_generator/
-│   └── SKILL.md
-├── data_analyzer/
-│   └── SKILL.md
-└── report_generator/
-    └── SKILL.md
-```
-
-**说明：** Skills 目录固定为 `{GROOT_HOME}/skills`，不支持配置。
-
-#### 4.2.3 加载与注册
-
-**注册流程：**
-
-```
-程序启动 → 扫描 skills 目录 → 解析每个 SKILL.md →
-提取 frontmatter 中的 name/description →
-解析 Markdown 正文内容 → 注册到内存索引
-```
-
-当 Skill 声明了 dependencies，Agent 在执行时会自动识别并递归调用依赖的子 Skills。
-
-#### 4.2.4 热插拔机制
-
-支持运行时动态添加、修改、删除 Skills，无需重启服务。
-
-**监听机制：**
-- 使用 `fsnotify` 监听 skills 目录变化
-- 只监听 `SKILL.md` 文件的创建、修改、删除事件
-- 防抖机制：检测到变化后延迟 2秒再执行加载
-
-**处理流程：**
-
-```
-文件变化检测 → 防抖等待（2秒） →
-│
-├─ 新增 SKILL.md → 解析并注册 → 输出日志
-│
-├─ 修改 SKILL.md → 重新解析并更新 → 输出日志
-│
-└─ 删除 SKILL.md → 移除对应 Skill → 输出日志
-```
-
-**配置项：**
-
-```yaml
-skills:
-  hot_reload:
-    enabled: true       # 是否启用热插拔
-    debounce_delay: 2   # 防抖延迟（秒）
-```
+> 详细设计见 [Skills 设计文档](2026-05-10-skills-design.md)。
 
 ### 4.3 MCP
 
-#### 4.3.1 MCP 配置文件格式
+MCP（Model Context Protocol）是 Groot 集成外部工具的标准化协议，支持 stdio/sse/streamable_http 三种连接类型。
 
-每个 MCP 一个独立的 JSON 文件。
+**核心能力：**
 
-**stdio 类型示例（本地工具）：**
+| 能力 | 说明 |
+|------|------|
+| 多连接类型 | stdio（本地命令行）、sse（远程单向推送）、streamable_http（远程双向流式） |
+| 自动工具发现 | 连接 MCP Server 后自动调用 `tools/list` 发现可用工具，无需手动配置 |
+| 独立配置 | 每个 MCP Server 以独立 JSON 文件存放在 `{GROOT_HOME}/mcp/` 目录 |
+| CLI 管理 | `groot mcp list` 命令查看已配置的 MCP Server |
 
-```json
-{
-  "name": "database_tool",
-  "type": "stdio",
-  "description": "数据库查询和操作工具",
-  "isActive": true,
-  "command": "mcp-server-postgres",
-  "args": ["--connection", "${DB_CONNECTION}"],
-  "env": {
-    "DB_CONNECTION": "${DB_CONNECTION}"
-  }
-}
-```
-
-**sse 类型示例（远程服务）：**
-
-```json
-{
-  "name": "WebParser",
-  "type": "sse",
-  "description": "网页解析 MCP 服务",
-  "isActive": true,
-  "baseUrl": "https://dashscope.aliyuncs.com/api/v1/mcps/WebParser/sse",
-  "headers": {
-    "Authorization": "Bearer ${DASHSCOPE_API_KEY}"
-  }
-}
-```
-
-**streamable_http 类型示例：**
-
-```json
-{
-  "name": "web_search",
-  "type": "streamable_http",
-  "description": "网络搜索工具",
-  "isActive": true,
-  "baseUrl": "https://mcp-search.example.com/api",
-  "headers": {
-    "X-API-Key": "${SEARCH_API_KEY}"
-  }
-}
-```
-
-#### 4.3.2 连接类型
-
-| 类型 | 说明 | 适用场景 |
-|------|------|---------|
-| `stdio` | 标准输入输出通信 | 本地命令行工具 |
-| `sse` | Server-Sent Events | 远程 HTTP 服务（单向推送） |
-| `streamable_http` | Streamable HTTP | 远程 HTTP 服务（双向流式） |
-
-#### 4.3.3 工具发现机制
-
-MCP 工具支持自动发现，无需手动配置工具列表。
-
-**发现流程：**
-
-```
-加载 MCP 配置 → 
-│
-├─ 配置中有 tools 字段 → 直接使用配置的工具列表
-│
-└─ 配置中无 tools 字段 → 连接 MCP Server → 调用 tools/list → 自动注册发现的工具
-```
-
-**tools/list 协议：**
-
-| 连接类型 | 发现方式 |
-|---------|---------|
-| `stdio` | JSON-RPC: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` |
-| `sse` | HTTP POST to baseUrl, 解析 SSE data |
-| `streamable_http` | HTTP POST to `{baseUrl}/tools/list` |
-
-**返回格式：**
-
-```json
-{
-  "result": {
-    "tools": [
-      {"name": "read_file", "description": "读取文件内容"},
-      {"name": "write_file", "description": "写入文件内容"}
-    ]
-  }
-}
-```
-
-**配置示例（自动发现）：**
-
-```json
-{
-  "name": "filesystem",
-  "type": "stdio",
-  "description": "文件系统操作",
-  "isActive": true,
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
-}
-```
-
-无需指定 `tools` 字段，系统自动发现。
-
-**配置示例（手动指定）：**
-
-```json
-{
-  "name": "custom_mcp",
-  "type": "stdio",
-  "description": "自定义 MCP",
-  "isActive": true,
-  "command": "my-mcp-server",
-  "tools": [
-    {"name": "custom_tool", "description": "自定义工具"}
-  ]
-}
-```
-
-手动指定 `tools` 字段时，跳过自动发现。
-
-#### 4.3.4 热插拔机制
-
-**监听机制：**
-- 使用 `fsnotify` 监听 mcp 目录变化
-- 只监听 `.json` 文件的创建、修改、删除事件
-- 防抖机制：检测到变化后延迟 2秒再执行加载
-
-**处理流程：**
-
-```
-文件变化检测 → 防抖等待（2秒） →
-│
-├─ 新增 .json → 解析配置 → 工具发现（tools/list） → 注册 MCP → 输出日志
-│
-├─ 修改 .json → 重新解析 → 工具发现 → 断开旧连接 → 注册新配置 → 输出日志
-│
-└─ 删除 .json → 断开连接 → 移除 MCP 注册 → 输出日志
-```
-
-**说明：** MCP 目录固定为 `{GROOT_HOME}/mcp`，不支持配置。
+> 详细设计见 [MCP 设计文档](2026-05-10-mcp-design.md)。
 
 ### 4.4 Memory
 
@@ -1997,7 +1794,6 @@ POST /chat (sid=xxx):
 
 **支持热更新的配置：**
 - Skills 配置（添加/修改/删除 SKILL.md）
-- MCP 配置（添加/修改/删除 .json 文件）
 
 **不支持热更新的配置：**
 - LLM 配置（需重启服务）
@@ -2343,57 +2139,7 @@ logging:
 
 ### A. Skill 示例
 
-**pdf_analyzer：**
-
-```markdown
----
-name: pdf_analyzer
-description: "分析PDF文档内容，提取关键信息并生成结构化摘要报告"
----
-
-# PDF 文档分析
-
-你是一个专业的PDF文档分析助手。
-
-## 执行步骤
-
-1. 使用 file_operations.file_read 工具读取PDF文件
-2. 提取文档的关键内容和结构
-3. 根据文档类型生成相应的结构化摘要
-4. 输出结构化的分析结果
-
-## 输出格式
-
-{
-  "document_type": "文档类型",
-  "title": "文档标题",
-  "key_points": ["关键要点"],
-  "summary": "详细摘要",
-  "recommendations": ["建议"]
-}
-```
-
-**report_generator（嵌套Skill示例）：**
-
-```markdown
----
-name: report_generator
-description: "综合分析多种来源的资料，生成完整的分析报告"
-dependencies: [pdf_analyzer, data_analyzer]
----
-
-# 报告生成
-
-你是一个报告生成助手，可调用其他 Skills 完成综合分析。
-
-## 执行步骤
-
-1. 分析用户提供的资料类型
-2. 根据资料类型调用相应的分析 Skills
-3. 整合各 Skills 的分析结果
-4. 生成结构化的综合报告
-5. 使用 file_operations.file_write 保存报告
-```
+> 详见 [Skills 设计文档 - 七、Skill 示例](2026-05-10-skills-design.md#七skill-示例)。
 
 ### B. 错误码速查表
 

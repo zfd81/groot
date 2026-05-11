@@ -21,7 +21,6 @@ type MCPConfig struct {
 	BaseURL      string            `json:"baseUrl,omitempty"`
 	Headers      map[string]string `json:"headers,omitempty"`
 	Tools        []ToolDefinition  `json:"tools,omitempty"`
-	WorkspaceRoot string           `json:"workspaceRoot,omitempty"` // Root directory for MCP operations
 }
 
 // ToolDefinition represents a tool's definition in MCP config

@@ -33,6 +33,7 @@ import (
 	"github.com/zfd81/groot/internal/message/senders"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
+	"github.com/zfd81/groot/internal/skills"
 )
 
 var (
@@ -210,6 +211,9 @@ func startServer(homeDir string, port int) {
 
 	// Initialize skills via eino skill middleware
 	skillsDir := filepath.Join(homeDir, "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		log.Error("无法创建 Skills 目录", zap.Error(err))
+	}
 
 	// Create local filesystem backend
 	localBackend, err := local.NewBackend(context.Background(), &local.Config{})
@@ -265,6 +269,12 @@ func startServer(homeDir string, port int) {
 		if listErr == nil {
 			log.Info("Skills 加载完成", zap.Int("count", len(matters)), zap.String("dir", skillsDir))
 		}
+	}
+
+	// Start skills hot-reload watcher
+	skillsWatcher := skills.NewWatcher(skillsDir, cfg.Skills.HotReload, log)
+	if err := skillsWatcher.Start(); err != nil {
+		log.Error("无法启动 Skills watcher", zap.Error(err))
 	}
 
 	// Initialize MCP manager
@@ -384,6 +394,7 @@ func startServer(homeDir string, port int) {
 
 		// Stop watchers
 		grootMdWatcher.Stop()
+		skillsWatcher.Stop()
 
 		// Stop scheduler
 		if sched != nil {

@@ -82,11 +82,8 @@ func (m *Manager) RegisterBuiltinTools(tools map[string]tool.BaseTool) {
 	m.logger.Info("注册内置工具", zap.Int("count", len(tools)))
 }
 
-// Register adds an MCP configuration with tools
-func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryError string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+// registerLocked stores MCP config and tool metadata (caller must hold m.mu.Lock)
+func (m *Manager) registerLocked(config *MCPConfig, tools []ToolDefinition, discoveryError string) {
 	m.mcps[config.Name] = config
 
 	if discoveryError != "" {
@@ -95,7 +92,6 @@ func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryE
 		delete(m.errors, config.Name)
 	}
 
-	// Store tool metadata
 	for _, td := range tools {
 		m.toolInfos[td.Name] = &ToolInfo{
 			Name:        td.Name,
@@ -104,7 +100,14 @@ func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryE
 			MCP:         config.Name,
 		}
 	}
+}
 
+// Register adds an MCP configuration with tools
+func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryError string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.registerLocked(config, tools, discoveryError)
 	m.logger.Info("Registered MCP tools", zap.String("name", config.Name), zap.Int("tools", len(tools)))
 }
 
@@ -113,11 +116,13 @@ func (m *Manager) Unregister(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if config, ok := m.mcps[name]; ok {
-		// Remove tools from this MCP
-		for _, toolDef := range config.Tools {
-			delete(m.einoTools, toolDef.Name)
-			delete(m.toolInfos, toolDef.Name)
+	if _, ok := m.mcps[name]; ok {
+		// Remove tools belonging to this MCP
+		for toolName, info := range m.toolInfos {
+			if info.MCP == name {
+				delete(m.einoTools, toolName)
+				delete(m.toolInfos, toolName)
+			}
 		}
 		// Close client
 		if cli, ok := m.clients[name]; ok {
@@ -268,27 +273,31 @@ func (m *Manager) Load(path string) error {
 		return nil
 	}
 
-	// If tools are pre-defined in config, register them directly (built-in style)
-	if len(config.Tools) > 0 {
-		m.Register(&config, config.Tools, "")
-		return nil
-	}
-
-	// Otherwise, discover tools via mcp-go client + eino-ext
+	// Create client and initialize (same for both auto-discovery and name-filtered modes)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cli, err := m.createAndInitClient(ctx, &config)
 	if err != nil {
 		m.Register(&config, nil, err.Error())
-		return nil // Don't fail, just record the error
+		return nil
+	}
+
+	// Build mcpp.Config; if tools are pre-defined, use ToolNameList to filter
+	mcppConf := &mcpp.Config{
+		Cli:           cli,
+		CustomHeaders: expandHeaders(config.Headers),
+	}
+	if len(config.Tools) > 0 {
+		toolNames := make([]string, len(config.Tools))
+		for i, t := range config.Tools {
+			toolNames[i] = t.Name
+		}
+		mcppConf.ToolNameList = toolNames
 	}
 
 	// Discover tools via eino-ext GetTools
-	einoTools, err := mcpp.GetTools(ctx, &mcpp.Config{
-		Cli:           cli,
-		CustomHeaders: config.Headers,
-	})
+	einoTools, err := mcpp.GetTools(ctx, mcppConf)
 	if err != nil {
 		m.Register(&config, nil, err.Error())
 		return nil
@@ -299,27 +308,28 @@ func (m *Manager) Load(path string) error {
 	for _, t := range einoTools {
 		info, _ := t.Info(ctx)
 		if info != nil {
-			toolDefs = append(toolDefs, ToolDefinition{
+			td := ToolDefinition{
 				Name:        info.Name,
 				Description: info.Desc,
-			})
+			}
+			if info.ParamsOneOf != nil {
+				if js, e := info.ParamsOneOf.ToJSONSchema(); e == nil && js != nil {
+					data, _ := json.Marshal(js)
+					var schema map[string]interface{}
+					json.Unmarshal(data, &schema)
+					td.InputSchema = schema
+				}
+			}
+			toolDefs = append(toolDefs, td)
 		}
 	}
 
-	// Store everything
+	// Store everything: common via registerLocked, then clients+einoTools
 	m.mu.Lock()
-	m.mcps[config.Name] = &config
+	m.registerLocked(&config, toolDefs, "")
 	m.clients[config.Name] = cli
-	delete(m.errors, config.Name)
-
 	for i, t := range einoTools {
-		toolName := toolDefs[i].Name
-		m.einoTools[toolName] = t
-		m.toolInfos[toolName] = &ToolInfo{
-			Name:        toolName,
-			Description: toolDefs[i].Description,
-			MCP:         config.Name,
-		}
+		m.einoTools[toolDefs[i].Name] = t
 	}
 	m.mu.Unlock()
 
@@ -406,6 +416,18 @@ func (m *Manager) Close() {
 		}
 	}
 	m.clients = make(map[string]client.MCPClient)
+}
+
+// expandHeaders expands environment variables in header values
+func expandHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return headers
+	}
+	result := make(map[string]string, len(headers))
+	for k, v := range headers {
+		result[k] = os.ExpandEnv(v)
+	}
+	return result
 }
 
 // expandArgs expands environment variables and home dir in args
