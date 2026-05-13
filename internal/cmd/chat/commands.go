@@ -39,7 +39,7 @@ func ExecuteCommand(msg CommandMsg) CommandResult {
 	case "/clear":
 		return CommandResult{Action: "clear"}
 	case "/help":
-		return CommandResult{Action: "render", Content: HelpText}
+		return CommandResult{Action: "help_popup", Content: HelpText}
 	case "/model":
 		if msg.Args != "" {
 			return CommandResult{Action: "switch_model", Content: msg.Args}
@@ -52,7 +52,7 @@ func ExecuteCommand(msg CommandMsg) CommandResult {
 	case "/export":
 		return CommandResult{Action: "export"}
 	default:
-		return CommandResult{Action: "render",
+		return CommandResult{Action: "help_popup",
 			Content: fmt.Sprintf("未知命令: %s\n输入 /help 查看可用命令", msg.Cmd)}
 	}
 }

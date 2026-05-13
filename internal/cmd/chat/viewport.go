@@ -95,6 +95,9 @@ func (v *ViewportModel) UpdateToolCall(toolCallID, toolName, arguments string, t
 				return true
 			}
 		}
+		// ID not found — this is a new tool call; don't fall through to Index/Name
+		// which would incorrectly match a different tool call with the same index.
+		return false
 	}
 	// 2. Match by Index — requires name match (or incoming name empty);
 	// prevents matching across different tool calls that share the same index.

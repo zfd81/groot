@@ -30,6 +30,7 @@ type Model struct {
 	viewport   ViewportModel
 	input      InputModel
 	completion CompletionModel
+	popup      PopupModel
 
 	client *Client
 	config *config.Config
@@ -67,6 +68,7 @@ func NewModel(cfg *config.Config, baseURL string) Model {
 		viewport:   vp,
 		input:      input,
 		completion: completion,
+		popup:      NewPopup(),
 		client:     client,
 		config:     cfg,
 		spinner:    s,
@@ -208,6 +210,10 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
+		if m.popup.IsVisible() {
+			m.popup.Hide()
+			return m, nil
+		}
 		if m.completion.IsVisible() {
 			m.completion.Hide()
 			m.input.ClearGhostText()
@@ -227,6 +233,10 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter":
+		if m.popup.IsVisible() {
+			m.popup.Hide()
+			return m, nil
+		}
 		if m.completion.IsVisible() {
 			return m.handleCompletionSelect()
 		}
@@ -374,6 +384,10 @@ func (m Model) handleCommand(msg CommandMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.doFetchAPI("/sess/" + m.client.SessionID())
+
+	case "help_popup":
+		m.popup.Show(result.Content)
+		return m, nil
 
 	case "render":
 		m.viewport.AddMessage(ChatMessage{Role: "system", Content: result.Content})
@@ -584,35 +598,41 @@ func (m *Model) clearSession() {
 	m.sessionInit = false
 }
 
-// View renders the entire TUI layout.
-// Layout from top to bottom: Viewport -> Completion (overlay) -> Input -> StatusBar.
-// When completion is visible, the viewport height is temporarily reduced so the
-// completion overlays the bottom of the viewport area without pushing the input down.
-func (m Model) View() tea.View {
-	completionView := ""
-	compLines := 0
-	if m.completion.IsVisible() {
-		completionView = m.completion.View()
-		if completionView != "" {
-			completionView += "\n"
-			compLines = strings.Count(completionView, "\n")
+	// Layout from top to bottom: Viewport -> Overlay (popup or completion) -> Input -> StatusBar.
+	// When popup or completion is visible, the viewport is trimmed so the overlay sits
+	// between viewport and input without pushing the input down.
+	func (m Model) View() tea.View {
+		overlayView := ""
+		overlayLines := 0
+		if m.popup.IsVisible() {
+			m.popup.SetWidth(m.width - 2)
+			overlayView = m.popup.View()
+			if overlayView != "" {
+				overlayView += "\n"
+				overlayLines = strings.Count(overlayView, "\n")
+			}
+		} else if m.completion.IsVisible() {
+			overlayView = m.completion.View()
+			if overlayView != "" {
+				overlayView += "\n"
+				overlayLines = strings.Count(overlayView, "\n")
+			}
 		}
-	}
 
-	// Trim viewport content when completion is visible so the completion
-	// overlays the bottom of the viewport area without pushing input down.
-	vpView := m.viewport.View()
-	if compLines > 0 {
-		lines := strings.Split(vpView, "\n")
-		if len(lines) > compLines {
-			vpView = strings.Join(lines[:len(lines)-compLines], "\n")
+		// Trim viewport content when overlay is visible so it sits at the
+		// bottom of the viewport area without pushing input down.
+		vpView := m.viewport.View()
+		if overlayLines > 0 {
+			lines := strings.Split(vpView, "\n")
+			if len(lines) > overlayLines {
+				vpView = strings.Join(lines[:len(lines)-overlayLines], "\n")
+			}
 		}
-	}
 
-	content := vpView + "\n" +
-		completionView +
-		m.input.View(m.width) + "\n" +
-		m.status.View()
+		content := vpView + "\n" +
+			overlayView +
+			m.input.View(m.width) + "\n" +
+			m.status.View()
 
 	v := tea.NewView(content)
 	v.AltScreen = true
@@ -624,7 +644,7 @@ func (m Model) View() tea.View {
 	//   Y: viewport lines + separator(1) + completion lines + input top border(1)
 	if c := m.input.textarea.Cursor(); c != nil {
 		c.Position.X += 2
-		c.Position.Y += strings.Count(vpView, "\n") + compLines + 2
+		c.Position.Y += strings.Count(vpView, "\n") + overlayLines + 2
 		v.Cursor = c
 	}
 
