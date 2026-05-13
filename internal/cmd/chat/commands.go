@@ -105,25 +105,14 @@ func ExportToMarkdown(body []byte) (string, error) {
 }
 
 // HelpText is shown when the user types /help.
-const HelpText = `## 系统命令
-
-| 命令 | 参数 | 功能 |
-|------|------|------|
-| /exit | 无 | 退出 TUI |
-| /model | [model_name] | 切换模型，无参数弹出选择列表 |
-| /clear | 无 | 开始新对话 |
-| /help | 无 | 显示本帮助 |
-| /skills | 无 | 查看已安装 skill |
-| /mcp | 无 | 查看可用工具 |
-| /export | 无 | 导出当前对话为 Markdown |
-
-## 快捷键
-
-| 按键 | 行为 |
-|------|------|
-| Enter | 发送消息 |
-| Alt+Enter / Shift+Enter | 插入换行 |
-| Tab | 接受补全 / 切换下一项 |
-| ESC | 取消 / 关闭补全 / 清空输入 |
-| Ctrl+C | 退出 TUI |
-`
+const HelpText = `  
+	命令                     			快捷键
+  ───────────────────             	 ───────────────────────────
+  /exit         退出       			Enter           发送
+  /model [name] 切换       			Alt+Enter / Shift+Enter 换行
+  /clear        新对话       		  Tab             补全
+  /help         帮助       			ESC             关闭 / 取消
+  /skills       技能       			Ctrl+C          退出
+  /mcp          工具
+  /export       导出
+	`

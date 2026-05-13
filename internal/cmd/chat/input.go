@@ -39,7 +39,7 @@ func NewInput() InputModel {
 
 // SetSize adjusts input width and height.
 func (i *InputModel) SetSize(width, height int) {
-	i.textarea.SetWidth(width - 4) // account for border padding
+	i.textarea.SetWidth(width - 2) // account for double border
 	if height > 0 {
 		i.textarea.SetHeight(height)
 	}
@@ -126,8 +126,7 @@ func (i InputModel) View(width int) string {
 	borderStyle := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
 		BorderForeground(lipgloss.Color("#98c379")).
-		Width(width - 2).
-		Padding(0, 1)
+		Width(width)
 
 	return borderStyle.Render(content)
 }

@@ -285,7 +285,7 @@ func (m Model) handleCompletionSelect() (tea.Model, tea.Cmd) {
 // handleSendMessage processes the input text as either a command or chat message.
 func (m Model) handleSendMessage() (tea.Model, tea.Cmd) {
 	text := m.input.Value()
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return m, nil
 	}
 	m.input.Reset()
@@ -624,6 +624,26 @@ func (m *Model) clearSession() {
 		vpView := m.viewport.View()
 		if overlayLines > 0 {
 			lines := strings.Split(vpView, "\n")
+			maxOverlay := len(lines) - 1
+			if maxOverlay < 1 {
+				maxOverlay = 1
+			}
+			if overlayLines > maxOverlay {
+				// Popup content is too tall; truncate inner content while
+				// keeping top and bottom borders intact.
+				ovLines := strings.Split(overlayView, "\n")
+				if len(ovLines) > maxOverlay && maxOverlay >= 3 {
+					// Keep top border (line 0) and bottom border (last line).
+					keep := maxOverlay - 2 // minus top and bottom borders
+					if keep < 1 {
+						keep = 1
+					}
+					trimmed := append([]string{ovLines[0]}, ovLines[1:1+keep]...)
+					trimmed = append(trimmed, ovLines[len(ovLines)-1])
+					overlayView = strings.Join(trimmed, "\n") + "\n"
+					overlayLines = maxOverlay
+				}
+			}
 			if len(lines) > overlayLines {
 				vpView = strings.Join(lines[:len(lines)-overlayLines], "\n")
 			}
@@ -640,10 +660,10 @@ func (m *Model) clearSession() {
 
 	// Declarative cursor from textarea for IME composition support.
 	// Offset textarea-internal cursor to screen coordinates:
-	//   X: border(1) + padding(1) = 2
+	//   X: border(1) = 1
 	//   Y: viewport lines + separator(1) + completion lines + input top border(1)
 	if c := m.input.textarea.Cursor(); c != nil {
-		c.Position.X += 2
+		c.Position.X += 1
 		c.Position.Y += strings.Count(vpView, "\n") + overlayLines + 2
 		v.Cursor = c
 	}
