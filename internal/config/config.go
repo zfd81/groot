@@ -75,6 +75,7 @@ type MemoryConfig struct {
 
 // ScheduleConfig 定时任务调度配置
 type ScheduleConfig struct {
+	Enabled            bool   `yaml:"enabled"`              // 是否允许在对话中创建定时任务（默认关闭）
 	MaxConcurrentTasks int    `yaml:"max_concurrent_tasks"` // 最大并发执行数
 	SyncInterval       string `yaml:"sync_interval"`        // 目录同步间隔
 }

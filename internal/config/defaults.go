@@ -39,6 +39,7 @@ func DefaultConfig() *Config {
 			HistoryWindow:   20,
 		},
 		Schedule: ScheduleConfig{
+			Enabled:            false,
 			MaxConcurrentTasks: 3,
 			SyncInterval:       "30s",
 		},

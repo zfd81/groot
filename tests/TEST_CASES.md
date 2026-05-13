@@ -8,6 +8,22 @@
 
 位于 `internal/` 各包目录下的 `*_test.go` 文件。
 
+### 1.1 Chat TUI 测试
+
+| 测试函数 | 测试文件 | 测试内容 |
+|---------|---------|---------|
+| TestParseCommand | commands_test.go | 命令解析：/exit、/model arg、/session switch id、/skills list、普通文本、空字符串 |
+| TestExecuteCommandRouting | commands_test.go | 命令路由：13 条命令 → 对应 Action（quit/clear/render/fetch/export 等） |
+| TestMaskAPIKey | commands_test.go | API Key 脱敏：空值、环境变量引用、短 key、长 key |
+| TestClassifyEvent | client_test.go | SSE 事件分类：thinking/tool_calls/tool_result/message/finish_reason/error/优先级 |
+| TestNewClientDefaults | client_test.go | HTTP 客户端默认值：baseURL 去尾斜杠、modelName 正确设置 |
+| TestStatusBarView | model_test.go | 状态栏渲染：非空输出 |
+| TestCompletionFilter | model_test.go | 补全过滤：前缀匹配 /mod → /model |
+| TestCompletionHide | model_test.go | 补全隐藏：Hide() 后 IsVisible() = false |
+| TestCompletionSelectWrap | model_test.go | 补全选择循环：SelectNext/SelectPrev 首尾环绕 |
+| TestCompletionFilterNoMatch | model_test.go | 补全无匹配：无匹配项时自动隐藏 |
+| TestVisibleWidth | model_test.go | 可见宽度计算：ASCII 和 CJK 字符 |
+
 ---
 
 ## 二、系统测试（Python）
@@ -261,9 +277,10 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
+| Go 单元测试 | 11 个函数 (chat) | 3 (chat) |
 | Python 系统测试 | 112 个类 | 25 |
 
-**总计**: 约 135+ 个测试点覆盖核心功能。
+**总计**: 约 146+ 个测试点覆盖核心功能。
 
 ---
 

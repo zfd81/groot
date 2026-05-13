@@ -9,12 +9,11 @@ import (
 
 	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/eino-ext/adk/backend/local"
-
-	"github.com/zfd81/groot/internal/cmd"
 )
 
 func TestSymlinkBackend_LoadRealSkills(t *testing.T) {
-	skillsDir := filepath.Join(cmd.GetDefaultHome(), "skills")
+	homeDir, _ := os.UserHomeDir()
+	skillsDir := filepath.Join(homeDir, ".groot", "skills")
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		t.Skip("Skills dir not found:", skillsDir)
 	}

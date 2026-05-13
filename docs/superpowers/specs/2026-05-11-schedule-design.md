@@ -325,8 +325,9 @@ POST   /schedule/:id/rerun           # 立即重新执行
 
 ```yaml
 schedule:
-  max_concurrent_tasks: 3             # 最大并发执行数
-  sync_interval: 30s                  # 目录同步间隔（定期对比 active/ 目录与 gocron 内存状态，修复手动改文件等导致的不一致；正常运行中走 Manager 保证一致性，此仅为安全网）
+  enabled: false                        # 是否允许在对话中创建定时任务（默认关闭，不影响系统级清理/同步任务）
+  max_concurrent_tasks: 3               # 最大并发执行数
+  sync_interval: 30s                    # 目录同步间隔（定期对比 active/ 目录与 gocron 内存状态，修复手动改文件等导致的不一致；正常运行中走 Manager 保证一致性，此仅为安全网）
 ```
 
 ## 错误处理

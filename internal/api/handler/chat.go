@@ -9,6 +9,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"io"
+
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
@@ -164,8 +166,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		})
 		return
 	}
-	// 确保 Register 之后任何退出路径都会清理活跃状态，防止 session 永久锁定
-	defer h.runtimeState.Delete(sessionID)
+	// 活跃状态在 agent goroutine 结束时清理
 
 	// 9. 注册成功后，再创建 session（如果是新会话）
 	if isNew {
@@ -175,17 +176,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		}
 	}
 
-	// 10. 设置响应 Header
-	rc.Response.Header.Set("X-Session-ID", sessionID)
-	rc.Response.Header.Set("X-Chat-ID", chatID)
-	rc.Response.Header.Set("Content-Type", "text/event-stream") // 直接设置，避免框架添加charset
-	rc.Response.Header.Set("Cache-Control", "no-cache")
-	rc.Response.Header.Set("Connection", "keep-alive")
-
-	// 11. 创建 SSE Writer
-	sseWriter := agent.NewSSEWriter(rc, sessionID, chatID, round)
-
-	// 12. 处理附件
+	// 10. 处理附件
 	var attachmentNames []string
 	var multimodalContents []agent.MultimodalContent
 	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
@@ -231,7 +222,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		}
 	}
 
-	// 13. 构建 Task 对象
+	// 11. 构建 Task 对象
 	task := &agent.Task{
 		ID:              chatID,
 		Instruction:     req.Instruction,
@@ -246,9 +237,25 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		HistoryMessages: historyMessages,
 		ModelName:       modelName,
 	}
+	// 12. 设置 SSE 响应头
+	rc.Response.Header.Set("X-Session-ID", sessionID)
+	rc.Response.Header.Set("X-Chat-ID", chatID)
+	rc.Response.Header.Set("Content-Type", "text/event-stream")
+	rc.Response.Header.Set("Cache-Control", "no-cache")
+	rc.Response.Header.Set("Connection", "keep-alive")
+	rc.Response.ImmediateHeaderFlush = true
 
-	// 14. 执行 Agent (同步执行以保持 SSE 连接)
-	func() {
+	// 13. 创建 pipe 用于流式 SSE
+	pr, pw := io.Pipe()
+	rc.SetBodyStream(pr, -1)
+
+	// 14. 异步执行 Agent
+	go func() {
+		defer h.runtimeState.Delete(sessionID)
+		defer pw.Close()
+
+		sseWriter := agent.NewSSEWriter(pipeFlushWriter{pw}, sessionID, chatID, round)
+
 		defer func() {
 			if r := recover(); r != nil {
 				h.log.Error(fmt.Sprintf("Agent 执行异常(panic): %v", r))
@@ -258,19 +265,27 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 			}
 		}()
 		h.agentExecutor.Execute(ctx, sessionID, task, sseWriter, activeChat.CancelCh)
-	}()
 
-	// 记录日志（区分完成/取消/失败）
-	statusText := string(task.Status)
-	if task.Status == agent.StatusCompleted {
-		statusText = "完成对话"
-	} else if task.Status == agent.StatusCancelled {
-		statusText = "对话被取消"
-	} else if task.Status == agent.StatusFailed {
-		statusText = "对话失败"
-	}
-	h.log.Info(fmt.Sprintf("%s: session=%s, chat=%s, round=%d, isNew=%v", statusText, sessionID, chatID, round, isNew))
+		// 记录日志
+		statusText := string(task.Status)
+		if task.Status == agent.StatusCompleted {
+			statusText = "完成对话"
+		} else if task.Status == agent.StatusCancelled {
+			statusText = "对话被取消"
+		} else if task.Status == agent.StatusFailed {
+			statusText = "对话失败"
+		}
+		h.log.Info(fmt.Sprintf("%s: session=%s, chat=%s, round=%d, isNew=%v", statusText, sessionID, chatID, round, isNew))
+	}()
 }
+
+// pipeFlushWriter 将 io.PipeWriter 适配为 flushWriter，Flush 为空操作。
+// HTTP chunked encoder 会在每个 chunk 后自动 flush。
+type pipeFlushWriter struct {
+	*io.PipeWriter
+}
+
+func (p pipeFlushWriter) Flush() error { return nil }
 
 // Serve 实现 handler 接口，路由到 Handle
 func (h *ChatHandler) Serve(ctx context.Context, rc *app.RequestContext) {

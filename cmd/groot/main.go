@@ -86,6 +86,12 @@ func main() {
 		case "schedule":
 			handleScheduleCommand(args[1:])
 			return
+		case "chat":
+			if err := cmd.RunChat(); err != nil {
+				fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "tail":
 			handleTailCommand(args[1:])
 		default:
@@ -350,10 +356,12 @@ func startServer(homeDir string, port int) {
 		// Create manager
 		scheduleMgr = schedule.NewManager(scheduleStorage, scheduleEngine, scheduleRunner, log)
 
-		// Register built-in schedule tools
-		scheduleTools := schedule.NewScheduleTools(scheduleMgr)
-		mcpMgr.RegisterBuiltinTools(scheduleTools)
-		log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
+		// Register built-in schedule tools (only when user-facing schedule is enabled)
+		if cfg.Schedule.Enabled {
+			scheduleTools := schedule.NewScheduleTools(scheduleMgr)
+			mcpMgr.RegisterBuiltinTools(scheduleTools)
+			log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
+		}
 
 		// Register cleanup task
 		cleanupHour, cleanupMinute := schedule.ParseCleanupTime(cfg.Memory.CleanupSchedule)
@@ -443,6 +451,7 @@ func printHelp() {
 	fmt.Println("  skills            管理 Skills（list/install/uninstall）")
 	fmt.Println("  mcp               管理 MCP Servers（list）")
 	fmt.Println("  schedule          管理定时任务（list/inspect/history 等）")
+	fmt.Println("  chat              打开交互式聊天界面")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println()
 	fmt.Println("选项:")
@@ -474,6 +483,10 @@ func printHelp() {
 	fmt.Println("  enable <id>       启用任务")
 	fmt.Println("  archive <id>      归档任务")
 	fmt.Println()
+	fmt.Println("chat 子命令:")
+	fmt.Println("  启动交互式聊天界面 (TUI)，通过 HTTP+SSE 连接 groot 服务")
+	fmt.Println("  支持模型切换、会话管理、命令补全等系统命令")
+	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
 	fmt.Println("  -l <level>        按日志级别过滤 (error/warn/info/debug)")
@@ -493,6 +506,8 @@ func printHelp() {
 	fmt.Println("  groot skills uninstall my-skill  # 卸载 Skill")
 	fmt.Println("  groot mcp list                  # 列出所有 MCP Servers")
 	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
+	fmt.Println("  groot tail                    # 显示最近 100 行日志")
+	fmt.Println("  groot chat                    # 打开聊天界面")
 	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")
 }

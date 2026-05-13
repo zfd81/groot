@@ -3,40 +3,48 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/cloudwego/hertz/pkg/app"
+	"io"
 )
 
-// SSEWriter writes Server-Sent Events
+// flushWriter is the minimal interface for SSE writing: Write + Flush.
+// network.Conn satisfies this natively; io.PipeWriter can be adapted with a no-op Flush.
+type flushWriter interface {
+	io.Writer
+	Flush() error
+}
+
+// SSEWriter writes Server-Sent Events to a flushable writer.
 type SSEWriter struct {
-	rc        *app.RequestContext
+	w         flushWriter
 	sessionID string
 	chatID    string
 	round     int
 }
 
-// NewSSEWriter creates a new SSE writer
-func NewSSEWriter(rc *app.RequestContext, sessionID, chatID string, round int) *SSEWriter {
+// NewSSEWriter creates a new SSE writer.
+func NewSSEWriter(w flushWriter, sessionID, chatID string, round int) *SSEWriter {
 	return &SSEWriter{
-		rc:        rc,
+		w:         w,
 		sessionID: sessionID,
 		chatID:    chatID,
 		round:     round,
 	}
 }
 
-// WriteData writes raw SSE data line
+// WriteData marshals data as JSON and writes it as an SSE data line, then flushes.
 func (s *SSEWriter) WriteData(data interface{}) error {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal SSE data: %w", err)
 	}
 	line := fmt.Sprintf("data: %s\n\n", string(dataBytes))
-	_, err = s.rc.Write([]byte(line))
-	return err
+	if _, err := s.w.Write([]byte(line)); err != nil {
+		return err
+	}
+	return s.w.Flush()
 }
 
-// WriteThinking writes thinking chunk (reasoning_content)
+// WriteThinking writes thinking chunk (reasoning_content).
 func (s *SSEWriter) WriteThinking(content string) error {
 	return s.WriteData(map[string]string{
 		"role":              "assistant",
@@ -44,7 +52,7 @@ func (s *SSEWriter) WriteThinking(content string) error {
 	})
 }
 
-// WriteMessage writes message chunk (content)
+// WriteMessage writes message chunk (content).
 func (s *SSEWriter) WriteMessage(content string) error {
 	return s.WriteData(map[string]string{
 		"role":    "assistant",
@@ -52,7 +60,7 @@ func (s *SSEWriter) WriteMessage(content string) error {
 	})
 }
 
-// WriteToolCalls writes tool_calls event
+// WriteToolCalls writes tool_calls event.
 func (s *SSEWriter) WriteToolCalls(toolCalls []ToolCall) error {
 	return s.WriteData(map[string]interface{}{
 		"role":       "assistant",
@@ -60,7 +68,7 @@ func (s *SSEWriter) WriteToolCalls(toolCalls []ToolCall) error {
 	})
 }
 
-// WriteFinish writes finish_reason event
+// WriteFinish writes finish_reason event.
 func (s *SSEWriter) WriteFinish(reason string) error {
 	return s.WriteData(map[string]string{
 		"role":          "assistant",
@@ -68,7 +76,7 @@ func (s *SSEWriter) WriteFinish(reason string) error {
 	})
 }
 
-// WriteToolResult writes tool result event
+// WriteToolResult writes tool result event.
 func (s *SSEWriter) WriteToolResult(toolCallID, toolName, content string) error {
 	return s.WriteData(map[string]string{
 		"role":         "tool",
@@ -78,13 +86,15 @@ func (s *SSEWriter) WriteToolResult(toolCallID, toolName, content string) error 
 	})
 }
 
-// WriteDone writes [DONE] marker
+// WriteDone writes [DONE] marker and flushes.
 func (s *SSEWriter) WriteDone() error {
-	_, err := s.rc.Write([]byte("data: [DONE]\n\n"))
-	return err
+	if _, err := s.w.Write([]byte("data: [DONE]\n\n")); err != nil {
+		return err
+	}
+	return s.w.Flush()
 }
 
-// WriteError writes error event
+// WriteError writes error event.
 func (s *SSEWriter) WriteError(code, message string) error {
 	return s.WriteData(map[string]interface{}{
 		"event":   "error",
@@ -93,14 +103,15 @@ func (s *SSEWriter) WriteError(code, message string) error {
 	})
 }
 
-// ToolCall represents a tool call (OpenAI format)
+// ToolCall represents a tool call (OpenAI format).
 type ToolCall struct {
+	Index    *int         `json:"index,omitempty"`
 	ID       string       `json:"id"`
 	Type     string       `json:"type"` // "function"
 	Function FunctionCall `json:"function"`
 }
 
-// FunctionCall represents function call details
+// FunctionCall represents function call details.
 type FunctionCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON string

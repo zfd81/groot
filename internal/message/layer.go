@@ -81,6 +81,12 @@ func (l *Layer) Publish(ctx context.Context, event Event, channels []string) (<-
 		resultCh: make(chan []SendResult, 1),
 	}
 
+	// 优先检查 context 是否已取消，避免 select 随机选择入队成功
+	if err := ctx.Err(); err != nil {
+		l.log.Info("消息入队失败: context已取消", zap.String("title", event.Title))
+		return nil, err
+	}
+
 	select {
 	case l.queue <- job:
 		l.log.Info("消息入队",

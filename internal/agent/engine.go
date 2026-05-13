@@ -227,10 +227,10 @@ eventLoop:
 							finalResult += msg.Content
 						}
 
-						// Send tool_calls
+						// Send tool_calls (skip streaming artifacts with empty name and no ID)
 						if len(msg.ToolCalls) > 0 {
 							toolCalls := convertToolCalls(msg.ToolCalls)
-							if cb.WriteToolCalls != nil {
+							if len(toolCalls) > 0 && cb.WriteToolCalls != nil {
 								cb.WriteToolCalls(toolCalls)
 							}
 							for _, tc := range msg.ToolCalls {
@@ -252,10 +252,9 @@ eventLoop:
 						}
 					}
 					stream.Close()
-				}
 
-				// Handle non-streaming response
-				if msgOutput.Message != nil {
+				// Handle non-streaming response (only when no streaming was done)
+				} else if msgOutput.Message != nil {
 					msg := msgOutput.Message
 
 					if msg.ReasoningContent != "" {
@@ -273,7 +272,7 @@ eventLoop:
 
 					if len(msg.ToolCalls) > 0 {
 						toolCalls := convertToolCalls(msg.ToolCalls)
-						if cb.WriteToolCalls != nil {
+						if len(toolCalls) > 0 && cb.WriteToolCalls != nil {
 							cb.WriteToolCalls(toolCalls)
 						}
 						for _, tc := range msg.ToolCalls {
@@ -353,18 +352,23 @@ func (e *Engine) processToolEvent(event *adk.AgentEvent, cb *ProgressCallback, s
 	}
 }
 
-// convertToolCalls converts eino ToolCalls to SSE ToolCalls format
+// convertToolCalls converts eino ToolCalls to SSE ToolCalls format,
+// filtering out streaming artifacts that carry no useful content.
 func convertToolCalls(tcs []schema.ToolCall) []ToolCall {
-	result := make([]ToolCall, len(tcs))
-	for i, tc := range tcs {
-		result[i] = ToolCall{
-			ID:   tc.ID,
-			Type: tc.Type,
+	result := make([]ToolCall, 0, len(tcs))
+	for _, tc := range tcs {
+		if tc.Function.Name == "" && tc.ID == "" && tc.Function.Arguments == "" {
+			continue
+		}
+		result = append(result, ToolCall{
+			Index:    tc.Index,
+			ID:       tc.ID,
+			Type:     tc.Type,
 			Function: FunctionCall{
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,
 			},
-		}
+		})
 	}
 	return result
 }

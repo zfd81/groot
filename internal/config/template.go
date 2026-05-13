@@ -65,6 +65,12 @@ llm:
 #  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
 #  history_window: 20               # LLM 上下文窗口（轮次），-1 不限制
 
+# 定时任务调度配置
+#schedule:
+#  enabled: false                  # 是否允许在对话中创建定时任务（默认关闭，不影响系统级清理任务）
+#  max_concurrent_tasks: 3         # 最大并发执行数
+#  sync_interval: 30s              # 目录同步间隔
+
 # 安全配置
 #security:
 #  rate_limit:
