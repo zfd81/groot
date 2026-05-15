@@ -111,6 +111,18 @@ func (m *Manager) Register(config *MCPConfig, tools []ToolDefinition, discoveryE
 	m.logger.Info("Registered MCP tools", zap.String("name", config.Name), zap.Int("tools", len(tools)))
 }
 
+// UnregisterBuiltinTools removes all built-in tools (e.g., schedule tools)
+func (m *Manager) UnregisterBuiltinTools() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for name := range m.builtinTools {
+		delete(m.toolInfos, name)
+	}
+	m.builtinTools = make(map[string]tool.BaseTool)
+	m.logger.Info("已注销内置工具")
+}
+
 // Unregister removes an MCP configuration
 func (m *Manager) Unregister(name string) {
 	m.mu.Lock()

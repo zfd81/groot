@@ -22,6 +22,7 @@ import (
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api"
+	"github.com/zfd81/groot/internal/cluster"
 	"github.com/zfd81/groot/internal/cmd"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/filesystem"
@@ -324,43 +325,38 @@ func startServer(homeDir string, port int) {
 	// Create executor (used by both API server and schedule runner)
 	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, *cfg, log)
 
-	// Create unified scheduler
-	maxConcurrent := cfg.Schedule.MaxConcurrentTasks
-	if maxConcurrent <= 0 {
-		maxConcurrent = 10
-	}
-	sched, err := scheduler.New(log, maxConcurrent)
-
-	// Declare scheduleMgr outside if block for use in api.NewServer
+	// Declare schedule module variables (used by leader callbacks and API server)
+	var sched *scheduler.Scheduler
 	var scheduleMgr *schedule.Manager
+	var scheduleEngine *schedule.Engine
+	var scheduleStorage *schedule.Storage
+	var scheduleRunner *schedule.Runner
 
-	if err != nil {
-		log.Error("无法创建调度器", zap.Error(err))
-	} else {
-		// Initialize schedule module
-		scheduleDir := filepath.Join(homeDir, "schedules")
-		scheduleStorage := schedule.NewStorage(scheduleDir, log)
-		if err := scheduleStorage.EnsureDirs(); err != nil {
-			log.Error("无法创建调度目录", zap.Error(err))
+	// Initialize schedule module (storage and runner needed regardless of leader status)
+	scheduleDir := filepath.Join(homeDir, "schedules")
+	scheduleStorage = schedule.NewStorage(scheduleDir, log)
+	if err := scheduleStorage.EnsureDirs(); err != nil {
+		log.Error("无法创建调度目录", zap.Error(err))
+	}
+	scheduleRunner = schedule.NewRunner(exec, memMgr, msgLayer, scheduleStorage, log)
+
+	// Define leader task callbacks
+	startLeaderTasks := func() {
+		maxConcurrent := cfg.Schedule.MaxConcurrentTasks
+		if maxConcurrent <= 0 {
+			maxConcurrent = 10
+		}
+		var err error
+		sched, err = scheduler.New(log, maxConcurrent)
+		if err != nil {
+			log.Error("无法创建调度器", zap.Error(err))
+			return
 		}
 
-		// Create runner
-		scheduleRunner := schedule.NewRunner(exec, memMgr, msgLayer, scheduleStorage, log)
-
-		// Create engine and load active tasks
-		scheduleEngine := schedule.NewEngine(sched, scheduleRunner, scheduleStorage, log)
+		scheduleEngine = schedule.NewEngine(sched, scheduleRunner, scheduleStorage, log)
 		if err := scheduleEngine.Start(); err != nil {
 			log.Error("无法启动调度引擎", zap.Error(err))
-		}
-
-		// Create manager
-		scheduleMgr = schedule.NewManager(scheduleStorage, scheduleEngine, scheduleRunner, log)
-
-		// Register built-in schedule tools (only when user-facing schedule is enabled)
-		if cfg.Schedule.Enabled {
-			scheduleTools := schedule.NewScheduleTools(scheduleMgr)
-			mcpMgr.RegisterBuiltinTools(scheduleTools)
-			log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
+			return
 		}
 
 		// Register cleanup task
@@ -374,14 +370,45 @@ func startServer(homeDir string, port int) {
 		}
 		sched.AddDuration(syncInterval, gocron.NewTask(schedule.NewSyncTask(scheduleEngine, scheduleStorage, log)), "system-sync", "sync")
 
-		// Start scheduler
+		// Register schedule tools if enabled
+		if cfg.Schedule.Enabled {
+			scheduleMgr = schedule.NewManager(scheduleStorage, scheduleEngine, scheduleRunner, log)
+			scheduleTools := schedule.NewScheduleTools(scheduleMgr)
+			mcpMgr.RegisterBuiltinTools(scheduleTools)
+			log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
+		}
+
 		sched.Start()
-		log.Info("统一调度器已启动",
+		log.Info("统一调度器已启动 (Leader)",
 			zap.Int("max_concurrent", maxConcurrent),
 			zap.Int("cleanup_hour", cleanupHour),
 			zap.Int("cleanup_minute", cleanupMinute),
 		)
 	}
+
+	stopLeaderTasks := func() {
+		if sched != nil {
+			sched.Stop()
+			sched = nil
+		}
+		if scheduleMgr != nil {
+			mcpMgr.UnregisterBuiltinTools()
+			scheduleMgr = nil
+		}
+	}
+
+	// Initialize cluster
+	clusterInst := cluster.New(homeDir, cfg.Server.Host, cfg.Server.Port, log)
+	clusterInst.SetCallbacks(startLeaderTasks, stopLeaderTasks)
+
+	if err := clusterInst.Join(context.Background()); err != nil {
+		log.Error("加入集群失败", zap.Error(err))
+	}
+
+	log.Info("集群状态",
+		zap.String("role", clusterInst.Role()),
+		zap.String("reg_id", clusterInst.RegID()),
+	)
 
 	// Create API server
 	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, scheduleMgr)
@@ -397,17 +424,15 @@ func startServer(homeDir string, port int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Leave cluster before shutting down
+		clusterInst.Leave()
+
 		// Stop server
 		srv.Stop(ctx)
 
 		// Stop watchers
 		grootMdWatcher.Stop()
 		skillsWatcher.Stop()
-
-		// Stop scheduler
-		if sched != nil {
-			sched.Stop()
-		}
 
 		// Stop message layer
 		msgLayer.Stop()
