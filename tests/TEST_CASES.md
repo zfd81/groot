@@ -24,6 +24,49 @@
 | TestCompletionFilterNoMatch | model_test.go | 补全无匹配：无匹配项时自动隐藏 |
 | TestVisibleWidth | model_test.go | 可见宽度计算：ASCII 和 CJK 字符 |
 
+### 1.2 集群管理测试
+
+位于 `internal/cluster/` 目录。
+
+**选举逻辑** (`election_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestDetermineRole_NoAliveMembers | 无存活成员时成为 leader |
+| TestDetermineRole_SelfIsSmallest | 注册编号最小 → leader |
+| TestDetermineRole_SelfIsNotSmallest | 注册编号非最小 → follower |
+| TestDetermineRole_StaleMembersExcluded | 超时成员被排除后，自身最小 → leader |
+| TestDetermineRole_AllStale | 全部超时 → leader |
+| TestDetermineRole_SelfStaleOthersAlive | 自身超时但其他存活 → 存活最小者选为 leader |
+
+**文件操作** (`member_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestWriteRegistrationFile | 写入注册文件，验证格式 `{role}\|{host}:{port}\|{pid}` |
+| TestListMembers | 列出目录中所有成员，按文件名排序 |
+| TestListMembers_EmptyDir | 空目录返回零成员 |
+| TestRemoveStaleFile | 删除注册文件，不存在时无操作 |
+| TestEnsureMembersDir | 确保 `cluster/members/` 目录存在 |
+| TestGenerateRegID | 注册编号格式：17 位数字 `YYYYMMDDHHMMSSmmm` |
+| TestFileMtimeUpdates | 覆盖写入后 mtime 更新 |
+
+**Cluster 集成** (`cluster_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestCluster_JoinAsLeader_NoExistingMembers | 无现有成员时加入成为 leader |
+| TestCluster_JoinAsFollower_ExistingLeader | 已有 leader 时加入成为 follower |
+| TestCluster_Heartbeat_FileLost | 注册文件丢失后重新注册（新 ID） |
+| TestCluster_Heartbeat_LeaderCleanupStale | Leader 心跳清理超时文件 |
+| TestCluster_Leave | 优雅退出删除注册文件 |
+| TestCluster_FollowerPromotionOnLeaderLeave | Leader 退出后 follower 提升 |
+| TestCluster_Callbacks_OnBecomeLeader | 成为 leader 时触发回调 |
+| TestCluster_Callbacks_OnLoseLeader | 文件丢失时触发失去 leader 回调 |
+| TestCluster_Callbacks_OnPromotionFromFollower | Follower 提升为 leader 时触发回调 |
+| TestCluster_MultipleInstances_SingleLeader | 3 实例共享 homeDir，恰好 1 个 leader |
+| TestCluster_FollowerHeartbeat_NoStaleCleanup | Follower 不清理过期文件（仅 leader 清理） |
+
 ---
 
 ## 二、系统测试（Python）
@@ -250,6 +293,22 @@
 | TestSessionHandlingDetails | test_supplementary.py | 会话处理详细 |
 | TestMetricsInHealth | test_supplementary.py | 健康检查指标 |
 
+### 2.20 集群管理系统测试
+
+位于 `tests/python/test_cluster.py`。
+
+| 测试类 | 测试函数 | 测试内容 |
+|-------|---------|---------|
+| TestSingleInstance | test_single_instance_becomes_leader | 单实例启动自动成为 leader |
+| TestSingleInstance | test_registration_file_format | 注册文件格式验证（17位ID + 内容格式） |
+| TestDualInstance | test_second_instance_becomes_follower | 第二个实例成为 follower |
+| TestDualInstance | test_first_instance_is_leader | 先启动（更小编号）的是 leader |
+| TestFailover | test_leader_killed_follower_promotes | 杀 leader → follower 提升为 leader |
+| TestFailover | test_leader_graceful_shutdown_follower_promotes | Leader 优雅退出 → follower 提升 |
+| TestMultipleInstances | test_three_instances_exactly_one_leader | 3 实例恰好 1 leader + 2 follower |
+| TestCrashRecovery | test_restarted_old_leader_becomes_follower | 旧 leader 重启后成为 follower |
+| TestHeartbeatFileUpdate | test_leader_file_mtime_updates | Leader 心跳持续更新文件 mtime |
+
 ---
 
 ## 三、运行测试
@@ -277,10 +336,10 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Go 单元测试 | 11 个函数 (chat) | 3 (chat) |
-| Python 系统测试 | 112 个类 | 25 |
+| Go 单元测试 | 35 个函数 | 6 |
+| Python 系统测试 | 121 个测试 | 26 |
 
-**总计**: 约 146+ 个测试点覆盖核心功能。
+**总计**: 约 156+ 个测试点覆盖核心功能。
 
 ---
 

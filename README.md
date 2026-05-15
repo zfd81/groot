@@ -118,6 +118,8 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │           └── chat_{timestamp}.json  # 单次对话完整记录
 ├── logs/                          # 日志目录
 │   └── groot-{date}.log           # 日志文件
+├── cluster/                       # 集群管理目录
+│   └── members/                   # 成员注册文件（用于多实例 Leader 选举）
 ├── schedules/                     # 定时任务目录
 │   ├── active/                    # 活跃任务
 │   │   └── {task-id}.json         # 任务定义文件
@@ -139,6 +141,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
 | `skills/` | Skills 定义目录（固定位置），支持热插拔 |
 | `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
+| `cluster/members/` | 集群成员注册目录（固定位置），存放实例注册文件，用于 Leader 选举 |
 | `schedules/` | 定时任务存储目录（固定位置），active/disabled/archive 三目录状态流转 |
 
 **可配置目录（支持相对/绝对路径）：**
@@ -260,6 +263,7 @@ groot init
 | `mcp/` | MCP 配置目录 |
 | `memory/` | 会话数据目录 |
 | `logs/` | 日志文件目录 |
+| `cluster/members/` | 集群成员注册目录（用于多实例 Leader 选举） |
 | `schedules/` | 定时任务存储目录（含 active/disabled/archive/executions） |
 | `config.yaml` | 主配置文件 |
 

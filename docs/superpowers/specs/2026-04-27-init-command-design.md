@@ -48,6 +48,7 @@ groot tail [选项]         # 实时日志查看（已有）
    - `mcp/` 子目录
    - `memory/` 子目录
    - `logs/` 子目录
+   - `cluster/members/` 子目录（用于集群管理的成员注册文件存放）
 3. 检查并创建配置模板文件 `config.yaml`
 
 **目录/文件检查逻辑**：
@@ -66,6 +67,7 @@ groot tail [选项]         # 实时日志查看（已有）
 目录 mcp 已存在，跳过创建
 目录 memory 创建成功
 目录 logs 创建成功
+目录 cluster/members 创建成功
 配置文件 config.yaml 已存在，跳过创建
 
 初始化完成

@@ -142,7 +142,7 @@ func TestRunInit(t *testing.T) {
 	}
 
 	// 检查目录创建
-	expectedDirs := []string{"skills", "mcp", "memory", "logs"}
+	expectedDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
 	for _, dir := range expectedDirs {
 		path := filepath.Join(homeDir, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -171,7 +171,7 @@ func TestRunInitExistingDirectory(t *testing.T) {
 	}
 
 	// 检查所有目录仍存在
-	expectedDirs := []string{"skills", "mcp", "memory", "logs"}
+	expectedDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
 	for _, dir := range expectedDirs {
 		path := filepath.Join(homeDir, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -231,7 +231,7 @@ func RunInit(homeDir string) error {
 	}
 
 	// 创建子目录
-	subDirs := []string{"skills", "mcp", "memory", "logs"}
+	subDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
 	for _, dir := range subDirs {
 		if err := createDir(filepath.Join(homeDir, dir), "目录 "+dir, false); err != nil {
 			return err

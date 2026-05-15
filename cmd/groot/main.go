@@ -400,6 +400,19 @@ func startServer(homeDir string, port int) {
 		}
 	}
 
+	// Check if port is available before starting
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	conn, err := net.Dial("tcp", addr)
+	if err == nil {
+		conn.Close()
+		log.Error("端口已被占用",
+			zap.String("host", cfg.Server.Host),
+			zap.Int("port", cfg.Server.Port))
+		fmt.Fprintf(os.Stderr, "错误: 端口 %d 已被占用\n", cfg.Server.Port)
+		fmt.Fprintf(os.Stderr, "提示: 请检查是否有其他 Groot 进程运行，或使用 -p 指定其他端口\n")
+		os.Exit(1)
+	}
+
 	// Initialize cluster
 	clusterInst := cluster.New(homeDir, cfg.Server.Host, cfg.Server.Port, log)
 	clusterInst.SetCallbacks(startLeaderTasks, stopLeaderTasks)
@@ -446,18 +459,6 @@ func startServer(homeDir string, port int) {
 		log.Info("Groot Agent 已关闭")
 	}()
 
-	// Check if port is available before starting
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	conn, err := net.Dial("tcp", addr)
-	if err == nil {
-		conn.Close()
-		log.Error("端口已被占用",
-			zap.String("host", cfg.Server.Host),
-			zap.Int("port", cfg.Server.Port))
-		fmt.Fprintf(os.Stderr, "错误: 端口 %d 已被占用\n", cfg.Server.Port)
-		fmt.Fprintf(os.Stderr, "提示: 请检查是否有其他 Groot 进程运行，或使用 -p 指定其他端口\n")
-		os.Exit(1)
-	}
 
 	// Start server
 	log.Info("API 服务启动",

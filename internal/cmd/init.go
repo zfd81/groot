@@ -64,7 +64,7 @@ func RunInit(homeDir string) error {
 	}
 
 	// 创建子目录
-	subDirs := []string{"skills", "mcp", "memory", "logs"}
+	subDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
 	for _, dir := range subDirs {
 		if err := createDir(filepath.Join(homeDir, dir), "目录 "+dir, false); err != nil {
 			return err
