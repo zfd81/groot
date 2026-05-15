@@ -80,6 +80,26 @@ func TestEnsureMembersDir(t *testing.T) {
 	}
 }
 
+func TestGenerateRegID(t *testing.T) {
+	id1 := GenerateRegID()
+
+	if len(id1) != 17 {
+		t.Errorf("expected length 17, got %d: %s", len(id1), id1)
+	}
+
+	for i, c := range id1 {
+		if c < '0' || c > '9' {
+			t.Errorf("expected all digits, got non-digit %c at position %d: %s", c, i, id1)
+			break
+		}
+	}
+
+	id2 := GenerateRegID()
+	if id2 < id1 {
+		t.Errorf("expected non-decreasing, got id1=%s, id2=%s", id1, id2)
+	}
+}
+
 func TestFileMtimeUpdates(t *testing.T) {
 	dir := t.TempDir()
 	WriteRegistration(dir, "test", "leader", "127.0.0.1", 8080, 12345)
