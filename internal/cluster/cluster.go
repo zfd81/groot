@@ -148,7 +148,7 @@ func (c *Cluster) heartbeat(membersDir string) {
 }
 
 func (c *Cluster) register(membersDir string) {
-	// List existing members first to detect regID collisions
+	// List existing members to determine role
 	members, err := ListMembers(membersDir)
 	if err != nil {
 		c.log.Error("列出成员失败", zap.Error(err))
