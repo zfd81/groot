@@ -156,18 +156,7 @@ func (c *Cluster) register(membersDir string) {
 		return
 	}
 
-	// Build a set of existing member IDs for collision detection
-	existingIDs := make(map[string]bool, len(members))
-	for _, m := range members {
-		existingIDs[m.ID] = true
-	}
-
-	// Generate a regID that does not collide with any existing member
 	c.regID = GenerateRegID()
-	for existingIDs[c.regID] {
-		time.Sleep(time.Millisecond)
-		c.regID = GenerateRegID()
-	}
 
 	c.role = DetermineRole(c.regID, members, heartbeatTimeout)
 

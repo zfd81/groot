@@ -64,6 +64,9 @@ func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 	}
 
 	// start second instance (follower)
+	// Small delay to ensure different regID (same-millisecond startup is not
+	// a real-world concern per design doc).
+	time.Sleep(time.Millisecond)
 	follower := New(homeDir, "127.0.0.1", 8081, log)
 	err = follower.Join(ctx)
 	if err != nil {
