@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+const (
+	RoleLeader   = "leader"
+	RoleFollower = "follower"
+)
+
 // MemberInfo represents a cluster member's metadata from its registration file.
 type MemberInfo struct {
 	ID    string
@@ -23,13 +28,13 @@ func DetermineRole(selfID string, members []MemberInfo, timeout time.Duration) s
 		}
 	}
 	if len(alive) == 0 {
-		return "leader"
+		return RoleLeader
 	}
 	sort.Slice(alive, func(i, j int) bool {
 		return alive[i].ID < alive[j].ID
 	})
-	if selfID <= alive[0].ID {
-		return "leader"
+	if selfID == alive[0].ID {
+		return RoleLeader
 	}
-	return "follower"
+	return RoleFollower
 }
