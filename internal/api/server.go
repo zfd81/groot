@@ -40,7 +40,7 @@ func NewServer(
 	skillMiddleware adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
 	exec *agent.Executor,
-	scheduleMgr *schedule.Manager,
+	scheduleMgr **schedule.Manager,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -78,10 +78,7 @@ func NewServer(
 	healthH := handler.NewHealthHandler(cfg, skillBackend, mcpMgr, mem, runtime, log)
 	skillsH := handler.NewSkillsHandler(skillBackend)
 	toolsH := handler.NewToolsHandler(mcpMgr, log)
-	var scheduleH *handler.ScheduleHandler
-	if scheduleMgr != nil {
-		scheduleH = handler.NewScheduleHandler(scheduleMgr, log)
-	}
+	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW,

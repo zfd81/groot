@@ -82,8 +82,8 @@ func main() {
 			handleSkillsCommand(args[1:])
 			return
 		case "mcp":
-				handleMcpCommand(args[1:])
-				return
+			handleMcpCommand(args[1:])
+			return
 		case "schedule":
 			handleScheduleCommand(args[1:])
 			return
@@ -95,6 +95,7 @@ func main() {
 			return
 		case "tail":
 			handleTailCommand(args[1:])
+			return
 		default:
 			fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", command)
 			printHelp()
@@ -388,7 +389,9 @@ func startServer(homeDir string, port int) {
 
 	stopLeaderTasks := func() {
 		if sched != nil {
-			sched.Stop()
+			if err := sched.Stop(); err != nil {
+				log.Error("无法停止调度器", zap.Error(err))
+			}
 			sched = nil
 		}
 		if scheduleMgr != nil {
@@ -411,7 +414,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, scheduleMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, &scheduleMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
