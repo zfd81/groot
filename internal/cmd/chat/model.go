@@ -45,6 +45,7 @@ type Model struct {
 
 	embedServer interface{ Shutdown() error }
 	embedMode   bool
+	focusInInput bool
 }
 
 // NewModel creates a fully initialized TUI model.
@@ -164,6 +165,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.completion.Mode = ModeSkill
 		m.input.SetGhostText(m.completion.GhostText())
 		return m, nil
+
+	case tea.MouseWheelMsg:
+		mouse := msg.Mouse()
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			m.viewport.viewport.ScrollUp(3)
+		case tea.MouseWheelDown:
+			m.viewport.viewport.ScrollDown(3)
+		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		mouse := msg.Mouse()
+		if mouse.Button == tea.MouseLeft {
+			inputView := m.input.View(m.width)
+			inputLines := strings.Count(inputView, "\n") + 1
+			inputStartY := m.height - 2 - inputLines
+			inputEndY := m.height - 3
+			if mouse.Y >= inputStartY && mouse.Y <= inputEndY {
+				m.focusInInput = true
+			} else {
+				m.focusInInput = false
+			}
+		}
+		return m, nil
 	}
 
 	if !m.completion.IsVisible() {
@@ -195,8 +221,15 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.input.SetGhostText(m.completion.GhostText())
 			return m, nil
 		}
-		newInput, _ := m.input.Update(msg)
-		m.input = newInput
+		if m.popup.IsVisible() {
+			return m, nil
+		}
+		if m.focusInInput {
+			newInput, _ := m.input.Update(msg)
+			m.input = newInput
+			return m, nil
+		}
+		m.viewport.viewport.ScrollUp(1)
 		return m, nil
 
 	case "down":
@@ -205,8 +238,15 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.input.SetGhostText(m.completion.GhostText())
 			return m, nil
 		}
-		newInput, _ := m.input.Update(msg)
-		m.input = newInput
+		if m.popup.IsVisible() {
+			return m, nil
+		}
+		if m.focusInInput {
+			newInput, _ := m.input.Update(msg)
+			m.input = newInput
+			return m, nil
+		}
+		m.viewport.viewport.ScrollDown(1)
 		return m, nil
 
 	case "esc":
@@ -657,6 +697,7 @@ func (m *Model) clearSession() {
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.KeyboardEnhancements.ReportEventTypes = true
+	v.MouseMode = tea.MouseModeCellMotion
 
 	// Declarative cursor from textarea for IME composition support.
 	// Offset textarea-internal cursor to screen coordinates:
