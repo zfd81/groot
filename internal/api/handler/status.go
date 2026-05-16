@@ -95,7 +95,6 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			"status":       activeChat.Status,
 			"started_at":   activeChat.StartTime.Format(time.RFC3339),
 			"elapsed_time": duration,
-			"duration":     duration,
 			"round":        round,
 			"progress":     activeChat.Progress,
 		},

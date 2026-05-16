@@ -278,23 +278,7 @@ type skillItem struct {
 }
 ```
 
-## API 端点
-
-```
-GET /skills    # 返回所有已安装 Skill 的名称和描述列表
-```
-
-响应格式：
-
-```json
-{
-  "skills": [
-    {"name": "pdf_analyzer", "description": "分析PDF文档内容，提取关键信息并生成结构化摘要报告"},
-    {"name": "code_generator", "description": "根据需求生成代码"}
-  ],
-  "total": 2
-}
-```
+> API 端点定义已抽取至 [API 设计文档](2026-05-16-api-design.md)。
 
 ## 配置扩展
 

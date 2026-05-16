@@ -117,14 +117,14 @@ func getRequiredPermission(path, method string) string {
 		return "detail"
 	}
 
+	// Session history endpoint (must come before /sess/ prefix check)
+	if path == "/sess/history" {
+		return "history"
+	}
+
 	// Session endpoints
 	if strings.HasPrefix(path, "/sess/") {
 		return "session"
-	}
-
-	// Session history endpoint
-	if path == "/sess/history" {
-		return "history"
 	}
 
 	// Skills endpoint
@@ -135,6 +135,11 @@ func getRequiredPermission(path, method string) string {
 	// Tools endpoint
 	if path == "/tools" {
 		return "tools"
+	}
+
+	// Schedule endpoints
+	if strings.HasPrefix(path, "/schedule") {
+		return "schedule"
 	}
 
 	// Default: require all

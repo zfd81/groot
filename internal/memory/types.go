@@ -55,7 +55,7 @@ type ChatRecord struct {
 // Step 单步执行记录
 type Step struct {
 	StepID       string    `json:"step_id"`
-	Type         string    `json:"type"` // skill/tool/llm
+	Type         string    `json:"type"` // skill/tool/llm/thinking
 	Name         string    `json:"name"`
 	StartTime    time.Time `json:"start_time"`
 	EndTime      time.Time `json:"end_time"`

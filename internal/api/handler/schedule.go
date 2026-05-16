@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/logger"
@@ -25,7 +26,7 @@ func NewScheduleHandler(mgr **schedule.Manager, log *logger.Logger) *ScheduleHan
 func (h *ScheduleHandler) List(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -37,7 +38,7 @@ func (h *ScheduleHandler) List(ctx context.Context, rc *app.RequestContext) {
 	tasks, err := mgr.List(status)
 	if err != nil {
 		h.log.Error("Failed to list schedule tasks", zap.Error(err))
-		rc.JSON(500, map[string]string{"error": err.Error()})
+		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
 		return
 	}
 
@@ -51,7 +52,7 @@ func (h *ScheduleHandler) List(ctx context.Context, rc *app.RequestContext) {
 func (h *ScheduleHandler) Get(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -60,7 +61,7 @@ func (h *ScheduleHandler) Get(ctx context.Context, rc *app.RequestContext) {
 	task, err := mgr.Get(id)
 	if err != nil {
 		h.log.Error("Failed to get schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(404, map[string]string{"error": "task not found"})
+		rc.JSON(404, utils.H{"status": "task_not_found", "message": "任务不存在"})
 		return
 	}
 
@@ -71,7 +72,7 @@ func (h *ScheduleHandler) Get(ctx context.Context, rc *app.RequestContext) {
 func (h *ScheduleHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -79,7 +80,7 @@ func (h *ScheduleHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Delete(id); err != nil {
 		h.log.Error("Failed to delete schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, map[string]string{"error": err.Error()})
+		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
 		return
 	}
 
@@ -90,7 +91,7 @@ func (h *ScheduleHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 func (h *ScheduleHandler) Disable(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -98,7 +99,7 @@ func (h *ScheduleHandler) Disable(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Disable(id); err != nil {
 		h.log.Error("Failed to disable schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, map[string]string{"error": err.Error()})
+		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
 		return
 	}
 
@@ -109,7 +110,7 @@ func (h *ScheduleHandler) Disable(ctx context.Context, rc *app.RequestContext) {
 func (h *ScheduleHandler) Enable(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -117,7 +118,7 @@ func (h *ScheduleHandler) Enable(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Enable(id); err != nil {
 		h.log.Error("Failed to enable schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, map[string]string{"error": err.Error()})
+		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
 		return
 	}
 
@@ -128,7 +129,7 @@ func (h *ScheduleHandler) Enable(ctx context.Context, rc *app.RequestContext) {
 func (h *ScheduleHandler) Archive(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -136,7 +137,7 @@ func (h *ScheduleHandler) Archive(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Archive(id); err != nil {
 		h.log.Error("Failed to archive schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, map[string]string{"error": err.Error()})
+		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
 		return
 	}
 
@@ -147,7 +148,7 @@ func (h *ScheduleHandler) Archive(ctx context.Context, rc *app.RequestContext) {
 func (h *ScheduleHandler) History(ctx context.Context, rc *app.RequestContext) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, map[string]string{"error": "schedule service not available"})
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
 		return
 	}
 
@@ -156,7 +157,7 @@ func (h *ScheduleHandler) History(ctx context.Context, rc *app.RequestContext) {
 	records, err := mgr.GetHistory(id)
 	if err != nil {
 		h.log.Error("Failed to get schedule history", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, map[string]string{"error": err.Error()})
+		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
 		return
 	}
 

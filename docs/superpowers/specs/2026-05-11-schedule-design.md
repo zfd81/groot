@@ -303,21 +303,7 @@ groot schedule archive <task-id>        # 归档任务（→ archive）
 groot schedule rerun <task-id>          # 立即重新执行一次任务
 ```
 
-## API 端点
-
-API 仅提供查看和管理能力，不提供创建：
-
-```
-GET    /schedule                     # 列出所有任务
-GET    /schedule/:id                 # 查看任务详情
-GET    /schedule/:id/history         # 查看执行历史
-DELETE /schedule/:id                 # 删除任务
-POST   /schedule/:id/stop            # 停止正在执行的任务
-POST   /schedule/:id/disable         # 禁用任务
-POST   /schedule/:id/enable          # 启用任务
-POST   /schedule/:id/archive         # 归档任务
-POST   /schedule/:id/rerun           # 立即重新执行
-```
+> API 端点定义已抽取至 [API 设计文档](2026-05-16-api-design.md)。
 
 ## 配置扩展
 
