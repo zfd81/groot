@@ -10,15 +10,18 @@ build-all: build-darwin build-linux build-windows
 
 # macOS ARM64
 build-darwin:
-	GOOS=darwin GOARCH=arm64 go build -o bin/groot-darwin-arm64 ./cmd/groot
+	@mkdir -p bin/darwin-arm64
+	GOOS=darwin GOARCH=arm64 go build -o bin/darwin-arm64/groot ./cmd/groot
 
 # Linux AMD64
 build-linux:
-	GOOS=linux GOARCH=amd64 go build -o bin/groot-linux-amd64 ./cmd/groot
+	@mkdir -p bin/linux-amd64
+	GOOS=linux GOARCH=amd64 go build -o bin/linux-amd64/groot ./cmd/groot
 
 # Windows AMD64
 build-windows:
-	GOOS=windows GOARCH=amd64 go build -o bin/groot-windows-amd64.exe ./cmd/groot
+	@mkdir -p bin/windows-amd64
+	GOOS=windows GOARCH=amd64 go build -o bin/windows-amd64/groot.exe ./cmd/groot
 
 run:
 	go run ./cmd/groot
