@@ -136,7 +136,7 @@ def abs_path_server():
     env["GROOT_API_KEY"] = TEST_API_KEY
 
     process = subprocess.Popen(
-        [GROOT_BIN, "-H", home_dir, "-p", abs_port],
+        [GROOT_BIN, "-p", abs_port],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE

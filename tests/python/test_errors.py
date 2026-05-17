@@ -175,16 +175,12 @@ class TestErrorCodeList:
 
     def test_session_not_found(self, server, api_headers):
         """TC-ERR-010: session_not_found 错误（通过 DELETE）"""
-        # 删除不存在的会话
+        # DELETE 端点已删除，返回 404
         response = requests.delete(
             f"{BASE_URL}/chat/nonexistent_session_12345",
             headers=api_headers
         )
-
-        # 根据实现，可能返回 success + no_running_chat
-        # 或 session_not_found
-        data = response.json()
-        assert data["status"] in ["success", "no_running_chat", "session_not_found"]
+        assert response.status_code == 404
 
 
 class TestSSEErrorHandling:
@@ -210,16 +206,16 @@ class TestSSEErrorHandling:
         completed = sse.get_completed_event()
         if completed:
             # 如果失败，completed 应包含 error
-            if completed["data"]["status"] == "failed":
+            if completed["data"].get("finish_reason") not in ("stop", "tool_calls"):
                 assert "error" in completed["data"]
                 assert "code" in completed["data"]["error"]
                 assert "message" in completed["data"]["error"]
 
-    def test_thinking_end_error_on_failure(self, server, api_headers):
-        """TC-ERR-012: thinking_end 包含 error（失败步骤）
+    def test_thinking_error_on_failure(self, server, api_headers):
+        """TC-ERR-012: thinking 事件包含 error（失败步骤）
 
         新版 SSE 事件系统：
-        - thinking_end 替代旧的 step_end
+        - thinking 替代旧的 step_end / thinking_end
         - 失败时 status="failed" 且包含 error 字段
         """
         payload = {"instruction": "执行可能失败的命令"}
@@ -234,9 +230,9 @@ class TestSSEErrorHandling:
         from conftest import SSEClient
         sse = SSEClient(response)
 
-        thinking_ends = sse.get_events_by_type("thinking_end")
+        thinking_events = sse.get_events_by_type("thinking")
 
-        for step in thinking_ends:
+        for step in thinking_events:
             if step["data"]["status"] == "failed":
                 assert "error" in step["data"]
 

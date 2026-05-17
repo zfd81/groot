@@ -245,9 +245,9 @@ class TestStepIdFormat:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
+        steps = sse.get_all_steps()
 
-        for step in step_starts:
+        for step in steps:
             step_id = step["data"]["step_id"]
 
             # 验证格式
@@ -274,15 +274,15 @@ class TestStepIdFormat:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
+        steps = sse.get_all_steps()
 
-        step_ids = [s["data"]["step_id"] for s in step_starts]
+        step_ids = [s["data"]["step_id"] for s in steps]
 
         # 验证唯一性
         assert len(step_ids) == len(set(step_ids))
 
     def test_step_id_pairing(self, server, api_headers):
-        """TC-ID-010: step_start 和 step_end step_id 匹配"""
+        """TC-ID-010: 步骤 step_id 唯一性验证（新协议中 thinking 事件包含步骤信息）"""
         payload = {"instruction": "帮我分析数据"}
 
         response = requests.post(
@@ -294,15 +294,12 @@ class TestStepIdFormat:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
-        step_ends = sse.get_events_by_type("step_end")
+        steps = sse.get_all_steps()
 
-        start_ids = [s["data"]["step_id"] for s in step_starts]
-        end_ids = [e["data"]["step_id"] for e in step_ends]
+        step_ids = [s["data"]["step_id"] for s in steps if "step_id" in s["data"]]
 
-        # 验证每个 step_end 的 step_id 存在于 step_start
-        for end_id in end_ids:
-            assert end_id in start_ids
+        # 验证唯一性
+        assert len(step_ids) == len(set(step_ids))
 
 
 class TestNestingLevel:
@@ -321,7 +318,7 @@ class TestNestingLevel:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
+        step_starts = sse.get_events_by_type("thinking")
 
         for step in step_starts:
             data = step["data"]
@@ -348,7 +345,7 @@ class TestNestingLevel:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
+        step_starts = sse.get_events_by_type("thinking")
 
         # 主步骤（第一个步骤）nesting_level 应为 0
         if step_starts:
@@ -369,7 +366,7 @@ class TestNestingLevel:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
+        step_starts = sse.get_events_by_type("thinking")
 
         # 查找嵌套步骤
         nested_steps = [s for s in step_starts if s["data"]["nesting_level"] > 0]
@@ -392,7 +389,7 @@ class TestNestingLevel:
 
         sse = SSEClient(response)
 
-        step_starts = sse.get_events_by_type("step_start")
+        step_starts = sse.get_events_by_type("thinking")
 
         for step in step_starts:
             nesting_level = step["data"]["nesting_level"]

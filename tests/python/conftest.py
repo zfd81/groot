@@ -62,7 +62,13 @@ def wait_for_server(timeout: int = 30) -> bool:
 
 
 class SSEClient:
-    """SSE 流式响应客户端"""
+    """SSE 流式响应客户端
+
+    解析设计文档 3.6 节定义的 SSE 协议：
+    - 格式: data: <JSON>\\n\\n，无 event: 行
+    - 事件类型由 JSON 字段推断：thinking / message / tool_calls / finish / tool_result / error
+    - [DONE] 为流结束标记
+    """
 
     def __init__(self, response):
         self.response = response
@@ -70,36 +76,54 @@ class SSEClient:
         self._parse_events()
 
     def _parse_events(self):
-        """解析 SSE 事件流"""
+        """解析 SSE 事件流（仅 data: 行格式）"""
         content = self.response.text
         lines = content.split("\n")
-
-        current_event = None
-        current_data = None
 
         for line in lines:
             line = line.strip()
             if not line:
-                if current_event and current_data:
-                    self.events.append({
-                        "event": current_event,
-                        "data": json.loads(current_data) if current_data else {}
-                    })
-                    current_event = None
-                    current_data = None
                 continue
 
-            if line.startswith("event:"):
-                current_event = line[6:].strip()
-            elif line.startswith("data:"):
-                current_data = line[5:].strip()
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
 
-        # 处理最后一个事件
-        if current_event and current_data:
-            self.events.append({
-                "event": current_event,
-                "data": json.loads(current_data) if current_data else {}
-            })
+                if data_str == "[DONE]":
+                    continue  # 流结束标记，不是事件
+
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = self._infer_event_type(data)
+                self.events.append({
+                    "event": event_type,
+                    "data": data,
+                })
+
+    @staticmethod
+    def _infer_event_type(data: dict) -> str:
+        """根据 JSON 字段推断 SSE 事件类型（见 API 设计文档 3.6 节）"""
+        if data.get("event") == "error":
+            return "error"
+
+        role = data.get("role", "")
+
+        if role == "tool":
+            return "tool_result"
+
+        if "tool_calls" in data:
+            return "tool_calls"
+
+        if "reasoning_content" in data:
+            return "thinking"
+
+        if "finish_reason" in data:
+            return "finish"
+
+        # content / 其他 assistant 消息
+        return "message"
 
     def get_events_by_type(self, event_type: str) -> List[Dict]:
         """获取指定类型的所有事件"""
@@ -110,76 +134,61 @@ class SSEClient:
         return [e["event"] for e in self.events]
 
     def verify_event_order(self) -> bool:
-        """验证事件顺序是否正确（新事件系统）"""
+        """验证事件顺序是否正确（新协议）"""
         order = self.get_event_order()
-
-        # started 必须是第一个（替代旧的intent）
-        if not order or order[0] != "started":
+        if not order:
             return False
 
-        # completed 必须是最后一个
-        if order[-1] != "completed":
+        # 至少有一个有意义的事件（message / tool_calls / thinking / finish / error）
+        valid_events = {"message", "tool_calls", "thinking", "finish", "error"}
+        if not any(e in order for e in valid_events):
             return False
 
-        # thinking_start 和 thinking_end 应成对
-        thinking_starts = [i for i, e in enumerate(order) if e == "thinking_start"]
-        thinking_ends = [i for i, e in enumerate(order) if e == "thinking_end"]
+        # tool_calls 和 tool_result: 如果有 tool_result，前面必须有 tool_calls
+        tool_calls_indices = [i for i, e in enumerate(order) if e == "tool_calls"]
+        tool_results_indices = [i for i, e in enumerate(order) if e == "tool_result"]
 
-        if len(thinking_starts) != len(thinking_ends):
-            return False
-
-        # thinking_end 必须在对应的 thinking_start 之后
-        for i, start_idx in enumerate(thinking_starts):
-            if i >= len(thinking_ends) or thinking_ends[i] < start_idx:
+        # 每个 tool_result 前至少有一个 tool_calls（tool_calls 可能比 tool_result 多，比如调用失败）
+        for tr_idx in tool_results_indices:
+            if not any(tc_idx < tr_idx for tc_idx in tool_calls_indices):
                 return False
 
-        # tool_call 和 tool_result 应成对
-        tool_calls = [i for i, e in enumerate(order) if e == "tool_call"]
-        tool_results = [i for i, e in enumerate(order) if e == "tool_result"]
-
-        if len(tool_calls) != len(tool_results):
+        # finish 或 error 事件应该存在（终态）
+        if "finish" not in order and "error" not in order:
             return False
 
-        # tool_result 必须在对应的 tool_call 之后
-        for i, call_idx in enumerate(tool_calls):
-            if i >= len(tool_results) or tool_results[i] < call_idx:
-                return False
+        # error 事件只能出现在最后（终态）
+        error_indices = [i for i, e in enumerate(order) if e == "error"]
+        if error_indices and error_indices[-1] != len(order) - 1:
+            return False
 
         return True
 
     def get_completed_event(self) -> Optional[Dict]:
-        """获取 completed 事件"""
-        events = self.get_events_by_type("completed")
+        """获取 finish 事件（兼容旧名）"""
+        events = self.get_events_by_type("finish")
         return events[0] if events else None
 
     def get_started_event(self) -> Optional[Dict]:
-        """获取 started 事件（替代旧的intent）"""
-        events = self.get_events_by_type("started")
+        """获取首个 message 事件（新协议无 started 事件）"""
+        events = self.get_events_by_type("message")
         return events[0] if events else None
 
     def get_intent_event(self) -> Optional[Dict]:
-        """获取 intent 事件（兼容旧测试）"""
-        # 尝试获取started事件，如果没有则获取intent事件
-        started = self.get_started_event()
-        if started:
-            return started
-        events = self.get_events_by_type("intent")
-        return events[0] if events else None
+        """获取首个 message 事件（兼容旧测试）"""
+        return self.get_started_event()
 
     def get_all_steps(self) -> List[Dict]:
-        """获取所有 step_start 事件（兼容旧测试）"""
-        # 新事件系统中没有step_start，返回thinking_start和tool_call
-        thinking_starts = self.get_events_by_type("thinking_start")
-        tool_calls = self.get_events_by_type("tool_call")
-        return thinking_starts + tool_calls
+        """获取所有 thinking 和 tool_calls 事件"""
+        return self.get_events_by_type("thinking") + self.get_events_by_type("tool_calls")
 
     def get_thinking_events(self) -> List[Dict]:
         """获取所有 thinking 事件"""
         return self.get_events_by_type("thinking")
 
     def get_tool_calls(self) -> List[Dict]:
-        """获取所有 tool_call 事件"""
-        return self.get_events_by_type("tool_call")
+        """获取所有 tool_calls 事件"""
+        return self.get_events_by_type("tool_calls")
 
     def get_tool_results(self) -> List[Dict]:
         """获取所有 tool_result 事件"""
@@ -248,6 +257,7 @@ def server():
             "cleanup_schedule": "02:00"
         },
         "schedule": {
+            "enabled": True,
             "max_concurrent_tasks": 10,
             "sync_interval": "30s"
         },
@@ -255,8 +265,8 @@ def server():
             "queue_size": 10,
             "workers": 1,
             "senders": {
-                "webhook": {"enabled": false, "url": ""},
-                "email": {"enabled": false, "smtp_host": "", "smtp_port": 587, "username": "", "password": "", "from": ""}
+                "webhook": {"enabled": False, "url": ""},
+                "email": {"enabled": False, "smtp_host": "", "smtp_port": 587, "username": "", "password": "", "from": ""}
             }
         },
         "logging": {"level": "debug", "format": "json", "output": ["stdout"]},

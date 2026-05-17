@@ -82,7 +82,7 @@ class TestFileOperationsSecurity:
         completed = sse.get_completed_event()
 
         if completed:
-            assert completed["data"]["status"] in ["success", "failed"]
+            assert "finish_reason" in completed["data"]
             # 成功时应是安全路径，失败应说明拒绝访问
 
 

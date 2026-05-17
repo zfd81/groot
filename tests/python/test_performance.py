@@ -135,13 +135,13 @@ class TestReActLimits:
         sse = SSEClient(response)
 
         # 验证不会超过 max_iterations（默认20）
-        step_starts = sse.get_events_by_type("step_start")
-        assert len(step_starts) <= 20  # 或配置值
+        thinking_events = sse.get_events_by_type("thinking")
+        assert len(thinking_events) <= 20  # 或配置值
 
         # 如果达到限制，completed.status 应为 failed
         completed = sse.get_completed_event()
-        if len(step_starts) >= 20:
-            assert completed["data"]["status"] == "failed"
+        if len(thinking_events) >= 20:
+            assert completed["data"]["finish_reason"] not in ("stop", "tool_calls")
 
     def test_max_tokens(self, server, api_headers):
         """TC-PERF-008: max_tokens 配置（默认100000）"""
@@ -185,9 +185,9 @@ class TestReActLimits:
         sse = SSEClient(response)
 
         # 验证 nesting_level 不超过限制
-        step_starts = sse.get_events_by_type("step_start")
+        thinking_events = sse.get_events_by_type("thinking")
 
-        for step in step_starts:
+        for step in thinking_events:
             nesting_level = step["data"].get("nesting_level", 0)
             assert nesting_level <= 3  # 默认值
 

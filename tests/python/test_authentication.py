@@ -135,9 +135,10 @@ class TestAuthenticationAllAPIs:
         )
 
         if is_auth_enabled():
-            assert response.status_code == 401
+            # DELETE /chat/{sid} 端点已删除，返回 404
+            assert response.status_code == 404
         else:
-            # 认证禁用时可能返回 200 或其他状态
+            # 认证禁用时也可能返回 404
             assert response.status_code in [200, 404]
 
     def test_chat_status_auth_behavior(self, server, no_auth_headers):

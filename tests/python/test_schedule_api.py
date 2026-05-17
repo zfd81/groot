@@ -21,48 +21,66 @@ from conftest import BASE_URL, TEST_HOME
 
 def _write_task_json(task_id: str, task_name: str, status: str = "active",
                      schedule: str = "0 9 * * *", instruction: str = "测试指令"):
-    """向 schedules/{status}/ 写入任务 JSON 文件"""
-    task_dir = os.path.join(TEST_HOME, "schedules", status)
+    """向 schedules/{status}/{task_id}/task.json 写入任务文件"""
+    task_dir = os.path.join(TEST_HOME, "schedules", status, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
     task = {
         "id": task_id,
         "name": task_name,
         "schedule": schedule,
-        "instruction": instruction,
         "missed_policy": "run_once",
+        "task": {
+            "instruction": instruction,
+            "model": "",
+            "system_prompt": ""
+        },
+        "notification": {
+            "on_success": [],
+            "on_failure": []
+        },
         "created_at": "2026-05-11T00:00:00Z",
         "updated_at": "2026-05-11T00:00:00Z"
     }
 
-    filepath = os.path.join(task_dir, f"{task_id}.json")
+    filepath = os.path.join(task_dir, "task.json")
     with open(filepath, "w") as f:
         json.dump(task, f)
     return filepath
 
 
 def _delete_task_json(task_id: str):
-    """删除所有状态目录下的任务 JSON 文件"""
+    """删除所有状态目录下的任务文件和目录"""
     for status in ["active", "disabled", "archive"]:
-        filepath = os.path.join(TEST_HOME, "schedules", status, f"{task_id}.json")
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        task_dir = os.path.join(TEST_HOME, "schedules", status, task_id)
+        if os.path.exists(task_dir):
+            import shutil
+            shutil.rmtree(task_dir)
 
 
 def _write_execution_records(task_id: str, records: list):
-    """写入执行记录"""
-    exec_dir = os.path.join(TEST_HOME, "schedules", "executions")
-    os.makedirs(exec_dir, exist_ok=True)
-    filepath = os.path.join(exec_dir, f"{task_id}.json")
-    with open(filepath, "w") as f:
-        json.dump(records, f)
+    """写入执行记录到 {status}/{task_id}/executions/ 下"""
+    # 确定任务所在状态目录
+    for status in ["active", "disabled", "archive"]:
+        task_dir = os.path.join(TEST_HOME, "schedules", status, task_id)
+        if os.path.exists(task_dir):
+            exec_dir = os.path.join(task_dir, "executions")
+            os.makedirs(exec_dir, exist_ok=True)
+            for i, record in enumerate(records):
+                filename = f"2026-05-{11-i:02d}-09000{i}.json"
+                filepath = os.path.join(exec_dir, filename)
+                with open(filepath, "w") as f:
+                    json.dump(record, f)
+            return
 
 
 def _cleanup_execution_records(task_id: str):
     """清理执行记录"""
-    filepath = os.path.join(TEST_HOME, "schedules", "executions", f"{task_id}.json")
-    if os.path.exists(filepath):
-        os.remove(filepath)
+    for status in ["active", "disabled", "archive"]:
+        exec_dir = os.path.join(TEST_HOME, "schedules", status, task_id, "executions")
+        if os.path.exists(exec_dir):
+            import shutil
+            shutil.rmtree(exec_dir)
 
 
 class TestScheduleListAPI:
@@ -154,14 +172,15 @@ class TestScheduleGetAPI:
         assert data["id"] == self.TASK_ID
         assert data["name"] == "测试任务详情"
         assert data["schedule"] == "*/30 * * * *"
-        assert data["instruction"] == "每30分钟执行一次"
+        assert data["task"]["instruction"] == "每30分钟执行一次"
 
     def test_get_nonexistent_task(self, server, api_headers):
         """查询不存在的任务"""
         response = requests.get(f"{BASE_URL}/schedule/task-nonexistent", headers=api_headers)
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "status" in data
+        assert "message" in data
 
 
 class TestScheduleDeleteAPI:
@@ -194,7 +213,8 @@ class TestScheduleDeleteAPI:
         response = requests.delete(f"{BASE_URL}/schedule/task-nonexistent", headers=api_headers)
         assert response.status_code == 500
         data = response.json()
-        assert "error" in data
+        assert "status" in data
+        assert "message" in data
 
 
 class TestScheduleDisableAPI:
@@ -219,10 +239,10 @@ class TestScheduleDisableAPI:
         assert data["status"] == "disabled"
 
         # 验证文件已移动到 disabled 目录
-        disabled_path = os.path.join(TEST_HOME, "schedules", "disabled", f"{self.TASK_ID}.json")
+        disabled_path = os.path.join(TEST_HOME, "schedules", "disabled", self.TASK_ID, "task.json")
         assert os.path.exists(disabled_path)
 
-        active_path = os.path.join(TEST_HOME, "schedules", "active", f"{self.TASK_ID}.json")
+        active_path = os.path.join(TEST_HOME, "schedules", "active", self.TASK_ID, "task.json")
         assert not os.path.exists(active_path)
 
     def test_disable_nonexistent_task(self, server, api_headers):
@@ -254,10 +274,10 @@ class TestScheduleEnableAPI:
         assert data["status"] == "enabled"
 
         # 验证文件已移动到 active 目录
-        active_path = os.path.join(TEST_HOME, "schedules", "active", f"{self.TASK_ID}.json")
+        active_path = os.path.join(TEST_HOME, "schedules", "active", self.TASK_ID, "task.json")
         assert os.path.exists(active_path)
 
-        disabled_path = os.path.join(TEST_HOME, "schedules", "disabled", f"{self.TASK_ID}.json")
+        disabled_path = os.path.join(TEST_HOME, "schedules", "disabled", self.TASK_ID, "task.json")
         assert not os.path.exists(disabled_path)
 
 
@@ -282,10 +302,10 @@ class TestScheduleArchiveAPI:
         data = response.json()
         assert data["status"] == "archived"
 
-        archive_path = os.path.join(TEST_HOME, "schedules", "archive", f"{self.TASK_ID}.json")
+        archive_path = os.path.join(TEST_HOME, "schedules", "archive", self.TASK_ID, "task.json")
         assert os.path.exists(archive_path)
 
-        active_path = os.path.join(TEST_HOME, "schedules", "active", f"{self.TASK_ID}.json")
+        active_path = os.path.join(TEST_HOME, "schedules", "active", self.TASK_ID, "task.json")
         assert not os.path.exists(active_path)
 
     def test_archive_disabled_task(self, server, api_headers):
@@ -395,8 +415,10 @@ class TestScheduleAPIResponseFormat:
         response = requests.get(f"{BASE_URL}/schedule/task-nonexistent-xxxxx", headers=api_headers)
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
-        assert isinstance(data["error"], str)
+        assert "status" in data
+        assert "message" in data
+        assert isinstance(data["status"], str)
+        assert isinstance(data["message"], str)
 
 
 class TestScheduleToolsVisible:

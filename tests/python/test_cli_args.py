@@ -26,7 +26,7 @@ class TestCommandLineArgs:
         )
 
         # 验证输出包含帮助信息
-        assert "--home" in result.stdout or "-H" in result.stdout
+        assert "--help" in result.stdout or "-h" in result.stdout
         assert "--port" in result.stdout or "-p" in result.stdout
 
     def test_version_flag(self):

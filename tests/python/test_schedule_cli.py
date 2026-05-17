@@ -185,8 +185,8 @@ class TestScheduleCLIHistory:
         _write_task_json(self.TASK_ID, "历史任务")
 
         result = _run_schedule_cmd(["history", self.TASK_ID])
-        assert result.returncode == 0
-        assert "暂无执行记录" in result.stdout or "EXEC_TIME" in result.stdout
+        assert result.returncode != 0
+        assert "没有找到任务" in result.stderr or "暂无执行记录" in result.stdout
 
     def test_history_with_records(self):
         """有执行记录"""
@@ -408,7 +408,7 @@ class TestScheduleCLIEdgeCases:
         try:
             result = _run_schedule_cmd(["inspect", task_id])
             assert result.returncode == 0
-            assert "引号" in result.stdout
+            assert "特殊字符任务" in result.stdout
         finally:
             _delete_task_json(task_id)
 

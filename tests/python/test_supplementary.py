@@ -27,10 +27,10 @@ class TestLLMErrors:
 
         # 如果 LLM 连接失败，应返回对应错误
         sse = SSEClient(response)
-        completed = sse.get_completed_event()
+        error_events = sse.get_events_by_type("error")
 
-        if completed and completed["data"]["status"] == "failed":
-            error = completed["data"].get("error", {})
+        if error_events:
+            error = error_events[0]["data"]
             # 验证错误码格式
             assert "code" in error
             # 可能的错误码：llm_connection_error, llm_rate_limited 等
@@ -66,12 +66,12 @@ class TestLLMErrors:
 
         sse = SSEClient(response)
 
-        # 如果有重试，thinking_end 会有多次失败然后成功
-        thinking_ends = sse.get_events_by_type("thinking_end")
+        # 如果有重试，tool_result 会有多次失败然后成功
+        tool_results = sse.get_events_by_type("tool_result")
 
-        # 统计失败和成功的步骤
-        failed_steps = [s for s in thinking_ends if s["data"]["status"] == "failed"]
-        success_steps = [s for s in thinking_ends if s["data"]["status"] == "success"]
+        # 统计失败和成功的工具结果
+        failed_results = [r for r in tool_results if "error" in r["data"]]
+        success_results = [r for r in tool_results if "error" not in r["data"]]
 
         # 验证重试行为（如果有失败）
 
@@ -113,15 +113,14 @@ class TestMCPToolErrors:
         )
 
         sse = SSEClient(response)
-        thinking_ends = sse.get_events_by_type("thinking_end")
         tool_results = sse.get_events_by_type("tool_result")
 
-        # 查找失败的步骤
-        for step in thinking_ends:
-            if step["data"]["status"] == "failed":
-                error = step["data"].get("error", {})
-                assert "code" in error
-                assert "message" in error
+        # 查找失败的工具结果
+        for result in tool_results:
+            if "error" in result["data"]:
+                error = result["data"].get("error", {})
+                if isinstance(error, dict):
+                    assert "code" in error or "message" in error
 
         # 查找失败的工具调用
         for result in tool_results:
@@ -142,11 +141,10 @@ class TestMCPToolErrors:
         sse = SSEClient(response)
 
         # 观察是否有重试步骤
-        thinking_starts = sse.get_events_by_type("thinking_start")
-        thinking_ends = sse.get_events_by_type("thinking_end")
-        tool_calls = sse.get_events_by_type("tool_call")
+        thinking_events = sse.get_events_by_type("thinking")
+        tool_calls = sse.get_events_by_type("tool_calls")
 
-        # 同一个工具可能有多个 thinking_start（重试）
+        # 同一个工具可能有多个 thinking（重试）
 
 
 class TestSkillErrors:
@@ -165,13 +163,13 @@ class TestSkillErrors:
         )
 
         sse = SSEClient(response)
-        completed = sse.get_completed_event()
 
         # Agent 可能：
         # 1. 直接忽略，自己处理
         # 2. 返回 skill_not_found 错误
-        if completed and completed["data"]["status"] == "failed":
-            error = completed["data"].get("error", {})
+        error_events = sse.get_events_by_type("error")
+        if error_events:
+            error = error_events[0]["data"]
             # 验证错误码
 
 
@@ -352,15 +350,15 @@ description: "子Skill"
 
         sse = SSEClient(response)
 
-        # 验证有嵌套的 thinking_start
-        thinking_starts = sse.get_events_by_type("thinking_start")
+        # 验证有 thinking 事件
+        thinking_events = sse.get_events_by_type("thinking")
 
         # 查找子 Skill 调用（如果有 step 信息）
-        tool_calls = sse.get_events_by_type("tool_call")
+        tool_calls = sse.get_events_by_type("tool_calls")
 
-        if thinking_starts:
+        if thinking_events:
             # 验证 nesting_level > 0（如果字段存在）
-            for step in thinking_starts:
+            for step in thinking_events:
                 if "nesting_level" in step["data"]:
                     assert step["data"].get("nesting_level", 0) >= 0
 
@@ -398,7 +396,7 @@ class TestPromptValidation:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
     def test_prompt_empty_allowed(self, server, api_headers):
         """TC-PROMPT-002: prompt 为空允许"""
@@ -745,20 +743,20 @@ class TestCancelMechanismDetails:
 
         session_id = response.headers.get("X-Session-ID")
 
-        # 立即取消
+        # DELETE /chat/{sid} 端点已删除
         cancel_response = requests.delete(
             f"{BASE_URL}/chat/{session_id}",
             headers=api_headers
         )
 
-        assert cancel_response.status_code == 200
+        assert cancel_response.status_code == 404
 
-        # SSE 应收到 cancelled 事件
+        # SSE 流正常完成（无法通过 DELETE 取消）
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
         if completed:
-            assert completed["data"]["status"] == "cancelled"
+            assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
     def test_cancel_interrupts_mcp_tool(self, server, api_headers):
         """TC-CANCEL-002: 取消中断 MCP 工具调用"""
@@ -773,13 +771,15 @@ class TestCancelMechanismDetails:
 
         session_id = response.headers.get("X-Session-ID")
 
-        # 取消
-        requests.delete(
+        # DELETE /chat/{sid} 端点已删除
+        cancel_response = requests.delete(
             f"{BASE_URL}/chat/{session_id}",
             headers=api_headers
         )
 
-        # 验证取消成功
+        assert cancel_response.status_code == 404
+
+        # 流正常完成
         SSEClient(response)
 
     def test_cancel_sse_pushes_event(self, server, api_headers):
@@ -797,21 +797,20 @@ class TestCancelMechanismDetails:
 
         session_id = response.headers.get("X-Session-ID")
 
-        # 取消
-        requests.delete(
+        # DELETE /chat/{sid} 端点已删除
+        cancel_response = requests.delete(
             f"{BASE_URL}/chat/{session_id}",
             headers=api_headers
         )
 
-        # 等待 SSE 完成
+        assert cancel_response.status_code == 404
+
+        # SSE 流正常完成
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
         if completed:
-            assert completed["data"]["status"] == "cancelled"
-            assert "message" in completed["data"]
-            # 消息应为 "用户主动取消" 或类似
-            assert completed["data"]["message"]
+            assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
 
 class TestReActExecutionDetails:
@@ -830,18 +829,14 @@ class TestReActExecutionDetails:
 
         sse = SSEClient(response)
 
-        thinking_starts = sse.get_events_by_type("thinking_start")
-
-        # 应有 thinking_start 事件（如果 LLM 有思考过程）
+        # 应有 thinking 事件（如果 LLM 有思考过程）
         # 注意：Mock LLM 可能不产生 thinking
-
-        # 验证 thinking 事件
         thinking_events = sse.get_events_by_type("thinking")
 
         # 如果有 thinking，验证内容
         if thinking_events:
             for event in thinking_events:
-                assert "content" in event["data"]
+                assert "reasoning_content" in event["data"]
 
     def test_acting_tool_call_step(self, server, api_headers):
         """TC-REACT-002: Acting 工具调用步骤"""
@@ -857,7 +852,7 @@ class TestReActExecutionDetails:
         sse = SSEClient(response)
 
         # 查找 tool_call 事件
-        tool_calls = sse.get_events_by_type("tool_call")
+        tool_calls = sse.get_events_by_type("tool_calls")
 
         if tool_calls:
             for call in tool_calls:
@@ -877,13 +872,6 @@ class TestReActExecutionDetails:
         )
 
         sse = SSEClient(response)
-
-        # thinking_end 事件包含执行结果
-        thinking_ends = sse.get_events_by_type("thinking_end")
-
-        for step in thinking_ends:
-            assert "status" in step["data"]
-            assert step["data"]["status"] in ["success", "failed"]
 
         # tool_result 事件包含工具执行结果
         tool_results = sse.get_events_by_type("tool_result")

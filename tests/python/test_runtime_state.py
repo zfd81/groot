@@ -177,7 +177,7 @@ class TestRuntimeStateCancel:
     """RuntimeState 取消功能测试"""
 
     def test_cancel_active_chat(self, server, api_headers):
-        """TC-RS-006: 取消活跃对话"""
+        """TC-RS-006: 取消活跃对话（DELETE 端点已删除，SSE 断开即取消）"""
         payload = {"instruction": "长任务"}
 
         response1 = requests.post(
@@ -189,28 +189,33 @@ class TestRuntimeStateCancel:
 
         session_id = response1.headers.get("X-Session-ID")
 
-        # 取消
+        # DELETE 端点已删除，返回 404
         cancel_response = requests.delete(
             f"{BASE_URL}/chat/{session_id}",
             headers=api_headers
         )
+        assert cancel_response.status_code == 404
 
-        assert cancel_response.status_code == 200
-        data = cancel_response.json()
-        assert data["status"] == "success"
+        # 关闭 SSE 流即取消
+        response1.close()
+
+        # 等服务器处理取消
+        import time
+        time.sleep(1)
 
         # 验证状态已移除
         status_response = requests.get(
             f"{BASE_URL}/chat/status/{session_id}",
             headers=api_headers
         )
+        status_data = status_response.json()
 
-        # 取消后应无活跃对话
-        assert status_response.json()["chat"] is None
+        # SSE 断开后，服务器可能仍在处理中或已完成
+        assert status_data["chat"] is None or status_data.get("status") in ("idle", "success")
 
     def test_cancel_returns_chat_record(self, server, api_headers):
-        """TC-RS-007: 取消返回 ChatRecord"""
-        payload = {"instruction": "长任务"}
+        """TC-RS-007: 取消后仍可查看对话记录"""
+        payload = {"instruction": "测试任务"}
 
         response1 = requests.post(
             f"{BASE_URL}/chat",
@@ -221,19 +226,28 @@ class TestRuntimeStateCancel:
 
         session_id = response1.headers.get("X-Session-ID")
 
-        # 取消
+        # DELETE 端点已删除，返回 404
         cancel_response = requests.delete(
             f"{BASE_URL}/chat/{session_id}",
             headers=api_headers
         )
+        assert cancel_response.status_code == 404
 
-        data = cancel_response.json()
+        # 关闭 SSE 流即取消
+        response1.close()
 
-        # 验证返回 chat_id
-        if data["status"] == "success":
-            assert "chat_id" in data
+        # 等待服务器生成 chat record
+        import time
+        time.sleep(1)
 
-        SSEClient(response1)
+        # 验证可通过 GET /chat/{sid} 查询对话记录
+        detail_response = requests.get(
+            f"{BASE_URL}/chat/{session_id}",
+            headers=api_headers
+        )
+        assert detail_response.status_code == 200
+        detail_data = detail_response.json()
+        assert detail_data.get("status") in ("success", "idle")
 
 
 class TestRuntimeStateMemoryIntegration:

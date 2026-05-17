@@ -32,14 +32,14 @@ class TestSSEEventOrder:
         # 验证事件顺序
         order = sse.get_event_order()
 
-        # started 必须是第一个事件（替代旧的intent）
-        assert order[0] == "started"
+        # message 必须是第一个事件（替代旧的started/intent）
+        assert order[0] == "message"
 
-        # completed 必须是最后一个事件
-        assert order[-1] == "completed"
+        # finish 必须是最后一个事件（替代旧的completed）
+        assert order[-1] == "finish"
 
     def test_started_is_first_event(self, server, api_headers):
-        """TC-SSE-002: started 是首个事件"""
+        """TC-SSE-002: message 是首个事件"""
         payload = {"instruction": "测试"}
 
         response = requests.post(
@@ -51,13 +51,13 @@ class TestSSEEventOrder:
 
         sse = SSEClient(response)
 
-        # started 事件必须在最前
+        # message 事件必须在最前
         events = sse.events
-        assert events[0]["event"] == "started"
+        assert events[0]["event"] == "message"
 
-        # started 事件只有一个
-        started_events = sse.get_events_by_type("started")
-        assert len(started_events) == 1
+        # message 事件至少有一个（流式多条）
+        message_events = sse.get_events_by_type("message")
+        assert len(message_events) >= 1
 
     def test_completed_is_last_event(self, server, api_headers):
         """TC-SSE-003: completed 是最后一个事件"""
@@ -74,14 +74,14 @@ class TestSSEEventOrder:
 
         # completed 事件必须在最后
         events = sse.events
-        assert events[-1]["event"] == "completed"
+        assert events[-1]["event"] == "finish"
 
         # completed 事件只有一个
-        completed_events = sse.get_events_by_type("completed")
+        completed_events = sse.get_events_by_type("finish")
         assert len(completed_events) == 1
 
-    def test_thinking_start_end_pairing(self, server, api_headers):
-        """TC-SSE-004: thinking_start 和 thinking_end 成对"""
+    def test_thinking_events_exist(self, server, api_headers):
+        """TC-SSE-004: thinking 事件存在且包含必要字段（不再区分 start/end）"""
         payload = {"instruction": "帮我分析数据"}
 
         response = requests.post(
@@ -93,21 +93,18 @@ class TestSSEEventOrder:
 
         sse = SSEClient(response)
 
-        thinking_starts = sse.get_events_by_type("thinking_start")
-        thinking_ends = sse.get_events_by_type("thinking_end")
+        thinking_events = sse.get_events_by_type("thinking")
 
-        # 数量应该相等
-        assert len(thinking_starts) == len(thinking_ends)
-
-        # 每个 thinking_end 的 step_id 应对应 thinking_start
-        start_ids = [s["data"]["step_id"] for s in thinking_starts]
-        end_ids = [e["data"]["step_id"] for e in thinking_ends]
-
-        for end_id in end_ids:
-            assert end_id in start_ids
+        # thinking 事件应该存在（当需要推理时）
+        if thinking_events:
+            for event in thinking_events:
+                data = event["data"]
+                # thinking 事件必须包含 role 和 reasoning_content
+                assert data.get("role") == "assistant"
+                assert "reasoning_content" in data
 
     def test_tool_call_result_pairing(self, server, api_headers):
-        """TC-SSE-005: tool_call 和 tool_result 成对"""
+        """TC-SSE-005: tool_calls 和 tool_result 成对"""
         payload = {"instruction": "读取文件 /tmp/test.txt"}
 
         response = requests.post(
@@ -119,25 +116,36 @@ class TestSSEEventOrder:
 
         sse = SSEClient(response)
 
-        tool_calls = sse.get_events_by_type("tool_call")
+        tool_calls = sse.get_events_by_type("tool_calls")
         tool_results = sse.get_events_by_type("tool_result")
 
-        # 数量应该相等
-        assert len(tool_calls) == len(tool_results)
+        # 验证 tool_calls 和 tool_result 存在对应关系
+        # tool_calls 数量应 >= tool_result 数量
+        assert len(tool_calls) >= len(tool_results), \
+            f"tool_calls({len(tool_calls)}) 应 >= tool_result({len(tool_results)})"
 
-        # 每个 tool_result 的 step_id 应对应 tool_call
-        call_ids = [c["data"]["step_id"] for c in tool_calls]
-        result_ids = [r["data"]["step_id"] for r in tool_results]
+        # 收集 tool_call 中的 id（可能在不同层级）
+        call_ids = []
+        for c in tool_calls:
+            data = c["data"]
+            if "id" in data:
+                call_ids.append(data["id"])
+            elif "tool_calls" in data:
+                for tc in data["tool_calls"]:
+                    if "id" in tc:
+                        call_ids.append(tc["id"])
+
+        result_ids = [r["data"].get("id") for r in tool_results if r["data"].get("id")]
 
         for result_id in result_ids:
-            assert result_id in call_ids
+            assert result_id in call_ids, f"tool_result id '{result_id}' 无对应 tool_calls"
 
 
 class TestSSEEventFields:
     """SSE 事件字段完整性测试"""
 
     def test_started_event_fields(self, server, api_headers):
-        """TC-SSE-006: started 事件字段验证"""
+        """TC-SSE-006: 首个 message 事件字段验证（替代旧 started）"""
         payload = {"instruction": "测试"}
 
         response = requests.post(
@@ -153,17 +161,12 @@ class TestSSEEventFields:
         assert started is not None
         data = started["data"]
 
-        # 必须包含 session_id, chat_id, timestamp
-        assert "session_id" in data
-        assert "chat_id" in data
-        assert "timestamp" in data
-
-        # timestamp 应为 ISO 格式
-        timestamp = data["timestamp"]
-        assert "T" in timestamp  # ISO 格式包含 T
+        # message 事件必须包含 role 和 content
+        assert data.get("role") == "assistant"
+        assert "content" in data
 
     def test_thinking_start_event_fields(self, server, api_headers):
-        """TC-SSE-007: thinking_start 事件字段验证"""
+        """TC-SSE-007: thinking 事件字段验证"""
         payload = {"instruction": "帮我分析数据"}
 
         response = requests.post(
@@ -174,17 +177,17 @@ class TestSSEEventFields:
         )
 
         sse = SSEClient(response)
-        thinking_starts = sse.get_events_by_type("thinking_start")
+        thinking_events = sse.get_events_by_type("thinking")
 
-        if thinking_starts:
-            step = thinking_starts[0]["data"]
+        if thinking_events:
+            event = thinking_events[0]["data"]
 
-            # 必填字段
-            assert "step_id" in step
-            assert "timestamp" in step
+            # thinking 事件必填字段
+            assert event.get("role") == "assistant"
+            assert "reasoning_content" in event
 
     def test_thinking_end_event_fields(self, server, api_headers):
-        """TC-SSE-008: thinking_end 事件字段验证"""
+        """TC-SSE-008: thinking 事件流式内容验证（不再区分 start/end）"""
         payload = {"instruction": "帮我分析数据"}
 
         response = requests.post(
@@ -195,18 +198,17 @@ class TestSSEEventFields:
         )
 
         sse = SSEClient(response)
-        thinking_ends = sse.get_events_by_type("thinking_end")
+        thinking_events = sse.get_events_by_type("thinking")
 
-        if thinking_ends:
-            step = thinking_ends[0]["data"]
+        if thinking_events:
+            event = thinking_events[0]["data"]
 
-            # 必填字段
-            assert "step_id" in step
-            assert "timestamp" in step
-            assert "status" in step
+            # thinking 事件必填字段
+            assert event.get("role") == "assistant"
+            assert "reasoning_content" in event
 
-            # 验证 status 可选值
-            assert step["status"] in ["success", "failed"]
+            # reasoning_content 应有实际内容
+            assert isinstance(event["reasoning_content"], str)
 
     def test_thinking_event_fields(self, server, api_headers):
         """TC-SSE-009: thinking 事件字段验证"""
@@ -225,12 +227,12 @@ class TestSSEEventFields:
         if thinking_events:
             thinking = thinking_events[0]["data"]
 
-            # 必填字段
-            assert "content" in thinking
-            assert "timestamp" in thinking
+            # thinking 事件必填字段
+            assert thinking.get("role") == "assistant"
+            assert "reasoning_content" in thinking
 
     def test_tool_call_event_fields(self, server, api_headers):
-        """TC-SSE-010: tool_call 事件字段验证"""
+        """TC-SSE-010: tool_calls 事件字段验证"""
         payload = {"instruction": "读取文件 /tmp/test.txt"}
 
         response = requests.post(
@@ -246,11 +248,16 @@ class TestSSEEventFields:
         if tool_calls:
             call = tool_calls[0]["data"]
 
-            # 必填字段
-            assert "step_id" in call
-            assert "name" in call
-            assert "arguments" in call
-            assert "timestamp" in call
+            # 必填字段：role 和 tool_calls 数组
+            assert call.get("role") == "assistant"
+            assert "tool_calls" in call
+            assert isinstance(call["tool_calls"], list)
+            assert len(call["tool_calls"]) > 0
+
+            # 数组内每个元素应包含 name 和 arguments
+            for tc in call["tool_calls"]:
+                assert "name" in tc
+                assert "arguments" in tc
 
     def test_tool_result_event_fields(self, server, api_headers):
         """TC-SSE-011: tool_result 事件字段验证"""
@@ -269,16 +276,15 @@ class TestSSEEventFields:
         if tool_results:
             result = tool_results[0]["data"]
 
-            # 必填字段
-            assert "step_id" in result
-            assert "timestamp" in result
+            # tool_result 必填字段：role 为 tool
+            assert result.get("role") == "tool"
 
             # 可选字段：output 或 error
             # 成功时有 output，失败时有 error
             assert "output" in result or "error" in result
 
     def test_message_start_event_fields(self, server, api_headers):
-        """TC-SSE-012: message_start 事件字段验证"""
+        """TC-SSE-012: message 事件字段验证（首个 message 替代旧 message_start）"""
         payload = {"instruction": "测试"}
 
         response = requests.post(
@@ -289,11 +295,12 @@ class TestSSEEventFields:
         )
 
         sse = SSEClient(response)
-        message_starts = sse.get_events_by_type("message_start")
+        message_events = sse.get_events_by_type("message")
 
-        if message_starts:
-            event = message_starts[0]["data"]
-            assert "timestamp" in event
+        if message_events:
+            event = message_events[0]["data"]
+            assert event.get("role") == "assistant"
+            assert "content" in event
 
     def test_message_event_fields(self, server, api_headers):
         """TC-SSE-013: message 事件字段验证"""
@@ -311,11 +318,11 @@ class TestSSEEventFields:
 
         if message_events:
             event = message_events[0]["data"]
+            assert event.get("role") == "assistant"
             assert "content" in event
-            assert "timestamp" in event
 
     def test_message_end_event_fields(self, server, api_headers):
-        """TC-SSE-014: message_end 事件字段验证"""
+        """TC-SSE-014: finish 事件字段验证（替代旧 message_end/completed）"""
         payload = {"instruction": "测试"}
 
         response = requests.post(
@@ -326,14 +333,16 @@ class TestSSEEventFields:
         )
 
         sse = SSEClient(response)
-        message_ends = sse.get_events_by_type("message_end")
+        finish_events = sse.get_events_by_type("finish")
 
-        if message_ends:
-            event = message_ends[0]["data"]
-            assert "timestamp" in event
+        if finish_events:
+            event = finish_events[0]["data"]
+            assert event.get("role") == "assistant"
+            assert "finish_reason" in event
+            assert event["finish_reason"] in ["stop", "tool_calls"]
 
     def test_completed_event_fields(self, server, api_headers):
-        """TC-SSE-015: completed 事件字段验证"""
+        """TC-SSE-015: finish 事件字段验证（替代旧 completed）"""
         payload = {"instruction": "测试"}
 
         response = requests.post(
@@ -349,37 +358,19 @@ class TestSSEEventFields:
         assert completed is not None
         data = completed["data"]
 
-        # 必填字段
-        assert "status" in data
-        assert "timestamp" in data
-        assert "duration" in data
-        assert "round" in data
-        assert "chat_id" in data  # 新增字段
+        # finish 事件必填字段
+        assert data.get("role") == "assistant"
+        assert "finish_reason" in data
 
-        # 验证 status 可选值
-        assert data["status"] in ["success", "failed", "cancelled"]
-
-        # 验证 round 为整数
-        assert isinstance(data["round"], int)
-
-        # 成功时应包含 result
-        if data["status"] == "success":
-            assert "result" in data
-
-        # 失败时应包含 error
-        if data["status"] == "failed":
-            assert "error" in data
-
-        # 取消时应包含 message
-        if data["status"] == "cancelled":
-            assert "message" in data
+        # 验证 finish_reason 可选值
+        assert data["finish_reason"] in ["stop", "tool_calls"]
 
 
 class TestSSECancelledEvent:
     """取消对话的 SSE 事件测试"""
 
     def test_cancelled_completed_event(self, server, api_headers):
-        """TC-SSE-016: 取消对话 completed 事件验证"""
+        """TC-SSE-016: 取消对话时应有 error 事件（替代旧 completed cancelled）"""
         # 启动长任务
         payload = {"instruction": "帮我分析大数据文件"}
 
@@ -404,27 +395,27 @@ class TestSSECancelledEvent:
 
         # 解析 SSE
         sse = SSEClient(response1)
-        completed = sse.get_completed_event()
 
-        if completed:
-            data = completed["data"]
+        # 取消后应有 error 事件或 finish 事件
+        error_events = sse.get_events_by_type("error")
+        finish_events = sse.get_events_by_type("finish")
 
-            # 验证取消状态
-            assert data["status"] == "cancelled"
-
-            # 验证取消消息
-            assert "message" in data
-            assert "取消" in data["message"] or "cancel" in data["message"].lower()
-
-            # 验证 round 存在
-            assert "round" in data
+        if error_events:
+            data = error_events[0]["data"]
+            assert data.get("event") == "error"
+            # error 事件应包含错误信息
+            assert "message" in data or "error" in data
+        elif finish_events:
+            data = finish_events[0]["data"]
+            # 如果是正常 finish，finish_reason 应为 stop
+            assert data.get("finish_reason") in ["stop", "tool_calls"]
 
 
 class TestSSEMultipleRounds:
     """多轮对话 SSE 测试"""
 
     def test_round_field_increment(self, server, api_headers):
-        """TC-SSE-017: 多轮对话 round 递增"""
+        """TC-SSE-017: 多轮对话均正常完成（finish 事件不再含 round 字段）"""
         # 第一轮
         payload1 = {"instruction": "第一轮对话"}
 
@@ -439,9 +430,11 @@ class TestSSEMultipleRounds:
         sse1 = SSEClient(response1)
 
         completed1 = sse1.get_completed_event()
-        assert completed1["data"]["round"] == 1
+        assert completed1 is not None
+        assert completed1["data"].get("role") == "assistant"
+        assert "finish_reason" in completed1["data"]
 
-        # 第二轮
+        # 第二轮（使用相同 session_id）
         headers2 = api_headers.copy()
         headers2["X-Session-ID"] = session_id
 
@@ -457,10 +450,12 @@ class TestSSEMultipleRounds:
         sse2 = SSEClient(response2)
 
         completed2 = sse2.get_completed_event()
-        assert completed2["data"]["round"] == 2
+        assert completed2 is not None
+        assert completed2["data"].get("role") == "assistant"
+        assert "finish_reason" in completed2["data"]
 
     def test_round_field_after_invalid_session(self, server, api_headers):
-        """TC-SSE-018: 无效 session_id round 为 1"""
+        """TC-SSE-018: 无效 session_id 仍可正常响应（finish 不含 round）"""
         headers = api_headers.copy()
         headers["X-Session-ID"] = "invalid_session"
 
@@ -476,4 +471,6 @@ class TestSSEMultipleRounds:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["round"] == 1
+        assert completed is not None
+        assert completed["data"].get("role") == "assistant"
+        assert "finish_reason" in completed["data"]

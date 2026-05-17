@@ -34,13 +34,13 @@ class TestRealLLMBasic:
 
         # 验证完成事件
         assert completed is not None
-        assert completed["data"]["status"] == "success"
-        assert "result" in completed["data"]
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证有内容返回
-        result = completed["data"]["result"]
-        assert result is not None
-        assert len(str(result)) > 10  # 应有实质性回复
+        messages = sse.get_message_events()
+        assert len(messages) > 0
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
+        assert len(result) > 10  # 应有实质性回复
 
     def test_real_llm_code_generation(self, server, api_headers):
         """TC-REAL-002: 真实 LLM 代码生成"""
@@ -59,8 +59,9 @@ class TestRealLLMBasic:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
-        result = str(completed["data"]["result"])
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
+        messages = sse.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
 
         # 验证包含代码相关内容
         assert "def" in result or "function" in result or "fibonacci" in result.lower()
@@ -85,10 +86,11 @@ class TestRealLLMBasic:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证返回内容
-        result = str(completed["data"]["result"])
+        messages = sse.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
         # 应包含 JSON 结构迹象
         assert "{" in result or "name" in result.lower()
 
@@ -114,8 +116,7 @@ class TestRealLLMMultiRound:
 
         sse1 = SSEClient(response1)
         completed1 = sse1.get_completed_event()
-        assert completed1["data"]["status"] == "success"
-        assert completed1["data"]["round"] == 1
+        assert completed1["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 第二轮（继续会话）
         headers2 = api_headers.copy()
@@ -134,11 +135,11 @@ class TestRealLLMMultiRound:
         sse2 = SSEClient(response2)
         completed2 = sse2.get_completed_event()
 
-        assert completed2["data"]["status"] == "success"
-        assert completed2["data"]["round"] == 2
+        assert completed2["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证 LLM 能记住上下文
-        result = str(completed2["data"]["result"])
+        messages = sse2.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
         assert "42" in result  # 应能回忆起之前说的数字
 
     def test_real_llm_three_round_conversation(self, server, api_headers):
@@ -193,8 +194,7 @@ class TestRealLLMMultiRound:
         sse3 = SSEClient(response3)
         completed3 = sse3.get_completed_event()
 
-        assert completed3["data"]["status"] == "success"
-        assert completed3["data"]["round"] == 3
+        assert completed3["data"]["finish_reason"] in ("stop", "tool_calls")
 
 
 class TestRealLLMToolCall:
@@ -223,11 +223,10 @@ class TestRealLLMToolCall:
         completed = sse.get_completed_event()
 
         # 验证完成状态
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 检查是否调用了工具
-        step_starts = sse.get_events_by_type("step_start")
-        tool_steps = [s for s in step_starts if s["data"]["type"] == "tool"]
+        tool_steps = sse.get_tool_calls()
 
         # LLM 可能会尝试调用 file_read 工具
         # 或者直接返回指令（取决于模型行为）
@@ -265,10 +264,11 @@ class TestRealLLMToolCall:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证返回内容提到文件信息
-        result = str(completed["data"]["result"])
+        messages = sse.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
         # LLM 应能识别文件内容
 
 
@@ -295,10 +295,11 @@ class TestRealLLMComplexTasks:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证分析结果
-        result = str(completed["data"]["result"])
+        messages = sse.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
         assert "人工智能" in result or "AI" in result
 
     def test_real_llm_translation_task(self, server, api_headers):
@@ -319,10 +320,11 @@ class TestRealLLMComplexTasks:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证翻译结果包含英文
-        result = str(completed["data"]["result"])
+        messages = sse.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
         assert "Machine learning" in result or "machine learning" in result.lower()
 
     def test_real_llm_math_problem(self, server, api_headers):
@@ -340,10 +342,11 @@ class TestRealLLMComplexTasks:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
 
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 验证计算结果（123 + 912 - 78 = 957）
-        result = str(completed["data"]["result"])
+        messages = sse.get_message_events()
+        result = " ".join(m.get("data", {}).get("content", "") for m in messages)
         assert "957" in result
 
 
@@ -392,7 +395,7 @@ class TestRealLLMErrorHandling:
         completed = sse.get_completed_event()
 
         # 验证能处理长指令
-        assert completed["data"]["status"] == "success"
+        assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
 
 class TestRealLLMPerformance:
@@ -542,15 +545,15 @@ class TestRealLLMSSEReliability:
 
         # 验证事件类型
         event_types = [e["event"] for e in events]
-        assert "intent" in event_types
-        assert "completed" in event_types
+        assert "message" in event_types
+        assert "finish" in event_types
 
         # completed 应是最后一个
-        assert event_types[-1] == "completed"
+        assert event_types[-1] == "finish"
 
-    def test_real_llm_no_duplicate_intent(self, server, api_headers):
-        """TC-REAL-018: 真实 LLM intent 不应重复"""
-        payload = {"instruction": "测试intent事件"}
+    def test_real_llm_no_duplicate_message(self, server, api_headers):
+        """TC-REAL-018: 真实 LLM message 不应重复"""
+        payload = {"instruction": "测试message事件"}
 
         response = requests.post(
             f"{BASE_URL}/chat",
@@ -561,9 +564,9 @@ class TestRealLLMSSEReliability:
         )
 
         sse = SSEClient(response)
-        intent_events = sse.get_events_by_type("intent")
+        message_events = sse.get_events_by_type("message")
 
-        # intent 应只发送一次
+        # message 应只发送一次
         # 这是一个已知的bug，测试记录当前行为
-        print(f"\nintent 事件数量: {len(intent_events)}")
-        # assert len(intent_events) == 1  # 期望修复后通过
+        print(f"\nmessage 事件数量: {len(message_events)}")
+        # assert len(message_events) == 1  # 期望修复后通过

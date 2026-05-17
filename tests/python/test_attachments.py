@@ -35,10 +35,10 @@ class TestAttachmentBasic:
 
         assert response.status_code == 200
         sse = SSEClient(response)
-        assert sse.get_completed_event()["data"]["status"] == "success"
+        assert sse.get_completed_event()["data"]["finish_reason"] in ("stop", "tool_calls")
 
     def test_url_attachment(self, server, api_headers):
-        """TC-ATT-002: URL 类型附件"""
+        """TC-ATT-002: URL 类型附件（不被支持，返回 400）"""
         payload = {
             "instruction": "获取这个URL的内容",
             "attachments": [
@@ -57,7 +57,8 @@ class TestAttachmentBasic:
             stream=True
         )
 
-        assert response.status_code == 200
+        # url 类型不在 [file, image, audio, video] 中，返回 400
+        assert response.status_code == 400
 
     def test_multiple_attachments(self, server, api_headers, test_file_base64, pdf_file_base64):
         """TC-ATT-003: 多个附件上传"""
@@ -78,7 +79,7 @@ class TestAttachmentBasic:
 
         assert response.status_code == 200
         sse = SSEClient(response)
-        assert sse.get_completed_event()["data"]["status"] == "success"
+        assert sse.get_completed_event()["data"]["finish_reason"] in ("stop", "tool_calls")
 
 
 class TestAttachmentLimits:
