@@ -102,11 +102,6 @@ func getRequiredPermission(path, method string) string {
 		return "chat"
 	}
 
-	// Cancel endpoint (DELETE /chat/:sid)
-	if strings.HasPrefix(path, "/chat/") && method == "DELETE" {
-		return "cancel"
-	}
-
 	// Status endpoint (GET /chat/status/:sid)
 	if strings.HasPrefix(path, "/chat/status/") {
 		return "status"

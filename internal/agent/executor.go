@@ -105,7 +105,7 @@ func NewExecutor(
 }
 
 // Execute starts task execution
-func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Task, sse *SSEWriter, cancelCh chan struct{}) {
+func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Task, sse *SSEWriter) {
 	// Read SESSION.md content
 	sessionMdContent := ""
 	if e.memoryManager != nil {
@@ -124,19 +124,9 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		e.logger,
 	)
 
-	// Create context with cancellation support
+	// Create context derived from parent (SSE disconnect will cancel parentCtx)
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
-
-	// Handle cancellation in separate goroutine
-	go func() {
-		select {
-		case <-cancelCh:
-			cancel()
-		case <-ctx.Done():
-			return
-		}
-	}()
 
 	// Run engine with simplified progress callback
 	result, err := engine.Run(
@@ -197,13 +187,9 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 	// Determine final status
 	ctxCancelled := ctx.Err() == context.Canceled
 
-	// If execution failed (not cancelled), send error via SSE before saving to memory
+	// If execution failed (not cancelled), close SSE stream
 	if err != nil && !ctxCancelled {
 		e.logger.Error("Agent execution failed: " + err.Error())
-		// Send error event to client via SSE
-		if writeErr := sse.WriteError("execution_error", err.Error()); writeErr != nil {
-			e.logger.Error("Failed to write SSE error: " + writeErr.Error())
-		}
 		if writeErr := sse.WriteDone(); writeErr != nil {
 			e.logger.Error("Failed to write SSE done: " + writeErr.Error())
 		}

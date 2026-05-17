@@ -71,7 +71,6 @@ func NewServer(
 
 	// Create handlers
 	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, attHandler, cfg, log)
-	cancelH := handler.NewCancelHandler(runtime, mem)
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
@@ -82,7 +81,7 @@ func NewServer(
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW,
-		chatH, cancelH, statusH, detailH, sessionH,
+		chatH, statusH, detailH, sessionH,
 		healthH, skillsH, toolsH, scheduleH)
 
 	return &Server{

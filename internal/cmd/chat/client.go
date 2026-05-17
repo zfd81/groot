@@ -83,10 +83,6 @@ func (c *Client) SendChatStream(instruction string, events chan<- tea.Msg, cance
 		go func() {
 			<-cancelCh
 			cancel()
-			if c.sessionID != "" {
-				req, _ := http.NewRequest("DELETE", c.baseURL+"/chat/"+c.sessionID, nil)
-				c.httpCli.Do(req)
-			}
 		}()
 
 		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat", bytes.NewReader(bodyBytes))

@@ -78,8 +78,7 @@ func (r *Runner) Run(taskID string) func() {
 		}
 
 		// Execute
-		cancelCh := make(chan struct{})
-		r.executor.Execute(context.Background(), sessionID, agentTask, nil, cancelCh)
+		r.executor.Execute(context.Background(), sessionID, agentTask, nil)
 
 		durationMs := time.Since(startTime).Milliseconds()
 
@@ -149,8 +148,7 @@ func (r *Runner) RunImmediate(task *Task) error {
 		Caller:      "schedule",
 	}
 
-	cancelCh := make(chan struct{})
-	r.executor.Execute(context.Background(), sessionID, agentTask, nil, cancelCh)
+	r.executor.Execute(context.Background(), sessionID, agentTask, nil)
 
 	durationMs := time.Since(startTime).Milliseconds()
 	status := string(agentTask.Status)

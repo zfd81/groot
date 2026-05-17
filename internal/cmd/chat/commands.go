@@ -26,7 +26,7 @@ func ParseCommand(input string) *CommandMsg {
 
 // CommandResult tells the model what action to take after a command.
 type CommandResult struct {
-	Action  string // "quit", "clear", "render", "model_popup", "fetch", "export", "none"
+	Action  string // "quit", "clear", "render", "help_popup", "model_popup", "skills_popup", "switch_model", "fetch", "export", "none"
 	Content string // for "render": text to show in viewport
 	API     string // for "fetch": API path to GET
 }

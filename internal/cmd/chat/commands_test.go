@@ -46,13 +46,13 @@ func TestExecuteCommandRouting(t *testing.T) {
 	}{
 		{CommandMsg{Cmd: "/exit"}, "quit"},
 		{CommandMsg{Cmd: "/clear"}, "clear"},
-		{CommandMsg{Cmd: "/help"}, "render"},
+		{CommandMsg{Cmd: "/help"}, "help_popup"},
 		{CommandMsg{Cmd: "/model"}, "model_popup"},
 		{CommandMsg{Cmd: "/model", Args: "gpt-4o"}, "switch_model"},
 		{CommandMsg{Cmd: "/skills", Args: "list"}, "skills_popup"},
 		{CommandMsg{Cmd: "/mcp", Args: "list"}, "fetch"},
 		{CommandMsg{Cmd: "/export"}, "export"},
-		{CommandMsg{Cmd: "/unknown"}, "render"},
+		{CommandMsg{Cmd: "/unknown"}, "help_popup"},
 	}
 
 	for _, tt := range tests {

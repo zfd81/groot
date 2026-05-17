@@ -296,11 +296,8 @@ eventLoop:
 		}
 	}
 
-	// Handle cancellation: send cancelled event + [DONE], then return
+	// Handle cancellation: send [DONE], then return
 	if agentCancelled || ctx.Err() == context.Canceled {
-		if cb.WriteFinish != nil {
-			cb.WriteFinish("cancel")
-		}
 		if cb.WriteDone != nil {
 			cb.WriteDone()
 		}
@@ -368,6 +365,7 @@ func convertToolCalls(tcs []schema.ToolCall) []ToolCall {
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,
 			},
+			Extra: tc.Extra,
 		})
 	}
 	return result

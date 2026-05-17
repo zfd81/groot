@@ -36,10 +36,6 @@ func TestRuntimeState_Register(t *testing.T) {
 	if chat.Status != "running" {
 		t.Errorf("Register().Status = %s, want running", chat.Status)
 	}
-
-	if chat.CancelCh == nil {
-		t.Error("Register().CancelCh should not be nil")
-	}
 }
 
 func TestRuntimeState_Register_Duplicate(t *testing.T) {
@@ -112,52 +108,6 @@ func TestRuntimeState_UpdateProgress_Nonexistent(t *testing.T) {
 	err := state.UpdateProgress("nonexistent", &ChatProgress{})
 	if err == nil {
 		t.Error("UpdateProgress() should fail for nonexistent session")
-	}
-}
-
-func TestActiveChat_Cancel(t *testing.T) {
-	state := NewRuntimeState()
-
-	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
-
-	chat, ok := state.Get(sessionID)
-	if !ok {
-		t.Fatal("Get() should return true for registered session")
-	}
-	chat.Cancel()
-
-	if chat.Status != "cancelled" {
-		t.Errorf("Cancel().Status = %s, want cancelled", chat.Status)
-	}
-
-	// 验证 CancelCh 已关闭
-	select {
-	case <-chat.CancelCh:
-		// 正常，channel 已关闭
-	default:
-		t.Error("CancelCh should be closed after Cancel()")
-	}
-}
-
-func TestActiveChat_Cancel_MultipleCalls(t *testing.T) {
-	state := NewRuntimeState()
-
-	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
-
-	chat, ok := state.Get(sessionID)
-	if !ok {
-		t.Fatal("Get() should return true for registered session")
-	}
-
-	// 第一次取消
-	chat.Cancel()
-	// 第二次取消同一 session（使用 sync.Once，不应 panic）
-	chat.Cancel()
-
-	if chat.Status != "cancelled" {
-		t.Errorf("Status after multiple Cancel() = %s, want cancelled", chat.Status)
 	}
 }
 

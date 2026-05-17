@@ -156,7 +156,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 8. 立即注册活跃状态 - 在创建 session 或获取历史之后立即执行
 	// 这确保了同一 session 的并发请求只有一个能成功注册
-	activeChat, err := h.runtimeState.Register(sessionID, chatID)
+	_, err := h.runtimeState.Register(sessionID, chatID)
 	if err != nil {
 		// Register 返回错误表示有冲突（已有活跃对话）
 		rc.JSON(409, utils.H{
@@ -260,11 +260,10 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 			if r := recover(); r != nil {
 				h.log.Error(fmt.Sprintf("Agent 执行异常(panic): %v", r))
 				task.Status = agent.StatusFailed
-				sseWriter.WriteError("internal_error", fmt.Sprintf("执行异常: %v", r))
 				sseWriter.WriteDone()
 			}
 		}()
-		h.agentExecutor.Execute(ctx, sessionID, task, sseWriter, activeChat.CancelCh)
+		h.agentExecutor.Execute(ctx, sessionID, task, sseWriter)
 
 		// 记录日志
 		statusText := string(task.Status)

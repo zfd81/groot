@@ -15,7 +15,6 @@ Groot 提供 RESTful HTTP API，客户端通过 API 与 AI Agent 交互。核心
 | 认证方式 | API Key（`X-API-Key` header，可配置开关） |
 
 **设计原则：**
-- **SSE 流式响应**：核心对话接口使用 SSE 单向推送，客户端通过 `CancelCh` 信号取消
 - **会话模型**：Session（会话）包含多轮 Chat（对话），每轮对话有独立的 `chat_id`
 - **横切关注点分离**：认证、附件校验、错误码作为独立章节，各端点引用
 - **无状态请求**：每个请求独立创建所需实例（如 ChatModel），不跨请求共享
@@ -29,7 +28,7 @@ Groot 提供 RESTful HTTP API，客户端通过 API 与 AI Agent 交互。核心
 | 端点 | 方法 | 用途 | 响应类型 |
 |------|------|------|---------|
 | `/chat` | POST | 执行对话 | SSE 流 |
-| `/chat/{sid}` | DELETE | 取消执行中的对话 | JSON |
+
 | `/chat/status/{sid}` | GET | 查询最新对话状态 | JSON |
 | `/chat/{sid}` | GET | 查询最新对话详情（含步骤） | JSON |
 | `/chat/{sid}/{cid}` | GET | 查询指定对话详情 | JSON |
@@ -252,7 +251,7 @@ POST /chat 请求到达
 ### 3.3 注意事项
 
 - **并发限制**：同一会话同时只能有一个活跃对话，冲突返回 **409** `chat_limit_exceeded`
-- **取消机制**：取消信号通过 `CancelCh` 传递，Agent 在下一个循环检查点终止
+- **取消机制**：客户端断开 SSE 连接后，HTTP 请求上下文自动取消，Agent 在下一次循环检查点终止执行
 - **轮次管理**：继续会话时 `round` 自增，首次对话 `round=1`
 
 ### 3.4 会话处理
@@ -434,7 +433,6 @@ POST /chat 的响应是 SSE 流。所有事件格式为 `data: <JSON>\n\n`，流
 | `tool_calls` | `assistant` | AI 决定调用工具，含 `tool_calls` 数组 | 调用工具时 |
 | `finish` | `assistant` | 当前响应阶段结束，含 `finish_reason` | 必有 |
 | `tool_result` | `tool` | 工具执行结果 | 调用工具时 |
-| `error` | - | 错误事件（终态），`"event": "error"`，含 `code` 和 `message`，之后紧跟 `[DONE]` 流关闭 | 执行发生异常时 |
 | `[DONE]` | - | 整个对话结束 | 必有 |
 
 **finish_reason**
@@ -443,6 +441,9 @@ POST /chat 的响应是 SSE 流。所有事件格式为 `data: <JSON>\n\n`，流
 |----|------|------|
 | `tool_calls` | AI 需要调用工具 | 后续 `tool_result`，然后 AI 继续响应 |
 | `stop` | 对话正常结束 | 后续 `[DONE]` |
+| `length` | 达到最大 token 限制 | 当前回答截断 |
+| `content_filter` | 内容被安全过滤 | 当前回答中断 |
+| `null` | 未明确结束原因 | 流式传输中的中间状态 |
 
 **tool_calls 结构：**
 
@@ -456,11 +457,14 @@ POST /chat 的响应是 SSE 流。所有事件格式为 `data: <JSON>\n\n`，流
       "function": {
         "name": "工具名",
         "arguments": "{\"key\": \"value\"}"
-      }
+      },
+      "extra": {}
     }
   ]
 }
 ```
+
+> `index` 和 `extra` 字段为 omitempty，存在多工具调用或模型附加元数据时可能出现。
 
 **tool_result 结构：**
 
@@ -473,24 +477,8 @@ POST /chat 的响应是 SSE 流。所有事件格式为 `data: <JSON>\n\n`，流
 }
 ```
 
-工具调用出错时增加 `"error": "错误描述"` 字段。
+工具调用出错时，错误信息直接包含在 `content` 字段中。
 
-**error 结构：**
-
-```json
-{
-  "event": "error",
-  "code": "execution_error",
-  "message": "错误描述"
-}
-```
-
-| `code` | 说明 | 触发场景 |
-|--------|------|---------|
-| `execution_error` | 执行失败 | `Engine.Run()` 返回错误（LLM 连接失败等），executor 发送此事件 + `[DONE]` 后终止 |
-| `internal_error` | 内部异常 | Agent goroutine 发生 panic，chat handler 恢复并发送此事件 + `[DONE]` 后终止 |
-
-> error 事件是**终态事件**，发送后始终跟随 `[DONE]`，SSE 流随即关闭。
 
 **事件流示例**
 
@@ -530,50 +518,7 @@ data: [DONE]
 
 ## 四、对话管理
 
-### 4.1 DELETE /chat/{sid} — 取消对话
-
-取消指定会话中正在执行的对话。
-
-**路径参数**
-
-| 参数 | 说明 |
-|------|------|
-| `sid` | session_id |
-
-**处理流程：**
-
-```
-DELETE /chat/{sid} 请求到达
-  ├─ 根据 session_id 查找执行状态
-  ├─ 存在活跃对话 → 关闭 CancelCh → Agent 终止
-  │     ├─ SSE 推送 cancelled 事件
-  │     ├─ RuntimeState.Delete(sid)
-  │     └─ 保存 ChatRecord (status=cancelled)
-  └─ 不存在活跃对话 → 返回 no_running_chat
-```
-
-**成功响应（有活跃对话被取消）：**
-
-```json
-{
-  "status": "success",
-  "session_id": "...",
-  "chat_id": "...",
-  "message": "chat cancelled"
-}
-```
-
-**无运行中对话：**
-
-```json
-{
-  "status": "no_running_chat",
-  "session_id": "...",
-  "message": "no currently executing chat in this session"
-}
-```
-
-### 4.2 GET /chat/status/{sid} — 查询对话状态
+### 4.1 GET /chat/status/{sid} — 查询对话状态
 
 查询指定会话中最新一次对话的实时执行状态和进度。
 
@@ -635,7 +580,7 @@ DELETE /chat/{sid} 请求到达
 }
 ```
 
-### 4.3 GET /chat/{sid} — 查询最新对话详情
+### 4.2 GET /chat/{sid} — 查询最新对话详情
 
 返回指定会话中最新一次对话的完整记录，包含所有执行步骤。
 
@@ -684,9 +629,9 @@ DELETE /chat/{sid} 请求到达
 
 无对话记录时 `chat` 为 `null`。
 
-### 4.4 GET /chat/{sid}/{cid} — 查询指定对话详情
+### 4.3 GET /chat/{sid}/{cid} — 查询指定对话详情
 
-与 4.3 格式相同，但定位到特定的 `chat_id`。
+与 4.2 格式相同，但定位到特定的 `chat_id`。
 
 **路径参数**
 
@@ -976,7 +921,7 @@ security:
 | 权限 | 可访问端点 |
 |------|-----------|
 | `chat` | POST /chat |
-| `cancel` | DELETE /chat/{sid} |
+
 | `status` | GET /chat/status/{sid} |
 | `detail` | GET /chat/{sid}、GET /chat/{sid}/{cid} |
 | `session` | GET /sess/{sid} |
@@ -1104,8 +1049,6 @@ attachment:
 | 500 | `config_error` | 配置错误 |
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
-| — | `execution_error` | Agent 执行失败（SSE error 事件内置，终态） |
-| — | `internal_error` | Agent goroutine panic 恢复（SSE error 事件内置，终态） |
 | 503 | `schedule_unavailable` | 调度服务不可用（非 Leader 或未启动） |
 | 500 | `schedule_error` | 调度操作失败 |
 

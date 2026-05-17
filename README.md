@@ -532,7 +532,7 @@ TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次�
 | `↑` / `↓` | 补全弹窗不可见 | 输入框内光标上下移动（textarea 处理） |
 | `PgUp` / `PgDn` | 任意时刻 | 向上/向下半页滚动消息区 |
 | `ESC` | 补全弹窗可见 | 关闭补全弹窗 |
-| `ESC` | AI 回答中 | 取消当前回答（发送 DELETE 请求通知服务端） |
+| `ESC` | AI 回答中 | 断开 SSE 连接，取消当前回答 |
 | `ESC` | 正常状态 | 清空输入框 |
 | `Ctrl+C` | 任意时刻 | 退出 Chat TUI |
 | 鼠标滚轮 | 任意时刻 | 逐行滚动（依赖终端将滚轮转为 Up/Down 键） |
@@ -544,7 +544,7 @@ TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次�
 - **文本选择**：不启用鼠标捕获，终端原生鼠标选择和复制正常工作
 - **工具参数显示**：工具调用参数以 `├─ key = value` 树状格式逐行展示，非原始 JSON；超长值自动截断
 - **工具结果**：工具执行结果不在消息区展示，由 LLM 最终回答体现
-- **取消机制**：ESC 取消流式响应时，同时向服务端发送 DELETE 请求停止生成
+- **取消机制**：ESC 断开 SSE 连接停止生成
 
 **Skills 快捷调用：**
 
@@ -658,9 +658,9 @@ chmod +x groot-linux-amd64
 mv groot-linux-amd64 /usr/local/bin/groot
 
 # macOS
-wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-darwin-amd64
-chmod +x groot-darwin-amd64
-mv groot-darwin-amd64 /usr/local/bin/groot
+wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-darwin-arm64
+chmod +x groot-darwin-arm64
+mv groot-darwin-arm64 /usr/local/bin/groot
 ```
 
 #### 方式二：源码编译
@@ -696,9 +696,9 @@ make build-all        # 编译所有平台（macOS/Linux/Windows）
 
 | 文件 | 平台 |
 |------|------|
-| `bin/groot-darwin-arm64` | macOS ARM64 |
-| `bin/groot-linux-amd64` | Linux AMD64 |
-| `bin/groot-windows-amd64.exe` | Windows AMD64 |
+| `bin/darwin-arm64/groot` | macOS ARM64 |
+| `bin/linux-amd64/groot` | Linux AMD64 |
+| `bin/windows-amd64/groot.exe` | Windows AMD64 |
 
 ### 4.5 停止服务
 
@@ -1013,7 +1013,6 @@ logging:
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
 | `chat` | POST /chat | 执行对话 |
-| `cancel` | DELETE /chat/{sid} | 取消对话 |
 | `status` | GET /chat/status/{sid} | 查询对话状态 |
 | `detail` | GET /chat/{sid} | 查询对话详情 |
 | `session` | GET /sess/{sid} | 查询会话详情 |
@@ -1202,7 +1201,7 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
 | API | 方法 | 用途 |
 |-----|------|------|
 | `/chat` | POST | 执行对话，SSE 流式返回（支持多轮对话） |
-| `/chat/{sid}` | DELETE | 取消正在执行的对话 |
+
 | `/chat/status/{sid}` | GET | 查询最近一次对话状态 |
 | `/chat/{sid}` | GET | 查询最近一次对话详情（完整步骤记录） |
 | `/sess/{sid}` | GET | 查询会话详情（完整对话历史） |
@@ -1362,11 +1361,14 @@ data: [DONE]
       "function": {
         "name": "工具名称",
         "arguments": "JSON 格式参数字符串"
-      }
+      },
+      "extra": {}
     }
   ]
 }
 ```
+
+> `index` 和 `extra` 字段为 omitempty，存在多工具调用或模型附加元数据时可能出现。
 
 **finish：**
 
@@ -1380,7 +1382,10 @@ data: [DONE]
 | finish_reason | 含义 | 后续事件 |
 |--------------|------|---------|
 | `tool_calls` | LLM 决定调用工具 | 下一个事件为 `tool_result` |
-| `stop` | 当前回答完成 | 可能继续下一轮 tool_calls，最终 `[DONE]` |
+| `stop` | 当前回答正常完成 | 可能继续下一轮 tool_calls，最终 `[DONE]` |
+| `length` | 达到最大 token 限制 | 当前回答截断，可能继续或 `[DONE]` |
+| `content_filter` | 内容被安全过滤 | 当前回答中断 |
+| `null` | 未明确结束原因 | 流式传输中的中间状态 |
 
 **tool_result：**
 
@@ -1393,17 +1398,7 @@ data: [DONE]
 }
 ```
 
-工具执行失败：
-
-```json
-{
-  "role": "tool",
-  "tool_call_id": "call_xxx",
-  "tool_name": "文件读取",
-  "content": "",
-  "error": "文件不存在"
-}
-```
+工具执行失败时，错误信息直接包含在 `content` 字段中。
 
 ---
 
@@ -1484,44 +1479,7 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 8.4 DELETE /chat/{sid} - 取消对话
-
-取消指定会话中正在执行的对话。
-
-**请求参数：**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `sid` | string | 是 | 会话 ID（路径参数） |
-
-**成功响应：**
-```json
-{
-  "status": "success",
-  "session_id": "20260419103000523_a1b2",
-  "chat_id": "chat_20260419103000523",
-  "message": "对话已取消"
-}
-```
-
-**失败响应（无运行对话）：**
-```json
-{
-  "status": "no_running_chat",
-  "session_id": "20260419103000523_a1b2",
-  "message": "该会话当前没有正在执行的对话"
-}
-```
-
-**请求示例：**
-```bash
-curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
-  -H "X-API-Key: your-api-key"
-```
-
----
-
-### 8.5 GET /chat/status/{sid} - 查询对话状态
+### 8.4 GET /chat/status/{sid} - 查询对话状态
 
 查询指定会话中最近一次对话的运行状态。
 
@@ -1562,7 +1520,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.6 GET /chat/{sid}/{cid} - 查询对话详情
+### 8.5 GET /chat/{sid}/{cid} - 查询对话详情
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。
 
@@ -1604,7 +1562,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.7 GET /sess/{sid} - 查询会话详情
+### 8.6 GET /sess/{sid} - 查询会话详情
 
 查询会话详情，包括完整对话历史（所有轮次）。
 
@@ -1651,7 +1609,7 @@ curl -X DELETE http://localhost:8080/chat/20260419103000523_a1b2 \
 
 ---
 
-### 8.8 GET /sess/history - 查询会话列表
+### 8.7 GET /sess/history - 查询会话列表
 
 查询所有会话列表，支持分页。参数通过 URL Query String 传递。
 
@@ -1689,7 +1647,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.9 GET /health - 健康检查
+### 8.8 GET /health - 健康检查
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -1740,7 +1698,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.10 GET /skills - 列出可用 Skills
+### 8.9 GET /skills - 列出可用 Skills
 
 **响应示例：**
 ```json
@@ -1755,7 +1713,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.11 GET /tools - 列出可用工具
+### 8.10 GET /tools - 列出可用工具
 
 列出所有可用 MCP 工具，按来源分组返回。
 
@@ -1792,7 +1750,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.12 GET /schedule - 列出定时任务
+### 8.11 GET /schedule - 列出定时任务
 
 查询所有定时任务，支持按状态过滤。
 
@@ -1828,7 +1786,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.13 GET /schedule/:id - 查询任务详情
+### 8.12 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -1840,7 +1798,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.14 DELETE /schedule/:id - 删除任务
+### 8.13 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -1860,7 +1818,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.15 POST /schedule/:id/disable - 禁用任务
+### 8.14 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -1874,7 +1832,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.16 POST /schedule/:id/enable - 启用任务
+### 8.15 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -1888,7 +1846,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.17 POST /schedule/:id/archive - 归档任务
+### 8.16 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -1902,7 +1860,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.18 GET /schedule/:id/history - 执行历史
+### 8.17 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -1930,7 +1888,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 8.19 定时任务创建（通过对话）
+### 8.18 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
@@ -2114,7 +2072,6 @@ export OPENAI_API_KEY="your-api-key"
 **解决：**
 - 降低请求频率，等待当前请求完成后再发起下一条
 - 可通过配置文件调整 `rate_limit.default_qps` 和 `rate_limit.default_concurrency`
-- 也可以调用 `DELETE /chat/{sid}` 取消当前对话
 
 ---
 

@@ -15,8 +15,6 @@ type ActiveChat struct {
 	Status     string        `json:"status"` // running, cancelled, completed
 	Progress   *ChatProgress `json:"progress"`
 	StartTime  time.Time     `json:"start_time"`
-	CancelCh   chan struct{} `json:"-"`     // 取消信号通道
-	cancelOnce sync.Once      `json:"-"`     // 确保 channel 只 close 一次
 }
 
 // ChatProgress 对话进度
@@ -54,7 +52,6 @@ func (r *RuntimeState) Register(sessionID, chatID string) (*ActiveChat, error) {
 		Status:    "running",
 		Progress:  &ChatProgress{},
 		StartTime: time.Now(),
-		CancelCh:  make(chan struct{}),
 	}
 
 	// 使用 LoadOrStore 确保原子性
@@ -88,15 +85,6 @@ func (r *RuntimeState) UpdateProgress(sessionID string, progress *ChatProgress) 
 
 	chat.Progress = progress
 	return nil
-}
-
-// Cancel 取消对话（直接操作 ActiveChat，调用方已通过 Get 获取引用）
-func (a *ActiveChat) Cancel() {
-	a.Status = "cancelled"
-	// 使用 sync.Once 确保 channel 只被 close 一次，防止重复调用导致 panic
-	a.cancelOnce.Do(func() {
-		close(a.CancelCh)
-	})
 }
 
 // Delete removes active chat state for a session

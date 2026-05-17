@@ -70,13 +70,6 @@ type ErrorInfo struct {
 	Message string `json:"message"`
 }
 
-// CancelResponse represents cancel response
-type CancelResponse struct {
-	Status  string `json:"status"`
-	TaskID  string `json:"task_id"`
-	Message string `json:"message"`
-}
-
 // StatusResponse represents status response
 type StatusResponse struct {
 	Status      string        `json:"status"`

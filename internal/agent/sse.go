@@ -94,21 +94,13 @@ func (s *SSEWriter) WriteDone() error {
 	return s.w.Flush()
 }
 
-// WriteError writes error event.
-func (s *SSEWriter) WriteError(code, message string) error {
-	return s.WriteData(map[string]interface{}{
-		"event":   "error",
-		"code":    code,
-		"message": message,
-	})
-}
-
 // ToolCall represents a tool call (OpenAI format).
 type ToolCall struct {
-	Index    *int         `json:"index,omitempty"`
-	ID       string       `json:"id"`
-	Type     string       `json:"type"` // "function"
-	Function FunctionCall `json:"function"`
+	Index    *int           `json:"index,omitempty"`
+	ID       string         `json:"id"`
+	Type     string         `json:"type"` // "function"
+	Function FunctionCall   `json:"function"`
+	Extra    map[string]any `json:"extra,omitempty"`
 }
 
 // FunctionCall represents function call details.
