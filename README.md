@@ -94,120 +94,49 @@ Session（会话）
 
 ---
 
-## 二、工作目录结构
+## 二、快速开始
 
-Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过环境变量 `GROOT_HOME` 更改。
+> 如果还没安装 Groot，请先查看 [四、安装部署](#四安装部署)。
 
-### 2.1 目录结构
+### 2.1 初始化
 
-```
-{GROOT_HOME}/
-├── config.yaml                    # 主配置文件
-├── GROOT.md                       # 项目规范文件（自动注入系统指令）
-├── skills/                        # Skills 目录
-│   └── {skill-name}/SKILL.md      # Skill 定义文件
-├── mcp/                           # MCP 配置目录
-│   └── {mcp-name}.json            # MCP 配置文件
-├── memory/                        # 记忆模块目录
-│   ├── temp/                      # 附件处理临时目录
-│   └── {session_id}/              # 会话目录
-│       ├── history.json           # 对话历史（含执行元数据摘要）
-│       ├── attachments/           # 附件目录
-│       │   └── {filename}         # 附件文件
-│       └── chats/                 # 详细执行记录目录
-│           └── chat_{timestamp}.json  # 单次对话完整记录
-├── logs/                          # 日志目录
-│   └── groot-{date}.log           # 日志文件
-├── cluster/                       # 集群管理目录
-│   └── members/                   # 成员注册文件（用于多实例 Leader 选举）
-├── schedules/                     # 定时任务目录
-│   ├── active/                    # 活跃任务
-│   │   └── {task-id}.json         # 任务定义文件
-│   ├── disabled/                  # 已禁用任务
-│   │   └── {task-id}.json         # 任务定义文件
-│   ├── archive/                   # 已归档任务
-│   │   └── {task-id}.json         # 任务定义文件
-│   └── executions/                # 执行记录
-│       └── {task-id}.json         # 历史执行记录
+```bash
+groot init
 ```
 
-### 2.2 目录说明
+### 2.2 配置 LLM
 
-**固定目录（不可配置）：**
+编辑 `~/.groot/config.yaml`，填入必填的 LLM 配置：
 
-| 目录/文件 | 说明 |
-|----------|------|
-| `config.yaml` | 主配置文件，控制服务行为 |
-| `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
-| `skills/` | Skills 定义目录（固定位置），支持热插拔 |
-| `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
-| `cluster/members/` | 集群成员注册目录（固定位置），存放实例注册文件，用于 Leader 选举 |
-| `schedules/` | 定时任务存储目录（固定位置），active/disabled/archive 三目录状态流转 |
-
-**可配置目录（支持相对/绝对路径）：**
-
-| 目录/文件 | 说明 |
-|----------|------|
-| `memory/` | 会话数据目录（默认位置），可通过 `memory.directory` 配置 |
-| `memory/temp/` | 附件处理临时目录（固定在 memory 目录下） |
-| `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
-| `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
-| `logs/` | 日志存储目录（默认位置），可通过 `logging.file.directory` 配置 |
-
-> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见第五章"配置文件详解"。固定目录（skills/mcp/temp）位置不可更改。
-
-### 2.3 ID 格式说明
-
-| ID 类型 | 格式 | 示例 |
-|---------|------|------|
-| `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260419103000523_a1b2` |
-| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260419103000523` |
-| `task_id` | `task-{kebab-case-name}` | `task-每日报表生成` |
-
-**说明：**
-- `session_id`：会话唯一标识，毫秒级时间戳 + 4位随机字符
-- `chat_id`：单次对话标识，固定前缀 `chat_` + 毫秒级时间戳
-- `task_id`：定时任务唯一标识，固定前缀 `task-` + 名称转 kebab-case
-- 调度执行的会话 ID 格式：`{task_id}-{timestamp}-sched`（后缀区分标识）
-
-### 2.4 工作目录配置方式
-
-| 方式 | 示例 | 优先级 |
-|------|------|--------|
-| 环境变量 | `export GROOT_HOME=/opt/groot` | 高 |
-| 默认值 | `~/.groot` | 低 |
-
-### 2.5 项目规范文件（GROOT.md）
-
-Groot 支持在 `{GROOT_HOME}/GROOT.md` 文件中定义项目规范，这些规范会自动注入到每次对话的系统指令最前面。
-
-**功能特点：**
-- 无需配置开关，默认启用
-- 支持热加载，修改后自动生效
-- 内容始终位于系统指令最前面，优先级最高
-
-**使用示例：**
-
-在 `~/.groot/GROOT.md` 中写入：
-
-```markdown
-# 项目规范
-
-- 使用中文回答
-- 代码风格遵循 Go 标准
-- 优先使用已安装的工具
+```yaml
+llm:
+  default_model: gpt-4o
+  models:
+    gpt-4o:
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4o
 ```
 
-Groot 每次对话都会自动将这些规范注入系统指令，无需每次手动指定。
-
-**系统指令构建顺序：**
-
+```bash
+export OPENAI_API_KEY="sk-xxxx"
 ```
-GROOT.md（缓存）
-→ prompt（用户传入）
-→ Skills 指令
-→ 执行规则
+
+### 2.3 启动服务
+
+```bash
+groot
 ```
+
+### 2.4 第一次调用
+
+```bash
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "你好，请介绍一下你自己"}'
+```
+
+> 更多安装方式见 [四、安装部署](#四安装部署)，完整配置说明见 [五、配置文件详解](#五配置文件详解)，API 详细说明见 [八、API 详细说明](#八api详细说明)。
 
 ---
 
@@ -583,47 +512,13 @@ TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次�
 | 内存 | 建议 512MB+ |
 | 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
 
-### 4.2 配置文件说明
+### 4.2 配置文件
 
-初始化后生成的 `config.yaml` 包含完整配置模板，其中 **LLM 配置为必填项**，其他配置已注释并标注默认值。
+初始化后自动生成 `~/.groot/config.yaml`，包含完整配置模板。
 
-**必填配置（LLM）：**
+**LLM 配置为必填项**，其他所有配置项（server、skills、react、attachment、memory、security、logging 等）均已注释并标注默认值，按需取消注释即可。
 
-```yaml
-llm:
-  default_model: gpt-4o           # 默认模型名称
-  models:
-    gpt-4o:
-      base_url: https://api.openai.com/v1    # API 地址
-      api_key: ${OPENAI_API_KEY}             # API 密钥（建议使用环境变量）
-      model: gpt-4o                          # 模型名称
-```
-
-`api_key` 支持两种写法：
-
-```yaml
-# 方式一：环境变量引用（推荐）
-api_key: ${OPENAI_API_KEY}
-
-# 方式二：直接写入密钥
-api_key: sk-xxxxxxxxxxxx
-```
-
-> **推荐环境变量：** 避免密钥硬编码，便于环境切换。
-
-**可选配置：**
-
-配置模板中已注释展示所有可选配置项及其默认值，包括：
-- `agent` - Agent 基础信息
-- `server` - HTTP 服务配置
-- `skills` - Skills 热插拔配置
-- `react` - ReAct 执行配置
-- `attachment` - 附件处理配置
-- `memory` - 记忆模块配置
-- `security` - 安全认证配置
-- `logging` - 日志配置
-
-如需修改，取消对应配置的注释即可。
+> 完整配置项说明见 [五、配置文件详解](#五配置文件详解)。
 
 ### 4.3 环境变量
 
@@ -2227,3 +2122,118 @@ export OPENAI_API_KEY="your-api-key"
 
 - GitHub: https://github.com/zfd81/groot
 - 问题反馈: GitHub Issues
+
+### E. 工作目录结构
+
+Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过环境变量 `GROOT_HOME` 更改。
+
+#### E.1 目录结构
+
+```
+{GROOT_HOME}/
+├── config.yaml                    # 主配置文件
+├── GROOT.md                       # 项目规范文件（自动注入系统指令）
+├── skills/                        # Skills 目录
+│   └── {skill-name}/SKILL.md      # Skill 定义文件
+├── mcp/                           # MCP 配置目录
+│   └── {mcp-name}.json            # MCP 配置文件
+├── memory/                        # 记忆模块目录
+│   ├── temp/                      # 附件处理临时目录
+│   └── {session_id}/              # 会话目录
+│       ├── history.json           # 对话历史（含执行元数据摘要）
+│       ├── attachments/           # 附件目录
+│       │   └── {filename}         # 附件文件
+│       └── chats/                 # 详细执行记录目录
+│           └── chat_{timestamp}.json  # 单次对话完整记录
+├── logs/                          # 日志目录
+│   └── groot-{date}.log           # 日志文件
+├── cluster/                       # 集群管理目录
+│   └── members/                   # 成员注册文件（用于多实例 Leader 选举）
+├── schedules/                     # 定时任务目录
+│   ├── active/                    # 活跃任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   ├── disabled/                  # 已禁用任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   ├── archive/                   # 已归档任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   └── executions/                # 执行记录
+│       └── {task-id}.json         # 历史执行记录
+```
+
+#### E.2 目录说明
+
+**固定目录（不可配置）：**
+
+| 目录/文件 | 说明 |
+|----------|------|
+| `config.yaml` | 主配置文件，控制服务行为 |
+| `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
+| `skills/` | Skills 定义目录（固定位置），支持热插拔 |
+| `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
+| `cluster/members/` | 集群成员注册目录（固定位置），存放实例注册文件，用于 Leader 选举 |
+| `schedules/` | 定时任务存储目录（固定位置），active/disabled/archive 三目录状态流转 |
+
+**可配置目录（支持相对/绝对路径）：**
+
+| 目录/文件 | 说明 |
+|----------|------|
+| `memory/` | 会话数据目录（默认位置），可通过 `memory.directory` 配置 |
+| `memory/temp/` | 附件处理临时目录（固定在 memory 目录下） |
+| `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
+| `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
+| `logs/` | 日志存储目录（默认位置），可通过 `logging.file.directory` 配置 |
+
+> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见 [五、配置文件详解](#五配置文件详解)。固定目录（skills/mcp/temp）位置不可更改。
+
+#### E.3 ID 格式说明
+
+| ID 类型 | 格式 | 示例 |
+|---------|------|------|
+| `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260419103000523_a1b2` |
+| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260419103000523` |
+| `task_id` | `task-{kebab-case-name}` | `task-每日报表生成` |
+
+**说明：**
+- `session_id`：会话唯一标识，毫秒级时间戳 + 4位随机字符
+- `chat_id`：单次对话标识，固定前缀 `chat_` + 毫秒级时间戳
+- `task_id`：定时任务唯一标识，固定前缀 `task-` + 名称转 kebab-case
+- 调度执行的会话 ID 格式：`{task_id}-{timestamp}-sched`（后缀区分标识）
+
+#### E.4 工作目录配置方式
+
+| 方式 | 示例 | 优先级 |
+|------|------|--------|
+| 环境变量 | `export GROOT_HOME=/opt/groot` | 高 |
+| 默认值 | `~/.groot` | 低 |
+
+#### E.5 项目规范文件（GROOT.md）
+
+Groot 支持在 `{GROOT_HOME}/GROOT.md` 文件中定义项目规范，这些规范会自动注入到每次对话的系统指令最前面。
+
+**功能特点：**
+- 无需配置开关，默认启用
+- 支持热加载，修改后自动生效
+- 内容始终位于系统指令最前面，优先级最高
+
+**使用示例：**
+
+在 `~/.groot/GROOT.md` 中写入：
+
+```markdown
+# 项目规范
+
+- 使用中文回答
+- 代码风格遵循 Go 标准
+- 优先使用已安装的工具
+```
+
+Groot 每次对话都会自动将这些规范注入系统指令，无需每次手动指定。
+
+**系统指令构建顺序：**
+
+```
+GROOT.md（缓存）
+→ prompt（用户传入）
+→ Skills 指令
+→ 执行规则
+```
