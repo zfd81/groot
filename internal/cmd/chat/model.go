@@ -35,13 +35,15 @@ type Model struct {
 	client *Client
 	config *config.Config
 
-	streaming   bool
-	loading     bool
-	cancelCh    chan struct{}
-	eventsCh    chan tea.Msg
-	sessionInit bool
-	spinner     spinner.Model
-	skillsList  []CompletionItem
+	streaming         bool
+	loading           bool
+	cancelCh          chan struct{}
+	eventsCh          chan tea.Msg
+	sessionInit       bool
+	spinner           spinner.Model
+	skillsList        []CompletionItem
+	availableModels   []CompletionItem
+	pendingModelAction string // "" = none, "popup" = show popup after fetch, otherwise model name to switch to
 
 	embedServer interface{ Shutdown() error }
 	embedMode   bool
@@ -84,7 +86,7 @@ func (m *Model) SetEmbedServer(srv interface{ Shutdown() error }) {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, m.fetchModelsCmd())
 }
 
 // Update implements tea.Model. Central event dispatcher.
@@ -164,6 +166,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.completion.Show(msg.Skills)
 		m.completion.Mode = ModeSkill
 		m.input.SetGhostText(m.completion.GhostText())
+		return m, nil
+
+	case ModelsListMsg:
+		m.availableModels = msg.Models
+		switch m.pendingModelAction {
+		case "popup":
+			items := m.buildModelPopupItems()
+			m.completion.Show(items)
+			m.completion.Mode = ModeModel
+			m.input.SetGhostText(m.completion.GhostText())
+		case "":
+			// no pending action; if user is already typing /model, refresh completion
+			if strings.HasPrefix(m.input.Value(), "/model ") && m.completion.IsVisible() {
+				m.completion.Show(m.availableModels)
+				m.completion.Mode = ModeModel
+				m.completion.Filter(strings.TrimPrefix(m.input.Value(), "/model "))
+				if m.completion.IsVisible() {
+					m.input.SetGhostText(m.completion.GhostText())
+				}
+			}
+		default:
+			// pendingModelAction is a model name to switch to
+			name := m.pendingModelAction
+			if m.findModelByName(name) != nil {
+				m.client.SetModel(name)
+				m.status.ModelName = name
+			} else {
+				items := m.buildModelPopupItems()
+				m.completion.Show(items)
+				m.completion.Mode = ModeModel
+				m.input.SetGhostText(m.completion.GhostText())
+			}
+		}
+		m.pendingModelAction = ""
 		return m, nil
 
 	case tea.MouseWheelMsg:
@@ -269,6 +305,16 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "tab":
 		if m.completion.IsVisible() {
+			if m.completion.Mode == ModeModel {
+				sel := m.completion.Selected()
+				if sel != nil {
+					m.input.textarea.SetValue("/model " + sel.Name + " ")
+					m.input.textarea.CursorEnd()
+				}
+				m.input.ClearGhostText()
+				m.completion.Hide()
+				return m, nil
+			}
 			return m.handleCompletionSelect()
 		}
 
@@ -307,12 +353,10 @@ func (m Model) handleCompletionSelect() (tea.Model, tea.Cmd) {
 	}
 	switch m.completion.Mode {
 	case ModeModel:
-		// 直接切换模型，更新状态栏，不修改输入框
-		name := sel.Name
-		m.client.SetModel(name)
-		m.status.ModelName = name
+		m.client.SetModel(sel.Name)
+		m.status.ModelName = sel.Name
+		m.input.Reset()
 		m.completion.Hide()
-		m.input.ClearGhostText()
 		return m, nil
 	default:
 		// 命令/技能补全：填入输入框
@@ -379,36 +423,32 @@ func (m Model) handleCommand(msg CommandMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "model_popup":
-		items := make([]CompletionItem, 0, len(m.config.LLM.Models))
-		for name := range m.config.LLM.Models {
-			marker := ""
-			if name == m.client.ModelName() {
-				marker = "✓"
-			}
-			items = append(items, CompletionItem{
-				Name: name, Description: marker,
-			})
-		}
-		m.completion.Show(items)
-		m.completion.Mode = ModeModel
-		m.input.SetGhostText(m.completion.GhostText())
-		return m, nil
-
-	case "switch_model":
-		name := result.Content
-		if _, ok := m.config.LLM.Models[name]; !ok {
-			items := make([]CompletionItem, 0, len(m.config.LLM.Models))
-			for n := range m.config.LLM.Models {
-				items = append(items, CompletionItem{Name: n})
-			}
+		if len(m.availableModels) > 0 {
+			items := m.buildModelPopupItems()
 			m.completion.Show(items)
 			m.completion.Mode = ModeModel
 			m.input.SetGhostText(m.completion.GhostText())
 			return m, nil
 		}
-		m.client.SetModel(name)
-		m.status.ModelName = name
-		return m, nil
+		m.pendingModelAction = "popup"
+		return m, m.fetchModelsCmd()
+
+	case "switch_model":
+		name := result.Content
+		if len(m.availableModels) > 0 {
+			if m.findModelByName(name) != nil {
+				m.client.SetModel(name)
+				m.status.ModelName = name
+				return m, nil
+			}
+			items := m.buildModelPopupItems()
+			m.completion.Show(items)
+			m.completion.Mode = ModeModel
+			m.input.SetGhostText(m.completion.GhostText())
+			return m, nil
+		}
+		m.pendingModelAction = name
+		return m, m.fetchModelsCmd()
 
 	case "fetch":
 		return m, m.doFetchAPI(result.API)
@@ -577,6 +617,58 @@ func (m Model) fetchSkillsCmd() tea.Cmd {
 	}
 }
 
+// fetchModelsCmd fetches the model list from the /models API.
+func (m Model) fetchModelsCmd() tea.Cmd {
+	return func() tea.Msg {
+		body, err := m.client.FetchJSON("/models")
+		if err != nil {
+			return StreamErrorMsg{Err: fmt.Errorf("获取模型列表失败: %w", err)}
+		}
+		var resp struct {
+			Models []struct {
+				Name    string `json:"name"`
+				Model   string `json:"model"`
+				BaseURL string `json:"base_url"`
+			} `json:"models"`
+			Default string `json:"default"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return StreamErrorMsg{Err: fmt.Errorf("解析模型列表失败: %w", err)}
+		}
+		items := make([]CompletionItem, len(resp.Models))
+		for i, m := range resp.Models {
+			items[i] = CompletionItem{Name: m.Name, Description: m.Model}
+		}
+		return ModelsListMsg{Models: items, Default: resp.Default}
+	}
+}
+
+// buildModelPopupItems builds the CompletionItem list for the model popup,
+// marking the currently active model with a checkmark.
+func (m Model) buildModelPopupItems() []CompletionItem {
+	items := make([]CompletionItem, 0, len(m.availableModels))
+	for _, item := range m.availableModels {
+		marker := ""
+		if item.Name == m.client.ModelName() {
+			marker = "✓"
+		}
+		items = append(items, CompletionItem{
+			Name: item.Name, Description: marker,
+		})
+	}
+	return items
+}
+
+// findModelByName looks up a model in the cached availableModels list.
+func (m Model) findModelByName(name string) *CompletionItem {
+	for i := range m.availableModels {
+		if strings.EqualFold(m.availableModels[i].Name, name) {
+			return &m.availableModels[i]
+		}
+	}
+	return nil
+}
+
 // checkCompletion evaluates whether the current input should trigger completion.
 func (m Model) checkCompletion() (tea.Model, tea.Cmd) {
 	val := m.input.Value()
@@ -591,13 +683,11 @@ func (m Model) checkCompletion() (tea.Model, tea.Cmd) {
 
 	switch {
 	case strings.HasPrefix(val, "/model "):
-		models := make([]CompletionItem, 0, len(m.config.LLM.Models))
-		for name := range m.config.LLM.Models {
-			models = append(models, CompletionItem{Name: name})
+		if len(m.availableModels) > 0 {
+			m.completion.Show(m.availableModels)
+			m.completion.Mode = ModeModel
+			m.completion.Filter(strings.TrimPrefix(val, "/model "))
 		}
-		m.completion.Show(models)
-		m.completion.Mode = ModeModel
-		m.completion.Filter(strings.TrimPrefix(val, "/model "))
 
 	default:
 		m.completion.Show(SystemCommands)
@@ -695,11 +785,13 @@ func (m *Model) clearSession() {
 			m.status.View()
 
 		// 确保总行数不超出终端高度，防止 Windows 终端上的渲染溢出问题。
-		// 当内容超出时，从顶部裁剪 viewport（丢掉最早的输出行）。
+		// 当内容超出时，从顶部裁剪（丢掉最早的输出行），并同步修正光标 Y 坐标。
+		trimmedLines := 0
 		if m.height > 0 {
 			contentLines := strings.Split(content, "\n")
 			if len(contentLines) > m.height {
-				content = strings.Join(contentLines[len(contentLines)-m.height:], "\n")
+				trimmedLines = len(contentLines) - m.height
+				content = strings.Join(contentLines[trimmedLines:], "\n")
 			}
 		}
 
@@ -711,10 +803,10 @@ func (m *Model) clearSession() {
 	// Declarative cursor from textarea for IME composition support.
 	// Offset textarea-internal cursor to screen coordinates:
 	//   X: border(1) = 1
-	//   Y: viewport lines + separator(1) + completion lines + input top border(1)
+	//   Y: viewport lines + separator(1) + overlay lines + input top border(1) - trimmed top lines
 	if c := m.input.textarea.Cursor(); c != nil {
 		c.Position.X += 1
-		c.Position.Y += strings.Count(vpView, "\n") + overlayLines + 2
+		c.Position.Y += strings.Count(vpView, "\n") + overlayLines + 2 - trimmedLines
 		v.Cursor = c
 	}
 

@@ -71,6 +71,10 @@ var (
 			Foreground(lipgloss.Color("#98c379")).
 			Bold(true)
 
+	// Welcome screen ASCII art
+	WelcomeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#98c379"))
+
 	// Viewport area
 	ViewportStyle = lipgloss.NewStyle()
 

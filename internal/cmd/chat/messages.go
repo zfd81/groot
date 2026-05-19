@@ -53,6 +53,12 @@ type SkillsListMsg struct {
 	Skills []CompletionItem
 }
 
+// ModelsListMsg carries the model list fetched from the /models API
+type ModelsListMsg struct {
+	Models  []CompletionItem
+	Default string
+}
+
 // CommandMsg carries a parsed system command from user input
 type CommandMsg struct {
 	Cmd  string

@@ -38,7 +38,7 @@ const bottomReserve = 6
 // NewViewport creates a viewport pre-filled with the welcome screen.
 func NewViewport(width, height int) ViewportModel {
 	vp := viewport.New(viewport.WithWidth(width), viewport.WithHeight(height-bottomReserve))
-	vp.SetContent(WelcomeScreen)
+	vp.SetContent(WelcomeStyle.Render(WelcomeScreen))
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStylePath("pink"),
 		glamour.WithWordWrap(width-4),
@@ -138,7 +138,7 @@ func (v *ViewportModel) UpdateToolCall(toolCallID, toolName, arguments string, t
 // Clear resets to welcome screen.
 func (v *ViewportModel) Clear() {
 	v.messages = nil
-	v.viewport.SetContent(WelcomeScreen)
+	v.viewport.SetContent(WelcomeStyle.Render(WelcomeScreen))
 	v.viewport.GotoTop()
 }
 

@@ -1620,6 +1620,10 @@ func (m Model) handleCommand(msg CommandMsg) (tea.Model, tea.Cmd) {
 		m.status.ModelName = name
 		return m, nil
 
+		// NOTE: 后续变更 (2026-05-19) — 模型列表数据源已从 m.config.LLM.Models（本地配置文件）
+		// 改为通过 GET /models API 获取，模型列表缓存在 Model.availableModels 字段中。
+		// model_popup、switch_model 和 checkCompletion 中对应的读取逻辑已改为使用 API 数据。
+
 	case "fetch":
 		return m, m.doFetchAPI(result.API)
 

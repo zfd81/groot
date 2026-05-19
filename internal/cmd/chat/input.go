@@ -14,6 +14,7 @@ type InputModel struct {
 	textarea         textarea.Model
 	ghostText        string // the remainder text shown after cursor (gray)
 	completionPrefix string // what the user has typed so far
+	baseHeight       int    // desired textarea height (without ghost text)
 }
 
 // NewInput creates an input component with default settings.
@@ -34,14 +35,19 @@ func NewInput() InputModel {
 		ta.SetVirtualCursor(false)
 	ta.Focus()
 
-	return InputModel{textarea: ta}
+	return InputModel{textarea: ta, baseHeight: 3}
 }
 
 // SetSize adjusts input width and height.
 func (i *InputModel) SetSize(width, height int) {
 	i.textarea.SetWidth(width - 2) // account for double border
 	if height > 0 {
-		i.textarea.SetHeight(height)
+		i.baseHeight = height
+		if i.ghostText != "" && height > 1 {
+			i.textarea.SetHeight(height - 1)
+		} else {
+			i.textarea.SetHeight(height)
+		}
 	}
 }
 
@@ -54,28 +60,39 @@ func (i *InputModel) SetGhostText(full string) {
 	if strings.HasPrefix(full, prefix) {
 		i.completionPrefix = prefix
 		i.ghostText = full[len(prefix):]
+		i.shrinkForGhost()
 		return
 	}
 
 	// prefix 末尾与 full 开头有重叠（如 prefix="/session l", full="list "）
 	// 找到前缀末尾与 full 开头的最大匹配，ghost 只补未重叠的部分
+	// 大小写不敏感匹配，因为用户输入可能与模型名大小写不同
 	for j := len(prefix) - 1; j >= 0; j-- {
 		suffix := prefix[j:]
-		if strings.HasPrefix(full, suffix) {
+		if strings.HasPrefix(strings.ToLower(full), strings.ToLower(suffix)) {
 			i.completionPrefix = prefix
 			i.ghostText = full[len(suffix):]
+			i.shrinkForGhost()
 			return
 		}
 	}
 
 	i.completionPrefix = prefix
 	i.ghostText = full
+	i.shrinkForGhost()
+}
+
+func (i *InputModel) shrinkForGhost() {
+	if i.baseHeight > 1 {
+		i.textarea.SetHeight(i.baseHeight - 1)
+	}
 }
 
 // ClearGhostText removes ghost text.
 func (i *InputModel) ClearGhostText() {
 	i.ghostText = ""
 	i.completionPrefix = ""
+	i.textarea.SetHeight(i.baseHeight)
 }
 
 // HasGhostText reports whether ghost text is active.
@@ -115,18 +132,18 @@ func (i InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 	return i, cmd
 }
 
-// View renders the input area with double-line border and ghost text appended.
+// View renders the input area with double-line border.
+// Ghost text occupies the bottom line inside the border; textarea height
+// is reduced by 1 to keep the total border height constant.
 func (i InputModel) View(width int) string {
-	content := i.textarea.View()
-	if i.ghostText != "" {
-		content += GhostTextStyle.Render(i.ghostText)
-	}
-
-	// Render with double-line border
 	borderStyle := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
 		BorderForeground(lipgloss.Color("#98c379")).
 		Width(width)
 
-	return borderStyle.Render(content)
+	if i.ghostText != "" {
+		inner := i.textarea.View() + "\n" + GhostTextStyle.Render(i.ghostText)
+		return borderStyle.Render(inner)
+	}
+	return borderStyle.Render(i.textarea.View())
 }
