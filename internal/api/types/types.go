@@ -188,6 +188,20 @@ type ToolsGroup struct {
 	Total int        `json:"total"`
 }
 
+// ModelsResponse represents models list response
+type ModelsResponse struct {
+	Models  []ModelInfo `json:"models"`
+	Default string      `json:"default"`
+	Total   int         `json:"total"`
+}
+
+// ModelInfo represents model information
+type ModelInfo struct {
+	Name    string `json:"name"`
+	Model   string `json:"model"`
+	BaseURL string `json:"base_url"`
+}
+
 // ErrorResponse represents error response
 type ErrorResponse struct {
 	Status  string `json:"status"`

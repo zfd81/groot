@@ -18,6 +18,7 @@ func RegisterRoutes(h *server.Hertz,
 	healthH *handler.HealthHandler,
 	skillsH *handler.SkillsHandler,
 	toolsH *handler.ToolsHandler,
+	modelsH *handler.ModelsHandler,
 	scheduleH *handler.ScheduleHandler,
 ) {
 	// Health check (no auth required)
@@ -40,6 +41,7 @@ func RegisterRoutes(h *server.Hertz,
 	// Info endpoints
 	apiGroup.GET("/skills", skillsH.Serve)
 	apiGroup.GET("/tools", toolsH.Serve)
+	apiGroup.GET("/models", modelsH.Serve)
 
 	// Schedule endpoints
 	if scheduleH != nil {

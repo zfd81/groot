@@ -28,7 +28,6 @@ Groot 提供 RESTful HTTP API，客户端通过 API 与 AI Agent 交互。核心
 | 端点 | 方法 | 用途 | 响应类型 |
 |------|------|------|---------|
 | `/chat` | POST | 执行对话 | SSE 流 |
-
 | `/chat/status/{sid}` | GET | 查询最新对话状态 | JSON |
 | `/chat/{sid}` | GET | 查询最新对话详情（含步骤） | JSON |
 | `/chat/{sid}/{cid}` | GET | 查询指定对话详情 | JSON |
@@ -37,6 +36,7 @@ Groot 提供 RESTful HTTP API，客户端通过 API 与 AI Agent 交互。核心
 | `/health` | GET | 健康检查 | JSON |
 | `/skills` | GET | 列出可用 Skill | JSON |
 | `/tools` | GET | 列出可用 MCP 工具 | JSON |
+| `/models` | GET | 列出可用 LLM 模型 | JSON |
 | `/schedule` | GET | 列出定时任务 | JSON |
 | `/schedule/{id}` | GET | 查看任务详情 | JSON |
 | `/schedule/{id}/history` | GET | 查看执行历史 | JSON |
@@ -824,6 +824,55 @@ type ToolsGroup struct {
 - 工具对象不再包含 `mcp` 字段，避免数据冗余
 - `mcp.Manager.ListTools()` 保持不变，其他调用方不受影响
 - 向后不兼容：调用方需从平铺格式迁移到分组格式
+
+### 6.4 GET /models — 可用模型列表
+
+返回所有已配置的 LLM 模型及其默认模型。
+
+**响应**
+
+```json
+{
+  "models": [
+    {
+      "name": "gpt-4o",
+      "model": "gpt-4o",
+      "base_url": "https://api.openai.com/v1"
+    },
+    {
+      "name": "qwen-local",
+      "model": "Qwen3.5-122B-A10B-6bit",
+      "base_url": "http://127.0.0.1:8230/v1"
+    }
+  ],
+  "default": "gpt-4o",
+  "total": 2
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `models[].name` | string | 模型配置名，用于 `X-Model-Name` 请求头指定模型 |
+| `models[].model` | string | 实际调用 LLM API 时的 model 参数值 |
+| `models[].base_url` | string | LLM API 端点地址 |
+| `default` | string | 默认模型名称，对应 `llm.default_model` 配置 |
+| `total` | int | 已配置模型总数 |
+
+**类型定义：**
+
+```go
+type ModelsResponse struct {
+    Models  []ModelInfo `json:"models"`
+    Default string      `json:"default"`
+    Total   int         `json:"total"`
+}
+
+type ModelInfo struct {
+    Name    string `json:"name"`
+    Model   string `json:"model"`
+    BaseURL string `json:"base_url"`
+}
+```
 
 ---
 

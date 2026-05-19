@@ -77,12 +77,13 @@ func NewServer(
 	healthH := handler.NewHealthHandler(cfg, skillBackend, mcpMgr, mem, runtime, log)
 	skillsH := handler.NewSkillsHandler(skillBackend)
 	toolsH := handler.NewToolsHandler(mcpMgr, log)
+	modelsH := handler.NewModelsHandler(&cfg)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, toolsH, scheduleH)
+		healthH, skillsH, toolsH, modelsH, scheduleH)
 
 	return &Server{
 		hertz:  h,
