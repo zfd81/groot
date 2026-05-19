@@ -29,8 +29,11 @@ type ViewportModel struct {
 	lastWidth  int
 }
 
-// bottomReserve is the vertical space reserved for bottom elements (input + statusbar).
-const bottomReserve = 6 // input: 3 content + 2 border lines + 1 blank; statusbar: 1 line
+// bottomReserve is the vertical space reserved for bottom elements below the viewport:
+// input (3 content + 2 border) + 1 separator + 1 statusbar = 7.
+// The viewport height is terminal_height - bottomReserve.
+// Total content lines = viewport lines + separator + input + separator + status.
+const bottomReserve = 6
 
 // NewViewport creates a viewport pre-filled with the welcome screen.
 func NewViewport(width, height int) ViewportModel {
@@ -165,6 +168,8 @@ func (v *ViewportModel) rerender() {
 
 	var sb strings.Builder
 	for _, msg := range v.messages {
+		// 清理 Windows 行尾 \r 字符，防止终端光标异常
+		msg.Content = strings.ReplaceAll(msg.Content, "\r", "")
 		switch msg.Role {
 		case "user":
 			content := "> " + msg.Content

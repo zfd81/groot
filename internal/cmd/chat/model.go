@@ -694,7 +694,16 @@ func (m *Model) clearSession() {
 			m.input.View(m.width) + "\n" +
 			m.status.View()
 
-	v := tea.NewView(content)
+		// 确保总行数不超出终端高度，防止 Windows 终端上的渲染溢出问题。
+		// 当内容超出时，从顶部裁剪 viewport（丢掉最早的输出行）。
+		if m.height > 0 {
+			contentLines := strings.Split(content, "\n")
+			if len(contentLines) > m.height {
+				content = strings.Join(contentLines[len(contentLines)-m.height:], "\n")
+			}
+		}
+
+		v := tea.NewView(content)
 	v.AltScreen = true
 	v.KeyboardEnhancements.ReportEventTypes = true
 	v.MouseMode = tea.MouseModeCellMotion

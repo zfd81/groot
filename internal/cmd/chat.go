@@ -154,7 +154,7 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 		sc := cfg.Message.Senders["email"]
 		msgLayer.Register("email", senders.NewEmail(sc.SMTPHost, sc.SMTPPort, sc.Username, sc.Password, sc.From), sc)
 	}
-	msgLayer.Register("stdout", senders.NewStdout(), config.SenderConf{Enabled: true})
+	// 注意：不注册 stdout sender，因为 TUI 模式下 fmt.Printf 会破坏终端渲染
 	msgLayer.Start()
 
 	// Create executor
