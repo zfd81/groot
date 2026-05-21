@@ -165,13 +165,16 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			WriteFinish: func(reason string) error {
 				return sse.WriteFinish(reason)
 			},
-			WriteToolResult: func(toolCallID, toolName, content string) error {
+			WriteToolResult: func(toolCallID, toolName, content string, isError bool) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteToolResult(toolCallID, toolName, content)
+					return sse.WriteToolResult(toolCallID, toolName, content, isError)
 				}
+			},
+			WriteError: func(message string) error {
+				return sse.WriteError(message)
 			},
 			WriteDone: func() error {
 				return sse.WriteDone()

@@ -14,6 +14,7 @@ type SseEvent struct {
 	Event        string     `json:"event,omitempty"`
 	Code         string     `json:"code,omitempty"`
 	Message      string     `json:"message,omitempty"`
+	IsError      bool       `json:"error,omitempty"`
 	RawText      string     `json:"-"`
 }
 

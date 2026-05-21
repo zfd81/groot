@@ -9,6 +9,7 @@ const (
 	ModeCommand CompletionMode = iota // 命令/子命令补全（填入输入框）
 	ModeModel                         // 模型选择（直接切换）
 	ModeSkill                         // 技能选择（填入输入框）
+	ModeFile                          // 文件路径补全（@path）
 )
 
 // CompletionModel manages popup visibility, filtering, and selection.
@@ -21,6 +22,10 @@ type CompletionModel struct {
 	maxItems  int
 	ghostText string
 	Mode      CompletionMode
+
+	// filePrefix is the text before '@' when in ModeFile, used to
+	// construct full-line ghost text for path completion.
+	filePrefix string
 }
 
 // NewCompletion creates a hidden completion model.
@@ -159,7 +164,11 @@ func (c *CompletionModel) View() string {
 
 func (c *CompletionModel) updateGhostText() {
 	if sel := c.Selected(); sel != nil {
-		c.ghostText = sel.Name + " "
+		if c.Mode == ModeFile {
+			c.ghostText = c.filePrefix + "@" + sel.Name
+		} else {
+			c.ghostText = sel.Name + " "
+		}
 	} else {
 		c.ghostText = ""
 	}

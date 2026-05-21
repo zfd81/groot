@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,7 +27,8 @@ type ProgressCallback struct {
 	WriteMessage    func(content string) error
 	WriteToolCalls  func(toolCalls []ToolCall) error
 	WriteFinish     func(reason string) error
-	WriteToolResult func(toolCallID, toolName, content string) error
+	WriteToolResult func(toolCallID, toolName, content string, isError bool) error
+	WriteError      func(message string) error
 	WriteDone       func() error
 }
 
@@ -175,13 +178,35 @@ eventLoop:
 
 			// Process event
 			if event.Err != nil {
-				e.log.Error("Agent event error: " + event.Err.Error())
-				if strings.Contains(event.Err.Error(), "NodeRunError") ||
-					strings.Contains(event.Err.Error(), "connection refused") ||
-					strings.Contains(event.Err.Error(), "dial tcp") ||
-					strings.Contains(event.Err.Error(), "no such host") ||
-					strings.Contains(event.Err.Error(), "timeout") {
+				errStr := event.Err.Error()
+				e.log.Error("Agent event error: " + errStr)
+
+				// MCP tool execution errors → send as tool_result so agent can continue
+				if strings.Contains(errStr, "mcp") || strings.Contains(errStr, "command_not_allowed") {
+					toolCallID := extractToolCallID(errStr)
+					if cb.WriteToolResult != nil {
+						cb.WriteToolResult(toolCallID, "mcp_tool", "MCP 工具错误: "+formatMCPError(errStr), true)
+					}
+					continue
+				}
+
+				// LLM connection errors → fatal
+				if strings.Contains(errStr, "connection refused") ||
+					strings.Contains(errStr, "dial tcp") ||
+					strings.Contains(errStr, "no such host") ||
+					strings.Contains(errStr, "timeout") {
+					if cb.WriteError != nil {
+						cb.WriteError("LLM 服务连接失败: " + errStr)
+					}
 					return nil, fmt.Errorf("LLM 服务连接失败: %w", event.Err)
+				}
+
+				// Other NodeRunError → send error event but continue
+				if strings.Contains(errStr, "NodeRunError") {
+					if cb.WriteError != nil {
+						cb.WriteError(errStr)
+					}
+					continue
 				}
 				continue
 			}
@@ -336,7 +361,7 @@ func (e *Engine) processToolEvent(event *adk.AgentEvent, cb *ProgressCallback, s
 
 	// Send tool_result event
 	if cb.WriteToolResult != nil {
-		if err := cb.WriteToolResult(toolCallID, toolName, output); err != nil {
+		if err := cb.WriteToolResult(toolCallID, toolName, output, false); err != nil {
 			e.log.Error("SSE write tool_result failed: " + err.Error())
 		}
 	}
@@ -532,6 +557,78 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+var toolCallIDRegex = regexp.MustCompile(`tool call (\S+)`)
+
+// formatMCPError parses the nested MCP error JSON and returns a readable error message.
+// Falls back to extracting the tool_call_id and a short summary if parsing fails.
+func formatMCPError(errStr string) string {
+	// Find the JSON part: look for {"content": pattern
+	jsonStart := strings.Index(errStr, `{"content":`)
+	if jsonStart < 0 {
+		// Fallback: look for "mcp server return error: " prefix
+		if idx := strings.Index(errStr, "mcp server return error: "); idx >= 0 {
+			jsonStart = idx + len("mcp server return error: ")
+		}
+	}
+	if jsonStart < 0 {
+		return shortMCPError(errStr)
+	}
+
+	jsonStr := errStr[jsonStart:]
+	// Find matching closing brace
+	if idx := strings.LastIndex(jsonStr, "}}"); idx > 0 {
+		jsonStr = jsonStr[:idx+2]
+	}
+
+	var mcpErr struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &mcpErr); err != nil {
+		return shortMCPError(errStr)
+	}
+	if len(mcpErr.Content) == 0 || mcpErr.Content[0].Text == "" {
+		return shortMCPError(errStr)
+	}
+
+	var inner struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(mcpErr.Content[0].Text), &inner); err != nil {
+		return shortMCPError(mcpErr.Content[0].Text)
+	}
+
+	if inner.Error.Message != "" {
+		return fmt.Sprintf("%s (code: %s)", inner.Error.Message, inner.Error.Code)
+	}
+	return shortMCPError(errStr)
+}
+
+// shortMCPError extracts the tool_call_id from the error and returns a brief summary.
+func shortMCPError(errStr string) string {
+	id := extractToolCallID(errStr)
+	if strings.Contains(errStr, "command_not_allowed") {
+		return fmt.Sprintf("工具 %s 执行被拒绝 (code: command_not_allowed)", id)
+	}
+	if strings.Contains(errStr, "mcp") {
+		return fmt.Sprintf("工具 %s MCP 调用失败", id)
+	}
+	return fmt.Sprintf("工具 %s 执行失败", id)
+}
+
+// extractToolCallID extracts the tool call ID from an error message.
+func extractToolCallID(errStr string) string {
+	match := toolCallIDRegex.FindStringSubmatch(errStr)
+	if len(match) > 1 {
+		return match[1]
+	}
+	return "unknown"
 }
 
 // RunResult holds the result of agent run

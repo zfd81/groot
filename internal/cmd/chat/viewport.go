@@ -12,7 +12,7 @@ import (
 
 // ChatMessage represents a single rendered message block in the viewport.
 type ChatMessage struct {
-	Role        string // user, thinking, tool_call, tool_result, assistant, cancel, length, error, system
+	Role        string // user, thinking, tool_call, tool_result, tool_error, assistant, cancel, length, error, system
 	Content     string
 	Meta       string // tool name (for tool_call display)
 	ToolCallID string // OpenAI tool call ID, used to aggregate streaming deltas
@@ -219,6 +219,16 @@ func (v *ViewportModel) rerender() {
 			sb.WriteString("\n")
 		case "tool_result":
 			// 工具结果不展示，由 LLM 回答中体现
+		case "tool_error":
+			sb.WriteString(ToolErrorPrefix)
+			sb.WriteString(msg.Meta)
+			sb.WriteString("\n")
+			sb.WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#e06c75")).
+				Width(contentWidth).
+				PaddingLeft(3).
+				Render(msg.Content))
+			sb.WriteString("\n\n")
 		case "assistant":
 			if v.mdRenderer != nil {
 				prepped := normalizeMarkdown(msg.Content)

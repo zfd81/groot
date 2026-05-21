@@ -270,6 +270,103 @@ assistant 消息使用 `charmbracelet/glamour` 库进行终端 Markdown 渲染�
 
 注意：skill 列表会缓存在 TUI 本地（`skillsList` 字段），避免每次都请求后端。
 
+## 附件引用（`@path`）
+
+用户在输入框中可通过 `@/path/to/file` 引用本地文件，发送时自动读取文件内容并作为附件提交到 `/chat` API。也支持引用目录，目录下的所有文件（不含子目录）会作为独立附件提交。
+
+### 使用方式
+
+**手动输入：**
+
+```
+帮我分析这个日志 @/var/log/app.log
+```
+
+**拖拽路径：** 现代终端模拟器（VS Code 终端、iTerm2 等）支持拖拽文件到光标处自动插入路径，TUI 直接解析这些路径。
+
+**目录引用：**
+
+```
+对比这些文件 @/home/zfd/docs/
+```
+
+引用目录时，读取该目录下**一层**所有文件（不含子目录），每个文件作为独立附件。
+
+### `@` 路径补全
+
+输入 `@` 后自动触发文件路径补全，复用现有 `CompletionModel` 组件，新增 `ModeFilePath` 模式。
+
+**触发条件**：输入框中包含 `@`，且光标位于 `@` 后或 `@/path` 路径中时。
+
+**补全行为：**
+
+| 输入框内容 | 补全列表显示 |
+|-----------|------------|
+| `帮我分析 @/` | 根目录下所有名称 |
+| `帮我分析 @/h` | `/` 下以 `h` 开头的名称 |
+| `帮我分析 @/home/zfd/` | `/home/zfd/` 下所有名称 |
+| `帮我分析 @/home/zfd/a` | `/home/zfd/` 下以 `a` 开头的名称 |
+
+- 列表中**不区分目录和文件**，统一显示纯名称
+- 继续输入 `/` 可再次触发补全进入下一层目录
+- 仅 **Tab** 键确认补全（Enter 用于发送消息）
+
+### 发送时处理流程
+
+```
+用户输入: 帮我分析 @/var/log/app.log
+
+1. 正则扫描文本，提取所有 @path 引用
+   → ["/var/log/app.log"]
+
+2. 对每个路径调用 os.Stat 判断类型
+   - 文件 → 读取内容 → Base64 编码 → 加入 attachments
+   - 目录 → os.ReadDir 读一层文件，每个文件独立处理
+   - 不存在 → 弹窗报错，阻止发送
+
+3. 从 instruction 中移除路径部分，保留文件名
+   - 文件 → 保留文件名：`"帮我分析 app.log"`
+   - 目录 → 保留目录下所有文件名：`"帮我分析 app.log error.log access.log"`
+
+4. 发送给 /chat API:
+   {
+     "instruction": "帮我分析 app.log",
+     "attachments": [
+       {"type": "file", "name": "app.log", "content": "base64..."}
+     ]
+   }
+```
+
+### 路径提取规则
+
+- 匹配模式：`@` 后跟路径，边界为空白字符或字符串结尾
+- 支持绝对路径（`@/home/zfd/aa.txt`）和相对路径（`@./docs/readme.md`）
+- 一条消息可包含多个引用：`对比 @/a.txt 和 @/b.png`
+- 路径中的空格：初版暂不支持，后续扩展
+
+### 文件类型判断
+
+根据扩展名自动判断 `attachment.type`：
+
+| 类型 | 扩展名 |
+|------|--------|
+| `image` | png, jpg, jpeg, gif, bmp, webp, svg |
+| `audio` | mp3, wav, aac, ogg, flac |
+| `video` | mp4, avi, mov, mkv, webm |
+| `file` | 其他所有 |
+
+### 错误处理
+
+TUI 仅校验客户端能直接判断的错误：
+
+| 场景 | 行为 |
+|------|------|
+| 路径不存在 | 弹窗阻止发送 |
+| 无读取权限 | 弹窗阻止发送 |
+| 目录为空 | 弹窗阻止发送 |
+
+文件大小、附件数量、总大小限制由 `/chat` API 端点统一校验，TUI 直接透传 API 返回的错误信息。
+
 ### `/mcp` 命令详细交互
 
 输入 `/mcp` 回车后，TUI 通过 `GET /tools` 获取所有 MCP 工具，按 MCP 服务器分组渲染到对话区，树状结构展示：
@@ -407,10 +504,19 @@ App (Bubble Tea Model)
   │
   └─ 普通文本 → 构造请求体
                   │
+                  ├─ 扫描 @path 引用 → ExtractFileRefs(text)
+                  │     ├─ 有引用 → ReadAttachments(paths)
+                  │     │            ├─ 文件 → Base64 编码
+                  │     │            ├─ 目录 → 读取一层文件，逐个编码
+                  │     │            └─ 错误 → 弹窗阻止发送
+                  │     └─ 无引用 → attachments = []
+                  │
+                  ├─ 从文本中移除 @path → StripFileRefs(text)
+                  │
                   ├─ 显示 loading spinner + "正在思考..."
                   ├─ POST /chat (HTTP+SSE)
                   ├─ 请求头: X-Session-ID, X-Model-Name
-                  ├─ 请求体: { "instruction": "...", "attachments": [] }
+                  ├─ 请求体: { "instruction": "...", "attachments": [...] }
                   │
                   └─ SSE 流解析（事件循环持续轮询 channel）
                       ├─ SessionIDMsg  → 存储会话 ID，更新状态栏
@@ -436,6 +542,7 @@ internal/cmd/
 │   ├── completion.go    # 补全浮层 (过滤、选择、ghost text)
 │   ├── commands.go      # 系统命令定义 + 处理函数 + 导出功能
 │   ├── client.go        # HTTP+SSE 客户端 (流式请求 + 取消)
+│   ├── attachment.go    # @path 引用解析、文件读取编码、附件组装
 │   ├── styles.go        # Lipgloss 样式定义
 │   ├── messages.go      # Bubble Tea 消息类型定义
 │   └── welcome.go       # 欢迎画面 ASCII art

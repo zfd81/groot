@@ -13,6 +13,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/zfd81/groot/internal/api/types"
 )
 
 // Client communicates with the groot API over HTTP.
@@ -68,12 +70,15 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 }
 
 // SendChatStream starts an SSE streaming chat request in a goroutine.
-func (c *Client) SendChatStream(instruction string, events chan<- tea.Msg, cancelCh <-chan struct{}) {
+func (c *Client) SendChatStream(instruction string, attachments []types.Attachment, events chan<- tea.Msg, cancelCh <-chan struct{}) {
 	go func() {
 		defer close(events)
 
 		body := map[string]interface{}{
 			"instruction": instruction,
+		}
+		if len(attachments) > 0 {
+			body["attachments"] = attachments
 		}
 		bodyBytes, _ := json.Marshal(body)
 

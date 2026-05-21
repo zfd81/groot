@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 
 	"sort"
@@ -231,6 +232,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.completion.IsVisible() {
 		newInput, cmd := m.input.Update(msg)
 		m.input = newInput
+		// 拖拽/粘贴进来的裸路径自动添加 @ 前缀（非按键事件路径）
+		if fixed, changed := autoPrefixBarePaths(m.input.Value()); changed {
+			m.input.textarea.SetValue(fixed)
+			m.input.textarea.CursorEnd()
+		}
 		return m, cmd
 	}
 	return m, nil
@@ -391,6 +397,21 @@ func (m Model) handleSendMessage() (tea.Model, tea.Cmd) {
 		return m.handleCommand(*cmdMsg)
 	}
 
+	// 提取 @path 附件引用，读取文件内容，替换文本中的引用为文件名
+	var atts []types.Attachment
+	if refs := ExtractFileRefs(text); len(refs) > 0 {
+		var pathToNames map[string][]string
+		var err error
+		atts, pathToNames, err = ReadAttachments(refs)
+		if err != nil {
+			m.viewport.AddMessage(ChatMessage{
+				Role: "error", Content: fmt.Sprintf("读取附件失败: %v", err),
+			})
+			return m, nil
+		}
+		text = StripFileRefs(text, pathToNames)
+	}
+
 	if !m.sessionInit {
 		m.viewport.messages = nil
 		m.viewport.viewport.SetContent("")
@@ -402,7 +423,7 @@ func (m Model) handleSendMessage() (tea.Model, tea.Cmd) {
 	m.loading = true
 	m.cancelCh = make(chan struct{})
 	m.eventsCh = make(chan tea.Msg, 100)
-	m.client.SendChatStream(text, m.eventsCh, m.cancelCh)
+	m.client.SendChatStream(text, atts, m.eventsCh, m.cancelCh)
 	m.status.Round++
 
 	m.viewport.AddMessage(ChatMessage{Role: "loading", Content: m.spinner.View()})
@@ -549,6 +570,17 @@ func (m Model) handleSseEvent(event SseEvent) (tea.Model, tea.Cmd) {
 		}
 		m.viewport.AddMessage(ChatMessage{Role: "tool_result", Content: content})
 
+	case "tool_error":
+		content := event.Content
+		if len(content) > 200 {
+			content = content[:200] + "\n[... 展开]"
+		}
+		m.viewport.AddMessage(ChatMessage{
+			Role:    "tool_error",
+			Meta:    event.ToolName,
+			Content: content,
+		})
+
 	case "message":
 		if len(m.viewport.messages) > 0 &&
 			m.viewport.messages[len(m.viewport.messages)-1].Role == "assistant" {
@@ -672,6 +704,30 @@ func (m Model) findModelByName(name string) *CompletionItem {
 // checkCompletion evaluates whether the current input should trigger completion.
 func (m Model) checkCompletion() (tea.Model, tea.Cmd) {
 	val := m.input.Value()
+
+	// 自动为拖拽/粘贴进来的裸路径添加 @ 前缀
+	if fixed, changed := autoPrefixBarePaths(val); changed {
+		m.input.textarea.SetValue(fixed)
+		m.input.textarea.CursorEnd()
+		val = fixed
+	}
+
+	// 处理 @path 文件路径补全
+	if ref := extractActiveFileRef(val); ref != "" {
+		expanded := expandTilde(ref)
+		items := listPathItems(expanded)
+		if len(items) > 0 {
+			atIdx := strings.LastIndex(val, "@")
+			m.completion.Mode = ModeFile
+			m.completion.filePrefix = val[:atIdx]
+			m.completion.Show(items)
+			m.completion.Filter(expanded)
+			if m.completion.IsVisible() {
+				m.input.SetGhostText(m.completion.GhostText())
+			}
+			return m, nil
+		}
+	}
 
 	if !strings.HasPrefix(val, "/") {
 		if m.completion.IsVisible() {
@@ -825,6 +881,9 @@ func classifyEvent(event SseEvent) string {
 		return "tool_calls"
 	}
 	if event.Role == "tool" {
+		if event.IsError {
+			return "tool_error"
+		}
 		return "tool_result"
 	}
 	if event.FinishReason != "" {

@@ -88,6 +88,7 @@ var (
 var (
 	ThinkingLabel   = ThinkingLabelStyle.Render("🤔 Thinking...")
 	ToolCallPrefix  = ToolCallStyle.Render("🔧 调用工具: ")
+	ToolErrorPrefix = ErrorStyle.Render("❌ 工具错误: ")
 	SkillCallPrefix = lipgloss.NewStyle().Foreground(lipgloss.Color("#c678dd")).Render("⚡ 调用技能: ")
 	CancelLabel     = CancelStyle.Render("⏹️ 已取消")
 	LengthLabel     = WarnStyle.Render("⚠️ 已达 token 上限")

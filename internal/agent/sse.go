@@ -76,13 +76,23 @@ func (s *SSEWriter) WriteFinish(reason string) error {
 	})
 }
 
-// WriteToolResult writes tool result event.
-func (s *SSEWriter) WriteToolResult(toolCallID, toolName, content string) error {
-	return s.WriteData(map[string]string{
+// WriteToolResult writes tool result event. Set isError to true for MCP tool errors
+// so the TUI can render them with error styling instead of silently dropping them.
+func (s *SSEWriter) WriteToolResult(toolCallID, toolName, content string, isError bool) error {
+	return s.WriteData(map[string]interface{}{
 		"role":         "tool",
 		"tool_call_id": toolCallID,
 		"tool_name":    toolName,
 		"content":      content,
+		"error":        isError,
+	})
+}
+
+// WriteError writes an error SSE event.
+func (s *SSEWriter) WriteError(message string) error {
+	return s.WriteData(map[string]string{
+		"event":   "error",
+		"message": message,
 	})
 }
 
