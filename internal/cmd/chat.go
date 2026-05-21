@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/cloudwego/eino/adk"
 	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/eino-ext/adk/backend/local"
@@ -93,6 +95,7 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	logCfg.Output = []string{"file"}
 	logCfg.File.Directory = config.ResolvePath(logCfg.File.Directory, homeDir)
 	log := logger.New(logCfg)
+	hlog.SetOutput(io.Discard) // 禁止 Hertz 内部日志输出到 stderr，防止破坏 TUI 渲染
 
 	// Resolve directories
 	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
