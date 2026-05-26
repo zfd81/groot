@@ -18,12 +18,49 @@ Session（会话）
        └─ Step（步骤，一次工具调用或 LLM 输出）
 ```
 
+## ID 格式与目录映射
+
+三个核心 ID 均由 `internal/memory/idgen.go` 生成，使用 `crypto/rand` 作为随机源。
+
+### ID 格式
+
+| ID | 格式 | 示例 |
+|----|------|------|
+| `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260418100000523_a1b2` |
+| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260418100000523` |
+| `step_id` | `{YYYYMMDD}-{HHMMSSmmm}-{random6}` | `20260418-100005000-a1b2c3` |
+
+- 时间戳精确到毫秒（`mmm` = 毫秒，3 位），取自当前系统时间
+- 随机字符串由小写字母 + 数字组成
+
+### ID → 文件系统路径的映射
+
+三个 ID 直接决定了存储路径，规则统一且无歧义：
+
+```
+session_id  →  {memoryDir}/{session_id}/                          （会话目录）
+chat_id     →  {memoryDir}/{session_id}/chats/{chat_id}.json      （单轮详情文件）
+step_id     →  嵌在 ChatRecord.steps[].step_id 中，无独立文件
+```
+
+**示例** — 假设 `memoryDir = memory`，`session_id = 20260418100000523_a1b2`，`chat_id = chat_20260418100000523`：
+
+```
+memory/20260418100000523_a1b2/                  ← session_id 直接做目录名
+├── history.json
+├── chats/
+│   └── chat_20260418100000523.json               ← chat_id + ".json" 做文件名
+└── attachments/
+```
+
+> **关键约束：** `chat_id` 必须与它所属的 `session_id` 配合才能定位文件（路径中包含两者）。单独一个 `chat_id` 无法找到文件。
+
 ## 目录结构
 
 ```
 {memoryDir}/
-├── 20260418100000523_abc123/          ← Session A 目录
-│   ├── SESSION.md                     ← 会话文件目录提示（LLM 上下文注入）
+├── 20260418100000523_a1b2/          ← Session A 目录
+│   ├── SESSION.md                     ← 附件目录路径提示（注入 LLM 上下文）
 │   ├── history.json                   ← 会话索引（全部轮次摘要）
 │   ├── chats/
 │   │   ├── chat_20260418100000523.json  ← 第1轮详细记录
@@ -47,7 +84,7 @@ Session（会话）
 
 ```json
 {
-  "session_id": "20260418100000523_abc123",
+  "session_id": "20260418100000523_a1b2",
   "created_at": "2026-04-18T10:00:00Z",
   "messages": [
     {
@@ -72,7 +109,7 @@ Session（会话）
 ```json
 {
   "chat_id": "chat_20260418100000523",
-  "session_id": "20260418100000523_abc123",
+  "session_id": "20260418100000523_a1b2",
   "round": 1,
   "timestamp": "2026-04-18T10:00:00Z",
   "started_at": "2026-04-18T10:00:00Z",
@@ -331,8 +368,8 @@ func resolveMemoryDir(memoryDir string, homeDir string) string {
 
 ```log
 2026-04-18 02:00:01 [INFO] [memory] 开始清理，保留天数: 7，当前会话数: 15
-2026-04-18 02:00:02 [INFO] [memory] 清理会话 20260410T100000_abc123，最后活跃: 2026-04-10，轮数: 5
-2026-04-18 02:00:03 [INFO] [memory] 清理会话 20260409T093000_def456，最后活跃: 2026-04-09，轮数: 3
+2026-04-18 02:00:02 [INFO] [memory] 清理会话 20260410100000000_x2y5，最后活跃: 2026-04-10，轮数: 5
+2026-04-18 02:00:03 [INFO] [memory] 清理会话 20260409093000000_z8k3，最后活跃: 2026-04-09，轮数: 3
 2026-04-18 02:00:05 [INFO] [memory] 清理完成，删除 2 个会话，剩余 13 个
 ```
 
@@ -351,7 +388,7 @@ memory:
 | `directory` | string | `memory` | 存储目录，支持相对/绝对路径 |
 | `retention_days` | int | `7` | 会话保留天数，超过则清理 |
 | `cleanup_schedule` | string | `02:00` | 每日清理时间（HH:MM 格式，由 gocron 解析） |
-| `history_window` | int | `20` | LLM 上下文最大轮次数，`-1` 不限制，`0` 使用默认值 |
+| `history_window` | int | `20` | LLM 上下文最大轮次数，`-1` 或 `0` 不限制 |
 
 ## 实现文件
 
