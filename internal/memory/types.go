@@ -33,7 +33,12 @@ type History struct {
 	Messages  []Message `json:"messages"`
 }
 
-// ChatRecord 单次对话详细执行记录（chats/{chat_id}.json）
+// ChatRecord 单次对话详细执行记录（chats/{chat_id}.json）。
+//
+// JSON 字段策略：
+//   - Error 不带 omitempty：兼容承诺，消费方可稳定假设此 key 存在（值为 null 或对象）。
+//   - 多 Agent 扩展字段（AgentName/PromptTokens/CompletionTokens/TotalTokens）使用 omitempty，
+//     保证主 Agent 主路径下的 JSON 输出格式不变。
 type ChatRecord struct {
 	ChatID            string    `json:"chat_id"`
 	SessionID         string    `json:"session_id"`
