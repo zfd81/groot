@@ -71,6 +71,13 @@ llm:
 #  max_concurrent_tasks: 3         # 最大并发执行数
 #  sync_interval: 30s              # 目录同步间隔
 
+# 子 Agent 调度配置（v3.8）
+#subagent:
+#  max_concurrency: 5              # 全局并发上限（FIFO 排队）
+#  exec_timeout: "5m"              # 子 Agent 执行超时（排队不计入）
+#  max_task_length: 16000          # task 参数最大字符数
+#  max_result_length: 8000         # 子 Agent 返回文本截断长度
+
 # 安全配置
 #security:
 #  rate_limit:

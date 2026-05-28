@@ -17,6 +17,7 @@ type Config struct {
 	Attachment AttachmentConfig `yaml:"attachment"`
 	Schedule  ScheduleConfig  `yaml:"schedule"`
 	Message   MessageConfig   `yaml:"message"`
+	SubAgent  SubAgentConfig  `yaml:"subagent"`
 	Security  SecurityConfig  `yaml:"security"`
 	Logging   LoggingConfig   `yaml:"logging"`
 }
@@ -96,6 +97,14 @@ type SenderConf struct {
 	Username string `yaml:"username,omitempty"`
 	Password string `yaml:"password,omitempty"`
 	From     string `yaml:"from,omitempty"`
+}
+
+// SubAgentConfig 子 Agent 调度配置
+type SubAgentConfig struct {
+	MaxConcurrency  int    `yaml:"max_concurrency"`   // 全局 semaphore 大小
+	ExecTimeout     string `yaml:"exec_timeout"`      // 排队结束后开始计时，e.g. "5m"
+	MaxTaskLength   int    `yaml:"max_task_length"`   // task 参数最大字符数
+	MaxResultLength int    `yaml:"max_result_length"` // 子 Agent 返回文本截断长度
 }
 
 // ReactConfig holds ReAct execution limits

@@ -424,6 +424,23 @@ func TestValidateLLMConfigEnvVarSet(t *testing.T) {
 	}
 }
 
+// TestConfig_SubAgentDefaults 验证子 Agent 调度配置的默认值（设计 4.4 节）
+func TestConfig_SubAgentDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.SubAgent.MaxConcurrency != 5 {
+		t.Errorf("expected MaxConcurrency=5, got %d", cfg.SubAgent.MaxConcurrency)
+	}
+	if cfg.SubAgent.ExecTimeout != "5m" {
+		t.Errorf("expected ExecTimeout=5m, got %s", cfg.SubAgent.ExecTimeout)
+	}
+	if cfg.SubAgent.MaxTaskLength != 16000 {
+		t.Errorf("expected MaxTaskLength=16000, got %d", cfg.SubAgent.MaxTaskLength)
+	}
+	if cfg.SubAgent.MaxResultLength != 8000 {
+		t.Errorf("expected MaxResultLength=8000, got %d", cfg.SubAgent.MaxResultLength)
+	}
+}
+
 func TestValidateModelParams_Ranges(t *testing.T) {
 	validModel := ModelConfig{
 		BaseURL:          "https://api.openai.com/v1",

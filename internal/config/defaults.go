@@ -51,6 +51,12 @@ func DefaultConfig() *Config {
 				"email":   {Enabled: false, SMTPPort: 587},
 			},
 		},
+		SubAgent: SubAgentConfig{
+			MaxConcurrency:  5,     // 全局 semaphore 大小
+			ExecTimeout:     "5m",  // 子 Agent 执行超时（排队不计入）
+			MaxTaskLength:   16000, // task 参数最大字符数
+			MaxResultLength: 8000,  // 子 Agent 返回文本截断长度
+		},
 		React: ReactConfig{
 			MaxIterations:   20,
 			MaxTokens:       100000,
