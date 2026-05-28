@@ -89,7 +89,7 @@ func (e *Engine) Run(
 	}
 
 	agentConfig := &adk.ChatModelAgentConfig{
-		Name:          "GrootAgent",
+		Name:          MainAgentName,
 		Description:   "Groot AI Task Execution Agent",
 		Instruction:   systemInstruction,
 		Model:         chatModel,
