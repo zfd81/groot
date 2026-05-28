@@ -87,6 +87,20 @@ func applyDefaults(cfg *Config) {
 		cfg.Schedule.SyncInterval = "30s"
 	}
 
+	// SubAgent defaults
+	if cfg.SubAgent.MaxConcurrency == 0 {
+		cfg.SubAgent.MaxConcurrency = 5
+	}
+	if cfg.SubAgent.ExecTimeout == "" {
+		cfg.SubAgent.ExecTimeout = "5m"
+	}
+	if cfg.SubAgent.MaxTaskLength == 0 {
+		cfg.SubAgent.MaxTaskLength = 16000
+	}
+	if cfg.SubAgent.MaxResultLength == 0 {
+		cfg.SubAgent.MaxResultLength = 8000
+	}
+
 	// Message defaults
 	if cfg.Message.QueueSize == 0 {
 		cfg.Message.QueueSize = 256
