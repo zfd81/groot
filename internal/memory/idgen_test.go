@@ -3,6 +3,7 @@ package memory
 import (
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,5 +36,44 @@ func TestGenerateChildChatID_UniqueWithinMillisecond(t *testing.T) {
 	}
 	if len(seen) < 100 {
 		t.Fatalf("too few samples generated (%d), test environment too slow?", len(seen))
+	}
+}
+
+func TestGenerateChildChatID_ConcurrentNoDuplicates(t *testing.T) {
+	const goroutines = 32
+	const perGoroutine = 200
+	parent := "chat_20260524103000523"
+
+	type result struct {
+		ids []string
+	}
+	results := make(chan result, goroutines)
+
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids := make([]string, perGoroutine)
+			for i := 0; i < perGoroutine; i++ {
+				ids[i] = GenerateChildChatID(parent, "x")
+			}
+			results <- result{ids: ids}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	seen := make(map[string]struct{}, goroutines*perGoroutine)
+	for r := range results {
+		for _, id := range r.ids {
+			if _, dup := seen[id]; dup {
+				t.Fatalf("duplicate child chatID under concurrency: %s", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	if len(seen) != goroutines*perGoroutine {
+		t.Fatalf("expected %d unique IDs, got %d", goroutines*perGoroutine, len(seen))
 	}
 }
