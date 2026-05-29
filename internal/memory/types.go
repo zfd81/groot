@@ -23,7 +23,10 @@ type Message struct {
 	Status            string    `json:"status"`   // completed/failed/cancelled
 	Duration          int       `json:"duration"` // 秒
 	StepsCount        int       `json:"steps_count"`
-	Error             *Error    `json:"error"` // 移除 omitempty，总是输出
+	// 多 Agent 扩展字段（v3.8）：与 ChatRecord 同步，Solo 模式持久化使用的子 Agent 名。
+	// 主 Agent 通常省略；用 omitempty 保持向后兼容。
+	AgentName string `json:"agent_name,omitempty"`
+	Error     *Error `json:"error"` // 移除 omitempty，总是输出
 }
 
 // History 会话历史（history.json 根结构）

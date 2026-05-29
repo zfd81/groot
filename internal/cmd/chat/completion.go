@@ -10,6 +10,7 @@ const (
 	ModeModel                         // 模型选择（直接切换）
 	ModeSkill                         // 技能选择（填入输入框）
 	ModeFile                          // 文件路径补全（@path）
+	ModeAgent                         // Agent 选择（直接切换）
 )
 
 // CompletionModel manages popup visibility, filtering, and selection.
@@ -180,6 +181,7 @@ func (c *CompletionModel) updateGhostText() {
 var SystemCommands = []CompletionItem{
 	{Name: "/exit", Description: "退出聊天"},
 	{Name: "/model", Description: "切换模型"},
+	{Name: "/agent", Description: "切换 Agent"},
 	{Name: "/clear", Description: "清空对话"},
 	{Name: "/help", Description: "显示帮助"},
 	{Name: "/skills", Description: "查看已安装 skill"},

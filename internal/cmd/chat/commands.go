@@ -26,7 +26,7 @@ func ParseCommand(input string) *CommandMsg {
 
 // CommandResult tells the model what action to take after a command.
 type CommandResult struct {
-	Action  string // "quit", "clear", "render", "help_popup", "model_popup", "skills_popup", "switch_model", "fetch", "export", "none"
+	Action  string // "quit", "clear", "render", "help_popup", "model_popup", "agent_popup", "skills_popup", "switch_model", "switch_agent", "fetch", "export", "none"
 	Content string // for "render": text to show in viewport
 	API     string // for "fetch": API path to GET
 }
@@ -45,6 +45,11 @@ func ExecuteCommand(msg CommandMsg) CommandResult {
 			return CommandResult{Action: "switch_model", Content: msg.Args}
 		}
 		return CommandResult{Action: "model_popup"}
+	case "/agent":
+		if msg.Args != "" {
+			return CommandResult{Action: "switch_agent", Content: msg.Args}
+		}
+		return CommandResult{Action: "agent_popup"}
 	case "/skills":
 		return CommandResult{Action: "skills_popup"}
 	case "/mcp":
@@ -105,14 +110,15 @@ func ExportToMarkdown(body []byte) (string, error) {
 }
 
 // HelpText is shown when the user types /help.
-const HelpText = `  
+const HelpText = `
 	命令                     			快捷键
   ───────────────────             	 ───────────────────────────
   /exit         退出       			Enter           发送
-  /model [name] 切换       			Alt+Enter / Shift+Enter 换行
-  /clear        新对话       		  Tab             补全
-  /help         帮助       			ESC             关闭 / 取消
-  /skills       技能       			Ctrl+C          退出
+  /model [name] 切换模型   			Alt+Enter / Shift+Enter 换行
+  /agent [name] 切换 Agent 			Tab             补全
+  /clear        新对话       		  ESC             关闭 / 取消
+  /help         帮助       			Ctrl+C          退出
+  /skills       技能
   /mcp          工具
   /export       导出
 	`

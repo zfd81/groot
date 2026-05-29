@@ -60,6 +60,11 @@ type ModelsListMsg struct {
 	Default string
 }
 
+// AgentsListMsg carries the agent list fetched from the /agents API
+type AgentsListMsg struct {
+	Agents []CompletionItem
+}
+
 // CommandMsg carries a parsed system command from user input
 type CommandMsg struct {
 	Cmd  string

@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
+	"github.com/cloudwego/eino/components/tool"
+	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
@@ -51,6 +54,7 @@ type Task struct {
 	Round               int
 	HistoryMessages     []memory.Message
 	ModelName           string
+	AgentName           string // Solo 模式时为子 Agent 名；编排模式空字符串
 }
 
 // TaskError represents task error
@@ -80,11 +84,14 @@ type ProgressInfo struct {
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
-	memoryManager *memory.Manager
-	middlewares   []adk.ChatModelAgentMiddleware
-	mcpManager    *mcp.Manager
-	config        config.Config
-	logger        *logger.Logger
+	memoryManager     *memory.Manager
+	middlewares       []adk.ChatModelAgentMiddleware
+	mcpManager        *mcp.Manager
+	subAgentRegistry  *SubAgentRegistry
+	tokenAccumulators *TokenAccumulators
+	runtimeState      *RuntimeState
+	config            config.Config
+	logger            *logger.Logger
 }
 
 // NewExecutor creates a new task executor
@@ -92,15 +99,20 @@ func NewExecutor(
 	memMgr *memory.Manager,
 	middlewares []adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
+	subAgentReg *SubAgentRegistry,
+	runtime *RuntimeState,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
-		memoryManager: memMgr,
-		middlewares:   middlewares,
-		mcpManager:    mcpMgr,
-		config:        cfg,
-		logger:        log,
+		memoryManager:     memMgr,
+		middlewares:       middlewares,
+		mcpManager:        mcpMgr,
+		subAgentRegistry:  subAgentReg,
+		tokenAccumulators: NewTokenAccumulators(),
+		runtimeState:      runtime,
+		config:            cfg,
+		logger:            log,
 	}
 }
 
@@ -115,14 +127,130 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		}
 	}
 
-	// Create engine using eino
-	engine := NewEngine(
-		e.config.LLM,
-		e.middlewares,
-		e.mcpManager,
-		e.config.React,
-		e.logger,
+	// 区分 Solo / 编排模式：
+	// - Solo：task.AgentName 指向已注册子 Agent，使用其 Instruction/MCP/Skill 直接执行
+	// - 编排（默认/主 Agent）：挂载 call_agent 工具 + 打开 EmitInternalEvents
+	var (
+		agentName      = MainAgentName
+		agentMdContent = ""
+		mcpMgr         = e.mcpManager
+		middlewares    = e.middlewares
+		extraTools     []tool.BaseTool
+		emitInternal   = false
+		soloErr        error
 	)
+
+	if task.AgentName != "" && task.AgentName != MainAgentName {
+		// Solo 模式
+		agentName = task.AgentName
+		if e.subAgentRegistry == nil {
+			soloErr = fmt.Errorf("子 Agent 注册表未初始化")
+		} else if entry, ok := e.subAgentRegistry.Get(task.AgentName); !ok {
+			soloErr = fmt.Errorf("子 Agent 不存在: %s", task.AgentName)
+		} else {
+			agentMdContent = entry.Instruction
+			mcpMgr = entry.MCPManager
+			// agent.md 显式声明的 model 在 Solo 模式下覆盖 task.ModelName，
+			// 与 BuildAgentTool 中的 AgentMdModel 优先级语义一致。
+			if entry.AgentMdModel != "" {
+				task.ModelName = entry.AgentMdModel
+			}
+			if entry.SkillBK != nil {
+				mw, err := einoskill.NewMiddleware(parentCtx, &einoskill.Config{Backend: entry.SkillBK})
+				if err == nil {
+					middlewares = []adk.ChatModelAgentMiddleware{mw}
+				} else {
+					// skill 中间件构建失败时降级为「无 skill」继续执行子 Agent，
+					// 用户能感知到 skill 未生效，所以必须明确 log。
+					e.logger.Error("子 Agent skill 中间件创建失败",
+						zap.String("agent", task.AgentName),
+						zap.Error(err))
+					middlewares = nil
+				}
+			} else {
+				middlewares = nil
+			}
+			// Solo 模式不挂 call_agent；emitInternal 保持 false
+		}
+	} else {
+		// 编排模式 - 主 Agent；当 registry 不为 nil 时才挂 call_agent
+		if e.subAgentRegistry != nil {
+			execTimeout, _ := time.ParseDuration(e.config.SubAgent.ExecTimeout)
+			if execTimeout <= 0 {
+				execTimeout = 5 * time.Minute
+			}
+			callAgent := NewCallAgentTool(CallAgentToolConfig{
+				Registry:          e.subAgentRegistry,
+				ParentChatID:      task.ID,
+				SessionID:         sessionID,
+				MaxTaskLen:        e.config.SubAgent.MaxTaskLength,
+				MaxResultLen:      e.config.SubAgent.MaxResultLength,
+				ExecTimeout:       execTimeout,
+				Memory:            e.memoryManager,
+				RuntimeState:      e.runtimeState,
+				TokenAccumulators: e.tokenAccumulators,
+				Log:               e.logger,
+				ParentRound:       task.Round,
+			})
+			extraTools = []tool.BaseTool{callAgent}
+			emitInternal = true
+		}
+	}
+
+	// Solo 校验失败时直接走错误持久化路径，不创建 engine
+	if soloErr != nil {
+		sse.WriteError(agentName, soloErr.Error())
+		sse.WriteDone()
+		if e.memoryManager != nil {
+			endTime := time.Now()
+			record := &memory.ChatRecord{
+				ChatID:      task.ID,
+				SessionID:   sessionID,
+				Round:       task.Round,
+				Timestamp:   endTime,
+				StartedAt:   task.StartTime,
+				EndedAt:     endTime,
+				Instruction: task.Instruction,
+				Duration:    int(endTime.Sub(task.StartTime).Seconds()),
+				Attachments: task.Attachments,
+				Status:      "failed",
+				Error:       &memory.Error{Code: "subagent_unavailable", Message: soloErr.Error()},
+				AgentName:   task.AgentName,
+			}
+			if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
+				e.logger.Error("保存对话记录失败: " + saveErr.Error())
+			}
+			msg := &memory.Message{
+				ChatID:      task.ID,
+				Round:       task.Round,
+				Timestamp:   endTime,
+				Instruction: task.Instruction,
+				Attachments: task.Attachments,
+				Duration:    int(endTime.Sub(task.StartTime).Seconds()),
+				Status:      "failed",
+				AgentName:   task.AgentName,
+				Error:       &memory.Error{Code: "subagent_unavailable", Message: soloErr.Error()},
+			}
+			if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
+				e.logger.Error("追加历史消息失败: " + appendErr.Error())
+			}
+		}
+		task.Status = StatusFailed
+		return
+	}
+
+	// Create engine using eino
+	engine := NewEngine(EngineConfig{
+		LLM:                e.config.LLM,
+		Middlewares:        middlewares,
+		MCP:                mcpMgr,
+		ExtraTools:         extraTools,
+		React:              e.config.React,
+		Log:                e.logger,
+		AgentName:          agentName,
+		EmitInternalEvents: emitInternal,
+		TokenAccumulators:  e.tokenAccumulators,
+	})
 
 	// Create context derived from parent (SSE disconnect will cancel parentCtx)
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -138,48 +266,49 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		task.ModelName,
 		task.MultiModalContents,
 		&ProgressCallback{
-			WriteThinking: func(content string) error {
+			WriteThinking: func(agentName, content string) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteThinking(content)
+					return sse.WriteThinking(agentName, content)
 				}
 			},
-			WriteMessage: func(content string) error {
+			WriteMessage: func(agentName, content string) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteMessage(content)
+					return sse.WriteMessage(agentName, content)
 				}
 			},
-			WriteToolCalls: func(toolCalls []ToolCall) error {
+			WriteToolCalls: func(agentName string, toolCalls []ToolCall) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteToolCalls(toolCalls)
+					return sse.WriteToolCalls(agentName, toolCalls)
 				}
 			},
-			WriteFinish: func(reason string) error {
-				return sse.WriteFinish(reason)
+			WriteFinish: func(agentName, reason string) error {
+				return sse.WriteFinish(agentName, reason)
 			},
-			WriteToolResult: func(toolCallID, toolName, content string, isError bool) error {
+			WriteToolResult: func(agentName, toolCallID, toolName, content string, isError bool) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteToolResult(toolCallID, toolName, content, isError)
+					return sse.WriteToolResult(agentName, toolCallID, toolName, content, isError)
 				}
 			},
-			WriteError: func(message string) error {
-				return sse.WriteError(message)
+			WriteError: func(agentName, message string) error {
+				return sse.WriteError(agentName, message)
 			},
 			WriteDone: func() error {
 				return sse.WriteDone()
 			},
 		},
+		agentMdContent,
 	)
 
 	// Calculate duration
@@ -239,6 +368,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			Result:      chatResult,
 			Steps:       chatSteps,
 			Error:       chatError,
+			AgentName:   task.AgentName,
 		}
 
 		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
@@ -261,6 +391,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			StepsCount:  stepsCount,
 			Status:      chatStatus,
 			Result:      chatResult,
+			AgentName:   task.AgentName,
 			Error:       chatError,
 		}
 

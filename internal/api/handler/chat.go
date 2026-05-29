@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
+	"go.uber.org/zap"
 
 	"io"
 
@@ -25,6 +26,7 @@ type ChatHandler struct {
 	runtimeState      *agent.RuntimeState
 	agentExecutor     *agent.Executor
 	mcpManager        *mcp.Manager
+	subAgentRegistry  *agent.SubAgentRegistry
 	attachmentHandler *attachment.Handler
 	config            config.Config
 	log               *logger.Logger
@@ -36,6 +38,7 @@ func NewChatHandler(
 	runtime *agent.RuntimeState,
 	executor *agent.Executor,
 	mcpMgr *mcp.Manager,
+	subAgentReg *agent.SubAgentRegistry,
 	attHandler *attachment.Handler,
 	cfg config.Config,
 	log *logger.Logger,
@@ -45,6 +48,7 @@ func NewChatHandler(
 		runtimeState:      runtime,
 		agentExecutor:     executor,
 		mcpManager:        mcpMgr,
+		subAgentRegistry:  subAgentReg,
 		attachmentHandler: attHandler,
 		config:            cfg,
 		log:               log,
@@ -90,6 +94,29 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 			"message": fmt.Sprintf("模型 '%s' 不存在", modelName),
 		})
 		return
+	}
+
+	// 2.7. 提取 X-Agent-Name header（Solo 模式入口）
+	// 不传或传 "groot" → 编排模式（task.AgentName 为空）
+	// 传非主 Agent 名 → 校验注册表，未注册则 400
+	requestedAgent := string(rc.GetHeader("X-Agent-Name"))
+	if requestedAgent == agent.MainAgentName {
+		requestedAgent = "" // 标准化：传主 Agent 名等价于不传
+	}
+	if requestedAgent != "" {
+		if h.subAgentRegistry == nil {
+			// 配置缺失：服务端 main.go 未注入 SubAgentRegistry。
+			// 实际部署中不应发生（main 总会构建至少空 registry），出现即配置异常。
+			// 用户视角仍是 400 unknown_agent，运维通过日志区分故障源。
+			h.log.Error("X-Agent-Name 校验失败：SubAgentRegistry 未初始化",
+				zap.String("requested_agent", requestedAgent))
+			rc.JSON(400, utils.H{"status": "unknown_agent", "message": fmt.Sprintf("Unknown agent: %s", requestedAgent)})
+			return
+		}
+		if _, ok := h.subAgentRegistry.Get(requestedAgent); !ok {
+			rc.JSON(400, utils.H{"status": "unknown_agent", "message": fmt.Sprintf("Unknown agent: %s", requestedAgent)})
+			return
+		}
 	}
 
 	// 3. 提取 X-Session-ID
@@ -236,6 +263,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		Round:           round,
 		HistoryMessages: historyMessages,
 		ModelName:       modelName,
+		AgentName:       requestedAgent,
 	}
 	// 12. 设置 SSE 响应头
 	rc.Response.Header.Set("X-Session-ID", sessionID)

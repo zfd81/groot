@@ -279,12 +279,6 @@ func startServer(homeDir string, port int) {
 		}
 	}
 
-	// Start skills hot-reload watcher
-	skillsWatcher := skills.NewWatcher(skillsDir, cfg.Skills.HotReload, log)
-	if err := skillsWatcher.Start(); err != nil {
-		log.Error("无法启动 Skills watcher", zap.Error(err))
-	}
-
 	// Initialize MCP manager
 	mcpMgr := mcp.NewManager(log)
 
@@ -323,8 +317,29 @@ func startServer(homeDir string, port int) {
 	msgLayer.Start()
 	log.Info("消息层已启动")
 
+	// Load sub-agents (fixed directory: {GROOT_HOME}/subagents)
+	subAgentDir := filepath.Join(homeDir, "subagents")
+	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
+	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
+
+	// Start skills hot-reload watcher（同时监听主 Agent 与子 Agent skills）。
+	// 子 Agent skill 变更回调：第一期仅 log——einoskill backend 没有公开的 Rescan API，
+	// 真正热刷新留作后续优化（Task 21 文档同步阶段记录）。
+	skillsWatcher := skills.NewWatcher(skillsDir, subAgentDir, cfg.Skills.HotReload, log,
+		skills.NewSubAgentReloadCallback(log, func(name string) bool {
+			if subAgentReg == nil {
+				return false
+			}
+			_, ok := subAgentReg.Get(name)
+			return ok
+		}),
+	)
+	if err := skillsWatcher.Start(); err != nil {
+		log.Error("无法启动 Skills watcher", zap.Error(err))
+	}
+
 	// Create executor (used by both API server and schedule runner)
-	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, *cfg, log)
+	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
 
 	// Declare schedule module variables (used by leader callbacks and API server)
 	var sched *scheduler.Scheduler
@@ -427,7 +442,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, &scheduleMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -455,6 +470,11 @@ func startServer(homeDir string, port int) {
 
 		// Close MCP clients
 		mcpMgr.Close()
+
+		// Close sub-agent registry (closes per-agent MCP managers)
+		if subAgentReg != nil {
+			subAgentReg.Close()
+		}
 
 		log.Info("Groot Agent 已关闭")
 	}()

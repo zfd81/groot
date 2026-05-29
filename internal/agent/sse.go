@@ -44,56 +44,81 @@ func (s *SSEWriter) WriteData(data interface{}) error {
 	return s.w.Flush()
 }
 
-// WriteThinking writes thinking chunk (reasoning_content).
-func (s *SSEWriter) WriteThinking(content string) error {
-	return s.WriteData(map[string]string{
+// WriteThinking writes thinking chunk (reasoning_content); agentName 非空时注入 agent_name。
+func (s *SSEWriter) WriteThinking(agentName, content string) error {
+	payload := map[string]interface{}{
 		"role":              "assistant",
 		"reasoning_content": content,
-	})
+	}
+	if agentName != "" {
+		payload["agent_name"] = agentName
+	}
+	return s.WriteData(payload)
 }
 
-// WriteMessage writes message chunk (content).
-func (s *SSEWriter) WriteMessage(content string) error {
-	return s.WriteData(map[string]string{
+// WriteMessage writes message chunk (content); agentName 非空时注入 agent_name。
+func (s *SSEWriter) WriteMessage(agentName, content string) error {
+	payload := map[string]interface{}{
 		"role":    "assistant",
 		"content": content,
-	})
+	}
+	if agentName != "" {
+		payload["agent_name"] = agentName
+	}
+	return s.WriteData(payload)
 }
 
-// WriteToolCalls writes tool_calls event.
-func (s *SSEWriter) WriteToolCalls(toolCalls []ToolCall) error {
-	return s.WriteData(map[string]interface{}{
+// WriteToolCalls writes tool_calls event; agentName 非空时注入 agent_name。
+func (s *SSEWriter) WriteToolCalls(agentName string, toolCalls []ToolCall) error {
+	payload := map[string]interface{}{
 		"role":       "assistant",
 		"tool_calls": toolCalls,
-	})
+	}
+	if agentName != "" {
+		payload["agent_name"] = agentName
+	}
+	return s.WriteData(payload)
 }
 
-// WriteFinish writes finish_reason event.
-func (s *SSEWriter) WriteFinish(reason string) error {
-	return s.WriteData(map[string]string{
+// WriteFinish writes finish_reason event; agentName 非空时注入 agent_name。
+func (s *SSEWriter) WriteFinish(agentName, reason string) error {
+	payload := map[string]interface{}{
 		"role":          "assistant",
 		"finish_reason": reason,
-	})
+	}
+	if agentName != "" {
+		payload["agent_name"] = agentName
+	}
+	return s.WriteData(payload)
 }
 
 // WriteToolResult writes tool result event. Set isError to true for MCP tool errors
 // so the TUI can render them with error styling instead of silently dropping them.
-func (s *SSEWriter) WriteToolResult(toolCallID, toolName, content string, isError bool) error {
-	return s.WriteData(map[string]interface{}{
+// agentName 非空时注入 agent_name。
+func (s *SSEWriter) WriteToolResult(agentName, toolCallID, toolName, content string, isError bool) error {
+	payload := map[string]interface{}{
 		"role":         "tool",
 		"tool_call_id": toolCallID,
 		"tool_name":    toolName,
 		"content":      content,
 		"error":        isError,
-	})
+	}
+	if agentName != "" {
+		payload["agent_name"] = agentName
+	}
+	return s.WriteData(payload)
 }
 
-// WriteError writes an error SSE event.
-func (s *SSEWriter) WriteError(message string) error {
-	return s.WriteData(map[string]string{
+// WriteError writes an error SSE event; agentName 非空时注入 agent_name。
+func (s *SSEWriter) WriteError(agentName, message string) error {
+	payload := map[string]interface{}{
 		"event":   "error",
 		"message": message,
-	})
+	}
+	if agentName != "" {
+		payload["agent_name"] = agentName
+	}
+	return s.WriteData(payload)
 }
 
 // WriteDone writes [DONE] marker and flushes.

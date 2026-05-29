@@ -2,6 +2,7 @@ package memory
 
 import (
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -40,8 +41,11 @@ func TestGenerateChildChatID_UniqueWithinMillisecond(t *testing.T) {
 }
 
 func TestGenerateChildChatID_ConcurrentNoDuplicates(t *testing.T) {
-	const goroutines = 32
-	const perGoroutine = 200
+	t.Parallel()
+	// 提示运行时使用全部 CPU，最大化跨毫秒乱序触发竞态的概率。
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	const goroutines = 64
+	const perGoroutine = 500
 	parent := "chat_20260524103000523"
 
 	type result struct {
@@ -69,6 +73,48 @@ func TestGenerateChildChatID_ConcurrentNoDuplicates(t *testing.T) {
 		for _, id := range r.ids {
 			if _, dup := seen[id]; dup {
 				t.Fatalf("duplicate child chatID under concurrency: %s", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	if len(seen) != goroutines*perGoroutine {
+		t.Fatalf("expected %d unique IDs, got %d", goroutines*perGoroutine, len(seen))
+	}
+}
+
+// TestGenerateChildChatID_StressManyMs 极端压力测试：高并发覆盖跨毫秒边界。
+// 历史 bug：goroutine 调度延迟导致「老毫秒」在锁内被当作「新毫秒」重置 counter，
+// 生日悖论让 offset 重抽碰撞复现历史 ID。该测试用更高并发量提升竞态触发概率。
+func TestGenerateChildChatID_StressManyMs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress test")
+	}
+	const goroutines = 128
+	const perGoroutine = 1000
+	parent := "chat_20260524103000523"
+
+	type result struct{ ids []string }
+	results := make(chan result, goroutines)
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids := make([]string, perGoroutine)
+			for i := 0; i < perGoroutine; i++ {
+				ids[i] = GenerateChildChatID(parent, "x")
+			}
+			results <- result{ids: ids}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	seen := make(map[string]struct{}, goroutines*perGoroutine)
+	for r := range results {
+		for _, id := range r.ids {
+			if _, dup := seen[id]; dup {
+				t.Fatalf("duplicate child chatID under stress: %s", id)
 			}
 			seen[id] = struct{}{}
 		}

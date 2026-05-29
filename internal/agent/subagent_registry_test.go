@@ -78,7 +78,7 @@ func TestSubAgentRegistry_BuildDescriptionEmpty(t *testing.T) {
 
 // newEmptyRegistry 仅用于测试，跳过启动期扫描。
 func newEmptyRegistry(maxConc int) *SubAgentRegistry {
-	return newRegistryForTest(maxConc)
+	return NewRegistryForTest(maxConc)
 }
 
 // TestScanSubAgentDirs_HappyPath 验证扫描层能正确识别合法子 Agent 并跳过非法目录：
@@ -128,9 +128,38 @@ description: 冒名顶替
 // TestScanSubAgentDirs_MissingRoot 验证扫描根目录不存在时静默返回空切片，不报错。
 func TestScanSubAgentDirs_MissingRoot(t *testing.T) {
 	log := newTestLogger(t)
-	parsed := scanSubAgentDirs("/nonexistent/subagents", log)
+	root := filepath.Join(t.TempDir(), "definitely-missing")
+	parsed := scanSubAgentDirs(root, log)
 	if len(parsed) != 0 {
 		t.Errorf("expected empty result for missing root, got %d", len(parsed))
+	}
+}
+
+// TestScanSubAgentDirs_SymlinkToDir 验证「指向目录的符号链接」也被识别为合法子 Agent。
+// 用户可能用 ln -s 共享子 Agent 模板，os.DirEntry.IsDir() 对符号链接返回 false，
+// 必须通过 os.Stat 解析后才能正确接受。
+func TestScanSubAgentDirs_SymlinkToDir(t *testing.T) {
+	root := t.TempDir()
+	// 真实目录放在 root 之外，以模拟 ln -s 共享场景
+	realDir := filepath.Join(t.TempDir(), "shared-agent")
+	mustMkdir(t, realDir)
+	mustWrite(t, filepath.Join(realDir, "agent.md"), `---
+description: 共享子 Agent
+---
+正文
+`)
+	link := filepath.Join(root, "linked-agent")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlink not supported on this platform: %v", err)
+	}
+
+	log := newTestLogger(t)
+	parsed := scanSubAgentDirs(root, log)
+	if len(parsed) != 1 || parsed[0].name != "linked-agent" {
+		t.Fatalf("expected 1 entry 'linked-agent', got: %+v", parsed)
+	}
+	if parsed[0].md.Description != "共享子 Agent" {
+		t.Errorf("description mismatch: %q", parsed[0].md.Description)
 	}
 }
 

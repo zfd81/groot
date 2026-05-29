@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,6 +209,85 @@ func TestActiveChat_Progress(t *testing.T) {
 
 	if chat.Progress.Percentage != 66 {
 		t.Errorf("Progress.Percentage = %d, want 66", chat.Progress.Percentage)
+	}
+}
+
+// TestRuntimeState_SubAgentTracking 验证 AddSubAgent/RemoveSubAgent 正确维护
+// ChatProgress.SubAgents 列表，且对未注册的 session 是 no-op。
+func TestRuntimeState_SubAgentTracking(t *testing.T) {
+	r := NewRuntimeState()
+	_, _ = r.Register("sess", "chat")
+	r.AddSubAgent("sess", "db-agent")
+	r.AddSubAgent("sess", "weather-agent")
+	c, _ := r.Get("sess")
+	if len(c.Progress.SubAgents) != 2 {
+		t.Fatalf("expected 2 sub_agents, got %d", len(c.Progress.SubAgents))
+	}
+	r.RemoveSubAgent("sess", "db-agent")
+	c, _ = r.Get("sess")
+	if len(c.Progress.SubAgents) != 1 || c.Progress.SubAgents[0].Name != "weather-agent" {
+		t.Fatalf("expected only weather-agent, got %+v", c.Progress.SubAgents)
+	}
+
+	// No active chat → no-op (no panic)
+	r.AddSubAgent("missing", "x")
+	r.RemoveSubAgent("missing", "x")
+}
+
+// TestRuntimeState_AddSubAgentConcurrent 验证多 goroutine 并发 AddSubAgent 不丢条目。
+//
+// 在不加锁的旧实现下，原地 append 共享底层数组会导致写覆盖；race detector 也会
+// 直接报错。本测试在 -race 模式下若 AddSubAgent 没有 mu.Lock 必失败。
+func TestRuntimeState_AddSubAgentConcurrent(t *testing.T) {
+	rt := NewRuntimeState()
+	if _, err := rt.Register("sess", "chat"); err != nil {
+		t.Fatal(err)
+	}
+	const N = 100
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rt.AddSubAgent("sess", fmt.Sprintf("agent-%d", i))
+		}(i)
+	}
+	wg.Wait()
+
+	snap := rt.SnapshotProgress("sess")
+	if snap == nil {
+		t.Fatal("snapshot is nil")
+	}
+	if len(snap.SubAgents) != N {
+		t.Errorf("expected %d sub_agents, got %d", N, len(snap.SubAgents))
+	}
+}
+
+// TestRuntimeState_SnapshotIsolatesFromMutation 验证 SnapshotProgress 返回的 slice
+// 不会被后续 Add/Remove 影响——保证 handler 在序列化期间不会读到中间状态。
+func TestRuntimeState_SnapshotIsolatesFromMutation(t *testing.T) {
+	rt := NewRuntimeState()
+	if _, err := rt.Register("sess", "chat"); err != nil {
+		t.Fatal(err)
+	}
+	rt.AddSubAgent("sess", "a")
+	rt.AddSubAgent("sess", "b")
+	snap := rt.SnapshotProgress("sess")
+	if len(snap.SubAgents) != 2 {
+		t.Fatalf("expected 2, got %d", len(snap.SubAgents))
+	}
+	rt.AddSubAgent("sess", "c")
+	rt.RemoveSubAgent("sess", "a")
+	if len(snap.SubAgents) != 2 {
+		t.Errorf("snapshot should be isolated; got %d", len(snap.SubAgents))
+	}
+}
+
+// TestRuntimeState_SnapshotProgress_Nonexistent 验证 session 不存在时返回 nil。
+func TestRuntimeState_SnapshotProgress_Nonexistent(t *testing.T) {
+	rt := NewRuntimeState()
+	if snap := rt.SnapshotProgress("nope"); snap != nil {
+		t.Errorf("expected nil snapshot, got %+v", snap)
 	}
 }
 

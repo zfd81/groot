@@ -128,10 +128,6 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 		return nil, fmt.Errorf("无法创建Skill中间件: %w", err)
 	}
 
-	// Skills hot-reload watcher
-	skillsWatcher := skills.NewWatcher(skillsDir, cfg.Skills.HotReload, log)
-	_ = skillsWatcher.Start()
-
 	// MCP manager
 	mcpMgr := mcp.NewManager(log)
 	if err := mcpMgr.LoadAll(mcpDir); err != nil {
@@ -160,11 +156,29 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	// 注意：不注册 stdout sender，因为 TUI 模式下 fmt.Printf 会破坏终端渲染
 	msgLayer.Start()
 
+	// Load sub-agents (fixed directory: {GROOT_HOME}/subagents)
+	subAgentDir := filepath.Join(homeDir, "subagents")
+	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
+
+	// Skills hot-reload watcher（同时监听主 Agent 与子 Agent skills）。
+	// 子 Agent skill 变更回调：第一期仅 log——einoskill backend 没有公开的 Rescan API，
+	// 真正热刷新留作后续优化。
+	skillsWatcher := skills.NewWatcher(skillsDir, subAgentDir, cfg.Skills.HotReload, log,
+		skills.NewSubAgentReloadCallback(log, func(name string) bool {
+			if subAgentReg == nil {
+				return false
+			}
+			_, ok := subAgentReg.Get(name)
+			return ok
+		}),
+	)
+	_ = skillsWatcher.Start()
+
 	// Create executor
-	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, *cfg, log)
+	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
 
 	// Create API server (schedule disabled in embed mode)
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, nil)
+	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)
 
 	// Start server in goroutine — hertz.Run() blocks, so we need to start it
 	// in the background and then poll for health.

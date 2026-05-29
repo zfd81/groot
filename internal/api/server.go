@@ -40,6 +40,7 @@ func NewServer(
 	skillMiddleware adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
 	exec *agent.Executor,
+	subAgentReg *agent.SubAgentRegistry,
 	scheduleMgr **schedule.Manager,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
@@ -70,20 +71,21 @@ func NewServer(
 	rateLimitMW := middleware.NewRateLimitMiddleware(rateLimiter)
 
 	// Create handlers
-	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, attHandler, cfg, log)
+	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, subAgentReg, attHandler, cfg, log)
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
 	healthH := handler.NewHealthHandler(cfg, skillBackend, mcpMgr, mem, runtime, log)
-	skillsH := handler.NewSkillsHandler(skillBackend)
-	toolsH := handler.NewToolsHandler(mcpMgr, log)
+	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
+	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, log)
+	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
 	modelsH := handler.NewModelsHandler(&cfg)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, toolsH, modelsH, scheduleH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH)
 
 	return &Server{
 		hertz:  h,

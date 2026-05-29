@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
 )
 
@@ -21,6 +22,7 @@ import (
 type Client struct {
 	baseURL   string
 	modelName string
+	agentName string // 空字符串 == 主 Agent
 	sessionID string
 	httpCli   *http.Client
 }
@@ -51,6 +53,12 @@ func (c *Client) SetModel(name string) { c.modelName = name }
 
 // ModelName returns the current model name.
 func (c *Client) ModelName() string { return c.modelName }
+
+// SetAgent 设置当前 Agent。空字符串表示主 Agent。
+func (c *Client) SetAgent(name string) { c.agentName = name }
+
+// AgentName 返回当前 Agent 名（空 == 主 Agent）。
+func (c *Client) AgentName() string { return c.agentName }
 
 // HealthCheck tests whether the service is reachable.
 func (c *Client) HealthCheck(ctx context.Context) error {
@@ -100,6 +108,11 @@ func (c *Client) SendChatStream(instruction string, attachments []types.Attachme
 			req.Header.Set("X-Session-ID", c.sessionID)
 		}
 		req.Header.Set("X-Model-Name", c.modelName)
+		// 仅在子 Agent 模式下携带 X-Agent-Name；主 Agent (空串或 MainAgentName) 不发，
+		// 减小后端处理负担（chat handler 会显式忽略主 Agent 名）。
+		if c.agentName != "" && c.agentName != agent.MainAgentName {
+			req.Header.Set("X-Agent-Name", c.agentName)
+		}
 
 		resp, err := c.httpCli.Do(req)
 		if err != nil {

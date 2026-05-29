@@ -88,15 +88,17 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	rc.JSON(200, utils.H{
-		"status":       "success",
-		"session_id":   sessionID,
+		"status":     "success",
+		"session_id": sessionID,
 		"chat": utils.H{
 			"chat_id":      activeChat.ChatID,
 			"status":       activeChat.Status,
 			"started_at":   activeChat.StartTime.Format(time.RFC3339),
 			"elapsed_time": duration,
 			"round":        round,
-			"progress":     activeChat.Progress,
+			// 通过 SnapshotProgress 取深拷贝，避免在 JSON 序列化期间被
+			// AddSubAgent/RemoveSubAgent 等并发写者修改底层 SubAgents slice。
+			"progress": h.runtimeState.SnapshotProgress(sessionID),
 		},
 	})
 }

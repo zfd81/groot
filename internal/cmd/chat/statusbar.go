@@ -9,6 +9,7 @@ import (
 // StatusBar holds and renders the bottom status bar state.
 type StatusBar struct {
 	ModelName string
+	AgentName string // 空串 == 主 Agent，渲染时显示为 "groot"
 	SessionID string
 	Round     int
 	Width     int
@@ -18,6 +19,7 @@ type StatusBar struct {
 func NewStatusBar(modelName string) StatusBar {
 	return StatusBar{
 		ModelName: modelName,
+		AgentName: "groot",
 		SessionID: "新会话",
 		Round:     0,
 	}
@@ -25,7 +27,11 @@ func NewStatusBar(modelName string) StatusBar {
 
 // View renders the status bar as a single line: left | center | right.
 func (s StatusBar) View() string {
-	left := fmt.Sprintf("模型: %s", s.ModelName)
+	agent := s.AgentName
+	if agent == "" {
+		agent = "groot"
+	}
+	left := fmt.Sprintf("模型: %s | Agent: %s", s.ModelName, agent)
 	mid := fmt.Sprintf("会话: %s", s.SessionID)
 	right := fmt.Sprintf("对话: 第 %d 轮", s.Round)
 

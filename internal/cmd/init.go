@@ -64,7 +64,7 @@ func RunInit(homeDir string) error {
 	}
 
 	// 创建子目录
-	subDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
+	subDirs := []string{"skills", "mcp", "subagents", "memory", "logs", "cluster/members"}
 	for _, dir := range subDirs {
 		if err := createDir(filepath.Join(homeDir, dir), "目录 "+dir, false); err != nil {
 			return err
@@ -73,6 +73,11 @@ func RunInit(homeDir string) error {
 
 	// 创建配置文件
 	if err := createConfigFile(homeDir); err != nil {
+		return err
+	}
+
+	// 创建默认 GROOT.md（含子 Agent 调度引导段）
+	if err := createGrootMdFile(homeDir); err != nil {
 		return err
 	}
 
@@ -130,6 +135,43 @@ func createConfigFile(homeDir string) error {
 	}
 
 	fmt.Println("配置文件 config.yaml 创建成功")
+	return nil
+}
+
+// defaultGrootMdContent 是 groot init 写入的默认 GROOT.md 内容；
+// 末尾「子 Agent 调度」段引导主 Agent 在拥有 call_agent 工具时如何使用子 Agent。
+const defaultGrootMdContent = `# GROOT.md
+
+本文件是主 Agent 的全局指导，每次对话都会作为 system 提示注入。请在此处填写你想让主 Agent 始终遵守的规则、风格、目标等。
+
+## 子 Agent 调度
+
+当你拥有 ` + "`call_agent`" + ` 工具时，意味着系统中注册了一些专门的子 Agent。请遵循：
+
+- **按需调用**：只在子 Agent 的 description 与子任务匹配时才调用
+- **逐个调用**：建议先调一个，确认返回足够信息后再决定是否调下一个；避免盲目并行
+- **明确传参**：task 参数必须包含完整上下文，因为子 Agent 看不到主对话历史
+- **附件引用**：如需子 Agent 访问附件，在 task 中显式写明附件路径
+`
+
+// createGrootMdFile 在 homeDir 下写入默认 GROOT.md；已存在则跳过避免覆盖用户自定义内容。
+func createGrootMdFile(homeDir string) error {
+	path := filepath.Join(homeDir, "GROOT.md")
+
+	_, err := os.Stat(path)
+	if err == nil {
+		fmt.Println("GROOT.md 已存在，跳过创建")
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("检查 GROOT.md 失败: %w", err)
+	}
+
+	if err := os.WriteFile(path, []byte(defaultGrootMdContent), 0644); err != nil {
+		return fmt.Errorf("创建 GROOT.md 失败: %w", err)
+	}
+
+	fmt.Println("GROOT.md 创建成功")
 	return nil
 }
 

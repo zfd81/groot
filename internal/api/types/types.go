@@ -207,3 +207,17 @@ type ErrorResponse struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 }
+
+// AgentInfo 列出 Agent 接口的单条信息（GET /agents 响应元素）。
+// 每个 Agent 携带其 skills 列表摘要；skills 仅包含 name/description，详情走 GET /skills。
+type AgentInfo struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Skills      []SkillInfo `json:"skills"`
+}
+
+// AgentsResponse 是 GET /agents 的完整响应体。
+// 主 Agent（"groot"）始终位于 Agents[0]，其余按字典序排列。
+type AgentsResponse struct {
+	Agents []AgentInfo `json:"agents"`
+}

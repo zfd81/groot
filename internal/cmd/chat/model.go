@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 
@@ -45,6 +46,8 @@ type Model struct {
 	skillsList        []CompletionItem
 	availableModels   []CompletionItem
 	pendingModelAction string // "" = none, "popup" = show popup after fetch, otherwise model name to switch to
+	availableAgents    []CompletionItem
+	pendingAgentAction string // "" = none, "popup" = show popup after fetch, otherwise agent name to switch to
 
 	embedServer interface{ Shutdown() error }
 	embedMode   bool
@@ -87,7 +90,7 @@ func (m *Model) SetEmbedServer(srv interface{ Shutdown() error }) {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.fetchModelsCmd())
+	return tea.Batch(textarea.Blink, m.fetchModelsCmd(), m.fetchAgentsCmd())
 }
 
 // Update implements tea.Model. Central event dispatcher.
@@ -142,6 +145,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		// 把当前 spinner 帧透到 viewport，让 tool_call 渲染分支能在
+		// 「正在进行中的最近一条 tool_call」末尾拼出旋转图标
+		// （skill / call_agent / 普通工具调用期间都生效）。
+		m.viewport.currentSpinner = m.spinner.View()
+		// loading 占位的内容也用同一帧字符
 		if m.loading {
 			for i := range m.viewport.messages {
 				if m.viewport.messages[i].Role == "loading" {
@@ -149,6 +157,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+		}
+		// streaming 中：触发一次 rerender 让 spinner 帧字符的变化反映到屏幕。
+		if m.streaming {
 			m.viewport.rerender()
 			return m, cmd
 		}
@@ -201,6 +212,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.pendingModelAction = ""
+		return m, nil
+
+	case AgentsListMsg:
+		m.availableAgents = msg.Agents
+		switch m.pendingAgentAction {
+		case "popup":
+			items := m.buildAgentPopupItems()
+			m.completion.Show(items)
+			m.completion.Mode = ModeAgent
+			m.input.SetGhostText(m.completion.GhostText())
+		case "":
+			// no pending action
+		default:
+			name := m.pendingAgentAction
+			m.applyAgentSwitch(name)
+		}
+		m.pendingAgentAction = ""
 		return m, nil
 
 	case tea.MouseWheelMsg:
@@ -321,6 +349,16 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.completion.Hide()
 				return m, nil
 			}
+			if m.completion.Mode == ModeAgent {
+				sel := m.completion.Selected()
+				if sel != nil {
+					m.input.textarea.SetValue("/agent " + sel.Name + " ")
+					m.input.textarea.CursorEnd()
+				}
+				m.input.ClearGhostText()
+				m.completion.Hide()
+				return m, nil
+			}
 			return m.handleCompletionSelect()
 		}
 
@@ -361,6 +399,11 @@ func (m Model) handleCompletionSelect() (tea.Model, tea.Cmd) {
 	case ModeModel:
 		m.client.SetModel(sel.Name)
 		m.status.ModelName = sel.Name
+		m.input.Reset()
+		m.completion.Hide()
+		return m, nil
+	case ModeAgent:
+		m.applyAgentSwitch(sel.Name)
 		m.input.Reset()
 		m.completion.Hide()
 		return m, nil
@@ -428,7 +471,10 @@ func (m Model) handleSendMessage() (tea.Model, tea.Cmd) {
 
 	m.viewport.AddMessage(ChatMessage{Role: "loading", Content: m.spinner.View()})
 
-	return m, tea.Batch(m.waitForEvents(), func() tea.Msg { return m.spinner.Tick() })
+	return m, tea.Batch(
+		m.waitForEvents(),
+		func() tea.Msg { return m.spinner.Tick() },
+	)
 }
 
 // handleCommand executes a system command.
@@ -470,6 +516,26 @@ func (m Model) handleCommand(msg CommandMsg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingModelAction = name
 		return m, m.fetchModelsCmd()
+
+	case "agent_popup":
+		if len(m.availableAgents) > 0 {
+			items := m.buildAgentPopupItems()
+			m.completion.Show(items)
+			m.completion.Mode = ModeAgent
+			m.input.SetGhostText(m.completion.GhostText())
+			return m, nil
+		}
+		m.pendingAgentAction = "popup"
+		return m, m.fetchAgentsCmd()
+
+	case "switch_agent":
+		name := result.Content
+		if len(m.availableAgents) > 0 {
+			m.applyAgentSwitch(name)
+			return m, nil
+		}
+		m.pendingAgentAction = name
+		return m, m.fetchAgentsCmd()
 
 	case "fetch":
 		return m, m.doFetchAPI(result.API)
@@ -532,10 +598,9 @@ func (m Model) handleSseEvent(event SseEvent) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.loading {
-		m.loading = false
-		m.removeLoadingMessage()
-	}
+	// 任何事件到达时先把当前的 loading 占位删掉，避免它残留在被新内容追加之前的位置；
+	// 处理完事件后会按需重新追加（见末尾 maybeAppendLoading）。
+	m.removeLoadingMessage()
 
 	eType := classifyEvent(event)
 
@@ -600,17 +665,20 @@ func (m Model) handleSseEvent(event SseEvent) (tea.Model, tea.Cmd) {
 		case "length":
 			m.viewport.AddMessage(ChatMessage{Role: "length"})
 		}
+		// finish_reason 是终态（继续流式时上游会再发别的事件），不追加 loading
+		m.loading = false
+		return m, m.waitForEvents()
 
 	case "error":
 		m.streaming = false
-		if m.loading {
-			m.loading = false
-			m.removeLoadingMessage()
-		}
+		m.loading = false
 		m.viewport.AddMessage(ChatMessage{Role: "error", Content: event.Message})
 		return m, nil
 	}
 
+	// 流式期间在尾部追加新 loading 占位，让"调用工具/skill/子 Agent 期间"也有动画反馈。
+	// 若尾消息已经是 assistant 流式中则跳过——内容增长本身就是反馈，再叠 spinner 会闪。
+	m.maybeAppendLoading()
 	return m, m.waitForEvents()
 }
 
@@ -623,6 +691,27 @@ func (m *Model) removeLoadingMessage() {
 			break
 		}
 	}
+}
+
+// maybeAppendLoading 在流式期间的事件之间追加一个 loading 占位，使
+// "调用工具 / skill / 子 Agent 期间"也有 spinner 动画反馈。
+//
+// 跳过条件（保持已有视觉反馈不冲突）：
+//   - 不在 streaming 状态
+//   - 尾部消息已是 assistant 流式中（内容增长本身就是反馈）
+//   - 尾部消息已是 thinking（reasoning 流式增长本身就是反馈）
+func (m *Model) maybeAppendLoading() {
+	if !m.streaming {
+		return
+	}
+	if n := len(m.viewport.messages); n > 0 {
+		switch m.viewport.messages[n-1].Role {
+		case "assistant", "thinking", "loading":
+			return
+		}
+	}
+	m.loading = true
+	m.viewport.AddMessage(ChatMessage{Role: "loading", Content: m.spinner.View()})
 }
 
 // fetchSkillsCmd fetches the skill list from the API and returns a SkillsListMsg.
@@ -675,6 +764,30 @@ func (m Model) fetchModelsCmd() tea.Cmd {
 	}
 }
 
+// fetchAgentsCmd fetches the agent list from the /agents API.
+func (m Model) fetchAgentsCmd() tea.Cmd {
+	return func() tea.Msg {
+		body, err := m.client.FetchJSON("/agents")
+		if err != nil {
+			return StreamErrorMsg{Err: fmt.Errorf("获取 Agent 列表失败: %w", err)}
+		}
+		var resp struct {
+			Agents []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"agents"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return StreamErrorMsg{Err: fmt.Errorf("解析 Agent 列表失败: %w", err)}
+		}
+		items := make([]CompletionItem, len(resp.Agents))
+		for i, a := range resp.Agents {
+			items[i] = CompletionItem{Name: a.Name, Description: a.Description}
+		}
+		return AgentsListMsg{Agents: items}
+	}
+}
+
 // buildModelPopupItems builds the CompletionItem list for the model popup,
 // marking the currently active model with a checkmark.
 func (m Model) buildModelPopupItems() []CompletionItem {
@@ -699,6 +812,66 @@ func (m Model) findModelByName(name string) *CompletionItem {
 		}
 	}
 	return nil
+}
+
+// applyAgentSwitch 切换 Agent 并新建会话；name 为空或 MainAgentName 视为切回主 Agent。
+// 未识别的 name 触发 popup 让用户重选。
+// 警告：本方法 mutates receiver（client/status/sessionID），调用方必须能拿到生效后的 m。
+func (m *Model) applyAgentSwitch(name string) {
+	isMain := name == "" || name == agent.MainAgentName
+	if !isMain && m.findAgentByName(name) == nil {
+		items := m.buildAgentPopupItems()
+		m.completion.Show(items)
+		m.completion.Mode = ModeAgent
+		m.input.SetGhostText(m.completion.GhostText())
+		return
+	}
+	if isMain {
+		m.client.SetAgent("")
+		m.status.AgentName = agent.MainAgentName
+	} else {
+		m.client.SetAgent(name)
+		m.status.AgentName = name
+	}
+	m.clearSession()
+}
+
+// findAgentByName 在缓存的 availableAgents 中按名查找（忽略大小写）。
+func (m Model) findAgentByName(name string) *CompletionItem {
+	for i := range m.availableAgents {
+		if strings.EqualFold(m.availableAgents[i].Name, name) {
+			return &m.availableAgents[i]
+		}
+	}
+	return nil
+}
+
+// buildAgentPopupItems 构建 popup 列表，给当前 Agent 加 ✓ 标记。
+// /agents API 已包含 groot（Task 14），但代码层做去重保险。
+func (m Model) buildAgentPopupItems() []CompletionItem {
+	items := make([]CompletionItem, 0, len(m.availableAgents)+1)
+	seenGroot := false
+	for _, item := range m.availableAgents {
+		if item.Name == agent.MainAgentName {
+			seenGroot = true
+		}
+		marker := ""
+		if item.Name == m.status.AgentName ||
+			(item.Name == agent.MainAgentName && (m.status.AgentName == "" || m.status.AgentName == agent.MainAgentName)) {
+			marker = "✓"
+		}
+		items = append(items, CompletionItem{Name: item.Name, Description: marker + " " + item.Description})
+	}
+	if !seenGroot {
+		// 防御性兜底；Task 14 后 /agents 通常会首位返回 groot，正常路径不触发。
+		marker := ""
+		if m.status.AgentName == "" || m.status.AgentName == agent.MainAgentName {
+			marker = "✓"
+		}
+		// 放到最前面
+		items = append([]CompletionItem{{Name: agent.MainAgentName, Description: marker + " 主 Agent"}}, items...)
+	}
+	return items
 }
 
 // checkCompletion evaluates whether the current input should trigger completion.
@@ -776,6 +949,7 @@ func (m Model) waitForEvents() tea.Cmd {
 type waitMsg struct{}
 
 // clearSession resets the TUI state for a new conversation.
+// 注意：不重置 ModelName / AgentName —— 这两项跨会话保留。
 func (m *Model) clearSession() {
 	m.viewport.Clear()
 	m.client.SetSessionID("")

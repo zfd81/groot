@@ -94,17 +94,204 @@ Session（会话）
 
 ---
 
-## 二、快速开始
+## 二、安装部署
 
-> 如果还没安装 Groot，请先查看 [四、安装部署](#四安装部署)。
+### 2.1 系统要求
 
-### 2.1 初始化
+| 要求 | 说明 |
+|------|------|
+| 操作系统 | Linux / macOS / Windows |
+| Go 版本 | Go 1.21+（仅源码编译需要） |
+| 内存 | 建议 512MB+ |
+| 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
+
+### 2.2 安装方式
+
+#### 方式一：直接运行（推荐）
+
+下载预编译的二进制文件：
+
+```bash
+# Linux
+wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-linux-amd64
+chmod +x groot-linux-amd64
+mv groot-linux-amd64 /usr/local/bin/groot
+
+# macOS
+wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-darwin-arm64
+chmod +x groot-darwin-arm64
+mv groot-darwin-arm64 /usr/local/bin/groot
+```
+
+#### 方式二：源码编译
+
+```bash
+# 克隆仓库
+git clone https://github.com/zfd81/groot.git
+cd groot
+
+# 编译当前平台
+go build -o bin/groot ./cmd/groot
+
+# 或使用 Makefile
+make build            # 编译当前平台
+make build-all        # 编译所有平台（macOS/Linux/Windows）
+
+# 运行
+./bin/groot
+```
+
+**Makefile 编译命令：**
+
+| 命令 | 说明 |
+|------|------|
+| `make build` | 编译当前平台可执行文件 |
+| `make build-all` | 编译三个平台可执行文件 |
+| `make build-darwin` | 编译 macOS ARM64 |
+| `make build-linux` | 编译 Linux AMD64 |
+| `make build-windows` | 编译 Windows AMD64 |
+| `make clean` | 清理编译产物 |
+
+**编译产物：**
+
+| 文件 | 平台 |
+|------|------|
+| `bin/darwin-arm64/groot` | macOS ARM64 |
+| `bin/linux-amd64/groot` | Linux AMD64 |
+| `bin/windows-amd64/groot.exe` | Windows AMD64 |
+
+### 2.3 工作目录结构
+
+Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过环境变量 `GROOT_HOME` 更改。
+
+```
+{GROOT_HOME}/
+├── config.yaml                    # 主配置文件
+├── GROOT.md                       # 项目规范文件（自动注入系统指令）
+├── skills/                        # Skills 目录
+│   └── {skill-name}/SKILL.md      # Skill 定义文件
+├── mcp/                           # MCP 配置目录
+│   └── {mcp-name}.json            # MCP 配置文件
+├── subagents/                     # 子 Agent 目录
+│   └── {agent-name}/              # 单个子 Agent
+│       ├── agent.md               # 子 Agent 定义文件（frontmatter + 系统提示词）
+│       ├── mcp/                   # 子 Agent 专属 MCP 配置（可选）
+│       │   └── {mcp-name}.json
+│       └── skills/                # 子 Agent 专属 Skills（可选）
+│           └── {skill-name}/SKILL.md
+├── memory/                        # 记忆模块目录
+│   ├── temp/                      # 附件处理临时目录
+│   └── {session_id}/              # 会话目录
+│       ├── history.json           # 对话历史（含执行元数据摘要）
+│       ├── attachments/           # 附件目录
+│       │   └── {filename}         # 附件文件
+│       └── chats/                 # 详细执行记录目录
+│           └── chat_{timestamp}.json  # 单次对话完整记录
+├── logs/                          # 日志目录
+│   └── groot-{date}.log           # 日志文件
+├── cluster/                       # 集群管理目录
+│   └── members/                   # 成员注册文件（用于多实例 Leader 选举）
+├── schedules/                     # 定时任务目录
+│   ├── active/                    # 活跃任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   ├── disabled/                  # 已禁用任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   ├── archive/                   # 已归档任务
+│   │   └── {task-id}.json         # 任务定义文件
+│   └── executions/                # 执行记录
+│       └── {task-id}.json         # 历史执行记录
+```
+
+### 2.4 目录说明
+
+**固定目录（不可配置）：**
+
+| 目录/文件 | 说明 |
+|----------|------|
+| `config.yaml` | 主配置文件，控制服务行为 |
+| `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
+| `skills/` | Skills 定义目录（固定位置），支持热插拔 |
+| `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
+| `subagents/` | 子 Agent 定义目录（固定位置），存放各子 Agent 的 `agent.md` 与专属 mcp/skills |
+| `cluster/members/` | 集群成员注册目录（固定位置），存放实例注册文件，用于 Leader 选举 |
+| `schedules/` | 定时任务存储目录（固定位置），active/disabled/archive 三目录状态流转 |
+
+**可配置目录（支持相对/绝对路径）：**
+
+| 目录/文件 | 说明 |
+|----------|------|
+| `memory/` | 会话数据目录（默认位置），可通过 `memory.directory` 配置 |
+| `memory/temp/` | 附件处理临时目录（固定在 memory 目录下） |
+| `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
+| `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
+| `logs/` | 日志存储目录（默认位置），可通过 `logging.file.directory` 配置 |
+
+> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见 [四、配置详解](#四配置详解)。固定目录（skills/mcp/temp）位置不可更改。
+
+### 2.5 工作目录配置方式
+
+| 方式 | 示例 | 优先级 |
+|------|------|--------|
+| 环境变量 | `export GROOT_HOME=/opt/groot` | 高 |
+| 默认值 | `~/.groot` | 低 |
+
+### 2.6 环境变量
+
+**固定环境变量：**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `GROOT_HOME` | 工作目录 | `~/.groot` |
+
+**用户自定义环境变量：**
+
+配置文件中 `${VAR_NAME}` 引用的变量名由用户自定义，是否需要设置取决于配置文件的写法：
+
+```bash
+# 示例（变量名可自定义）
+export OPENAI_API_KEY="sk-xxxx"
+export ANTHROPIC_API_KEY="sk-ant-xxxx"
+```
+
+> **判断方法：** 配置文件有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
+
+### 2.7 配置文件
+
+初始化后自动生成 `~/.groot/config.yaml`，包含完整配置模板。
+
+**LLM 配置为必填项**，其他所有配置项（server、skills、react、attachment、memory、security、logging 等）均已注释并标注默认值，按需取消注释即可。
+
+> 完整配置项说明见 [四、配置详解](#四配置详解)。
+
+### 2.8 停止服务
+
+```bash
+# 发送终止信号
+kill -SIGTERM <pid>
+
+# 或使用 Ctrl+C（前台运行时）
+```
+
+服务会优雅关闭：
+- 停止接受新请求
+- 等待当前对话完成（超时 30 秒）
+- 停止统一调度器（gocron）
+- 停止消息通知层
+- 关闭 MCP 连接
+- 刷新日志
+- 退出程序
+
+## 三、快速开始
+
+> 如果还没安装 Groot，请先查看 [二、安装部署](#二安装部署)。
+
+### 3.1 初始化
 
 ```bash
 groot init
 ```
 
-### 2.2 配置 LLM
+### 3.2 配置 LLM
 
 编辑 `~/.groot/config.yaml`，填入必填的 LLM 配置：
 
@@ -122,13 +309,13 @@ llm:
 export OPENAI_API_KEY="sk-xxxx"
 ```
 
-### 2.3 启动服务
+### 3.3 启动服务
 
 ```bash
 groot
 ```
 
-### 2.4 第一次调用
+### 3.4 第一次调用
 
 ```bash
 curl -X POST http://localhost:8080/chat \
@@ -136,15 +323,737 @@ curl -X POST http://localhost:8080/chat \
   -d '{"instruction": "你好，请介绍一下你自己"}'
 ```
 
-> 更多安装方式见 [四、安装部署](#四安装部署)，完整配置说明见 [五、配置文件详解](#五配置文件详解)，API 详细说明见 [八、API 详细说明](#八api详细说明)。
+> 更多安装方式见 [二、安装部署](#二安装部署)，完整配置说明见 [四、配置详解](#四配置详解)，API 详细说明见 [八、REST API](#八rest-api)。
 
 ---
 
-## 三、CLI 命令参考
+## 四、配置详解
+
+### 4.1 配置文件位置
+
+首次启动时，Groot 会自动生成默认配置文件 `{GROOT_HOME}/config.yaml`。
+
+### 4.2 完整配置文件示例
+
+```yaml
+# Groot Agent 配置文件
+# 生成时间: 2026-04-18
+
+# Agent 基础配置
+agent:
+  name: groot                      # Agent 名称
+  version: 1.0.0                   # Agent 版本号
+
+# HTTP 服务配置
+server:
+  host: 0.0.0.0                    # 服务监听地址
+  port: 8080                       # 服务监听端口
+
+# LLM 配置（OpenAI兼容协议）
+llm:
+  default_model: gpt-4o             # 默认模型名称
+  models:
+    gpt-4o:                        # 模型配置名称（自定义）
+      base_url: https://api.openai.com/v1    # LLM API 地址
+      api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
+      model: gpt-4o                          # 实际调用时的模型名称
+      max_completion_tokens: 4096            # 最大输出 Token 数
+      temperature: 0.7                       # 输出随机性（0.0~2.0）
+      top_p: 1.0                             # 核采样系数（0.0~1.0）
+      frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
+      presence_penalty: 0.0                  # 存在惩罚（-2.0~2.0）
+      seed: 0                                # 随机种子（0 表示不设置）
+      stop: []                               # 停止序列
+      thinking: false                        # 深度思考模式（Qwen/DeepSeek 等模型）
+    claude-3.5:
+      base_url: https://api.anthropic.com/v1
+      api_key: ${ANTHROPIC_API_KEY}
+      model: claude-3-5-sonnet-20241022
+      max_completion_tokens: 4096
+      temperature: 0.7
+
+# Skills 热插拔配置
+skills:
+  hot_reload:
+    enabled: true                    # 是否启用 Skills 热插拔
+    debounce_delay: 2                # 防抖延迟（秒）
+
+# ReAct 执行配置
+react:
+  max_iterations: 20               # 最大循环次数，-1 表示不限制
+  max_tokens: 100000               # 整个对话所有LLM调用的总Token消耗上限
+  step_timeout: 60                 # 单步执行超时（秒），-1 表示不限制
+  error_retry: 2                   # 单步失败重试次数
+  nesting_max_depth: 3             # Skills嵌套最大深度，-1 表示不限制
+
+# 附件处理配置
+attachment:
+  max_size: 50                     # 单个附件最大大小（MB）
+  max_total_size: 100              # 附件总大小上限（MB）
+  max_count: 10                    # 附件数量上限
+  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, jpeg, zip]  # 允许的附件类型
+
+# 记忆模块配置
+memory:
+  directory: memory                # 记忆目录（相对路径或绝对路径）
+  retention_days: 7                # 会话保留天数
+  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
+
+# 定时任务调度配置
+schedule:
+  enabled: false                   # 是否允许在对话中创建定时任务（默认关闭，不影响系统清理任务）
+  max_concurrent_tasks: 10         # 最大并发执行任务数
+  sync_interval: 30s               # 定期同步间隔（对比 active/ 目录与调度器状态，修复不一致）
+
+# 消息通知配置
+message:
+  queue_size: 100                  # 消息队列容量
+  workers: 3                       # 消息发送 worker 数量
+  senders:
+    webhook:
+      enabled: false               # 是否启用 webhook 通知
+      url: ""                      # Webhook URL（接收 POST JSON）
+    email:
+      enabled: false               # 是否启用邮件通知
+      smtp_host: ""                # SMTP 服务器地址
+      smtp_port: 587               # SMTP 端口
+      username: ""                 # SMTP 用户名
+      password: ""                 # SMTP 密码
+      from: ""                     # 发件人地址
+
+# 安全配置
+security:
+  rate_limit:
+    enabled: false                 # 是否启用速率限制（默认关闭）
+    global_qps: 0                  # 全局 QPS 限制（0=不限制）
+    global_concurrency: 0          # 全局并发限制（0=不限制）
+    default_qps: 10                # 每 API Key 默认 QPS
+    default_concurrency: 5         # 每 API Key 默认并发数
+    cleanup_interval: 5m           # 空闲限流器清理间隔
+  auth:
+    enabled: true                  # 是否开启认证
+    type: api_key                  # 认证类型
+    api_key:
+      header_name: X-API-Key       # 认证 Header 名称
+      keys:
+        - name: default            # Key 名称（唯一标识）
+          key: ${GROOT_API_KEY}    # Key 值（支持环境变量引用）
+          permissions: all         # 权限范围：all 或 [chat, status, ...]
+
+# 日志配置
+logging:
+  level: info                      # 日志级别：debug/info/warn/error
+  format: json                     # 日志格式：json/text
+  output: [stdout, file]           # 输出目标：stdout/file（可同时输出）
+  file:
+    directory: logs                # 日志文件目录
+    filename_pattern: groot-{date}.log  # 文件名模式，{date} 替换为 YYYY-MM-DD
+    max_age: 7                     # 日志保留天数
+    max_size: 100                  # 单个日志文件最大大小（MB），超过则轮转
+    compress: false                # 是否压缩旧日志文件
+```
+
+### 4.3 配置字段详解
+
+#### Agent 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `name` | 否 | Agent 名称，用于日志标识，默认 `groot` |
+| `version` | 否 | Agent 版本号，默认 `1.0.0` |
+
+#### Server 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `host` | 否 | 监听地址，默认 `0.0.0.0`（所有网卡） |
+| `port` | 否 | 监听端口，默认 `8080` |
+
+#### LLM 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `default_model` | **是** | 默认模型名称，对应 models 中的某个 key，修改后需重启 |
+| `models.{name}.base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
+| `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
+| `models.{name}.model` | **是** | 实际调用时的模型名称 |
+| `models.{name}.max_completion_tokens` | 否 | 最大输出 Token 数，默认 `4096` |
+| `models.{name}.temperature` | 否 | 输出随机性（0.0~2.0），默认 `0.7` |
+| `models.{name}.top_p` | 否 | 核采样系数（0.0~1.0），默认 `1.0` |
+| `models.{name}.frequency_penalty` | 否 | 频率惩罚（-2.0~2.0），默认 `0.0` |
+| `models.{name}.presence_penalty` | 否 | 存在惩罚（-2.0~2.0），默认 `0.0` |
+| `models.{name}.seed` | 否 | 随机种子，`0` 表示不设置 |
+| `models.{name}.stop` | 否 | 停止序列列表，默认空 |
+| `models.{name}.thinking` | 否 | 深度思考模式（Qwen/DeepSeek 等），默认 `false` |
+
+#### Skills 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
+| `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
+
+> **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。
+
+#### ReAct 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `max_iterations` | 否 | 最大循环次数，默认 `20`，`-1` 表示不限 |
+| `max_tokens` | 否 | 整个对话所有LLM调用的总Token消耗上限，默认 `100000`，`-1` 表示不限 |
+| `step_timeout` | 否 | 单步执行超时（秒），默认 `60`，`-1` 表示不限 |
+| `error_retry` | 否 | 单步失败重试次数，默认 `2` |
+| `nesting_max_depth` | 否 | Skills 嵌套最大深度，默认 `3`，`-1` 表示不限 |
+
+#### Attachment 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `max_size` | 否 | 单个附件最大大小（MB），默认 `50` |
+| `max_total_size` | 否 | 附件总大小上限（MB），默认 `100` |
+| `max_count` | 否 | 单次请求最大附件数量，默认 `10` |
+| `allowed_types` | 否 | 允许的文件扩展名列表，默认常见文档和图片类型 |
+
+#### Memory 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `directory` | 否 | 记忆目录，相对路径拼接工作目录，绝对路径直接使用，默认 `memory` |
+| `retention_days` | 否 | 会话保留天数，超过后自动清理，默认 `7`。清理依据目录最后修改时间（非创建时间） |
+| `cleanup_schedule` | 否 | 清理任务执行时间（HH:MM），默认 `02:00`，由统一调度器按天执行 |
+
+#### Schedule 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `enabled` | 否 | 是否允许在对话中创建定时任务，默认 `false`。关闭时对话中无法创建/管理任务（系统级清理和同步不受影响） |
+| `max_concurrent_tasks` | 否 | 最大并发执行任务数，超出的任务跳过当次执行，默认 `3` |
+| `sync_interval` | 否 | 定期同步间隔（Go duration 格式，如 `30s`/`1m`），对比 active/ 目录与调度器状态，自动修复不一致，默认 `30s` |
+
+#### Message 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `100` |
+| `workers` | 否 | 消息发送 worker 数量，默认 `3` |
+| `senders.webhook.enabled` | 否 | 是否启用 webhook 通知，默认 `false` |
+| `senders.webhook.url` | 否 | Webhook URL，任务完成/失败时 POST JSON 到该地址 |
+| `senders.email.enabled` | 否 | 是否启用邮件通知，默认 `false` |
+| `senders.email.smtp_host` | 否 | SMTP 服务器地址 |
+| `senders.email.smtp_port` | 否 | SMTP 端口，默认 `587` |
+| `senders.email.username` | 否 | SMTP 认证用户名 |
+| `senders.email.password` | 否 | SMTP 认证密码 |
+| `senders.email.from` | 否 | 发件人邮箱地址 |
+
+> **说明：** stdout sender 始终启用，无需配置。webhook 和 email sender 按需配置。定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道。
+
+#### Security 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `auth.enabled` | 否 | 是否开启认证，默认 `false` |
+| `auth.type` | 否 | 认证类型，目前只支持 `api_key` |
+| `auth.api_key.header_name` | 否 | 认证 Header 名称，默认 `X-API-Key` |
+| `auth.api_key.keys[].name` | 否 | Key 名称（唯一标识） |
+| `auth.api_key.keys[].key` | 否 | Key 值，支持 `${VAR_NAME}` 引用 |
+| `auth.api_key.keys[].permissions` | 否 | 权限范围：`all` 或 `[chat, status, ...]` |
+| `rate_limit.enabled` | 否 | 是否启用速率限制，默认 `false` |
+| `rate_limit.global_qps` | 否 | 全局 QPS 限制，`0` 表示不限制 |
+| `rate_limit.global_concurrency` | 否 | 全局并发限制，`0` 表示不限制 |
+| `rate_limit.default_qps` | 否 | 每 API Key 默认 QPS，默认 `10` |
+| `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
+| `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
+
+> **速率限制说明：**
+> - **匿名降级**：认证开启时按 API Key 名称限流；认证关闭（`auth.enabled: false`）时按客户端 IP 限流
+> - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
+
+#### Logging 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `level` | 否 | 日志级别：`debug`/`info`/`warn`/`error`，默认 `info` |
+| `format` | 否 | 日志格式：`json`/`text`，默认 `json` |
+| `output` | 否 | 输出目标：`[stdout, file]`，可同时输出 |
+| `file.directory` | 否 | 日志文件目录，默认 `logs` |
+| `file.filename_pattern` | 否 | 文件名模式，`{date}` 替换为 YYYY-MM-DD |
+| `file.max_age` | 否 | 日志保留天数，默认 `7` |
+| `file.max_size` | 否 | 单个日志文件最大大小（MB），默认 `100` |
+| `file.compress` | 否 | 是否压缩旧日志文件，默认 `false` |
+
+### 4.4 目录配置说明
+
+所有目录配置支持相对路径和绝对路径：
+
+- **相对路径**：相对于 `~/.groot` 目录（GROOT_HOME）
+- **绝对路径**：直接使用指定路径
+
+示例配置：
+
+```yaml
+# 相对路径示例（目录位于 ~/.groot/memory）
+memory:
+  directory: memory
+
+# 绝对路径示例（目录位于 /data/logs）
+logging:
+  file:
+    directory: /data/logs
+```
+
+可配置的目录包括：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `memory.directory` | `memory` | 会话记忆目录（支持相对/绝对路径） |
+| `logging.file.directory` | `logs` | 日志文件目录（支持相对/绝对路径） |
+
+**固定目录（不可配置）：**
+
+| 目录 | 位置 | 说明 |
+|------|------|------|
+| `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
+| `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
+| `subagents` | `{GROOT_HOME}/subagents` | 子 Agent 定义目录 |
+| `schedules` | `{GROOT_HOME}/schedules` | 定时任务存储目录 |
+| `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
+
+### 4.5 权限说明
+
+| 权限 | 对应 API | 说明 |
+|------|---------|------|
+| `chat` | POST /chat | 执行对话 |
+| `status` | GET /chat/status/{sid} | 查询对话状态 |
+| `detail` | GET /chat/{sid} | 查询对话详情 |
+| `session` | GET /sess/{sid} | 查询会话详情 |
+| `history` | GET /sess/history | 查询会话列表 |
+| `skills` | GET /skills | 查看 Skills 列表 |
+| `tools` | GET /tools | 查看工具列表（MCP 工具 + 调度工具） |
+| `schedule` | GET/POST/DELETE /schedule | 管理定时任务 |
+| `health` | GET /health | 健康检查 |
+| `all` | 以上全部 | 全部权限 |
+
+### 4.6 配置热更新
+
+**支持热更新的配置：**
+- Skills 配置：修改 SKILL.md 文件自动生效
+
+**不支持热更新的配置：**
+- LLM 配置、Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置、Schedule 配置、Message 配置需重启服务
+- MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
+
+---
+
+### 4.7 项目规范文件（GROOT.md）
+
+Groot 支持在 `{GROOT_HOME}/GROOT.md` 文件中定义项目规范，这些规范会自动注入到每次对话的系统指令最前面。
+
+**功能特点：**
+- 无需配置开关，默认启用
+- 支持热加载，修改后自动生效
+- 内容始终位于系统指令最前面，优先级最高
+
+**使用示例：**
+
+在 `~/.groot/GROOT.md` 中写入：
+
+```markdown
+# 项目规范
+
+- 使用中文回答
+- 代码风格遵循 Go 标准
+- 优先使用已安装的工具
+```
+
+Groot 每次对话都会自动将这些规范注入系统指令，无需每次手动指定。
+
+**系统指令构建顺序：**
+
+```
+GROOT.md（缓存）
+→ prompt（用户传入）
+→ Skills 指令
+→ 执行规则
+```
+
+---
+
+## 五、扩展能力
+
+本章介绍 Groot 的三个扩展能力：Skills、MCP 工具、多 Agent。
+
+### 5.1 Skills 配置
+
+Skills 目录固定位于 `{GROOT_HOME}/skills`，无需在配置文件中指定。
+
+#### 5.1.1 Skills 目录结构
+
+```
+{GROOT_HOME}/skills/
+├── pdf_analyzer/
+│   └── SKILL.md
+├── code_generator/
+│   └── SKILL.md
+└── data_analyzer/
+    └── SKILL.md
+```
+
+#### 5.1.2 Skill 文件格式
+
+每个 Skill 是一个目录，包含一个 `SKILL.md` 文件，采用 YAML frontmatter + Markdown 格式：
+
+```markdown
+---
+name: pdf_analyzer                    # Skill 名称（全局唯一）
+description: "分析PDF文档并生成摘要"   # Skill 描述（Agent 工具列表展示）
+dependencies: []                      # 依赖的其他 Skill（可选）
+---
+
+# PDF 文档分析
+
+你是一个专业的 PDF 文档分析助手。
+
+## 执行步骤
+
+1. 使用 file_operations.file_read 工具读取 PDF 文件
+2. 提取文档的关键内容和结构
+3. 根据文档类型生成相应的结构化摘要
+4. 输出结构化的分析结果
+
+## 输出格式
+
+{
+  "document_type": "文档类型",
+  "title": "文档标题",
+  "key_points": ["关键要点"],
+  "summary": "详细摘要",
+  "recommendations": ["建议"]
+}
+```
+
+#### 5.1.3 热插拔机制
+
+- 启用 `skills.hot_reload.enabled: true` 后，修改 `SKILL.md` 自动生效
+- 防抖延迟 `debounce_delay` 防止编辑过程中频繁触发加载
+- 新增 Skill：创建目录和 `SKILL.md` 文件
+- 修改 Skill：编辑 `SKILL.md` 内容
+- 删除 Skill：删除对应目录
+
+---
+
+### 5.2 MCP 工具配置
+
+#### 5.2.1 MCP 配置目录（固定位置）
+
+MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定。
+
+```
+{GROOT_HOME}/mcp/
+├── database_tool.json     # 数据库查询工具（stdio 类型）
+├── web_parser.json        # 网页解析服务（sse 类型）
+└── web_search.json        # 网络搜索服务（streamable_http 类型）
+```
+
+每个 MCP 工具使用独立的 JSON 配置文件。添加、修改或删除 MCP 配置后需要重启服务才能生效。
+
+#### 5.2.2 连接类型
+
+| 类型 | 说明 | 适用场景 |
+|------|------|---------|
+| `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
+| `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
+| `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
+
+#### 5.2.3 MCP 配置示例
+
+**stdio 类型（本地命令行工具）：**
+
+```json
+{
+  "name": "database_tool",
+  "type": "stdio",
+  "description": "数据库查询工具",
+  "isActive": true,
+  "command": "mcp-server-postgres",
+  "args": ["--connection", "${DB_CONNECTION}"],
+  "env": {
+    "DB_CONNECTION": "${DB_CONNECTION}"
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `name` | MCP 名称，用于日志和调试 |
+| `type` | 连接类型，`stdio` 表示通过标准输入输出通信 |
+| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
+| `isActive` | 是否启用，`false` 时跳过加载 |
+| `command` | 要执行的可执行程序名称 |
+| `args` | 命令行参数数组，支持环境变量引用 `${VAR}` |
+| `env` | 环境变量映射，传递给子进程 |
+
+**sse 类型（远程 SSE 服务）：**
+
+```json
+{
+  "name": "WebParser",
+  "type": "sse",
+  "description": "网页解析服务",
+  "isActive": true,
+  "baseUrl": "https://dashscope.aliyuncs.com/api/v1/mcps/WebParser/sse",
+  "headers": {
+    "Authorization": "Bearer ${DASHSCOPE_API_KEY}"
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `name` | MCP 名称，用于日志和调试 |
+| `type` | 连接类型，`sse` 表示 Server-Sent Events（单向推送） |
+| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
+| `isActive` | 是否启用，`false` 时跳过加载 |
+| `baseUrl` | 远程服务的 SSE 接口地址 |
+| `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
+
+**streamable_http 类型（HTTP 流式服务）：**
+
+```json
+{
+  "name": "web_search",
+  "type": "streamable_http",
+  "description": "网络搜索服务",
+  "isActive": true,
+  "baseUrl": "https://mcp-search.example.com/api",
+  "headers": {
+    "X-API-Key": "${SEARCH_API_KEY}"
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `name` | MCP 名称，用于日志和调试 |
+| `type` | 连接类型，`streamable_http` 表示双向流式 HTTP 通信 |
+| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
+| `isActive` | 是否启用，`false` 时跳过加载 |
+| `baseUrl` | 远程服务的 API 地址 |
+| `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
+
+---
+
+### 5.3 多 Agent
+
+Groot 支持在 `~/.groot/subagents/` 下声明子 Agent，每个子 Agent 拥有独立的系统提示词、MCP 工具和 Skills。主 Agent（`groot`）可以根据指令自动调度子 Agent，也可由调用方直接指定子 Agent 执行。
+
+#### 5.3.1 目录结构
+
+```
+~/.groot/subagents/db-agent/
+├── agent.md          # 必填：frontmatter 含 description；正文为系统提示词
+├── mcp/              # 可选：专属 MCP 配置（与主 Agent 隔离）
+└── skills/           # 可选：专属 Skills（与主 Agent 隔离）
+```
+
+`agent.md` 示例：
+
+```markdown
+---
+description: 数据库查询专家，擅长 SQL 编写与解读
+model: kimi-k2.5
+---
+
+# 数据库 Agent
+
+请直接基于数据库 schema 给出 SQL 查询，避免冗余解释。
+```
+
+frontmatter 字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `description` | 是 | 子 Agent 用途说明，主 Agent 编排时据此选择调用哪个子 Agent |
+| `model` | 否 | 钉死特定模型（覆盖运行期跟随逻辑），值需在 `llm.providers` 中存在；省略时跟随主 Agent 当前 model |
+
+注：子 Agent 目录名不能为 `groot`（主 Agent 保留名）；缺 `description` 或 `agent.md` 的目录会在启动期被跳过并记录日志。
+
+#### 5.3.2 调用方式
+
+**编排模式（默认）**：主 Agent 根据 GROOT.md 引导段与子 Agent 描述，通过 `call_agent` 工具自动调度：
+
+```bash
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"查询昨天的订单总金额"}'
+```
+
+**Solo 模式**：调用方通过 `X-Agent-Name` header 直接指定子 Agent，跳过主 Agent 编排：
+
+```bash
+curl -X POST http://localhost:8080/chat \
+  -H "X-Agent-Name: db-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"查询昨天的订单总金额"}'
+```
+
+`X-Agent-Name: groot` 等价于不传 header（走主 Agent）。指定未注册名时返回 HTTP 400。
+
+#### 5.3.3 子 Agent 的 Model 选择
+
+子 Agent 在调用 LLM 时，按以下优先级决定使用哪个 model：
+
+1. **`agent.md` 的 `model` 字段**（最高优先级）：显式钉死特定模型，无视运行期切换
+2. **主 Agent 当前 model**（编排模式默认）：编排模式下子 Agent 跟随主 Agent 实际选用的 model；TUI 里 `/model <name>` 切换主 Agent 后，再触发的子 Agent 调用就用新 model
+3. **`llm.default_model`**（兜底）：以上两者都缺时使用配置文件默认模型
+
+Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当前 model"取请求体 `model` 字段或 `default_model`，逻辑相同。
+
+实际效果：
+
+| 场景 | 子 Agent 实际使用的 model |
+|------|--------------------------|
+| `agent.md` 写了 `model: kimi-k2.5`，主 Agent 用 `gpt-4o` 编排 | `kimi-k2.5`（钉死） |
+| `agent.md` 不写 `model`，主 Agent TUI 里 `/model gpt-4o` | `gpt-4o`（跟随） |
+| `agent.md` 不写 `model`，请求未指定 model | `llm.default_model` 配置值 |
+
+#### 5.3.4 TUI 切换
+
+`groot chat` 中：
+
+| 命令 | 说明 |
+|------|------|
+| `/agent` | 列出所有可用 Agent（含主 Agent groot），高亮当前选中 |
+| `/agent <name>` | 切换到指定 Agent，自动新建会话 |
+| `/agent groot` | 切回主 Agent |
+
+切换 Agent 会清空当前会话；状态栏「Agent: <name>」实时反映当前选中。
+
+**编排模式下的可视化：** 主 Agent 通过 `call_agent` 调度子 Agent 时，TUI 会单独渲染为：
+
+```
+🤖 调用子 Agent: db-agent
+```
+
+而不是普通工具的 `🔧 调用工具: call_agent`，便于一眼区分主 Agent 自身的工具调用和子 Agent 的派发。
+
+#### 5.3.5 API 关联
+
+| 接口 | 多 Agent 行为 |
+|-----|--------------|
+| `GET /agents` | 列出所有 Agent，主 Agent 排在首位 |
+| `GET /skills` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 skills（不传 = 主 Agent） |
+| `GET /tools` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 MCP 工具（不传 = 主 Agent） |
+| `GET /chat/status/:sid` | 编排模式下 `progress.sub_agents` 含当前运行的子 Agent 列表 |
+
+注：`GET /tools` 在主 Agent 路径下会额外返回一个合成分组 `_builtin`，包含 `call_agent` 工具及其所有可用子 Agent 描述；Solo 模式（`X-Agent-Name` 指定子 Agent）下不暴露 `call_agent`，避免子 Agent 嵌套调用。
+
+#### 5.3.6 配置项（`config.yaml`）
+
+```yaml
+sub_agent:
+  max_concurrency: 5        # 同时运行的子 Agent 上限（FIFO 排队）
+  max_task_length: 4000     # call_agent task 参数长度上限（字符）
+  max_result_length: 8000   # 子 Agent 结果长度上限，超出截断
+  exec_timeout: 5m          # 单次子 Agent 执行超时
+```
+
+#### 5.3.7 关键限制
+
+- **单层调用**：主 Agent → 子 Agent 一层；子 Agent 无法再调用其它子 Agent
+- **`agent.md` 与 MCP 配置不支持热加载**：变更需重启服务才能生效
+- **Skills 支持热加载**：`subagents/<name>/skills/` 下变更会触发 watcher 通知（具体重扫由后续版本完善）
+- **隔离性**：每个子 Agent 的 MCP / Skills 与主 Agent 完全隔离，互不可见
+- **Token 计入主 Chat**：编排模式下子 Agent 消耗的 tokens 累加到父 ChatRecord
+
+#### 5.3.8 完整示例：从零创建一个子 Agent
+
+以创建一个「天气查询子 Agent」为例：
+
+**1. 创建目录与 agent.md**
+
+```bash
+mkdir -p ~/.groot/subagents/weather/mcp
+mkdir -p ~/.groot/subagents/weather/skills
+
+cat > ~/.groot/subagents/weather/agent.md <<'EOF'
+---
+description: 查询天气信息，当用户询问天气相关问题时使用
+---
+
+# 天气查询 Agent
+
+你是天气查询专家，根据用户提问调用 weather MCP 工具返回结果，
+不要回答与天气无关的问题。
+EOF
+```
+
+**2.（可选）配置专属 MCP 工具**
+
+```bash
+cat > ~/.groot/subagents/weather/mcp/api-proxy.json <<'EOF'
+{
+  "name": "api-proxy",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["mcp-server-api-proxy"],
+  "env": { "WEATHER_API_KEY": "your-key" }
+}
+EOF
+```
+
+**3. 重启服务（`agent.md` / MCP 不支持热加载）**
+
+```bash
+groot
+```
+
+**4. 验证 REST 接口**
+
+```bash
+# 列出所有 Agent，应能看到 weather
+curl -s http://localhost:8080/agents | jq
+
+# 列出 weather 的 MCP 工具
+curl -s -H 'X-Agent-Name: weather' http://localhost:8080/tools | jq
+
+# 主 Agent /tools 应包含 _builtin.call_agent，描述里能看到 weather
+curl -s http://localhost:8080/tools | jq '._builtin.tools[0].description'
+```
+
+**5. 调用：编排模式 vs Solo 模式**
+
+```bash
+# 编排模式：让主 Agent 自己决定调度 weather
+curl -X POST http://localhost:8080/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"instruction":"今天北京天气怎么样？"}'
+
+# Solo 模式：跳过主 Agent，直连 weather
+curl -X POST http://localhost:8080/chat \
+  -H 'X-Agent-Name: weather' \
+  -H 'Content-Type: application/json' \
+  -d '{"instruction":"今天北京天气怎么样？"}'
+```
+
+**6. TUI 中切换**
+
+```
+groot chat
+
+> /agent              # 列出，选中 weather
+> /agent weather      # 直接切到 weather（自动新建会话）
+> /agent groot        # 切回主 Agent
+```
+
+详见 [设计文档](docs/superpowers/specs/2026-05-24-multi-agent-design.md)。
+
+---
+
+## 六、CLI 命令参考
 
 Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 
-### 3.1 命令总览
+### 6.1 命令总览
 
 | 命令 | 说明 |
 |------|------|
@@ -167,7 +1076,7 @@ Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 | `-h, --help` | 显示帮助 | - |
 | `-v, --version` | 显示版本 | - |
 
-### 3.2 启动服务（groot）
+### 6.2 启动服务（groot）
 
 启动 Groot AI Agent 服务。
 
@@ -176,7 +1085,7 @@ groot                      # 使用默认配置启动
 groot -p 9090              # 指定端口启动
 ```
 
-### 3.3 初始化工作目录（groot init）
+### 6.3 初始化工作目录（groot init）
 
 初始化工作目录，创建必要的目录结构和配置文件。
 
@@ -190,13 +1099,14 @@ groot init
 |------|------|
 | `skills/` | Skills 定义目录 |
 | `mcp/` | MCP 配置目录 |
+| `subagents/` | 子 Agent 定义目录 |
 | `memory/` | 会话数据目录 |
 | `logs/` | 日志文件目录 |
 | `cluster/members/` | 集群成员注册目录（用于多实例 Leader 选举） |
 | `schedules/` | 定时任务存储目录（含 active/disabled/archive/executions） |
 | `config.yaml` | 主配置文件 |
 
-### 3.4 查看实例状态（groot status）
+### 6.4 查看实例状态（groot status）
 
 查看运行中 Groot 实例的状态和组件健康信息。
 
@@ -236,7 +1146,7 @@ Groot 实例状态
 提示: 请确认 Groot 是否已启动，或使用 -p 指定其他端口
 ```
 
-### 3.5 管理 Skills（groot skills）
+### 6.5 管理 Skills（groot skills）
 
 管理 Groot 的 Skills 安装、卸载和查看。
 
@@ -267,7 +1177,7 @@ groot skills uninstall my-skill            # 卸载 Skill
 共 2 个 Skill
 ```
 
-### 3.6 管理 MCP Servers（groot mcp）
+### 6.6 管理 MCP Servers（groot mcp）
 
 管理 Groot 的 MCP Servers 配置查看。
 
@@ -294,7 +1204,7 @@ broken-config    -                 -          -                    ⚠ 配置解
 共 4 个 MCP Server（2 个活跃，1 个未激活，1 个异常）
 ```
 
-### 3.7 管理定时任务（groot schedule）
+### 6.7 管理定时任务（groot schedule）
 
 管理 Groot 的定时任务，支持查看、详情、历史、删除、禁用、启用和归档操作。
 
@@ -344,7 +1254,7 @@ EXEC_TIME            TRIGGER          STATUS      DURATION    STEPS
 共 3 条记录
 ```
 
-### 3.8 日志查看（groot tail）
+### 6.8 日志查看（groot tail）
 
 实时查看 Groot 日志，类似 `tail -f`，支持格式化和过滤。
 
@@ -364,7 +1274,7 @@ groot tail -k "api_request" # 过滤包含关键词的日志
 
 退出方式：按 `Ctrl+C`。
 
-### 3.9 Chat TUI（groot chat）
+## 七、Chat TUI（groot chat）
 
 启动终端交互界面（Terminal User Interface），在终端中直接与大模型对话。
 
@@ -546,595 +1456,7 @@ TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次�
 
 ---
 
-## 四、安装部署
-
-### 4.1 系统要求
-
-| 要求 | 说明 |
-|------|------|
-| 操作系统 | Linux / macOS / Windows |
-| Go 版本 | Go 1.21+（仅源码编译需要） |
-| 内存 | 建议 512MB+ |
-| 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
-
-### 4.2 配置文件
-
-初始化后自动生成 `~/.groot/config.yaml`，包含完整配置模板。
-
-**LLM 配置为必填项**，其他所有配置项（server、skills、react、attachment、memory、security、logging 等）均已注释并标注默认值，按需取消注释即可。
-
-> 完整配置项说明见 [五、配置文件详解](#五配置文件详解)。
-
-### 4.3 环境变量
-
-**固定环境变量：**
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `GROOT_HOME` | 工作目录 | `~/.groot` |
-
-**用户自定义环境变量：**
-
-配置文件中 `${VAR_NAME}` 引用的变量名由用户自定义，是否需要设置取决于配置文件的写法：
-
-```bash
-# 示例（变量名可自定义）
-export OPENAI_API_KEY="sk-xxxx"
-export ANTHROPIC_API_KEY="sk-ant-xxxx"
-```
-
-> **判断方法：** 配置文件有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
-
-### 4.4 安装方式
-
-#### 方式一：直接运行（推荐）
-
-下载预编译的二进制文件：
-
-```bash
-# Linux
-wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-linux-amd64
-chmod +x groot-linux-amd64
-mv groot-linux-amd64 /usr/local/bin/groot
-
-# macOS
-wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-darwin-arm64
-chmod +x groot-darwin-arm64
-mv groot-darwin-arm64 /usr/local/bin/groot
-```
-
-#### 方式二：源码编译
-
-```bash
-# 克隆仓库
-git clone https://github.com/zfd81/groot.git
-cd groot
-
-# 编译当前平台
-go build -o bin/groot ./cmd/groot
-
-# 或使用 Makefile
-make build            # 编译当前平台
-make build-all        # 编译所有平台（macOS/Linux/Windows）
-
-# 运行
-./bin/groot
-```
-
-**Makefile 编译命令：**
-
-| 命令 | 说明 |
-|------|------|
-| `make build` | 编译当前平台可执行文件 |
-| `make build-all` | 编译三个平台可执行文件 |
-| `make build-darwin` | 编译 macOS ARM64 |
-| `make build-linux` | 编译 Linux AMD64 |
-| `make build-windows` | 编译 Windows AMD64 |
-| `make clean` | 清理编译产物 |
-
-**编译产物：**
-
-| 文件 | 平台 |
-|------|------|
-| `bin/darwin-arm64/groot` | macOS ARM64 |
-| `bin/linux-amd64/groot` | Linux AMD64 |
-| `bin/windows-amd64/groot.exe` | Windows AMD64 |
-
-### 4.5 停止服务
-
-```bash
-# 发送终止信号
-kill -SIGTERM <pid>
-
-# 或使用 Ctrl+C（前台运行时）
-```
-
-服务会优雅关闭：
-- 停止接受新请求
-- 等待当前对话完成（超时 30 秒）
-- 停止统一调度器（gocron）
-- 停止消息通知层
-- 关闭 MCP 连接
-- 刷新日志
-- 退出程序
-
-## 五、配置文件详解
-
-### 5.1 配置文件位置
-
-首次启动时，Groot 会自动生成默认配置文件 `{GROOT_HOME}/config.yaml`。
-
-### 5.2 完整配置文件示例
-
-```yaml
-# Groot Agent 配置文件
-# 生成时间: 2026-04-18
-
-# Agent 基础配置
-agent:
-  name: groot                      # Agent 名称
-  version: 1.0.0                   # Agent 版本号
-
-# HTTP 服务配置
-server:
-  host: 0.0.0.0                    # 服务监听地址
-  port: 8080                       # 服务监听端口
-
-# LLM 配置（OpenAI兼容协议）
-llm:
-  default_model: gpt-4o             # 默认模型名称
-  models:
-    gpt-4o:                        # 模型配置名称（自定义）
-      base_url: https://api.openai.com/v1    # LLM API 地址
-      api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
-      model: gpt-4o                          # 实际调用时的模型名称
-      max_completion_tokens: 4096            # 最大输出 Token 数
-      temperature: 0.7                       # 输出随机性（0.0~2.0）
-      top_p: 1.0                             # 核采样系数（0.0~1.0）
-      frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
-      presence_penalty: 0.0                  # 存在惩罚（-2.0~2.0）
-      seed: 0                                # 随机种子（0 表示不设置）
-      stop: []                               # 停止序列
-      thinking: false                        # 深度思考模式（Qwen/DeepSeek 等模型）
-    claude-3.5:
-      base_url: https://api.anthropic.com/v1
-      api_key: ${ANTHROPIC_API_KEY}
-      model: claude-3-5-sonnet-20241022
-      max_completion_tokens: 4096
-      temperature: 0.7
-
-# Skills 热插拔配置
-skills:
-  hot_reload:
-    enabled: true                    # 是否启用 Skills 热插拔
-    debounce_delay: 2                # 防抖延迟（秒）
-
-# ReAct 执行配置
-react:
-  max_iterations: 20               # 最大循环次数，-1 表示不限制
-  max_tokens: 100000               # 整个对话所有LLM调用的总Token消耗上限
-  step_timeout: 60                 # 单步执行超时（秒），-1 表示不限制
-  error_retry: 2                   # 单步失败重试次数
-  nesting_max_depth: 3             # Skills嵌套最大深度，-1 表示不限制
-
-# 附件处理配置
-attachment:
-  max_size: 50                     # 单个附件最大大小（MB）
-  max_total_size: 100              # 附件总大小上限（MB）
-  max_count: 10                    # 附件数量上限
-  allowed_types: [pdf, doc, docx, txt, json, csv, xml, yaml, png, jpg, jpeg, zip]  # 允许的附件类型
-
-# 记忆模块配置
-memory:
-  directory: memory                # 记忆目录（相对路径或绝对路径）
-  retention_days: 7                # 会话保留天数
-  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
-
-# 定时任务调度配置
-schedule:
-  enabled: false                   # 是否允许在对话中创建定时任务（默认关闭，不影响系统清理任务）
-  max_concurrent_tasks: 10         # 最大并发执行任务数
-  sync_interval: 30s               # 定期同步间隔（对比 active/ 目录与调度器状态，修复不一致）
-
-# 消息通知配置
-message:
-  queue_size: 100                  # 消息队列容量
-  workers: 3                       # 消息发送 worker 数量
-  senders:
-    webhook:
-      enabled: false               # 是否启用 webhook 通知
-      url: ""                      # Webhook URL（接收 POST JSON）
-    email:
-      enabled: false               # 是否启用邮件通知
-      smtp_host: ""                # SMTP 服务器地址
-      smtp_port: 587               # SMTP 端口
-      username: ""                 # SMTP 用户名
-      password: ""                 # SMTP 密码
-      from: ""                     # 发件人地址
-
-# 安全配置
-security:
-  rate_limit:
-    enabled: false                 # 是否启用速率限制（默认关闭）
-    global_qps: 0                  # 全局 QPS 限制（0=不限制）
-    global_concurrency: 0          # 全局并发限制（0=不限制）
-    default_qps: 10                # 每 API Key 默认 QPS
-    default_concurrency: 5         # 每 API Key 默认并发数
-    cleanup_interval: 5m           # 空闲限流器清理间隔
-  auth:
-    enabled: true                  # 是否开启认证
-    type: api_key                  # 认证类型
-    api_key:
-      header_name: X-API-Key       # 认证 Header 名称
-      keys:
-        - name: default            # Key 名称（唯一标识）
-          key: ${GROOT_API_KEY}    # Key 值（支持环境变量引用）
-          permissions: all         # 权限范围：all 或 [chat, status, ...]
-
-# 日志配置
-logging:
-  level: info                      # 日志级别：debug/info/warn/error
-  format: json                     # 日志格式：json/text
-  output: [stdout, file]           # 输出目标：stdout/file（可同时输出）
-  file:
-    directory: logs                # 日志文件目录
-    filename_pattern: groot-{date}.log  # 文件名模式，{date} 替换为 YYYY-MM-DD
-    max_age: 7                     # 日志保留天数
-    max_size: 100                  # 单个日志文件最大大小（MB），超过则轮转
-    compress: false                # 是否压缩旧日志文件
-```
-
-### 5.3 目录配置说明
-
-所有目录配置支持相对路径和绝对路径：
-
-- **相对路径**：相对于 `~/.groot` 目录（GROOT_HOME）
-- **绝对路径**：直接使用指定路径
-
-示例配置：
-
-```yaml
-# 相对路径示例（目录位于 ~/.groot/memory）
-memory:
-  directory: memory
-
-# 绝对路径示例（目录位于 /data/logs）
-logging:
-  file:
-    directory: /data/logs
-```
-
-可配置的目录包括：
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `memory.directory` | `memory` | 会话记忆目录（支持相对/绝对路径） |
-| `logging.file.directory` | `logs` | 日志文件目录（支持相对/绝对路径） |
-
-**固定目录（不可配置）：**
-
-| 目录 | 位置 | 说明 |
-|------|------|------|
-| `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
-| `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
-| `schedules` | `{GROOT_HOME}/schedules` | 定时任务存储目录 |
-| `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
-
-### 5.4 配置字段详解
-
-#### Agent 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `name` | 否 | Agent 名称，用于日志标识，默认 `groot` |
-| `version` | 否 | Agent 版本号，默认 `1.0.0` |
-
-#### Server 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `host` | 否 | 监听地址，默认 `0.0.0.0`（所有网卡） |
-| `port` | 否 | 监听端口，默认 `8080` |
-
-#### LLM 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `default_model` | **是** | 默认模型名称，对应 models 中的某个 key，修改后需重启 |
-| `models.{name}.base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
-| `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
-| `models.{name}.model` | **是** | 实际调用时的模型名称 |
-| `models.{name}.max_completion_tokens` | 否 | 最大输出 Token 数，默认 `4096` |
-| `models.{name}.temperature` | 否 | 输出随机性（0.0~2.0），默认 `0.7` |
-| `models.{name}.top_p` | 否 | 核采样系数（0.0~1.0），默认 `1.0` |
-| `models.{name}.frequency_penalty` | 否 | 频率惩罚（-2.0~2.0），默认 `0.0` |
-| `models.{name}.presence_penalty` | 否 | 存在惩罚（-2.0~2.0），默认 `0.0` |
-| `models.{name}.seed` | 否 | 随机种子，`0` 表示不设置 |
-| `models.{name}.stop` | 否 | 停止序列列表，默认空 |
-| `models.{name}.thinking` | 否 | 深度思考模式（Qwen/DeepSeek 等），默认 `false` |
-
-#### Skills 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
-| `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
-
-> **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。
-
-#### ReAct 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `max_iterations` | 否 | 最大循环次数，默认 `20`，`-1` 表示不限 |
-| `max_tokens` | 否 | 整个对话所有LLM调用的总Token消耗上限，默认 `100000`，`-1` 表示不限 |
-| `step_timeout` | 否 | 单步执行超时（秒），默认 `60`，`-1` 表示不限 |
-| `error_retry` | 否 | 单步失败重试次数，默认 `2` |
-| `nesting_max_depth` | 否 | Skills 嵌套最大深度，默认 `3`，`-1` 表示不限 |
-
-#### Attachment 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `max_size` | 否 | 单个附件最大大小（MB），默认 `50` |
-| `max_total_size` | 否 | 附件总大小上限（MB），默认 `100` |
-| `max_count` | 否 | 单次请求最大附件数量，默认 `10` |
-| `allowed_types` | 否 | 允许的文件扩展名列表，默认常见文档和图片类型 |
-
-#### Memory 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `directory` | 否 | 记忆目录，相对路径拼接工作目录，绝对路径直接使用，默认 `memory` |
-| `retention_days` | 否 | 会话保留天数，超过后自动清理，默认 `7`。清理依据目录最后修改时间（非创建时间） |
-| `cleanup_schedule` | 否 | 清理任务执行时间（HH:MM），默认 `02:00`，由统一调度器按天执行 |
-
-#### Schedule 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `enabled` | 否 | 是否允许在对话中创建定时任务，默认 `false`。关闭时对话中无法创建/管理任务（系统级清理和同步不受影响） |
-| `max_concurrent_tasks` | 否 | 最大并发执行任务数，超出的任务跳过当次执行，默认 `3` |
-| `sync_interval` | 否 | 定期同步间隔（Go duration 格式，如 `30s`/`1m`），对比 active/ 目录与调度器状态，自动修复不一致，默认 `30s` |
-
-#### Message 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `100` |
-| `workers` | 否 | 消息发送 worker 数量，默认 `3` |
-| `senders.webhook.enabled` | 否 | 是否启用 webhook 通知，默认 `false` |
-| `senders.webhook.url` | 否 | Webhook URL，任务完成/失败时 POST JSON 到该地址 |
-| `senders.email.enabled` | 否 | 是否启用邮件通知，默认 `false` |
-| `senders.email.smtp_host` | 否 | SMTP 服务器地址 |
-| `senders.email.smtp_port` | 否 | SMTP 端口，默认 `587` |
-| `senders.email.username` | 否 | SMTP 认证用户名 |
-| `senders.email.password` | 否 | SMTP 认证密码 |
-| `senders.email.from` | 否 | 发件人邮箱地址 |
-
-> **说明：** stdout sender 始终启用，无需配置。webhook 和 email sender 按需配置。定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道。
-
-#### Security 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `auth.enabled` | 否 | 是否开启认证，默认 `false` |
-| `auth.type` | 否 | 认证类型，目前只支持 `api_key` |
-| `auth.api_key.header_name` | 否 | 认证 Header 名称，默认 `X-API-Key` |
-| `auth.api_key.keys[].name` | 否 | Key 名称（唯一标识） |
-| `auth.api_key.keys[].key` | 否 | Key 值，支持 `${VAR_NAME}` 引用 |
-| `auth.api_key.keys[].permissions` | 否 | 权限范围：`all` 或 `[chat, status, ...]` |
-| `rate_limit.enabled` | 否 | 是否启用速率限制，默认 `false` |
-| `rate_limit.global_qps` | 否 | 全局 QPS 限制，`0` 表示不限制 |
-| `rate_limit.global_concurrency` | 否 | 全局并发限制，`0` 表示不限制 |
-| `rate_limit.default_qps` | 否 | 每 API Key 默认 QPS，默认 `10` |
-| `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
-| `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
-
-> **速率限制说明：**
-> - **匿名降级**：认证开启时按 API Key 名称限流；认证关闭（`auth.enabled: false`）时按客户端 IP 限流
-> - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
-
-#### Logging 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `level` | 否 | 日志级别：`debug`/`info`/`warn`/`error`，默认 `info` |
-| `format` | 否 | 日志格式：`json`/`text`，默认 `json` |
-| `output` | 否 | 输出目标：`[stdout, file]`，可同时输出 |
-| `file.directory` | 否 | 日志文件目录，默认 `logs` |
-| `file.filename_pattern` | 否 | 文件名模式，`{date}` 替换为 YYYY-MM-DD |
-| `file.max_age` | 否 | 日志保留天数，默认 `7` |
-| `file.max_size` | 否 | 单个日志文件最大大小（MB），默认 `100` |
-| `file.compress` | 否 | 是否压缩旧日志文件，默认 `false` |
-
-### 5.5 权限说明
-
-| 权限 | 对应 API | 说明 |
-|------|---------|------|
-| `chat` | POST /chat | 执行对话 |
-| `status` | GET /chat/status/{sid} | 查询对话状态 |
-| `detail` | GET /chat/{sid} | 查询对话详情 |
-| `session` | GET /sess/{sid} | 查询会话详情 |
-| `history` | GET /sess/history | 查询会话列表 |
-| `skills` | GET /skills | 查看 Skills 列表 |
-| `tools` | GET /tools | 查看工具列表（MCP 工具 + 调度工具） |
-| `schedule` | GET/POST/DELETE /schedule | 管理定时任务 |
-| `health` | GET /health | 健康检查 |
-| `all` | 以上全部 | 全部权限 |
-
-### 5.6 配置热更新
-
-**支持热更新的配置：**
-- Skills 配置：修改 SKILL.md 文件自动生效
-
-**不支持热更新的配置：**
-- LLM 配置、Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置、Schedule 配置、Message 配置需重启服务
-- MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
-
----
-
-## 六、Skills 配置（固定目录）
-
-Skills 目录固定位于 `{GROOT_HOME}/skills`，无需在配置文件中指定。
-
-### 6.1 Skills 目录结构
-
-```
-{GROOT_HOME}/skills/
-├── pdf_analyzer/
-│   └── SKILL.md
-├── code_generator/
-│   └── SKILL.md
-└── data_analyzer/
-    └── SKILL.md
-```
-
-### 6.2 Skill 文件格式
-
-每个 Skill 是一个目录，包含一个 `SKILL.md` 文件，采用 YAML frontmatter + Markdown 格式：
-
-```markdown
----
-name: pdf_analyzer                    # Skill 名称（全局唯一）
-description: "分析PDF文档并生成摘要"   # Skill 描述（Agent 工具列表展示）
-dependencies: []                      # 依赖的其他 Skill（可选）
----
-
-# PDF 文档分析
-
-你是一个专业的 PDF 文档分析助手。
-
-## 执行步骤
-
-1. 使用 file_operations.file_read 工具读取 PDF 文件
-2. 提取文档的关键内容和结构
-3. 根据文档类型生成相应的结构化摘要
-4. 输出结构化的分析结果
-
-## 输出格式
-
-{
-  "document_type": "文档类型",
-  "title": "文档标题",
-  "key_points": ["关键要点"],
-  "summary": "详细摘要",
-  "recommendations": ["建议"]
-}
-```
-
-### 6.3 热插拔机制
-
-- 启用 `skills.hot_reload.enabled: true` 后，修改 `SKILL.md` 自动生效
-- 防抖延迟 `debounce_delay` 防止编辑过程中频繁触发加载
-- 新增 Skill：创建目录和 `SKILL.md` 文件
-- 修改 Skill：编辑 `SKILL.md` 内容
-- 删除 Skill：删除对应目录
-
----
-
-## 七、MCP 工具配置
-
-### 7.1 MCP 配置目录（固定位置）
-
-MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定。
-
-```
-{GROOT_HOME}/mcp/
-├── database_tool.json     # 数据库查询工具（stdio 类型）
-├── web_parser.json        # 网页解析服务（sse 类型）
-└── web_search.json        # 网络搜索服务（streamable_http 类型）
-```
-
-每个 MCP 工具使用独立的 JSON 配置文件。添加、修改或删除 MCP 配置后需要重启服务才能生效。
-
-### 7.2 连接类型
-
-| 类型 | 说明 | 适用场景 |
-|------|------|---------|
-| `stdio` | 标准输入输出通信 | 本地命令行工具（如数据库客户端） |
-| `sse` | Server-Sent Events（单向推送） | 远程 HTTP 服务，服务端主动推送事件 |
-| `streamable_http` | Streamable HTTP（双向流式） | 远程 HTTP 服务，支持请求和响应双向流式 |
-
-### 7.3 MCP 配置示例
-
-**stdio 类型（本地命令行工具）：**
-
-```json
-{
-  "name": "database_tool",
-  "type": "stdio",
-  "description": "数据库查询工具",
-  "isActive": true,
-  "command": "mcp-server-postgres",
-  "args": ["--connection", "${DB_CONNECTION}"],
-  "env": {
-    "DB_CONNECTION": "${DB_CONNECTION}"
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `name` | MCP 名称，用于日志和调试 |
-| `type` | 连接类型，`stdio` 表示通过标准输入输出通信 |
-| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
-| `isActive` | 是否启用，`false` 时跳过加载 |
-| `command` | 要执行的可执行程序名称 |
-| `args` | 命令行参数数组，支持环境变量引用 `${VAR}` |
-| `env` | 环境变量映射，传递给子进程 |
-
-**sse 类型（远程 SSE 服务）：**
-
-```json
-{
-  "name": "WebParser",
-  "type": "sse",
-  "description": "网页解析服务",
-  "isActive": true,
-  "baseUrl": "https://dashscope.aliyuncs.com/api/v1/mcps/WebParser/sse",
-  "headers": {
-    "Authorization": "Bearer ${DASHSCOPE_API_KEY}"
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `name` | MCP 名称，用于日志和调试 |
-| `type` | 连接类型，`sse` 表示 Server-Sent Events（单向推送） |
-| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
-| `isActive` | 是否启用，`false` 时跳过加载 |
-| `baseUrl` | 远程服务的 SSE 接口地址 |
-| `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
-
-**streamable_http 类型（HTTP 流式服务）：**
-
-```json
-{
-  "name": "web_search",
-  "type": "streamable_http",
-  "description": "网络搜索服务",
-  "isActive": true,
-  "baseUrl": "https://mcp-search.example.com/api",
-  "headers": {
-    "X-API-Key": "${SEARCH_API_KEY}"
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `name` | MCP 名称，用于日志和调试 |
-| `type` | 连接类型，`streamable_http` 表示双向流式 HTTP 通信 |
-| `description` | MCP 功能描述，注册给 Agent 作为工具说明 |
-| `isActive` | 是否启用，`false` 时跳过加载 |
-| `baseUrl` | 远程服务的 API 地址 |
-| `headers` | HTTP 请求头，用于认证等，支持环境变量引用 `${VAR}` |
-
----
-
-## 八、API 详细说明
+## 八、REST API
 
 ### 8.1 API 列表
 
@@ -1232,7 +1554,7 @@ data: [DONE]
 
 ---
 
-### 事件识别规则
+#### SSE 事件识别规则
 
 每个事件通过 JSON 中的 **`role` 字段 + 特征字段** 组合来识别。前端解析策略：
 
@@ -1246,7 +1568,7 @@ data: [DONE]
     有 content         → message 事件
 ```
 
-### 事件类型与处理方式
+#### SSE 事件类型与处理方式
 
 | 事件 | role | 特征字段 | 内容字段 | 客户端处理 |
 |------|------|---------|---------|-----------|
@@ -1266,7 +1588,7 @@ data: [DONE]
 
 ---
 
-### 事件 JSON 结构
+#### SSE 事件 JSON 结构
 
 **thinking：**
 
@@ -1341,7 +1663,7 @@ data: [DONE]
 
 ---
 
-### 事件流示例
+#### SSE 事件流示例
 
 **场景1：纯 LLM 回答（无 thinking）**
 
@@ -1372,7 +1694,7 @@ data: {"role":"assistant","finish_reason":"stop"}
 data: [DONE]
 ```
 
-### 前端实现伪代码
+#### SSE 前端实现伪代码
 
 ```javascript
 eventSource.onmessage = (e) => {
@@ -1885,7 +2207,7 @@ ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), n
 
 ---
 
-## 十、使用场景示例
+## 十、使用场景
 
 ### 10.1 多轮文档分析
 
@@ -2127,6 +2449,9 @@ export OPENAI_API_KEY="your-api-key"
 | `{GROOT_HOME}/GROOT.md` | 项目规范文件 |
 | `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
 | `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件 |
+| `{GROOT_HOME}/subagents/{name}/agent.md` | 子 Agent 定义文件（frontmatter + 系统提示词） |
+| `{GROOT_HOME}/subagents/{name}/mcp/{mcp-name}.json` | 子 Agent 专属 MCP 配置 |
+| `{GROOT_HOME}/subagents/{name}/skills/{skill-name}/SKILL.md` | 子 Agent 专属 Skill 定义 |
 | `{GROOT_HOME}/schedules/active/{id}.json` | 活跃定时任务 |
 | `{GROOT_HOME}/schedules/disabled/{id}.json` | 已禁用定时任务 |
 | `{GROOT_HOME}/schedules/archive/{id}.json` | 已归档定时任务 |
@@ -2144,7 +2469,21 @@ export OPENAI_API_KEY="your-api-key"
 
 > **说明：** `{memoryDir}` 和 `{logsDir}` 可通过配置文件修改，默认为 `{GROOT_HOME}/memory` 和 `{GROOT_HOME}/logs`。
 
-### C. 错误码速查表
+### C. ID 格式说明
+
+| ID 类型 | 格式 | 示例 |
+|---------|------|------|
+| `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260419103000523_a1b2` |
+| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260419103000523` |
+| `task_id` | `task-{kebab-case-name}` | `task-每日报表生成` |
+
+**说明：**
+- `session_id`：会话唯一标识，毫秒级时间戳 + 4位随机字符
+- `chat_id`：单次对话标识，固定前缀 `chat_` + 毫秒级时间戳
+- `task_id`：定时任务唯一标识，固定前缀 `task-` + 名称转 kebab-case
+- 调度执行的会话 ID 格式：`{task_id}-{timestamp}-sched`（后缀区分标识）
+
+### D. 错误码速查表
 
 | HTTP 状态码 | 错误码 | 说明 |
 |------------|--------|------|
@@ -2162,122 +2501,8 @@ export OPENAI_API_KEY="your-api-key"
 | 404 | `task_not_found` | 定时任务不存在 |
 | 500 | `schedule_error` | 定时任务操作失败 |
 
-### D. 联系与支持
+### E. 联系与支持
 
 - GitHub: https://github.com/zfd81/groot
 - 问题反馈: GitHub Issues
 
-### E. 工作目录结构
-
-Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过环境变量 `GROOT_HOME` 更改。
-
-#### E.1 目录结构
-
-```
-{GROOT_HOME}/
-├── config.yaml                    # 主配置文件
-├── GROOT.md                       # 项目规范文件（自动注入系统指令）
-├── skills/                        # Skills 目录
-│   └── {skill-name}/SKILL.md      # Skill 定义文件
-├── mcp/                           # MCP 配置目录
-│   └── {mcp-name}.json            # MCP 配置文件
-├── memory/                        # 记忆模块目录
-│   ├── temp/                      # 附件处理临时目录
-│   └── {session_id}/              # 会话目录
-│       ├── history.json           # 对话历史（含执行元数据摘要）
-│       ├── attachments/           # 附件目录
-│       │   └── {filename}         # 附件文件
-│       └── chats/                 # 详细执行记录目录
-│           └── chat_{timestamp}.json  # 单次对话完整记录
-├── logs/                          # 日志目录
-│   └── groot-{date}.log           # 日志文件
-├── cluster/                       # 集群管理目录
-│   └── members/                   # 成员注册文件（用于多实例 Leader 选举）
-├── schedules/                     # 定时任务目录
-│   ├── active/                    # 活跃任务
-│   │   └── {task-id}.json         # 任务定义文件
-│   ├── disabled/                  # 已禁用任务
-│   │   └── {task-id}.json         # 任务定义文件
-│   ├── archive/                   # 已归档任务
-│   │   └── {task-id}.json         # 任务定义文件
-│   └── executions/                # 执行记录
-│       └── {task-id}.json         # 历史执行记录
-```
-
-#### E.2 目录说明
-
-**固定目录（不可配置）：**
-
-| 目录/文件 | 说明 |
-|----------|------|
-| `config.yaml` | 主配置文件，控制服务行为 |
-| `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
-| `skills/` | Skills 定义目录（固定位置），支持热插拔 |
-| `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
-| `cluster/members/` | 集群成员注册目录（固定位置），存放实例注册文件，用于 Leader 选举 |
-| `schedules/` | 定时任务存储目录（固定位置），active/disabled/archive 三目录状态流转 |
-
-**可配置目录（支持相对/绝对路径）：**
-
-| 目录/文件 | 说明 |
-|----------|------|
-| `memory/` | 会话数据目录（默认位置），可通过 `memory.directory` 配置 |
-| `memory/temp/` | 附件处理临时目录（固定在 memory 目录下） |
-| `memory/{sid}/attachments/` | 附件存储，保留原始文件名 |
-| `memory/{sid}/chats/` | 每轮对话的详细执行记录 |
-| `logs/` | 日志存储目录（默认位置），可通过 `logging.file.directory` 配置 |
-
-> **说明：** `memory` 和 `logs` 目录支持通过配置文件修改位置，详见 [五、配置文件详解](#五配置文件详解)。固定目录（skills/mcp/temp）位置不可更改。
-
-#### E.3 ID 格式说明
-
-| ID 类型 | 格式 | 示例 |
-|---------|------|------|
-| `session_id` | `{YYYYMMDDHHMMSSmmm}_{random4}` | `20260419103000523_a1b2` |
-| `chat_id` | `chat_{YYYYMMDDHHMMSSmmm}` | `chat_20260419103000523` |
-| `task_id` | `task-{kebab-case-name}` | `task-每日报表生成` |
-
-**说明：**
-- `session_id`：会话唯一标识，毫秒级时间戳 + 4位随机字符
-- `chat_id`：单次对话标识，固定前缀 `chat_` + 毫秒级时间戳
-- `task_id`：定时任务唯一标识，固定前缀 `task-` + 名称转 kebab-case
-- 调度执行的会话 ID 格式：`{task_id}-{timestamp}-sched`（后缀区分标识）
-
-#### E.4 工作目录配置方式
-
-| 方式 | 示例 | 优先级 |
-|------|------|--------|
-| 环境变量 | `export GROOT_HOME=/opt/groot` | 高 |
-| 默认值 | `~/.groot` | 低 |
-
-#### E.5 项目规范文件（GROOT.md）
-
-Groot 支持在 `{GROOT_HOME}/GROOT.md` 文件中定义项目规范，这些规范会自动注入到每次对话的系统指令最前面。
-
-**功能特点：**
-- 无需配置开关，默认启用
-- 支持热加载，修改后自动生效
-- 内容始终位于系统指令最前面，优先级最高
-
-**使用示例：**
-
-在 `~/.groot/GROOT.md` 中写入：
-
-```markdown
-# 项目规范
-
-- 使用中文回答
-- 代码风格遵循 Go 标准
-- 优先使用已安装的工具
-```
-
-Groot 每次对话都会自动将这些规范注入系统指令，无需每次手动指定。
-
-**系统指令构建顺序：**
-
-```
-GROOT.md（缓存）
-→ prompt（用户传入）
-→ Skills 指令
-→ 执行规则
-```

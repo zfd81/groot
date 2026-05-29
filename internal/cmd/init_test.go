@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,7 +77,7 @@ func TestRunInit(t *testing.T) {
 	}
 
 	// 检查目录创建
-	expectedDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
+	expectedDirs := []string{"skills", "mcp", "subagents", "memory", "logs", "cluster/members"}
 	for _, dir := range expectedDirs {
 		path := filepath.Join(homeDir, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -105,7 +106,7 @@ func TestRunInitExistingDirectory(t *testing.T) {
 	}
 
 	// 检查所有目录仍存在
-	expectedDirs := []string{"skills", "mcp", "memory", "logs", "cluster/members"}
+	expectedDirs := []string{"skills", "mcp", "subagents", "memory", "logs", "cluster/members"}
 	for _, dir := range expectedDirs {
 		path := filepath.Join(homeDir, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -132,5 +133,61 @@ func TestRunInitExistingConfig(t *testing.T) {
 	data, _ := os.ReadFile(configPath)
 	if string(data) != "existing: config" {
 		t.Errorf("配置文件被覆盖了")
+	}
+}
+
+// TestRunInit_CreatesSubAgentsDir 验证 init 创建 subagents/ 子目录（设计 10.2 节）。
+func TestRunInit_CreatesSubAgentsDir(t *testing.T) {
+	home := t.TempDir()
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit failed: %v", err)
+	}
+	stat, err := os.Stat(filepath.Join(home, "subagents"))
+	if err != nil || !stat.IsDir() {
+		t.Fatalf("subagents/ should be created, err=%v", err)
+	}
+}
+
+// TestRunInit_WritesGrootMdWithSchedulingHint 验证 init 写入默认 GROOT.md，
+// 内容包含「子 Agent 调度」段与 call_agent 工具引导（设计 10.2 节）。
+func TestRunInit_WritesGrootMdWithSchedulingHint(t *testing.T) {
+	home := t.TempDir()
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "GROOT.md"))
+	if err != nil {
+		t.Fatalf("GROOT.md 未创建: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{"子 Agent 调度", "call_agent", "按需调用", "逐个调用", "明确传参", "附件引用"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("GROOT.md 缺少关键词 %q\n实际内容:\n%s", want, got)
+		}
+	}
+}
+
+// TestRunInit_PreservesExistingGrootMd 验证用户已有的 GROOT.md 不会被覆盖。
+func TestRunInit_PreservesExistingGrootMd(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	custom := "# 我自己的 GROOT.md\n请别覆盖我。\n"
+	mdPath := filepath.Join(home, "GROOT.md")
+	if err := os.WriteFile(mdPath, []byte(custom), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit failed: %v", err)
+	}
+
+	data, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != custom {
+		t.Errorf("用户自定义 GROOT.md 被覆盖\n期望:\n%s\n实际:\n%s", custom, string(data))
 	}
 }

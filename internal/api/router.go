@@ -17,6 +17,7 @@ func RegisterRoutes(h *server.Hertz,
 	sessionH *handler.SessionHandler,
 	healthH *handler.HealthHandler,
 	skillsH *handler.SkillsHandler,
+	agentsH *handler.AgentsHandler,
 	toolsH *handler.ToolsHandler,
 	modelsH *handler.ModelsHandler,
 	scheduleH *handler.ScheduleHandler,
@@ -39,6 +40,7 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.GET("/sess/history", sessionH.ListSessions)
 
 	// Info endpoints
+	apiGroup.GET("/agents", agentsH.Serve)
 	apiGroup.GET("/skills", skillsH.Serve)
 	apiGroup.GET("/tools", toolsH.Serve)
 	apiGroup.GET("/models", modelsH.Serve)

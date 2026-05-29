@@ -86,12 +86,13 @@ var (
 
 // Pre-rendered label strings for reuse
 var (
-	ThinkingLabel   = ThinkingLabelStyle.Render("🤔 Thinking...")
-	ToolCallPrefix  = ToolCallStyle.Render("🔧 调用工具: ")
-	ToolErrorPrefix = ErrorStyle.Render("❌ 工具错误: ")
-	SkillCallPrefix = lipgloss.NewStyle().Foreground(lipgloss.Color("#c678dd")).Render("⚡ 调用技能: ")
-	CancelLabel     = CancelStyle.Render("⏹️ 已取消")
-	LengthLabel     = WarnStyle.Render("⚠️ 已达 token 上限")
-	ErrorLabel      = ErrorStyle.Render("❌ 错误")
-	LoadingText     = LoadingStyle.Render("正在思考...")
+	ThinkingLabel      = ThinkingLabelStyle.Render("🤔 Thinking...")
+	ToolCallPrefix     = ToolCallStyle.Render("🔧 调用工具: ")
+	ToolErrorPrefix    = ErrorStyle.Render("❌ 工具错误: ")
+	SkillCallPrefix    = lipgloss.NewStyle().Foreground(lipgloss.Color("#c678dd")).Render("⚡ 调用技能: ")
+	SubAgentCallPrefix = lipgloss.NewStyle().Foreground(lipgloss.Color("#56b6c2")).Render("🤖 调用子 Agent: ")
+	CancelLabel        = CancelStyle.Render("⏹️ 已取消")
+	LengthLabel        = WarnStyle.Render("⚠️ 已达 token 上限")
+	ErrorLabel         = ErrorStyle.Render("❌ 错误")
+	LoadingText        = LoadingStyle.Render("正在思考...")
 )

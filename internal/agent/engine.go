@@ -21,40 +21,63 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 )
 
-// ProgressCallback handles SSE event callbacks with structured data
+// ProgressCallback handles SSE event callbacks with structured data.
+// 所有 Write* 函数（除 WriteDone）首参数 agentName 非空时表示事件来自子 Agent；
+// 主 Agent 自身事件应传 ""，保持向后兼容（不注入 agent_name 字段）。
 type ProgressCallback struct {
-	WriteThinking   func(content string) error
-	WriteMessage    func(content string) error
-	WriteToolCalls  func(toolCalls []ToolCall) error
-	WriteFinish     func(reason string) error
-	WriteToolResult func(toolCallID, toolName, content string, isError bool) error
-	WriteError      func(message string) error
+	WriteThinking   func(agentName, content string) error
+	WriteMessage    func(agentName, content string) error
+	WriteToolCalls  func(agentName string, toolCalls []ToolCall) error
+	WriteFinish     func(agentName, reason string) error
+	WriteToolResult func(agentName, toolCallID, toolName, content string, isError bool) error
+	WriteError      func(agentName, message string) error
 	WriteDone       func() error
 }
 
 // Engine wraps eino's ChatModelAgent for task execution
 type Engine struct {
-	llmConfig   config.LLMConfig
-	middlewares []adk.ChatModelAgentMiddleware
-	mcpManager  *mcp.Manager
-	reactConfig config.ReactConfig
-	log         *logger.Logger
+	llmConfig          config.LLMConfig
+	middlewares        []adk.ChatModelAgentMiddleware
+	mcpManager         *mcp.Manager
+	extraTools         []tool.BaseTool // 追加到 mcpManager.GetTools() 之后，用于 call_agent
+	reactConfig        config.ReactConfig
+	log                *logger.Logger
+	agentName          string // MainAgentName 或子 Agent 名（Solo 模式）
+	emitInternalEvents bool   // 主 Agent 路径打开以透传子 Agent 事件
+	tokenAccumulators  *TokenAccumulators
 }
 
-// NewEngine creates a new Agent Engine
-func NewEngine(
-	cfg config.LLMConfig,
-	middlewares []adk.ChatModelAgentMiddleware,
-	mcpMgr *mcp.Manager,
-	reactCfg config.ReactConfig,
-	log *logger.Logger,
-) *Engine {
+// EngineConfig 是 NewEngine 的命名参数集合，避免位置参数过多。
+type EngineConfig struct {
+	LLM                config.LLMConfig
+	Middlewares        []adk.ChatModelAgentMiddleware
+	MCP                *mcp.Manager
+	ExtraTools         []tool.BaseTool
+	React              config.ReactConfig
+	Log                *logger.Logger
+	AgentName          string
+	EmitInternalEvents bool
+	TokenAccumulators  *TokenAccumulators
+}
+
+// NewEngine creates a new Agent Engine.
+// 若 cfg.AgentName 为空字符串，自动回退为 MainAgentName，
+// 调用方在「主 Agent / 默认场景」下可省略该字段。
+func NewEngine(cfg EngineConfig) *Engine {
+	name := cfg.AgentName
+	if name == "" {
+		name = MainAgentName
+	}
 	return &Engine{
-		llmConfig:   cfg,
-		middlewares: middlewares,
-		mcpManager:  mcpMgr,
-		reactConfig: reactCfg,
-		log:         log,
+		llmConfig:          cfg.LLM,
+		middlewares:        cfg.Middlewares,
+		mcpManager:         cfg.MCP,
+		extraTools:         cfg.ExtraTools,
+		reactConfig:        cfg.React,
+		log:                cfg.Log,
+		agentName:          name,
+		emitInternalEvents: cfg.EmitInternalEvents,
+		tokenAccumulators:  cfg.TokenAccumulators,
 	}
 }
 
@@ -68,7 +91,12 @@ func (e *Engine) Run(
 	modelName string,
 	attachments []MultimodalContent,
 	cb *ProgressCallback,
+	agentMdContent string,
 ) (*RunResult, error) {
+	// 0. 把父 modelName 放进 ctx —— call_agent 工具运行时通过它把同一个 model
+	// 透传给子 Agent，保证编排模式下子 Agent 跟随主 Agent 当前选定的 model。
+	ctx = WithParentModel(ctx, modelName)
+
 	// 1. Create ChatModel with per-call timeout
 	stepTimeout := time.Duration(e.reactConfig.StepTimeout) * time.Second
 	chatModel, err := llm.NewChatModel(ctx, e.llmConfig, modelName, stepTimeout)
@@ -80,7 +108,7 @@ func (e *Engine) Run(
 	tools := e.buildTools()
 
 	// 3. Build system instruction
-	systemInstruction := e.buildSystemInstruction(prompt, sessionMdContent)
+	systemInstruction := e.buildSystemInstruction(prompt, sessionMdContent, agentMdContent)
 
 	// 4. Create ChatModelAgent config
 	maxIter := e.reactConfig.MaxIterations
@@ -89,7 +117,7 @@ func (e *Engine) Run(
 	}
 
 	agentConfig := &adk.ChatModelAgentConfig{
-		Name:          MainAgentName,
+		Name:          e.agentName,
 		Description:   "Groot AI Task Execution Agent",
 		Instruction:   systemInstruction,
 		Model:         chatModel,
@@ -98,6 +126,7 @@ func (e *Engine) Run(
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: tools,
 			},
+			EmitInternalEvents: e.emitInternalEvents,
 		},
 	}
 
@@ -181,11 +210,17 @@ eventLoop:
 				errStr := event.Err.Error()
 				e.log.Error("Agent event error: " + errStr)
 
+				// 在错误分支中也提取 agentName，主 Agent 自身事件折叠为空串保持向后兼容
+				errEventAgentName := event.AgentName
+				if errEventAgentName == e.agentName {
+					errEventAgentName = ""
+				}
+
 				// MCP tool execution errors → send as tool_result so agent can continue
 				if strings.Contains(errStr, "mcp") || strings.Contains(errStr, "command_not_allowed") {
 					toolCallID := extractToolCallID(errStr)
 					if cb.WriteToolResult != nil {
-						cb.WriteToolResult(toolCallID, "mcp_tool", "MCP 工具错误: "+formatMCPError(errStr), true)
+						cb.WriteToolResult(errEventAgentName, toolCallID, "mcp_tool", "MCP 工具错误: "+formatMCPError(errStr), true)
 					}
 					continue
 				}
@@ -196,7 +231,7 @@ eventLoop:
 					strings.Contains(errStr, "no such host") ||
 					strings.Contains(errStr, "timeout") {
 					if cb.WriteError != nil {
-						cb.WriteError("LLM 服务连接失败: " + errStr)
+						cb.WriteError(errEventAgentName, "LLM 服务连接失败: "+errStr)
 					}
 					return nil, fmt.Errorf("LLM 服务连接失败: %w", event.Err)
 				}
@@ -204,7 +239,7 @@ eventLoop:
 				// Other NodeRunError → send error event but continue
 				if strings.Contains(errStr, "NodeRunError") {
 					if cb.WriteError != nil {
-						cb.WriteError(errStr)
+						cb.WriteError(errEventAgentName, errStr)
 					}
 					continue
 				}
@@ -216,10 +251,16 @@ eventLoop:
 			}
 
 			msgOutput := event.Output.MessageOutput
+			eventAgentName := event.AgentName
+			// 主 Agent 自身事件折叠为空串：SSE 不注入 agent_name，保持向后兼容
+			sseAgentName := eventAgentName
+			if sseAgentName == e.agentName {
+				sseAgentName = ""
+			}
 
 			// Handle Tool role (tool result from MCP execution)
 			if msgOutput.Role == schema.Tool {
-				e.processToolEvent(event, cb, &steps)
+				e.processToolEvent(sseAgentName, event, cb, &steps)
 				continue
 			}
 
@@ -240,14 +281,14 @@ eventLoop:
 						// Send reasoning_content (thinking)
 						if msg.ReasoningContent != "" {
 							if cb.WriteThinking != nil {
-								cb.WriteThinking(msg.ReasoningContent)
+								cb.WriteThinking(sseAgentName, msg.ReasoningContent)
 							}
 						}
 
 						// Send content (message)
 						if msg.Content != "" && msg.ReasoningContent == "" {
 							if cb.WriteMessage != nil {
-								cb.WriteMessage(msg.Content)
+								cb.WriteMessage(sseAgentName, msg.Content)
 							}
 							finalResult += msg.Content
 						}
@@ -256,7 +297,7 @@ eventLoop:
 						if len(msg.ToolCalls) > 0 {
 							toolCalls := convertToolCalls(msg.ToolCalls)
 							if len(toolCalls) > 0 && cb.WriteToolCalls != nil {
-								cb.WriteToolCalls(toolCalls)
+								cb.WriteToolCalls(sseAgentName, toolCalls)
 							}
 							for _, tc := range msg.ToolCalls {
 								steps = append(steps, StepRecord{
@@ -272,8 +313,9 @@ eventLoop:
 						// Send finish_reason
 						if msg.ResponseMeta != nil && msg.ResponseMeta.FinishReason != "" {
 							if cb.WriteFinish != nil {
-								cb.WriteFinish(msg.ResponseMeta.FinishReason)
+								cb.WriteFinish(sseAgentName, msg.ResponseMeta.FinishReason)
 							}
+							e.accumulateUsageIfChild(ctx, eventAgentName, msg.ResponseMeta)
 						}
 					}
 					stream.Close()
@@ -284,13 +326,13 @@ eventLoop:
 
 					if msg.ReasoningContent != "" {
 						if cb.WriteThinking != nil {
-							cb.WriteThinking(msg.ReasoningContent)
+							cb.WriteThinking(sseAgentName, msg.ReasoningContent)
 						}
 					}
 
 					if msg.Content != "" && msg.ReasoningContent == "" {
 						if cb.WriteMessage != nil {
-							cb.WriteMessage(msg.Content)
+							cb.WriteMessage(sseAgentName, msg.Content)
 						}
 						finalResult = msg.Content
 					}
@@ -298,7 +340,7 @@ eventLoop:
 					if len(msg.ToolCalls) > 0 {
 						toolCalls := convertToolCalls(msg.ToolCalls)
 						if len(toolCalls) > 0 && cb.WriteToolCalls != nil {
-							cb.WriteToolCalls(toolCalls)
+							cb.WriteToolCalls(sseAgentName, toolCalls)
 						}
 						for _, tc := range msg.ToolCalls {
 							steps = append(steps, StepRecord{
@@ -313,8 +355,9 @@ eventLoop:
 
 					if msg.ResponseMeta != nil && msg.ResponseMeta.FinishReason != "" {
 						if cb.WriteFinish != nil {
-							cb.WriteFinish(msg.ResponseMeta.FinishReason)
+							cb.WriteFinish(sseAgentName, msg.ResponseMeta.FinishReason)
 						}
+						e.accumulateUsageIfChild(ctx, eventAgentName, msg.ResponseMeta)
 					}
 				}
 			}
@@ -341,8 +384,9 @@ eventLoop:
 	return &RunResult{Content: finalResult, Steps: steps}, nil
 }
 
-// processToolEvent processes Tool role events
-func (e *Engine) processToolEvent(event *adk.AgentEvent, cb *ProgressCallback, steps *[]StepRecord) {
+// processToolEvent processes Tool role events.
+// eventAgentName 已由调用方完成「主 Agent 折叠为空串」处理，可直接透传给 SSE。
+func (e *Engine) processToolEvent(eventAgentName string, event *adk.AgentEvent, cb *ProgressCallback, steps *[]StepRecord) {
 	msgOutput := event.Output.MessageOutput
 
 	var toolCallID string
@@ -361,7 +405,7 @@ func (e *Engine) processToolEvent(event *adk.AgentEvent, cb *ProgressCallback, s
 
 	// Send tool_result event
 	if cb.WriteToolResult != nil {
-		if err := cb.WriteToolResult(toolCallID, toolName, output, false); err != nil {
+		if err := cb.WriteToolResult(eventAgentName, toolCallID, toolName, output, false); err != nil {
 			e.log.Error("SSE write tool_result failed: " + err.Error())
 		}
 	}
@@ -396,20 +440,36 @@ func convertToolCalls(tcs []schema.ToolCall) []ToolCall {
 	return result
 }
 
-// buildTools returns all eino tools from the MCP manager (via eino-ext)
+// buildTools returns mcp tools followed by extraTools (e.g., call_agent for orchestrated mode).
+// 主动拷贝以避免对 mcpManager.GetTools() 内部 slice 的隐式依赖——即使将来 GetTools 改为复用底层数组，
+// 这里也不会污染原始 slice。
 func (e *Engine) buildTools() []tool.BaseTool {
-	return e.mcpManager.GetTools()
+	base := e.mcpManager.GetTools()
+	tools := make([]tool.BaseTool, 0, len(base)+len(e.extraTools))
+	tools = append(tools, base...)
+	if len(e.extraTools) > 0 {
+		tools = append(tools, e.extraTools...)
+	}
+	return tools
 }
 
-// buildSystemInstruction builds the system prompt
-func (e *Engine) buildSystemInstruction(prompt string, sessionMdContent string) string {
+// buildSystemInstruction builds the system prompt.
+// Solo 模式（agentMdContent 非空）：用 agent.md 替换 GROOT.md；
+// 编排/主 Agent 模式：保留原有 GROOT.md 注入。
+func (e *Engine) buildSystemInstruction(prompt, sessionMdContent, agentMdContent string) string {
 	sb := &strings.Builder{}
 
-	// 1. GROOT.md（从全局缓存读取，放在最前面）
-	grootMd := grootmd.GetContent()
-	if grootMd != "" {
-		sb.WriteString(grootMd)
+	if agentMdContent != "" {
+		// Solo 模式：用 agent.md 替换 GROOT.md
+		sb.WriteString(agentMdContent)
 		sb.WriteString("\n\n")
+	} else {
+		// 1. GROOT.md（从全局缓存读取，放在最前面）
+		grootMd := grootmd.GetContent()
+		if grootMd != "" {
+			sb.WriteString(grootMd)
+			sb.WriteString("\n\n")
+		}
 	}
 
 	// 2. SESSION.md（会话文件目录提示）
@@ -549,6 +609,34 @@ func defaultMIMEType(attType string) string {
 
 func toPtr(s string) *string {
 	return &s
+}
+
+// childChatIDKey 是 ctx 中存放子 Agent chatID 的 key 类型（unexported 防外部冲突）。
+type childChatIDKey struct{}
+
+// WithChildChatID 把子 Agent 的 chatID 注入 ctx；调用方一般是 CallAgentTool（Task 11）。
+func WithChildChatID(ctx context.Context, chatID string) context.Context {
+	return context.WithValue(ctx, childChatIDKey{}, chatID)
+}
+
+// accumulateUsageIfChild 当事件来自子 Agent 且携带 Usage 时累加。
+// - eventAgentName 是事件源 Agent 名（adk.AgentEvent.AgentName）
+// - 主 Agent 自己的事件不累加（避免误把外层 token 当成子 Agent 输入）
+func (e *Engine) accumulateUsageIfChild(ctx context.Context, eventAgentName string, meta *schema.ResponseMeta) {
+	if meta == nil || meta.Usage == nil {
+		return
+	}
+	if eventAgentName == "" || eventAgentName == e.agentName {
+		return
+	}
+	if e.tokenAccumulators == nil {
+		return
+	}
+	childChatID, ok := ctx.Value(childChatIDKey{}).(string)
+	if !ok || childChatID == "" {
+		return
+	}
+	e.tokenAccumulators.Add(childChatID, meta.Usage.PromptTokens, meta.Usage.CompletionTokens)
 }
 
 // truncate truncates a string to max length

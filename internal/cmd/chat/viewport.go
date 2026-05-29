@@ -27,6 +27,10 @@ type ViewportModel struct {
 	messages   []ChatMessage
 	mdRenderer *glamour.TermRenderer
 	lastWidth  int
+	// currentSpinner 是当前 spinner 帧字符；spinner.Tick 来时由 Model 设置。
+	// 用于在「正在进行中的 tool_call」消息（尾部 tool_call 且未跟 tool_result）
+	// 后追加旋转图标，让用户在 skill / call_agent 调用期间看到动画反馈。
+	currentSpinner string
 }
 
 // bottomReserve is the vertical space reserved for bottom elements below the viewport:
@@ -167,9 +171,12 @@ func (v *ViewportModel) rerender() {
 	contentWidth := v.viewport.Width() - 2 // 两侧各留 1 字符
 
 	var sb strings.Builder
-	for _, msg := range v.messages {
+	for i, msg := range v.messages {
 		// 清理 Windows 行尾 \r 字符，防止终端光标异常
 		msg.Content = strings.ReplaceAll(msg.Content, "\r", "")
+		// 「正在进行中的 tool_call」标志：当前消息是 tool_call 且后面没有更多消息——
+		// 用于在 skill / call_agent / 普通工具的调用期间持续展示 spinner。
+		isPendingToolCall := msg.Role == "tool_call" && i == len(v.messages)-1
 		switch msg.Role {
 		case "user":
 			content := "> " + msg.Content
@@ -196,14 +203,29 @@ func (v *ViewportModel) rerender() {
 			sb.WriteString(wrapped)
 			sb.WriteString("\n\n")
 		case "tool_call":
+			// 进行中时在工具名后面追加一个 spinner 帧，让用户感知调用还在进行；
+			// 调用结束（后面追加了非 tool_call 消息）后 isPendingToolCall=false，
+			// spinner 自然消失。
+			spinnerSuffix := ""
+			if isPendingToolCall && v.currentSpinner != "" {
+				spinnerSuffix = " " + v.currentSpinner
+			}
 			if msg.Meta == "skill" {
 				sb.WriteString(SkillCallPrefix)
 				skillName := extractSkillName(msg.Content)
 				sb.WriteString(skillName)
+				sb.WriteString(spinnerSuffix)
+				sb.WriteString("\n")
+			} else if msg.Meta == "call_agent" {
+				sb.WriteString(SubAgentCallPrefix)
+				agentName := extractSubAgentName(msg.Content)
+				sb.WriteString(agentName)
+				sb.WriteString(spinnerSuffix)
 				sb.WriteString("\n")
 			} else {
 				sb.WriteString(ToolCallPrefix)
 				sb.WriteString(msg.Meta)
+				sb.WriteString(spinnerSuffix)
 				sb.WriteString("\n")
 				if msg.Content != "" {
 					formatted := formatToolArgs(msg.Content)
@@ -534,7 +556,6 @@ func formatValue(v interface{}) string {
 	}
 }
 
-// extractSkillName extracts the skill name from JSON arguments of a skill tool call.
 // eino skill middleware uses {"skill": "skill-name"} format.
 func extractSkillName(raw string) string {
 	var args map[string]interface{}
@@ -551,6 +572,23 @@ func extractSkillName(raw string) string {
 		return fmt.Sprintf("%v", name)
 	}
 	if name, ok := args["skill_name"]; ok {
+		return fmt.Sprintf("%v", name)
+	}
+	return raw
+}
+
+// extractSubAgentName extracts the sub-agent name from call_agent tool's JSON arguments.
+// CallAgentTool 入参格式：{"agent_name": "...", "task": "..."}（见 internal/agent/call_agent.go:18）。
+// 流式增量在解析完成前可能 unmarshal 失败，此时退回截断后的 raw 字符串以便用户看到反馈。
+func extractSubAgentName(raw string) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		if len(raw) > 50 {
+			return raw[:47] + "..."
+		}
+		return raw
+	}
+	if name, ok := args["agent_name"]; ok {
 		return fmt.Sprintf("%v", name)
 	}
 	return raw

@@ -311,6 +311,127 @@
 
 ---
 
+### 2.21 多 Agent 系统测试（v3.8 后）
+
+设计 `docs/superpowers/specs/2026-05-24-multi-agent-design.md`、计划 `docs/superpowers/plans/2026-05-28-multi-agent-implementation.md`。Python 系统测试由用户后续落地；以下为人工烟囱测试与覆盖范围清单。
+
+**前置准备**：
+
+```bash
+mkdir -p ~/.groot/subagents/echo-agent
+cat > ~/.groot/subagents/echo-agent/agent.md <<'EOF'
+---
+description: 回显测试 Agent，把用户输入原样返回
+---
+
+# 回显 Agent
+
+收到任何 task 后，直接返回 task 内容。
+EOF
+
+go build -o bin/groot ./cmd/groot
+./bin/groot &
+sleep 2
+```
+
+#### 2.21.1 子 Agent 注册（启动期扫描）
+
+| 场景 | 期望 |
+|------|------|
+| `subagents/` 目录不存在 | 启动正常，`GET /agents` 仅返回 `groot` |
+| `subagents/<name>/agent.md` 缺 description | 启动跳过该目录，日志 ERROR；其它 Agent 正常加载 |
+| `subagents/<name>/agent.md` 缺失 | 启动跳过该目录 |
+| 子目录名 == `groot`（与主 Agent 同名） | 启动跳过，日志 ERROR |
+| `subagents/<name>` 是符号链接到目录 | 正常识别为子 Agent |
+
+#### 2.21.2 Solo 模式（X-Agent-Name header）
+
+```bash
+# 已注册 → 用子 Agent 执行
+curl -X POST http://localhost:8080/chat \
+  -H "X-Agent-Name: echo-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"hello","prompt":""}'
+
+# 未注册 → 400 unknown_agent
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST http://localhost:8080/chat \
+  -H "X-Agent-Name: ghost-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"x"}'
+# Expected: 400
+
+# X-Agent-Name=groot → 等价于不传（走主 Agent 编排模式）
+```
+
+| 场景 | 期望 |
+|------|------|
+| `X-Agent-Name` 已注册 | 用子 Agent 的 instruction / MCP / skill 执行 |
+| `X-Agent-Name` 未注册 | HTTP 400，body 含 `unknown_agent` |
+| `X-Agent-Name: groot` | 等价于不传 header，走主 Agent 编排模式 |
+| Solo 模式 ChatRecord.AgentName | 持久化到 memory 的字段含子 Agent 名 |
+
+#### 2.21.3 编排模式（call_agent 工具）
+
+要求 GROOT.md 含调度引导段（`groot init` 已自动写入）。
+
+```bash
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"调用 echo-agent，让它回显「test」","prompt":""}'
+```
+
+| 场景 | 期望 |
+|------|------|
+| 主 Agent 工具列表含 `call_agent` | tools 列表内出现，描述含已注册子 Agent 列表 |
+| `call_agent(agent_name, task)` 委托 | 子 Agent 接收 task 并执行 |
+| 子 Agent SSE 事件透传 | 事件 JSON 含 `agent_name` 字段（子 Agent 名） |
+| 子 Agent ChatRecord chatID 含父前缀 | 形如 `<parent_chat_id>_<HHMMSSmmm>_<r4>_<agent_name>` |
+| `call_agent` task 超 `max_task_length` | 工具调用拒绝并返回错误说明 |
+| 子 Agent 结果超 `max_result_length` | 截断，开头加警告标记 |
+| 并发超 `sub_agent.max_concurrency` | FIFO 排队（`semaphore.Weighted`） |
+| Token 累加 | 子 Agent token 累计回到父 chat 的 ChatRecord |
+
+#### 2.21.4 API 行为
+
+| 接口 | 验证内容 |
+|-----|---------|
+| `GET /agents` | `groot` 首位 + 已注册子 Agent；每条含 `name`/`description`/`skills` |
+| `GET /skills` | 主 Agent skills（=不传 header 或 `X-Agent-Name: groot`） |
+| `GET /skills` + `X-Agent-Name: db-agent` | 返回 db-agent 的 skills（= `subagents/db-agent/skills/`） |
+| `GET /skills` + 未知 Agent | HTTP 400 unknown_agent |
+| `GET /tools` | 主 Agent MCP 工具 |
+| `GET /tools` + `X-Agent-Name: db-agent` | 子 Agent MCP 工具 |
+| `GET /chat/status/:sid` | 活跃 chat 时 `progress.sub_agents` 含当前运行的子 Agent 数组 |
+
+#### 2.21.5 TUI `/agent` 命令
+
+| 操作 | 期望 |
+|------|------|
+| `/agent`（无参） | 弹列表 popup，含 groot + 子 Agent，当前 Agent 标 ✓ |
+| `/agent <name>` | 切换并自动新建会话；状态栏 `Agent: <name>` 更新 |
+| `/agent groot` | 切回主 Agent，client 不再发送 `X-Agent-Name` header |
+| `/agent <未知>` | popup 列表回退（不静默，让用户重选） |
+| `/clear` | 不影响当前 Agent 选择 |
+
+#### 2.21.6 Skills 热插拔（subagents/*/skills/）
+
+| 操作 | 期望 |
+|------|------|
+| 在 `subagents/<name>/skills/` 下新增 `SKILL.md` | watcher 触发回调，日志记录「子 Agent skills 变更触发重新加载」 |
+| 在 `subagents/<name>/agent.md` 修改 | watcher 不响应（仅监听 skills 子目录变更） |
+| 在 `subagents/<name>/mcp/` 修改 | watcher 不响应 |
+
+#### 2.21.7 init 行为
+
+| 操作 | 期望 |
+|------|------|
+| `groot init` 全新目录 | 创建 `subagents/` 子目录 |
+| `groot init` 全新目录 | 写入 `GROOT.md`，含「子 Agent 调度」段（`call_agent` / 按需调用 / 逐个调用 / 明确传参 / 附件引用 关键词） |
+| `groot init` 已有 `GROOT.md` | 跳过不覆盖用户内容 |
+
+---
+
 ## 三、运行测试
 
 ### Go 单元测试

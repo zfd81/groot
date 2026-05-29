@@ -63,19 +63,29 @@ var (
 )
 
 func GenerateChildChatID(parentChatID, agentName string) string {
-	now := time.Now()
-	timeStr := now.Format("150405") + fmt.Sprintf("%03d", now.Nanosecond()/1000000)
-
-	ms := now.UnixNano() / int64(time.Millisecond)
 	childIDMu.Lock()
-	if ms != childIDLastMs {
+	// 关键：在锁内取 time.Now()，保证同一锁观察到的 ms 单调非递减。
+	// 历史 bug：锁外取时，goroutine 调度延迟可能让「老 ms」在锁内后到达，
+	// 触发 ms != lastMs 分支重置 counter+重抽 offset，生日悖论下与历史 offset 碰撞 → 复现历史 ID。
+	now := time.Now()
+	ms := now.UnixNano() / int64(time.Millisecond)
+
+	// 仅当 ms 严格大于 lastMs 时才重置 counter/offset。
+	// - 等于 lastMs：同一毫秒窗口，沿用 counter 自增即可保证唯一。
+	// - 小于 lastMs：极罕见的系统时钟回退（NTP 校时等）。此时把 ms 提升到 lastMs，
+	//   并同步重算 timeStr，防止「老 timeStr + 新 counter」与历史窗口的 ID 碰撞。
+	if ms > childIDLastMs {
 		childIDLastMs = ms
 		childIDCounter = 0
 		var seedBytes [4]byte
 		_, _ = rand.Read(seedBytes[:])
 		seed := uint32(seedBytes[0])<<24 | uint32(seedBytes[1])<<16 | uint32(seedBytes[2])<<8 | uint32(seedBytes[3])
 		childIDOffset = seed % childIDBase36Range
+	} else if ms < childIDLastMs {
+		ms = childIDLastMs
+		now = time.Unix(0, ms*int64(time.Millisecond))
 	}
+	timeStr := now.Format("150405") + fmt.Sprintf("%03d", now.Nanosecond()/1000000)
 	v := (childIDOffset + childIDCounter) % childIDBase36Range
 	childIDCounter++
 	childIDMu.Unlock()

@@ -49,6 +49,8 @@ func TestExecuteCommandRouting(t *testing.T) {
 		{CommandMsg{Cmd: "/help"}, "help_popup"},
 		{CommandMsg{Cmd: "/model"}, "model_popup"},
 		{CommandMsg{Cmd: "/model", Args: "gpt-4o"}, "switch_model"},
+		{CommandMsg{Cmd: "/agent"}, "agent_popup"},
+		{CommandMsg{Cmd: "/agent", Args: "db-agent"}, "switch_agent"},
 		{CommandMsg{Cmd: "/skills", Args: "list"}, "skills_popup"},
 		{CommandMsg{Cmd: "/mcp", Args: "list"}, "fetch"},
 		{CommandMsg{Cmd: "/export"}, "export"},

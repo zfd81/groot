@@ -1,7 +1,12 @@
 package chat
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestClassifyEvent(t *testing.T) {
@@ -62,5 +67,45 @@ func TestNewClientDefaults(t *testing.T) {
 	}
 	if client.modelName != "gpt-4o" {
 		t.Errorf("modelName = %q, want 'gpt-4o'", client.modelName)
+	}
+}
+
+// TestSendChatStream_AgentHeader 验证 X-Agent-Name 请求头按 Agent 名条件发送：
+// 主 Agent（空串或 MainAgentName="groot"）不发，子 Agent 才发。
+func TestSendChatStream_AgentHeader(t *testing.T) {
+	cases := []struct {
+		name       string
+		agent      string
+		wantHeader string // 空串 = 不应该有 header
+	}{
+		{"empty agent omits header", "", ""},
+		{"main agent name omits header", "groot", ""},
+		{"sub agent sends header", "db-agent", "db-agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotHeader string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeader = r.Header.Get("X-Agent-Name")
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("X-Session-ID", "sess-test")
+				w.WriteHeader(200)
+				_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			}))
+			defer srv.Close()
+
+			c := NewClient(srv.URL, "gpt-4")
+			c.SetAgent(tc.agent)
+
+			events := make(chan tea.Msg, 8)
+			cancelCh := make(chan struct{})
+			c.SendChatStream("hi", nil, events, cancelCh)
+			// drain channel until SendChatStream goroutine closes it
+			for range events {
+			}
+			if gotHeader != tc.wantHeader {
+				t.Errorf("X-Agent-Name = %q, want %q", gotHeader, tc.wantHeader)
+			}
+		})
 	}
 }
