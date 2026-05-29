@@ -421,6 +421,13 @@ message:
       password: ""                 # SMTP 密码
       from: ""                     # 发件人地址
 
+# 子 Agent 调度配置
+subagent:
+  max_concurrency: 5               # 同时运行的子 Agent 上限（FIFO 排队）
+  exec_timeout: 5m                 # 单次子 Agent 执行超时（排队不计入）
+  max_task_length: 16000           # call_agent task 参数长度上限（字符）
+  max_result_length: 8000          # 子 Agent 返回文本截断长度
+
 # 安全配置
 security:
   rate_limit:
@@ -546,6 +553,17 @@ logging:
 | `senders.email.from` | 否 | 发件人邮箱地址 |
 
 > **说明：** stdout sender 始终启用，无需配置。webhook 和 email sender 按需配置。定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道。
+
+#### SubAgent 配置
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `max_concurrency` | 否 | 同时运行的子 Agent 上限（全局 semaphore，超出 FIFO 排队），默认 `5` |
+| `exec_timeout` | 否 | 单次子 Agent 执行超时（Go duration 格式，如 `5m`/`30s`，排队不计入），默认 `5m` |
+| `max_task_length` | 否 | `call_agent` 工具 `task` 参数最大字符数，超出报错，默认 `16000` |
+| `max_result_length` | 否 | 子 Agent 返回文本截断长度，超出截断并附警告，默认 `8000` |
+
+> **说明：** 子 Agent 的目录、`agent.md` 与专属 mcp/skills 配置放在 `{GROOT_HOME}/subagents/<name>/` 下，详见 [五、扩展能力](#五扩展能力) 中的「5.3 多 Agent」。
 
 #### Security 配置
 
@@ -950,9 +968,9 @@ Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当�
 #### 5.3.6 配置项（`config.yaml`）
 
 ```yaml
-sub_agent:
+subagent:
   max_concurrency: 5        # 同时运行的子 Agent 上限（FIFO 排队）
-  max_task_length: 4000     # call_agent task 参数长度上限（字符）
+  max_task_length: 16000    # call_agent task 参数长度上限（字符）
   max_result_length: 8000   # 子 Agent 结果长度上限，超出截断
   exec_timeout: 5m          # 单次子 Agent 执行超时
 ```
