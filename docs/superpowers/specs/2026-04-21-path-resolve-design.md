@@ -7,7 +7,6 @@
 **固定目录：** 位置固定，不可通过配置更改。
 - `skills/` - Skills 定义目录，固定在 `{GROOT_HOME}/skills`
 - `mcp/` - MCP 配置目录，固定在 `{GROOT_HOME}/mcp`
-- `api/` - API 工具配置目录，固定在 `{GROOT_HOME}/api`
 - `temp/` - 附件处理临时目录，固定在 `{memoryDir}/temp`（位置取决于 memory.directory 配置）
 
 **可配置目录：** 支持相对路径和绝对路径配置。
@@ -24,7 +23,6 @@
 |------|----------|------|
 | `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
 | `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
-| `api` | `{GROOT_HOME}/api` | API 工具配置目录 |
 | `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
 
 **说明：** temp 目录的位置取决于 memory.directory 配置：
@@ -90,9 +88,8 @@ type SkillsConfig struct {
 }
 ```
 
-**MCPConfig 和 APIToolsConfig 已移除：**
+**MCPConfig 已移除：**
 - MCP 目录固定为 `{GROOT_HOME}/mcp`
-- API 工具目录固定为 `{GROOT_HOME}/api`
 
 ### 5. main.go 路径处理
 
@@ -102,7 +99,6 @@ type SkillsConfig struct {
 // 固定目录路径
 skillsDir := filepath.Join(homeDir, "skills")
 mcpDir := filepath.Join(homeDir, "mcp")
-apiDir := filepath.Join(homeDir, "api")
 
 // 可配置目录路径（使用 ResolvePath）
 memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
@@ -126,7 +122,7 @@ func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
 
 | 文件 | 改动类型 | 说明 |
 |------|----------|------|
-| `internal/config/config.go` | 修改 | 移除 MCPConfig、APIToolsConfig、SkillsConfig.Directory、AttachmentConfig.TempDirectory |
+| `internal/config/config.go` | 修改 | 移除 MCPConfig、SkillsConfig.Directory、AttachmentConfig.TempDirectory |
 | `internal/config/defaults.go` | 修改 | 移除相关默认配置值 |
 | `internal/config/loader.go` | 修改 | 移除相关默认填充逻辑 |
 | `internal/attachment/handler.go` | 修改 | NewHandler 参数改为 memoryDir，temp 固定为 memoryDir/temp |
@@ -136,7 +132,7 @@ func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
 
 ## 设计原因
 
-1. **简化配置：** skills、mcp、api 目录通常不需要自定义位置，固定路径减少配置复杂度。
+1. **简化配置：** skills、mcp 目录通常不需要自定义位置，固定路径减少配置复杂度。
 2. **避免错误：** 固定路径避免用户配置错误导致工具加载失败。
 3. **temp 目录归属：** temp 是附件处理的临时目录，逻辑上属于 memory 模块，放在 memory 目录下更合理。
 4. **保持灵活性：** memory 和 logs 目录可能需要放在不同存储位置（如 SSD 或网络存储），保留可配置性。

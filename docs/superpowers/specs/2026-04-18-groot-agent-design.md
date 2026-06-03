@@ -243,8 +243,6 @@ llm:
 │   └── {skill-name}/SKILL.md      # Skill 定义文件
 ├── mcp/                           # MCP 配置目录（固定位置）
 │   └── {mcp-name}.json            # MCP 配置文件
-├── api/                           # API 工具配置目录（固定位置）
-│   └── {tool-name}.json           # API 工具配置文件
 ├── schedules/                     # 定时任务目录（固定位置）
 │   ├── active/                    # 活跃任务
 │   │   └── {task-id}/
@@ -1273,7 +1271,6 @@ logging:
 以下目录位置固定，不可配置：
 - `{GROOT_HOME}/skills` - Skills 定义目录
 - `{GROOT_HOME}/mcp` - MCP 配置目录
-- `{GROOT_HOME}/api` - API 工具配置目录
 - `{GROOT_HOME}/schedules` - 定时任务目录
 - `{memoryDir}/temp` - 附件处理临时目录（固定在 memory 目录下）
 
@@ -1294,7 +1291,6 @@ logging:
 | `{GROOT_HOME}/config.yaml` | 配置文件 |
 | `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件（固定位置） |
 | `{GROOT_HOME}/mcp/{name}.json` | MCP 配置文件（固定位置） |
-| `{GROOT_HOME}/api/{name}.json` | API 工具配置文件（固定位置） |
 | `{GROOT_HOME}/schedules/active/{task-id}/task.json` | 定时任务定义文件（固定位置） |
 | `{GROOT_HOME}/schedules/active/{task-id}/executions/` | 定时任务执行历史 |
 | `{memoryDir}/temp/` | 附件处理临时目录（固定在 memory 目录下） |
