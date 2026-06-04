@@ -26,7 +26,6 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/message/senders"
-	"github.com/zfd81/groot/internal/skills"
 )
 
 // RunChat starts the chat TUI.
@@ -159,20 +158,6 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	// Load sub-agents (fixed directory: {GROOT_HOME}/subagents)
 	subAgentDir := filepath.Join(homeDir, "subagents")
 	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
-
-	// Skills hot-reload watcher（同时监听主 Agent 与子 Agent skills）。
-	// 子 Agent skill 变更回调：第一期仅 log——einoskill backend 没有公开的 Rescan API，
-	// 真正热刷新留作后续优化。
-	skillsWatcher := skills.NewWatcher(skillsDir, subAgentDir, cfg.Skills.HotReload, log,
-		skills.NewSubAgentReloadCallback(log, func(name string) bool {
-			if subAgentReg == nil {
-				return false
-			}
-			_, ok := subAgentReg.Get(name)
-			return ok
-		}),
-	)
-	_ = skillsWatcher.Start()
 
 	// Create executor
 	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)

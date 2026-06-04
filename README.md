@@ -372,12 +372,6 @@ llm:
       max_completion_tokens: 4096
       temperature: 0.7
 
-# Skills 热插拔配置
-skills:
-  hot_reload:
-    enabled: true                    # 是否启用 Skills 热插拔
-    debounce_delay: 2                # 防抖延迟（秒）
-
 # ReAct 执行配置
 react:
   max_iterations: 20               # 最大循环次数，-1 表示不限制
@@ -493,14 +487,7 @@ logging:
 | `models.{name}.stop` | 否 | 停止序列列表，默认空 |
 | `models.{name}.thinking` | 否 | 深度思考模式（Qwen/DeepSeek 等），默认 `false` |
 
-#### Skills 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `hot_reload.enabled` | 否 | 是否启用热插拔，默认 `true` |
-| `hot_reload.debounce_delay` | 否 | 防抖延迟（秒），默认 `2` |
-
-> **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。
+> **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。Skills 热插拔天然支持，无需配置开关。
 
 #### ReAct 配置
 
@@ -751,10 +738,11 @@ dependencies: []                      # 依赖的其他 Skill（可选）
 
 #### 5.1.3 热插拔机制
 
-- 启用 `skills.hot_reload.enabled: true` 后，修改 `SKILL.md` 自动生效
-- 防抖延迟 `debounce_delay` 防止编辑过程中频繁触发加载
-- 新增 Skill：创建目录和 `SKILL.md` 文件
-- 修改 Skill：编辑 `SKILL.md` 内容
+Skills 热插拔由 eino Backend 无缓存设计天然支持，无需配置或重启：
+
+- 新增 Skill：创建目录和 `SKILL.md` 文件，下次 Agent 调用时自动生效
+- 修改 Skill：编辑 `SKILL.md` 内容，下次 Agent 调用时自动生效
+- 删除 Skill：删除对应目录，下次 Agent 调用时自动生效
 - 删除 Skill：删除对应目录
 
 ---

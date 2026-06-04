@@ -191,18 +191,6 @@ func TestLogRequest(t *testing.T) {
 	log.LogRequest("GET", "/api/chat", "task_001", "user_001")
 }
 
-func TestLogSkillHotReload(t *testing.T) {
-	cfg := config.LoggingConfig{
-		Level:  "info",
-		Format: "json",
-		Output: []string{"stdout"},
-	}
-
-	log := New(cfg)
-
-	log.LogSkillHotReload("loaded", "test_skill", 5)
-}
-
 func TestLogMCPHotReload(t *testing.T) {
 	cfg := config.LoggingConfig{
 		Level:  "info",

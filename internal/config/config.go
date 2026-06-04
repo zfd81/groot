@@ -11,7 +11,6 @@ type Config struct {
 	Agent      AgentConfig      `yaml:"agent"`
 	Server     ServerConfig     `yaml:"server"`
 	LLM        LLMConfig        `yaml:"llm"`
-	Skills     SkillsConfig     `yaml:"skills"`
 	Memory     MemoryConfig     `yaml:"memory"`
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
@@ -53,17 +52,6 @@ type ModelConfig struct {
 	Seed                int      `yaml:"seed"`
 	Stop                []string `yaml:"stop"`
 	Thinking            bool     `yaml:"thinking"`
-}
-
-// SkillsConfig holds Skills hot-reload settings
-type SkillsConfig struct {
-	HotReload HotReloadConfig `yaml:"hot_reload"`
-}
-
-// HotReloadConfig holds hot-reload settings
-type HotReloadConfig struct {
-	Enabled       bool `yaml:"enabled"`
-	DebounceDelay int  `yaml:"debounce_delay"`
 }
 
 // MemoryConfig 记忆模块配置

@@ -135,7 +135,6 @@
 | TestGrootMdSpecialCases | test_hot_reload.py | GROOT.md 特殊情况 |
 | TestSkillsHotReload | test_hot_reload.py | 技能热加载 |
 | TestSkillFormat | test_hot_reload.py | 技能格式验证 |
-| TestDebounceDelay | test_hot_reload.py | 防抖延迟 |
 
 ### 2.7 ID 格式测试
 

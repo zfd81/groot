@@ -22,8 +22,8 @@ Agent → ChatModelAgentMiddleware（skill 中间件）
 
 - **声明式定义**：Skill 通过 Markdown 文件定义，无需编写代码，降低扩展门槛
 - **文件即接口**：每个 Skill 一个目录，目录下放 SKILL.md，结构简单直观
-- **热插拔优先**：fsnotify 监听目录变化，运行时动态加载/卸载，不中断服务
-- **框架复用**：Skill 加载、解析、注册均由 eino 框架提供，Groot 只做目录管理和热插拔监听
+- **热插拔优先**：eino Backend 无缓存设计，每次调用实时读取文件系统，Skills 变更即时生效
+- **框架复用**：Skill 加载、解析、注册均由 eino 框架提供，Groot 只做目录管理
 
 ## 目录结构
 
@@ -35,13 +35,9 @@ internal/
 ├── cmd/
 │   ├── skills.go            # skills CLI 命令实现（list/install/uninstall）
 │   └── skills_test.go       # CLI 单元测试
-├── skills/
-│   └── watcher.go           # Skills 目录热插拔监听器（fsnotify）
 ├── api/
 │   ├── handler/skills.go    # GET /skills API 处理器
 │   └── types/types.go       # SkillsResponse / SkillInfo 类型定义
-└── config/
-    └── config.go            # SkillsConfig（hot_reload 配置项）
 ```
 
 ### 数据目录
@@ -149,42 +145,11 @@ type Backend interface {
 
 ## 热插拔机制
 
-Skills 热插拔由两层协作实现：
+Skills 热插拔由 eino Backend 天然支持，无需额外组件。
 
-### eino Backend 层（天然支持）
+`filesystemBackend` 不缓存任何数据，`List()` 和 `Get()` 每次都实时扫描 `{GROOT_HOME}/skills/*/SKILL.md`。因此 Skills 的增/删/改在下一次 Agent 调用 `skill` 工具时自动生效，无需重启服务，无需配置开关。
 
-`filesystemBackend` 不缓存任何数据，`List()` 和 `Get()` 每次都实时扫描 `{GROOT_HOME}/skills/*/SKILL.md`。因此 Agent 调用 `skill` 工具时，看到的始终是最新的 Skills 列表。
-
-### Groot Watcher 层（事件监听 + 日志）
-
-`internal/skills/watcher.go` 使用 `fsnotify` 监听 skills 目录变化：
-
-- 监听 CREATE / REMOVE / RENAME / WRITE 事件
-- 防抖机制：检测到变化后延迟 `debounce_delay` 秒再触发 reload
-- reload 时统计当前 SKILL.md 数量，调用 `LogSkillHotReload` 记录日志
-- **不缓存、不索引**：纯粹的事件监听和日志记录
-
-### 配置项
-
-```yaml
-skills:
-  hot_reload:
-    enabled: true       # 是否启用热插拔监听（默认 true）
-    debounce_delay: 2   # 防抖延迟（秒，默认 2）
-```
-
-### 处理流程
-
-```
-Skills 目录变化（新增/修改/删除）
-  │
-  ├── fsnotify 检测到事件
-  ├── 防抖等待（debounce_delay 秒）
-  ├── 统计当前 SKILL.md 数量
-  └── 记录日志: LogSkillHotReload("reloaded", "", count)
-```
-
-> 注意：热插拔无需重建 Backend 或 Middleware。eino Backend 每次调用实时读取文件系统，Skill 变更在下一次 Agent 调用时自动生效。
+> 热插拔是 eino Backend 无缓存设计的自然结果，不是独立功能。
 
 ## CLI 命令设计
 
@@ -280,16 +245,7 @@ type skillItem struct {
 
 > API 端点定义已抽取至 [API 设计文档](2026-05-16-api-design.md)。
 
-## 配置扩展
-
-`config.yaml` 中 `skills` 段：
-
-```yaml
-skills:
-  hot_reload:
-    enabled: true       # 是否启用热插拔监听
-    debounce_delay: 2   # 防抖延迟（秒）
-```
+Skills 热插拔基于 eino Backend 的无缓存设计，无需在 `config.yaml` 中配置。
 
 ## Skill 示例
 

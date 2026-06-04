@@ -34,7 +34,6 @@ import (
 	"github.com/zfd81/groot/internal/message/senders"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
-	"github.com/zfd81/groot/internal/skills"
 )
 
 var (
@@ -322,22 +321,6 @@ func startServer(homeDir string, port int) {
 	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
-	// Start skills hot-reload watcher（同时监听主 Agent 与子 Agent skills）。
-	// 子 Agent skill 变更回调：第一期仅 log——einoskill backend 没有公开的 Rescan API，
-	// 真正热刷新留作后续优化（Task 21 文档同步阶段记录）。
-	skillsWatcher := skills.NewWatcher(skillsDir, subAgentDir, cfg.Skills.HotReload, log,
-		skills.NewSubAgentReloadCallback(log, func(name string) bool {
-			if subAgentReg == nil {
-				return false
-			}
-			_, ok := subAgentReg.Get(name)
-			return ok
-		}),
-	)
-	if err := skillsWatcher.Start(); err != nil {
-		log.Error("无法启动 Skills watcher", zap.Error(err))
-	}
-
 	// Create executor (used by both API server and schedule runner)
 	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
 
@@ -461,9 +444,8 @@ func startServer(homeDir string, port int) {
 		// Stop server
 		srv.Stop(ctx)
 
-		// Stop watchers
+		// Stop watcher
 		grootMdWatcher.Stop()
-		skillsWatcher.Stop()
 
 		// Stop message layer
 		msgLayer.Stop()

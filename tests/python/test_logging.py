@@ -148,7 +148,6 @@ class TestLogEvents:
                                 assert data["event"] in [
                                     "api_request",
                                     "chat_completed",
-                                    "skill_hot_reload",
                                     "mcp_hot_reload",
                                     "memory_cleanup"
                                 ]

@@ -63,11 +63,6 @@ func applyDefaults(cfg *Config) {
 		cfg.Server.Port = 8080
 	}
 
-	// Skills defaults
-	if cfg.Skills.HotReload.DebounceDelay == 0 {
-		cfg.Skills.HotReload.DebounceDelay = 2
-	}
-
 	// Memory defaults
 	if cfg.Memory.Directory == "" {
 		cfg.Memory.Directory = "memory"

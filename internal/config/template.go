@@ -37,12 +37,6 @@ llm:
 #  host: 0.0.0.0                    # 服务监听地址
 #  port: 8080                       # 服务监听端口
 
-# Skills 热插拔配置
-#skills:
-#  hot_reload:
-#    enabled: true                  # 是否启用热插拔
-#    debounce_delay: 2              # 防抖延迟（秒）
-
 # ReAct 执行配置
 #react:
 #  max_iterations: 20               # 最大循环次数

@@ -160,16 +160,6 @@ func (l *Logger) LogRequest(method, path, taskID, caller string) {
 	)
 }
 
-// LogSkillHotReload logs skill hot-reload event
-func (l *Logger) LogSkillHotReload(action, skillName string, count int) {
-	l.zap.Info("skill_hot_reload",
-		zap.String("event", "skill_hot_reload"),
-		zap.String("action", action),
-		zap.String("skill_name", skillName),
-		zap.Int("skills_count", count),
-	)
-}
-
 // LogMCPHotReload logs MCP hot-reload event
 func (l *Logger) LogMCPHotReload(action, mcpName, mcpType string, count int) {
 	l.zap.Info("mcp_hot_reload",

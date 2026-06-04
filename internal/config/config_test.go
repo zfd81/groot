@@ -50,14 +50,6 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("ModelConfig.PresencePenalty 默认值错误: got %f, want 0.0", defaultModel.PresencePenalty)
 	}
 
-	// 验证 Skills 默认值
-	if !cfg.Skills.HotReload.Enabled {
-		t.Error("Skills.HotReload.Enabled 默认应该为 true")
-	}
-	if cfg.Skills.HotReload.DebounceDelay != 2 {
-		t.Errorf("Skills.HotReload.DebounceDelay 默认值错误: got %d, want 2", cfg.Skills.HotReload.DebounceDelay)
-	}
-
 	// 验证 Memory 默认值
 	if cfg.Memory.Directory != "memory" {
 		t.Errorf("Memory.Directory 默认值错误: got %s, want memory", cfg.Memory.Directory)

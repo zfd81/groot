@@ -26,12 +26,6 @@ func DefaultConfig() *Config {
 				},
 			},
 		},
-		Skills: SkillsConfig{
-			HotReload: HotReloadConfig{
-				Enabled:       true,
-				DebounceDelay: 2,
-			},
-		},
 		Memory: MemoryConfig{
 			Directory:       "memory",
 			RetentionDays:   7,
