@@ -9,14 +9,14 @@
 | 要点 | 说明 |
 |------|------|
 | 文件位置 | `{GROOT_HOME}/GROOT.md`（默认 `~/.groot/GROOT.md`） |
-| 加载时机 | 服务启动时加载 + 热加载监听 |
-| 配置开关 | 无需配置，默认启用 |
-| 缓存机制 | 启动时加载到缓存，请求时从缓存读取，文件变化时更新缓存 |
+| 加载时机 | 每次构建系统指令时按需读取 |
+| 配置开关 | 无需配置，自动生效 |
+| 缓存机制 | 无缓存，每次直接读文件，有就加载，没有就跳过 |
 
 ## 系统指令构建顺序
 
 ```
-GROOT.md（缓存）
+GROOT.md（按需读取）
 → prompt（用户传入）
 → Skills 指令
 → 执行规则
@@ -24,198 +24,86 @@ GROOT.md（缓存）
 
 ## 边界条件处理
 
+GROOT.md 按需读取，每次构建系统指令时直接读文件：
+
 | 情况 | 处理方式 |
 |------|----------|
-| GROOT.md 不存在 | 正常运行，清空缓存 |
-| GROOT.md 存在但为空 | 正常运行，清空缓存 |
-| GROOT.md 读取失败 | 记录警告日志，正常运行，清空缓存 |
-| GROOT.md 被创建 | Watcher 检测到，加载内容到缓存 |
-| GROOT.md 被修改 | Watcher 检测到，重新加载内容到缓存 |
-| GROOT.md 被删除 | Watcher 检测到，清空缓存 |
+| GROOT.md 不存在 | 返回空字符串，正常运行 |
+| GROOT.md 存在但为空 | 返回空字符串，正常运行 |
+| GROOT.md 读取失败 | 记录错误日志，返回空字符串，正常运行 |
 
-## 热加载机制
+## 加载机制
 
-### 启动流程
-
-1. Engine 初始化（grootMdContent = ""）
-2. GROOT.md Watcher 启动（无条件）
-3. Watcher 读取 GROOT.md → 写入 Engine.grootMdContent
-4. Watcher 监听 GROOT_HOME 目录变化
-
-### 文件变化流程
-
-1. fsnotify 检测到 GROOT.md 变化
-2. Watcher.reload()
-3. 读取文件内容（或清空）
-4. Engine.SetGrootMdContent(content)
-5. 缓存更新完成
+与 Skills 的 eino Backend 策略一致：**无缓存，每次请求时直接读文件**。
 
 ### 请求处理流程
 
 1. 用户发起请求
 2. Engine.buildSystemInstruction()
-3. Engine.GetGrootMdContent()（从缓存读取，不读文件）
-4. 构建完整系统指令
+3. `grootmd.GetContent(homeDir)` → 直接读 `{GROOT_HOME}/GROOT.md`
+4. 文件存在 → 返回内容；不存在 → 返回空字符串
+5. 构建完整系统指令
+
+### 设计要点
+
+- **无需 Watcher**：不依赖 fsnotify，不维护缓存，不创建后台 goroutine
+- **天然热加载**：文件变更在下次请求时自动生效，与 Skills 行为一致
+- **零配置**：文件存在就加载，不存在就跳过，完全自动
 
 ## 改动文件清单
 
 | 文件 | 改动类型 | 说明 |
 |------|----------|------|
-| `internal/grootmd/watcher.go` | 新增 | GROOT.md 热加载 Watcher |
-| `internal/agent/engine.go` | 修改 | 新增缓存字段和读写方法 |
-| `cmd/groot/main.go` | 修改 | 启动 Watcher（无条件） |
+| `internal/grootmd/content.go` | 修改 | GetContent 改为直接读文件 |
+| `internal/grootmd/watcher.go` | 删除 | 不再需要 fsnotify watcher |
+| `internal/agent/engine.go` | 修改 | 传入 homeDir 参数，直接调用 grootmd.GetContent |
 
 ## 核心代码设计
 
-### Engine 结构体修改
+### GetContent 实现
 
 ```go
-type Engine struct {
-    // ...existing fields
-    grootMdContent string     // GROOT.md 内容缓存
-    grootMdMu      sync.RWMutex
-}
+package grootmd
 
-func (e *Engine) SetGrootMdContent(content string) {
-    e.grootMdMu.Lock()
-    e.grootMdContent = content
-    e.grootMdMu.Unlock()
-}
+// GetContent 每次调用时直接读取 GROOT.md 文件。
+// 文件存在且可读 → 返回内容；文件不存在/为空/读取失败 → 返回空字符串。
+func GetContent(homeDir string) string {
+    path := filepath.Join(homeDir, "GROOT.md")
 
-func (e *Engine) GetGrootMdContent() string {
-    e.grootMdMu.RLock()
-    defer e.grootMdMu.RUnlock()
-    return e.grootMdContent
+    info, err := os.Stat(path)
+    if err != nil || info.Size() == 0 {
+        return ""
+    }
+
+    content, err := os.ReadFile(path)
+    if err != nil {
+        return ""
+    }
+
+    return string(content)
 }
 ```
 
 ### buildSystemInstruction 修改
 
 ```go
-func (e *Engine) buildSystemInstruction(prompt string) string {
+func (e *Engine) buildSystemInstruction(prompt, sessionMdContent, agentMdContent string) string {
     sb := &strings.Builder{}
 
-    // 1. GROOT.md（从缓存读取）
-    grootMd := e.GetGrootMdContent()
-    if grootMd != "" {
-        sb.WriteString(grootMd)
+    if agentMdContent != "" {
+        // Solo 模式：用 agent.md 替换 GROOT.md
+        sb.WriteString(agentMdContent)
         sb.WriteString("\n\n")
-    }
-
-    // 2. prompt
-    if prompt != "" {
-        sb.WriteString(prompt)
-        sb.WriteString("\n\n")
-    }
-
-    // 3. Skills + 执行规则（原有逻辑）
-    // ...
-
-    return sb.String()
-}
-```
-
-### Watcher 实现
-
-```go
-package grootmd
-
-type Watcher struct {
-    engine     *agent.Engine
-    homeDir    string
-    watcher    *fsnotify.Watcher
-    stopChan   chan struct{}
-    log        *logger.Logger
-}
-
-func NewWatcher(engine *agent.Engine, homeDir string, log *logger.Logger) *Watcher {
-    return &Watcher{
-        engine:   engine,
-        homeDir:  homeDir,
-        stopChan: make(chan struct{}),
-        log:      log,
-    }
-}
-
-func (w *Watcher) Start() error {
-    // 初始加载
-    w.reload()
-
-    // 启动 fsnotify 监听
-    watcher, err := fsnotify.NewWatcher()
-    if err != nil {
-        return err
-    }
-    w.watcher = watcher
-
-    // 监听 homeDir 目录
-    if err := watcher.Add(w.homeDir); err != nil {
-        return err
-    }
-
-    go w.run()
-    return nil
-}
-
-func (w *Watcher) Stop() {
-    close(w.stopChan)
-    if w.watcher != nil {
-        w.watcher.Close()
-    }
-}
-
-func (w *Watcher) reload() {
-    path := filepath.Join(w.homeDir, "GROOT.md")
-
-    if _, err := os.Stat(path); os.IsNotExist(err) {
-        w.engine.SetGrootMdContent("")
-        return
-    }
-
-    content, err := os.ReadFile(path)
-    if err != nil {
-        w.log.Warn("无法读取 GROOT.md", zap.Error(err))
-        w.engine.SetGrootMdContent("")
-        return
-    }
-
-    w.engine.SetGrootMdContent(string(content))
-}
-
-func (w *Watcher) run() {
-    for {
-        select {
-        case <-w.stopChan:
-            return
-        case event, ok := <-w.watcher.Events:
-            if !ok {
-                return
-            }
-            // 只处理 GROOT.md 相关事件
-            if strings.HasSuffix(event.Name, "GROOT.md") {
-                w.reload()
-            }
-        case err, ok := <-w.watcher.Errors:
-            if !ok {
-                return
-            }
-            w.log.Error("Watcher 错误", zap.Error(err))
+    } else {
+        // 1. GROOT.md（按需读取，有就加载，没有就跳过）
+        grootMd := grootmd.GetContent(e.homeDir)
+        if grootMd != "" {
+            sb.WriteString(grootMd)
+            sb.WriteString("\n\n")
         }
     }
+    // ...
 }
-```
-
-### main.go 修改
-
-```go
-// 启动 GROOT.md watcher（无条件）
-grootMdWatcher := grootmd.NewWatcher(engine, homeDir, log)
-if err := grootMdWatcher.Start(); err != nil {
-    log.Error("无法启动 GROOT.md watcher", zap.Error(err))
-}
-
-// ...shutdown 时
-grootMdWatcher.Stop()
 ```
 
 ## 使用示例

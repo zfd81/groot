@@ -26,7 +26,6 @@ import (
 	"github.com/zfd81/groot/internal/cmd"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/filesystem"
-	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
@@ -296,12 +295,6 @@ func startServer(homeDir string, port int) {
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
 
-	// Start GROOT.md watcher (unconditionally)
-	grootMdWatcher := grootmd.NewWatcher(homeDir, log)
-	if err := grootMdWatcher.Start(); err != nil {
-		log.Error("无法启动 GROOT.md watcher", zap.Error(err))
-	}
-
 	// Initialize message layer
 	msgLayer := message.NewLayer(cfg.Message, log)
 	// Register all senders
@@ -322,7 +315,7 @@ func startServer(homeDir string, port int) {
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
 	// Create executor (used by both API server and schedule runner)
-	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
 
 	// Declare schedule module variables (used by leader callbacks and API server)
 	var sched *scheduler.Scheduler
@@ -443,9 +436,6 @@ func startServer(homeDir string, port int) {
 
 		// Stop server
 		srv.Stop(ctx)
-
-		// Stop watcher
-		grootMdWatcher.Stop()
 
 		// Stop message layer
 		msgLayer.Stop()

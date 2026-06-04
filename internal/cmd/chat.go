@@ -20,7 +20,6 @@ import (
 	"github.com/zfd81/groot/internal/cmd/chat"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/filesystem"
-	"github.com/zfd81/groot/internal/grootmd"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
@@ -139,10 +138,6 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	// Runtime state
 	runtimeState := agent.NewRuntimeState()
 
-	// GROOT.md watcher
-	grootMdWatcher := grootmd.NewWatcher(homeDir, log)
-	_ = grootMdWatcher.Start()
-
 	// Message layer
 	msgLayer := message.NewLayer(cfg.Message, log)
 	if cfg.Message.Senders["webhook"].Enabled {
@@ -160,7 +155,7 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
 
 	// Create executor
-	exec := agent.NewExecutor(memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
 
 	// Create API server (schedule disabled in embed mode)
 	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)

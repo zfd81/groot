@@ -84,6 +84,7 @@ type ProgressInfo struct {
 
 // Executor executes tasks with ReAct mode
 type Executor struct {
+	homeDir           string // GROOT_HOME 目录
 	memoryManager     *memory.Manager
 	middlewares       []adk.ChatModelAgentMiddleware
 	mcpManager        *mcp.Manager
@@ -96,6 +97,7 @@ type Executor struct {
 
 // NewExecutor creates a new task executor
 func NewExecutor(
+	homeDir string,
 	memMgr *memory.Manager,
 	middlewares []adk.ChatModelAgentMiddleware,
 	mcpMgr *mcp.Manager,
@@ -105,6 +107,7 @@ func NewExecutor(
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
+		homeDir:           homeDir,
 		memoryManager:     memMgr,
 		middlewares:       middlewares,
 		mcpManager:        mcpMgr,
@@ -242,6 +245,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 	// Create engine using eino
 	engine := NewEngine(EngineConfig{
 		LLM:                e.config.LLM,
+		HomeDir:            e.homeDir,
 		Middlewares:        middlewares,
 		MCP:                mcpMgr,
 		ExtraTools:         extraTools,

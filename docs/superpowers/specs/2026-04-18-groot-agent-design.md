@@ -999,7 +999,6 @@ JSON 结构化日志：
 | event 值 | 用途 |
 |----------|------|
 | `api_request` | API 调用记录 |
-| `skill_hot_reload` | Skills 热插拔事件 |
 | `chat_completed` | 对话完成事件 |
 
 #### 5.2.3 日志存储与轮转
@@ -1191,12 +1190,6 @@ llm:
       model: claude-3-5-sonnet-20241022
       max_completion_tokens: 4096
       temperature: 0.7
-
-# Skills 热插拔配置
-skills:
-  hot_reload:
-    enabled: true                  # 是否启用 Skills 热插拔
-    debounce_delay: 2              # 防抖延迟（秒）
 
 # ReAct 执行配置
 react:

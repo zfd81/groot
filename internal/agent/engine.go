@@ -37,6 +37,7 @@ type ProgressCallback struct {
 // Engine wraps eino's ChatModelAgent for task execution
 type Engine struct {
 	llmConfig          config.LLMConfig
+	homeDir            string // GROOT_HOME 目录，用于读取 GROOT.md
 	middlewares        []adk.ChatModelAgentMiddleware
 	mcpManager         *mcp.Manager
 	extraTools         []tool.BaseTool // 追加到 mcpManager.GetTools() 之后，用于 call_agent
@@ -50,6 +51,7 @@ type Engine struct {
 // EngineConfig 是 NewEngine 的命名参数集合，避免位置参数过多。
 type EngineConfig struct {
 	LLM                config.LLMConfig
+	HomeDir            string // GROOT_HOME 目录
 	Middlewares        []adk.ChatModelAgentMiddleware
 	MCP                *mcp.Manager
 	ExtraTools         []tool.BaseTool
@@ -70,6 +72,7 @@ func NewEngine(cfg EngineConfig) *Engine {
 	}
 	return &Engine{
 		llmConfig:          cfg.LLM,
+		homeDir:            cfg.HomeDir,
 		middlewares:        cfg.Middlewares,
 		mcpManager:         cfg.MCP,
 		extraTools:         cfg.ExtraTools,
@@ -464,8 +467,8 @@ func (e *Engine) buildSystemInstruction(prompt, sessionMdContent, agentMdContent
 		sb.WriteString(agentMdContent)
 		sb.WriteString("\n\n")
 	} else {
-		// 1. GROOT.md（从全局缓存读取，放在最前面）
-		grootMd := grootmd.GetContent()
+		// 1. GROOT.md（按需读取，有就加载，没有就跳过）
+		grootMd := grootmd.GetContent(e.homeDir)
 		if grootMd != "" {
 			sb.WriteString(grootMd)
 			sb.WriteString("\n\n")

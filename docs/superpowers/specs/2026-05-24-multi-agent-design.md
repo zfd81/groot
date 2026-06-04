@@ -600,7 +600,7 @@ data: {"agent_name":"db-agent","tool_calls":[{"index":0,"id":"call_001","functio
 | `agent.md` 内容 | ❌ | 启动期固化进 `entry.Tool`（参与 `Instruction`、模型绑定），运行时无回灌路径 |
 | Skills（全局 + 子 Agent） | ✅ | Watcher 监听变更，按路径匹配 Agent 名，通知对应 `entry.SkillBK` 重新扫描 |
 | MCP | ❌ | 与全局 MCP 一致，变更需重启 |
-| GROOT.md | ✅ | 已有 fsnotify 监听，变更即时生效 |
+| GROOT.md | ✅ | 按需读取，变更即时生效 |
 
 **Skills Watcher 路径→Agent 映射**：
 
@@ -901,7 +901,7 @@ Executor.Execute()
 |---------|------|
 | 新增 | `internal/agent/consts.go`、`internal/agent/subagent_registry.go`、`internal/agent/call_agent.go`、`internal/agent/token_accumulators.go` |
 | 中改 | `internal/agent/executor.go`、`internal/api/handler/chat.go` |
-| 轻改 | `internal/agent/engine.go`、`internal/agent/runtime_state.go`、`internal/agent/sse.go`、`internal/api/handler/skills.go`、`internal/api/handler/tools.go`、`internal/skills/watcher.go`、`internal/memory/types.go`、`internal/memory/idgen.go`、`internal/cmd/chat.go`、`internal/cmd/init.go`、`config.yaml` |
+| 轻改 | `internal/agent/engine.go`、`internal/agent/runtime_state.go`、`internal/agent/sse.go`、`internal/api/handler/skills.go`、`internal/api/handler/tools.go`、`internal/memory/types.go`、`internal/memory/idgen.go`、`internal/cmd/chat.go`、`internal/cmd/init.go`、`config.yaml` |
 | 无改动 | `GROOT.md`、全局 `skills/`、全局 `mcp/`、`internal/grootmd/`、`internal/mcp/manager.go`、`/models` |
 
 ### 10.2 关键变更点
