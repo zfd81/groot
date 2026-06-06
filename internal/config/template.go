@@ -1,6 +1,10 @@
 package config
 
-// GenerateConfigTemplate returns a config template with helpful comments
+// GenerateConfigTemplate returns a config template with helpful comments.
+//
+// Storage 块特殊约定：minio 子节使用"先缩进后 #"格式（如 "  #minio:"），
+// 而非常规的"先 # 后缩进"。这样用户只需删除 # 字符即可启用 minio 配置，
+// YAML 缩进自动正确。修改时请勿改成 "#  minio:" 形式，会破坏可用性。
 func GenerateConfigTemplate() string {
 	return `# Groot Agent 配置文件
 # 请根据实际情况修改以下配置

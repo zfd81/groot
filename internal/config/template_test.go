@@ -45,22 +45,28 @@ func TestGenerateConfigTemplate_HasStorageBlock(t *testing.T) {
 	if !strings.Contains(tpl, "${MINIO_ACCESS_KEY}") {
 		t.Error("missing minio access_key env placeholder")
 	}
+	if !strings.Contains(tpl, "${MINIO_SECRET_KEY}") {
+		t.Error("missing minio secret_key env placeholder")
+	}
 }
 
 // TestGenerateConfigTemplate_StorageMinioUncommented 验证模板格式：用户取消
-// 注释（删掉 # 字符）后能得到合法的 yaml 缩进，并被正确解析为 MinioConfig。
+// 注释（删掉行首的 # 字符）后能得到合法的 yaml 缩进，并被正确解析为 MinioConfig。
 func TestGenerateConfigTemplate_StorageMinioUncommented(t *testing.T) {
 	tpl := GenerateConfigTemplate()
-	// 模拟"用户取消 minio 块的注释"——把 #minio: 替换为 minio:，
-	// 把 #  endpoint 等替换为   endpoint
-	uncommented := strings.NewReplacer(
-		"  #minio:", "  minio:",
-		"  #  endpoint:", "    endpoint:",
-		"  #  access_key:", "    access_key:",
-		"  #  secret_key:", "    secret_key:",
-		"  #  bucket:", "    bucket:",
-		"  #  use_ssl:", "    use_ssl:",
-	).Replace(tpl)
+	// 模拟"用户取消 minio 块的注释"——按行匹配，把以"2 空格 + #"开头的行
+	// 的 # 删掉。整个模板里只有 storage 块的 minio 子节用了"行首 2 空格缩进
+	// 后再加 #"的格式（其他注释块如 #agent: / #server: 都是 # 顶格；LLM 块
+	// 里的内联注释如 "value    # 说明"虽含"2 空格 + #"但不在行首），所以这
+	// 种按行首匹配的替换不会误伤其他位置。给 storage 加新字段时，只要遵循
+	// "  #  field:" 格式，测试自动覆盖，无需同步修改。
+	lines := strings.Split(tpl, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "  #") {
+			lines[i] = "  " + line[3:]
+		}
+	}
+	uncommented := strings.Join(lines, "\n")
 
 	var c Config
 	if err := yaml.Unmarshal([]byte(uncommented), &c); err != nil {
@@ -74,5 +80,20 @@ func TestGenerateConfigTemplate_StorageMinioUncommented(t *testing.T) {
 	}
 	if c.Storage.Minio.Bucket != "groot" {
 		t.Errorf("Bucket = %q, want groot", c.Storage.Minio.Bucket)
+	}
+}
+
+// TestGenerateConfigTemplate_IsValidYAML 验证模板原文（未取消注释时）就是
+// 合法的 yaml，捕获未来维护时引入的语法错误（缩进错乱、tab/space 混用等）。
+func TestGenerateConfigTemplate_IsValidYAML(t *testing.T) {
+	tpl := GenerateConfigTemplate()
+	// 模板未取消注释时，storage: 顶格 + minio 子节全是注释，应是合法 yaml
+	var c Config
+	if err := yaml.Unmarshal([]byte(tpl), &c); err != nil {
+		t.Fatalf("template should be valid YAML, unmarshal error: %v", err)
+	}
+	// 默认情况下 minio 子节被注释，Storage.Minio 应为 nil
+	if c.Storage.Minio != nil {
+		t.Error("with all minio lines commented, Storage.Minio should be nil")
 	}
 }
