@@ -32,7 +32,8 @@ type Storage interface {
 	// Write 写入数据流到指定 path。
 	// size >= 0 时必须等于 r 的实际字节数（不一致时返回错误）；
 	// size < 0 表示长度未知（minio 会用分片上传，local 直接读到 EOF）。
-	// contentType 为空时实现侧应当原样保留为空，由调用方决定是否提供。
+	// contentType 为空时实现侧的行为因后端而异（local 留空、minio 兜底为
+	// application/octet-stream），调用方如关心跨实现一致性应显式提供。
 	Write(ctx context.Context, path string, r io.Reader, size int64, contentType string) error
 
 	// Read 返回指定 path 的内容流，调用方负责 Close。

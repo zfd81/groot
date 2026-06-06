@@ -141,6 +141,15 @@ storage 层将服务于以下场景（本期只实现 storage 层，调用方接
 
 minio 模式下，path 替换为对应的 object key（如 `sessions/<id>/attachments/<file>`），由调用方按业务约定构造。
 
+### 1.10 contentType 处理的实现差异
+
+`Write` 的 `contentType` 参数为空时：
+
+- **local 实现**：文件系统不存储 ContentType 元数据，Stat/List 时按文件扩展名推断（参考 `mime.TypeByExtension`）
+- **minio 实现**：S3 协议要求 HTTP `Content-Type` header 必须存在，minio-go 兜底成 `application/octet-stream`，无法保留为空字符串。这是 S3 协议的客观限制，不是实现 bug
+
+调用方如果关心跨实现的 ContentType 一致性，应该在 `Write` 时显式传入正确的 ContentType。
+
 ---
 
 ## 二、迭代说明

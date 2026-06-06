@@ -14,6 +14,9 @@ import (
 // 所有 path 必须是绝对路径，否则返回错误。
 type Local struct{}
 
+// 编译期断言：Local 必须满足 Storage 接口。
+var _ Storage = (*Local)(nil)
+
 // NewLocal 创建一个本地存储实例。无任何配置参数。
 func NewLocal() *Local { return &Local{} }
 

@@ -18,11 +18,12 @@ type fakeMinioClient struct {
 	objects map[string][]byte // key -> body
 	stats   map[string]minio.ObjectInfo
 
-	putErr    error
-	getErr    error
-	statErr   error
-	removeErr error
-	listErr   error
+	putErr           error
+	getErr           error
+	statErr          error
+	removeErr        error
+	listErr          error
+	recursiveListErr error
 }
 
 func newFakeClient() *fakeMinioClient {
@@ -91,17 +92,43 @@ func (f *fakeMinioClient) ListObjects(ctx context.Context, bucket string, opts m
 		close(ch)
 		return ch
 	}
+
+	// 模拟 delimiter "/" 行为：Recursive=false 时把 prefix 之下的对象按第一段切分
+	seen := map[string]struct{}{}
+	count := 0
 	for key, info := range f.stats {
 		if !strings.HasPrefix(key, opts.Prefix) {
 			continue
 		}
-		ch <- info
+		if opts.MaxKeys > 0 && count >= opts.MaxKeys {
+			break
+		}
+
+		out := info
+		if !opts.Recursive {
+			// 把 prefix 之后的部分按 "/" 切分，第一段如果还有 "/" 说明是子目录
+			rest := key[len(opts.Prefix):]
+			if idx := strings.Index(rest, "/"); idx >= 0 {
+				// 子目录：返回 CommonPrefix 形式（key=prefix+seg+"/"，无元数据）
+				dirKey := opts.Prefix + rest[:idx+1]
+				if _, dup := seen[dirKey]; dup {
+					continue
+				}
+				seen[dirKey] = struct{}{}
+				out = minio.ObjectInfo{Key: dirKey}
+			}
+		}
+		ch <- out
+		count++
 	}
 	close(ch)
 	return ch
 }
 
 func (f *fakeMinioClient) RemoveObjectsRecursive(ctx context.Context, bucket, prefix string) error {
+	if f.recursiveListErr != nil {
+		return f.recursiveListErr
+	}
 	if f.removeErr != nil {
 		return f.removeErr
 	}
@@ -198,5 +225,72 @@ func TestMinio_ListByPrefix(t *testing.T) {
 	}
 	if len(infos) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(infos))
+	}
+}
+
+func TestMinio_DeleteDirReturnsListError(t *testing.T) {
+	fc := newFakeClient()
+	fc.recursiveListErr = errors.New("simulated list failure")
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	err := ms.DeleteDir(ctx, "sessions/abc")
+	if err == nil {
+		t.Fatal("expected DeleteDir to return error when list fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "simulated list failure") {
+		t.Fatalf("expected error to wrap list failure, got: %v", err)
+	}
+}
+
+func TestMinio_StatReturnsIsDirForPrefix(t *testing.T) {
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+
+	// 没有名为 "sessions/abc" 的对象，但有 "sessions/abc/x"
+	if err := ms.Write(ctx, "sessions/abc/x", strings.NewReader("y"), 1, ""); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	info, err := ms.Stat(ctx, "sessions/abc")
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if !info.IsDir {
+		t.Fatal("expected IsDir=true for prefix")
+	}
+}
+
+func TestMinio_ListNonRecursiveSeparatesDirs(t *testing.T) {
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+
+	for _, k := range []string{"sessions/abc/a", "sessions/abc/sub/x", "sessions/abc/sub/y"} {
+		_ = ms.Write(ctx, k, strings.NewReader("z"), 1, "")
+	}
+
+	infos, err := ms.List(ctx, "sessions/abc")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	// 期望：a (file) + sub/ (dir)，共 2 个；不应该展开 sub 下的 x、y
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 entries (1 file + 1 dir), got %d", len(infos))
+	}
+
+	var sawFile, sawDir bool
+	for _, fi := range infos {
+		if !fi.IsDir && fi.Path == "sessions/abc/a" {
+			sawFile = true
+		}
+		if fi.IsDir && fi.Path == "sessions/abc/sub/" {
+			sawDir = true
+		}
+	}
+	if !sawFile {
+		t.Error("expected to see file 'sessions/abc/a'")
+	}
+	if !sawDir {
+		t.Error("expected to see dir 'sessions/abc/sub/'")
 	}
 }

@@ -52,13 +52,20 @@ func (m *minioClient) ListObjects(ctx context.Context, bucket string, opts minio
 
 func (m *minioClient) RemoveObjectsRecursive(ctx context.Context, bucket, prefix string) error {
 	objCh := make(chan minio.ObjectInfo)
+	var listErr error
 	go func() {
 		defer close(objCh)
 		for obj := range m.c.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
 			if obj.Err != nil {
-				continue
+				listErr = obj.Err
+				return // 提前返回，close(objCh) 由 defer 触发
 			}
-			objCh <- obj
+			select {
+			case objCh <- obj:
+			case <-ctx.Done():
+				listErr = ctx.Err()
+				return
+			}
 		}
 	}()
 	for rmErr := range m.c.RemoveObjects(ctx, bucket, objCh, minio.RemoveObjectsOptions{}) {
@@ -66,7 +73,7 @@ func (m *minioClient) RemoveObjectsRecursive(ctx context.Context, bucket, prefix
 			return rmErr.Err
 		}
 	}
-	return nil
+	return listErr
 }
 
 // Minio 是基于 MinIO 对象存储的 Storage 实现。
@@ -75,6 +82,9 @@ type Minio struct {
 	client minioAPI
 	bucket string
 }
+
+// 编译期断言：Minio 必须满足 Storage 接口。
+var _ Storage = (*Minio)(nil)
 
 // NewMinio 用提供的 endpoint / 密钥 / bucket 创建一个 minio 存储实例。
 func NewMinio(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Minio, error) {
@@ -108,6 +118,8 @@ func (m *Minio) Write(ctx context.Context, path string, r io.Reader, size int64,
 }
 
 func (m *Minio) Read(ctx context.Context, path string) (io.ReadCloser, error) {
+	// minio-go GetObject 是延迟执行的，错误要等到 Read/Stat 才暴露。
+	// 先 Stat 一次以同步返回 ErrNotFound。
 	if _, err := m.client.StatObject(ctx, m.bucket, path, minio.StatObjectOptions{}); err != nil {
 		if isNotExist(err) {
 			return nil, ErrNotFound
@@ -125,6 +137,8 @@ func (m *Minio) Read(ctx context.Context, path string) (io.ReadCloser, error) {
 }
 
 func (m *Minio) Delete(ctx context.Context, path string) error {
+	// S3 RemoveObject 对不存在的 key 是 noop（idempotent delete），
+	// 必须先 Stat 才能返回 ErrNotFound。
 	if _, err := m.client.StatObject(ctx, m.bucket, path, minio.StatObjectOptions{}); err != nil {
 		if isNotExist(err) {
 			return ErrNotFound
@@ -149,6 +163,14 @@ func (m *Minio) Stat(ctx context.Context, path string) (*FileInfo, error) {
 	info, err := m.client.StatObject(ctx, m.bucket, path, minio.StatObjectOptions{})
 	if err != nil {
 		if isNotExist(err) {
+			// minio 没有目录概念，但调用方可能传"目录"路径。
+			// 用 List 探测前缀，命中即视为目录返回 IsDir=true。
+			prefix := strings.TrimSuffix(path, "/") + "/"
+			for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{Prefix: prefix, MaxKeys: 1}) {
+				if obj.Err == nil {
+					return &FileInfo{Path: path, IsDir: true}, nil
+				}
+			}
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("storage: minio stat %s: %w", path, err)
@@ -164,21 +186,24 @@ func (m *Minio) List(ctx context.Context, dir string) ([]*FileInfo, error) {
 			return nil, fmt.Errorf("storage: minio list %s: %w", dir, obj.Err)
 		}
 		isDir := strings.HasSuffix(obj.Key, "/")
-		out = append(out, objectInfoToFileInfo(obj, isDir))
+		fi := objectInfoToFileInfo(obj, isDir)
+		if isDir {
+			// CommonPrefix 没有真实元数据，显式置零避免泄漏 1970-01-01 等假数据
+			fi.Size = 0
+			fi.ContentType = ""
+			fi.ModTime = time.Time{}
+		}
+		out = append(out, fi)
 	}
 	return out, nil
 }
 
 func objectInfoToFileInfo(info minio.ObjectInfo, isDir bool) *FileInfo {
-	mod := info.LastModified
-	if mod.IsZero() {
-		mod = time.Time{}
-	}
 	return &FileInfo{
 		Path:        info.Key,
 		Size:        info.Size,
 		ContentType: info.ContentType,
-		ModTime:     mod,
+		ModTime:     info.LastModified,
 		IsDir:       isDir,
 	}
 }
