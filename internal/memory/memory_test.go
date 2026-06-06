@@ -859,6 +859,12 @@ func TestManager_Cleanup_AttachmentDeleteFailureKeepsSession(t *testing.T) {
 	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
 		t.Error("sessionDir should still exist when attachment deletion fails")
 	}
+
+	// 附件目录也应该仍然存在（验证原子性：DeleteDir 失败时既不删元数据也不删附件）
+	attDir := filepath.Join(tmpDir, sessionID, "attachments")
+	if _, err := os.Stat(attDir); os.IsNotExist(err) {
+		t.Error("attachments dir should still exist when DeleteDir fails")
+	}
 }
 
 func TestNewManager_PanicsOnNilStorage(t *testing.T) {
