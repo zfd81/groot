@@ -25,3 +25,19 @@ func TestGenerateConfigTemplate(t *testing.T) {
 		t.Error("模板缺少注释说明")
 	}
 }
+
+func TestGenerateConfigTemplate_HasStorageBlock(t *testing.T) {
+	tpl := GenerateConfigTemplate()
+	if !strings.Contains(tpl, "# 存储抽象层配置") {
+		t.Error("missing storage section header")
+	}
+	if !strings.Contains(tpl, "storage:") {
+		t.Error("missing storage: key")
+	}
+	if !strings.Contains(tpl, "#   minio:") {
+		t.Error("missing commented minio block")
+	}
+	if !strings.Contains(tpl, "${MINIO_ACCESS_KEY}") {
+		t.Error("missing minio access_key env placeholder")
+	}
+}
