@@ -35,11 +35,14 @@ func (l *Local) Write(ctx context.Context, path string, r io.Reader, size int64,
 	if err != nil {
 		return fmt.Errorf("storage: open %s: %w", path, err)
 	}
-	defer f.Close()
 
 	n, err := io.Copy(f, r)
 	if err != nil {
+		f.Close()
 		return fmt.Errorf("storage: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("storage: close %s: %w", path, err)
 	}
 	if size >= 0 && n != size {
 		return fmt.Errorf("storage: write %s: declared size %d but wrote %d bytes", path, size, n)
@@ -137,7 +140,11 @@ func (l *Local) List(ctx context.Context, dir string) ([]*FileInfo, error) {
 		full := filepath.Join(dir, e.Name())
 		info, err := e.Info()
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				// 并发删除竞态，跳过该项
+				continue
+			}
+			return nil, fmt.Errorf("storage: list dir %s: stat entry %s: %w", dir, e.Name(), err)
 		}
 		out = append(out, &FileInfo{
 			Path:        full,
