@@ -95,12 +95,12 @@ llm:
 # 默认使用本地磁盘存储（无需任何配置）。如需切换到 MinIO 对象存储，
 # 取消以下 minio 块的注释并填入连接信息。
 storage:
-#   minio:
-#     endpoint: localhost:9000          # MinIO 服务地址（host:port）
-#     access_key: ${MINIO_ACCESS_KEY}   # 访问密钥（建议使用环境变量）
-#     secret_key: ${MINIO_SECRET_KEY}   # 密钥
-#     bucket: groot                     # 存储桶名称
-#     use_ssl: false                    # 是否启用 HTTPS
+  #minio:
+  #  endpoint: localhost:9000          # MinIO 服务地址（host:port）
+  #  access_key: ${MINIO_ACCESS_KEY}   # 访问密钥（建议使用环境变量）
+  #  secret_key: ${MINIO_SECRET_KEY}   # 密钥
+  #  bucket: groot                     # 存储桶名称
+  #  use_ssl: false                    # 是否启用 HTTPS
 
 # 日志配置
 #logging:
