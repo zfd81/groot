@@ -19,6 +19,7 @@ type Config struct {
 	SubAgent  SubAgentConfig  `yaml:"subagent"`
 	Security  SecurityConfig  `yaml:"security"`
 	Logging   LoggingConfig   `yaml:"logging"`
+	Storage   StorageConfig   `yaml:"storage"`
 }
 
 // AgentConfig holds agent metadata
@@ -161,6 +162,21 @@ type LogFileConfig struct {
 	Directory       string `yaml:"directory"`
 	FilenamePattern string `yaml:"filename_pattern"`
 	MaxAge          int    `yaml:"max_age"`
+}
+
+// StorageConfig 存储抽象层配置。
+// Minio 非 nil 时使用 MinIO 对象存储；nil 表示使用本地磁盘存储（零配置）。
+type StorageConfig struct {
+	Minio *MinioConfig `yaml:"minio"`
+}
+
+// MinioConfig 描述连接 MinIO 集群所需信息。
+type MinioConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"secret_key"`
+	Bucket    string `yaml:"bucket"`
+	UseSSL    bool   `yaml:"use_ssl"`
 }
 
 // ExpandEnv replaces ${VAR_NAME} with environment variable values
