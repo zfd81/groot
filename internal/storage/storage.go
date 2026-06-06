@@ -57,14 +57,15 @@ type Storage interface {
 	// 目录不存在返回 ErrNotFound，目录为空返回空切片。
 	List(ctx context.Context, dir string) ([]*FileInfo, error)
 
-	// Rename 将 src 重命名为 dst。
+	// Rename 将 src 重命名为 dst（支持文件和目录，与 os.Rename 一致）。
 	//
 	// 行为契约：
 	//   - src 不存在时返回 ErrNotFound
 	//   - dst 已存在时按"覆盖"语义处理（实现负责清理）
-	//   - local 实现：os.Rename，同文件系统下原子
-	//   - minio 实现：CopyObject + RemoveObject 两步，非原子；
-	//     失败时尽量回滚保证 src 完整，但进程崩溃可能留下 src 与 dst 各一份，
+	//   - local 实现：os.Rename，同文件系统下原子；支持文件和目录
+	//   - minio 实现：CopyObject + RemoveObject 两步，仅对单 object 有效
+	//     （对象存储无目录概念，需移动多个对象请由调用方拆分）；
+	//     非原子，失败时尽量回滚保证 src 完整，但进程崩溃可能留下 src 与 dst 各一份，
 	//     业务层需保证幂等
 	Rename(ctx context.Context, src, dst string) error
 }

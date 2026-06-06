@@ -263,3 +263,23 @@ func TestLocal_RenameOverwritesDst(t *testing.T) {
 		t.Errorf("dst should be overwritten, got %q", body)
 	}
 }
+
+func TestLocal_RenameAutoCreatesDstParent(t *testing.T) {
+	s := NewLocal()
+	ctx := context.Background()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	// dst 在不存在的子目录里
+	dst := filepath.Join(dir, "subdir", "b.txt")
+	if err := s.Write(ctx, src, strings.NewReader("hi"), 2, ""); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.Rename(ctx, src, dst); err != nil {
+		t.Fatalf("Rename should auto-create parent: %v", err)
+	}
+	rc, err := s.Read(ctx, dst)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	rc.Close()
+}

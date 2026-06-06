@@ -157,16 +157,16 @@ func (f *fakeMinioClient) CopyObject(ctx context.Context, dstBucket, dstKey, src
 	return nil
 }
 
-// fakeRollbackClient 专门用于测试 Delete 失败 + 回滚成功的场景。
-// deleteShouldFail 指定哪个 key 的 RemoveObject 调用会失败。
+// fakeRollbackClient 专门用于测试 Rename 的 step-2 / step-4 中 RemoveObject 失败的场景。
+// failKeys 中列出的 key 调用 RemoveObject 时会返回错误。
 type fakeRollbackClient struct {
 	*fakeMinioClient
-	deleteShouldFail string
+	failKeys map[string]bool
 }
 
 func (f *fakeRollbackClient) RemoveObject(ctx context.Context, bucket, key string, opts minio.RemoveObjectOptions) error {
-	if key == f.deleteShouldFail {
-		return errors.New("simulated delete failure")
+	if f.failKeys[key] {
+		return errors.New("simulated remove failure")
 	}
 	return f.fakeMinioClient.RemoveObject(ctx, bucket, key, opts)
 }
@@ -392,8 +392,8 @@ func TestMinio_RenameCopyFailureLeavesSrc(t *testing.T) {
 func TestMinio_RenameDeleteFailureRollsBackDst(t *testing.T) {
 	// 模拟 Copy 成功、Delete src 失败 → 应回滚删 dst
 	fc := &fakeRollbackClient{
-		fakeMinioClient:  newFakeClient(),
-		deleteShouldFail: "src",
+		fakeMinioClient: newFakeClient(),
+		failKeys:        map[string]bool{"src": true}, // src 删除失败，dst 删除（回滚）成功
 	}
 	ms := newMinioForTest(fc)
 	ctx := context.Background()
@@ -410,5 +410,57 @@ func TestMinio_RenameDeleteFailureRollsBackDst(t *testing.T) {
 	// dst 应该被回滚删除
 	if _, ok := fc.objects["dst"]; ok {
 		t.Error("dst should have been rolled back")
+	}
+}
+
+func TestMinio_RenameStaleDstCleanupFailure(t *testing.T) {
+	fc := &fakeRollbackClient{
+		fakeMinioClient: newFakeClient(),
+		failKeys:        map[string]bool{"dst": true}, // 步骤 2 删 dst 失败
+	}
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "src", strings.NewReader("new"), 3, "")
+	_ = ms.Write(ctx, "dst", strings.NewReader("stale"), 5, "")
+
+	err := ms.Rename(ctx, "src", "dst")
+	if err == nil {
+		t.Fatal("expected error from cleanup-dst failure")
+	}
+	// src 必须原封不动（步骤 2 失败时未到 CopyObject）
+	if got := fc.objects["src"]; string(got) != "new" {
+		t.Errorf("src should be intact, got %q", got)
+	}
+	// dst 仍是旧的（清理失败）
+	if got := fc.objects["dst"]; string(got) != "stale" {
+		t.Errorf("dst should remain stale (cleanup failed), got %q", got)
+	}
+}
+
+func TestMinio_RenameDeleteFailureAndRollbackFailure(t *testing.T) {
+	// 步骤 4 删 src 失败 + 回滚（删 dst）也失败 → 最坏情况：src 与 dst 各一份
+	fc := &fakeRollbackClient{
+		fakeMinioClient: newFakeClient(),
+		failKeys:        map[string]bool{"src": true, "dst": true},
+	}
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "src", strings.NewReader("data"), 4, "")
+
+	err := ms.Rename(ctx, "src", "dst")
+	if err == nil {
+		t.Fatal("expected error from delete src failure")
+	}
+	// 关键断言：返回的错误应该包装的是 src 删除失败（不是回滚失败）
+	if !strings.Contains(err.Error(), "delete src") {
+		t.Errorf("expected error to wrap 'delete src' failure, got: %v", err)
+	}
+	// src 仍存在（删失败）
+	if _, ok := fc.objects["src"]; !ok {
+		t.Error("src should still exist (delete failed)")
+	}
+	// dst 也仍存在（回滚失败）— 这是最坏情况
+	if _, ok := fc.objects["dst"]; !ok {
+		t.Error("dst should still exist (rollback also failed)")
 	}
 }

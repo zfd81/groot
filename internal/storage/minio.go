@@ -224,11 +224,16 @@ func (m *Minio) Rename(ctx context.Context, src, dst string) error {
 		}
 		return fmt.Errorf("storage: minio stat %s: %w", src, err)
 	}
-	// 2. 清理可能残留的 dst（上次崩溃或回滚失败遗留）
+	// 2. 清理可能残留的 dst（上次崩溃或回滚失败遗留）。
+	//    若 dst 不存在（NoSuchKey）→ 跳过；
+	//    若 dst 存在 → 删；
+	//    若 stat 因其他错误（如网络）失败 → 直接报错，不靠 CopyObject 兜底。
 	if _, err := m.client.StatObject(ctx, m.bucket, dst, minio.StatObjectOptions{}); err == nil {
 		if rmErr := m.client.RemoveObject(ctx, m.bucket, dst, minio.RemoveObjectOptions{}); rmErr != nil {
 			return fmt.Errorf("storage: minio rename cleanup dst %s: %w", dst, rmErr)
 		}
+	} else if !isNotExist(err) {
+		return fmt.Errorf("storage: minio rename stat dst %s: %w", dst, err)
 	}
 	// 3. CopyObject (服务端 copy，不下载)
 	if err := m.client.CopyObject(ctx, m.bucket, dst, m.bucket, src); err != nil {
