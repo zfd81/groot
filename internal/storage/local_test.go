@@ -200,3 +200,66 @@ func TestLocal_WriteAcceptsNegativeSize(t *testing.T) {
 		t.Fatalf("Write with size=-1 should succeed, got: %v", err)
 	}
 }
+
+func TestLocal_RenameFileMovesIt(t *testing.T) {
+	s := NewLocal()
+	ctx := context.Background()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	dst := filepath.Join(dir, "b.txt")
+	if err := s.Write(ctx, src, strings.NewReader("hello"), 5, ""); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.Rename(ctx, src, dst); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	// src 不存在了
+	if _, err := s.Stat(ctx, src); !errors.Is(err, ErrNotFound) {
+		t.Errorf("src should be gone, got err=%v", err)
+	}
+	// dst 存在且内容正确
+	rc, err := s.Read(ctx, dst)
+	if err != nil {
+		t.Fatalf("Read dst: %v", err)
+	}
+	defer rc.Close()
+	body, _ := io.ReadAll(rc)
+	if string(body) != "hello" {
+		t.Errorf("dst content = %q, want hello", body)
+	}
+}
+
+func TestLocal_RenameSrcNotFound(t *testing.T) {
+	s := NewLocal()
+	dir := t.TempDir()
+	err := s.Rename(context.Background(), filepath.Join(dir, "nope"), filepath.Join(dir, "dst"))
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestLocal_RenameRejectsRelativePath(t *testing.T) {
+	s := NewLocal()
+	if err := s.Rename(context.Background(), "rel/src", "rel/dst"); err == nil {
+		t.Error("expected error for relative paths")
+	}
+}
+
+func TestLocal_RenameOverwritesDst(t *testing.T) {
+	s := NewLocal()
+	ctx := context.Background()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	dst := filepath.Join(dir, "b.txt")
+	_ = s.Write(ctx, src, strings.NewReader("new"), 3, "")
+	_ = s.Write(ctx, dst, strings.NewReader("old"), 3, "")
+	if err := s.Rename(ctx, src, dst); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	rc, _ := s.Read(ctx, dst)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(body) != "new" {
+		t.Errorf("dst should be overwritten, got %q", body)
+	}
+}

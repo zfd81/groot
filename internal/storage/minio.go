@@ -20,6 +20,7 @@ type minioAPI interface {
 	RemoveObject(ctx context.Context, bucket, key string, opts minio.RemoveObjectOptions) error
 	ListObjects(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 	RemoveObjectsRecursive(ctx context.Context, bucket, prefix string) error
+	CopyObject(ctx context.Context, dstBucket, dstKey, srcBucket, srcKey string) error
 }
 
 // minioClient 是 minioAPI 的真实实现，包装 *minio.Client。
@@ -74,6 +75,13 @@ func (m *minioClient) RemoveObjectsRecursive(ctx context.Context, bucket, prefix
 		}
 	}
 	return listErr
+}
+
+func (m *minioClient) CopyObject(ctx context.Context, dstBucket, dstKey, srcBucket, srcKey string) error {
+	src := minio.CopySrcOptions{Bucket: srcBucket, Object: srcKey}
+	dst := minio.CopyDestOptions{Bucket: dstBucket, Object: dstKey}
+	_, err := m.c.CopyObject(ctx, dst, src)
+	return err
 }
 
 // Minio 是基于 MinIO 对象存储的 Storage 实现。
@@ -206,4 +214,31 @@ func objectInfoToFileInfo(info minio.ObjectInfo, isDir bool) *FileInfo {
 		ModTime:     info.LastModified,
 		IsDir:       isDir,
 	}
+}
+
+func (m *Minio) Rename(ctx context.Context, src, dst string) error {
+	// 1. 源必须存在
+	if _, err := m.client.StatObject(ctx, m.bucket, src, minio.StatObjectOptions{}); err != nil {
+		if isNotExist(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("storage: minio stat %s: %w", src, err)
+	}
+	// 2. 清理可能残留的 dst（上次崩溃或回滚失败遗留）
+	if _, err := m.client.StatObject(ctx, m.bucket, dst, minio.StatObjectOptions{}); err == nil {
+		if rmErr := m.client.RemoveObject(ctx, m.bucket, dst, minio.RemoveObjectOptions{}); rmErr != nil {
+			return fmt.Errorf("storage: minio rename cleanup dst %s: %w", dst, rmErr)
+		}
+	}
+	// 3. CopyObject (服务端 copy，不下载)
+	if err := m.client.CopyObject(ctx, m.bucket, dst, m.bucket, src); err != nil {
+		return fmt.Errorf("storage: minio rename copy %s -> %s: %w", src, dst, err)
+	}
+	// 4. RemoveObject src，失败则尽力回滚
+	if err := m.client.RemoveObject(ctx, m.bucket, src, minio.RemoveObjectOptions{}); err != nil {
+		// 尽力回滚：删掉已复制的 dst（即使失败也只能把原错误返回）
+		_ = m.client.RemoveObject(ctx, m.bucket, dst, minio.RemoveObjectOptions{})
+		return fmt.Errorf("storage: minio rename delete src %s: %w", src, err)
+	}
+	return nil
 }

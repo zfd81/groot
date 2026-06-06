@@ -171,3 +171,23 @@ func detectContentType(path string, isDir bool) string {
 	}
 	return mime.TypeByExtension(ext)
 }
+
+func (l *Local) Rename(ctx context.Context, src, dst string) error {
+	if err := l.ensureAbs(src); err != nil {
+		return err
+	}
+	if err := l.ensureAbs(dst); err != nil {
+		return err
+	}
+	// 确保目标目录存在（与 Write 保持一致的"按需建目录"语义）
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("storage: mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("storage: rename %s -> %s: %w", src, dst, err)
+	}
+	return nil
+}

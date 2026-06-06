@@ -24,6 +24,7 @@ type fakeMinioClient struct {
 	removeErr        error
 	listErr          error
 	recursiveListErr error
+	copyErr          error
 }
 
 func newFakeClient() *fakeMinioClient {
@@ -139,6 +140,35 @@ func (f *fakeMinioClient) RemoveObjectsRecursive(ctx context.Context, bucket, pr
 		}
 	}
 	return nil
+}
+
+func (f *fakeMinioClient) CopyObject(ctx context.Context, dstBucket, dstKey, srcBucket, srcKey string) error {
+	if f.copyErr != nil {
+		return f.copyErr
+	}
+	body, ok := f.objects[srcKey]
+	if !ok {
+		return minio.ErrorResponse{Code: "NoSuchKey"}
+	}
+	info := f.stats[srcKey]
+	info.Key = dstKey
+	f.objects[dstKey] = append([]byte(nil), body...)
+	f.stats[dstKey] = info
+	return nil
+}
+
+// fakeRollbackClient 专门用于测试 Delete 失败 + 回滚成功的场景。
+// deleteShouldFail 指定哪个 key 的 RemoveObject 调用会失败。
+type fakeRollbackClient struct {
+	*fakeMinioClient
+	deleteShouldFail string
+}
+
+func (f *fakeRollbackClient) RemoveObject(ctx context.Context, bucket, key string, opts minio.RemoveObjectOptions) error {
+	if key == f.deleteShouldFail {
+		return errors.New("simulated delete failure")
+	}
+	return f.fakeMinioClient.RemoveObject(ctx, bucket, key, opts)
 }
 
 func newMinioForTest(c minioAPI) *Minio {
@@ -292,5 +322,93 @@ func TestMinio_ListNonRecursiveSeparatesDirs(t *testing.T) {
 	}
 	if !sawDir {
 		t.Error("expected to see dir 'sessions/abc/sub/'")
+	}
+}
+
+func TestMinio_RenameSuccess(t *testing.T) {
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "a/x.txt", strings.NewReader("hello"), 5, "")
+
+	if err := ms.Rename(ctx, "a/x.txt", "b/y.txt"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if _, ok := fc.objects["a/x.txt"]; ok {
+		t.Error("src should be deleted")
+	}
+	if got := fc.objects["b/y.txt"]; string(got) != "hello" {
+		t.Errorf("dst content = %q, want hello", got)
+	}
+}
+
+func TestMinio_RenameSrcNotFound(t *testing.T) {
+	ms := newMinioForTest(newFakeClient())
+	err := ms.Rename(context.Background(), "missing", "dst")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestMinio_RenameOverwritesStaleDst(t *testing.T) {
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "src", strings.NewReader("new"), 3, "")
+	_ = ms.Write(ctx, "dst", strings.NewReader("stale"), 5, "")
+
+	if err := ms.Rename(ctx, "src", "dst"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if got := fc.objects["dst"]; string(got) != "new" {
+		t.Errorf("dst = %q, want new (stale should have been cleaned)", got)
+	}
+	if _, ok := fc.objects["src"]; ok {
+		t.Error("src should be deleted")
+	}
+}
+
+func TestMinio_RenameCopyFailureLeavesSrc(t *testing.T) {
+	fc := newFakeClient()
+	fc.copyErr = errors.New("simulated copy failure")
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "src", strings.NewReader("data"), 4, "")
+
+	err := ms.Rename(ctx, "src", "dst")
+	if err == nil {
+		t.Fatal("expected error from copy failure")
+	}
+	// src 必须原封不动
+	if got := fc.objects["src"]; string(got) != "data" {
+		t.Errorf("src should be intact, got %q", got)
+	}
+	// dst 不应存在
+	if _, ok := fc.objects["dst"]; ok {
+		t.Error("dst should not exist when copy failed")
+	}
+}
+
+func TestMinio_RenameDeleteFailureRollsBackDst(t *testing.T) {
+	// 模拟 Copy 成功、Delete src 失败 → 应回滚删 dst
+	fc := &fakeRollbackClient{
+		fakeMinioClient:  newFakeClient(),
+		deleteShouldFail: "src",
+	}
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "src", strings.NewReader("data"), 4, "")
+
+	err := ms.Rename(ctx, "src", "dst")
+	if err == nil {
+		t.Fatal("expected error from delete failure")
+	}
+	// src 应该还在（因为 delete 失败了）
+	if _, ok := fc.objects["src"]; !ok {
+		t.Error("src should still exist (delete failed)")
+	}
+	// dst 应该被回滚删除
+	if _, ok := fc.objects["dst"]; ok {
+		t.Error("dst should have been rolled back")
 	}
 }

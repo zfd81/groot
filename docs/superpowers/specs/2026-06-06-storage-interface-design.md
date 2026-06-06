@@ -24,6 +24,7 @@ storage 层不做任何路径拼接：调用方传入什么 path，底层就用�
 | `DeleteDir(ctx, path)` | 递归删除指定目录及其所有内容 |
 | `Stat(ctx, path)` | 返回文件元信息（大小、MIME、修改时间、是否目录） |
 | `List(ctx, dir)` | 列出指定目录下的所有文件（不递归），返回文件元信息列表 |
+| `Rename(ctx, src, dst)` | 将 src 重命名为 dst，dst 已存在时按"覆盖"语义处理 |
 
 ### 1.3 接口定义
 
@@ -36,6 +37,7 @@ type Storage interface {
     DeleteDir(ctx context.Context, path string) error
     Stat(ctx context.Context, path string) (*FileInfo, error)
     List(ctx context.Context, dir string) ([]*FileInfo, error)
+    Rename(ctx context.Context, src, dst string) error
 }
 
 // FileInfo 描述一个文件或目录的元数据。
@@ -61,6 +63,7 @@ var (
 
 - `Stat`、`Read`、`Delete` 对不存在的路径返回 `ErrNotFound`
 - `Read` 对目录路径返回 `ErrIsDir`
+- `Rename` 对 src 不存在返回 `ErrNotFound`
 - 两种存储类型在内部将各自底层错误（`os.ErrNotExist`、MinIO `NoSuchKey`）统一映射到这两个错误
 - 其他类型的错误通过 `fmt.Errorf("...: %w", err)` wrap 后返回，保留调用栈
 
@@ -149,6 +152,38 @@ minio 模式下，path 替换为对应的 object key（如 `sessions/<id>/attach
 - **minio 实现**：S3 协议要求 HTTP `Content-Type` header 必须存在，minio-go 兜底成 `application/octet-stream`，无法保留为空字符串。这是 S3 协议的客观限制，不是实现 bug
 
 调用方如果关心跨实现的 ContentType 一致性，应该在 `Write` 时显式传入正确的 ContentType。
+
+### 1.11 Rename 实现差异与故障路径
+
+`Rename` 在两种存储类型上的实现差异较大，本节单列说明。
+
+| 实现 | 底层操作 | 原子性 | 说明 |
+|------|---------|--------|------|
+| local | `os.Rename(src, dst)` | ✅ 同文件系统下原子 | 标准 POSIX rename，开销为零 |
+| minio | `CopyObject(src, dst)` + `RemoveObject(src)` | ❌ 非原子 | CopyObject 走 `x-amz-copy-source` 头，服务端 copy，不下载数据；Copy 成功后删源 |
+
+minio 实现下 Copy + Delete 不原子，进程崩溃会导致 src 和 dst 各有一份。业务层（如 schedule 的 `MoveTask`）需保证幂等：依赖 `DueTasks` 扫描或 `SetStatus` 重试自然修复，不依赖 Rename 本身的原子性。
+
+minio 实现通过补偿逻辑让语义尽量接近原子：
+
+1. **stat src**：源不存在直接返回 `ErrNotFound`
+2. **清理 dst 残留**：如果 dst 已存在（上次超时或回滚失败的脏数据），先删掉
+3. **CopyObject**：服务端复制 src → dst
+4. **RemoveObject src**：删源；若失败，尽力回滚（删 dst）后再向上返回错误
+
+故障路径恢复表：
+
+| 故障点 | 结果 | 恢复方式 |
+|-------|------|---------|
+| src 不存在 | 返回 `ErrNotFound` | 调用方无需重试 |
+| dst 残留清理失败 | 返回错误，src 未动 | 调用方重试 |
+| Copy 失败 | src 存在，dst 不存在 | 调用方直接重试 |
+| Copy 超时（实际成功） | src 存在，dst 可能存在 | 重试时步骤 2 清残留 |
+| Delete src 失败 + 回滚成功 | src 存在，dst 不存在 | 调用方重试 |
+| Delete src 失败 + 回滚失败 | src 与 dst 各一份 | 业务层幂等兜底 |
+| 进程崩溃（任意步骤间） | src 与 dst 状态不可知 | 业务层幂等兜底 |
+
+`CopyObject` 返回成功即表示 dst 已存在（S3 协议契约保证），无需额外验证。
 
 ---
 
