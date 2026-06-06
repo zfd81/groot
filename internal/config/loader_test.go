@@ -107,3 +107,56 @@ subagent:
 		t.Errorf("expected MaxResultLength=8000 (默认), got %d", cfg.SubAgent.MaxResultLength)
 	}
 }
+
+// TestExpandConfigEnvVars_StorageMinio 验证加载阶段会展开 storage.minio 的
+// AccessKey/SecretKey 中的 ${ENV_VAR}。
+func TestExpandConfigEnvVars_StorageMinio(t *testing.T) {
+	t.Setenv("MINIO_AK_TEST", "expanded-ak")
+	t.Setenv("MINIO_SK_TEST", "expanded-sk")
+	cfg := &Config{
+		Storage: StorageConfig{
+			Minio: &MinioConfig{
+				AccessKey: "${MINIO_AK_TEST}",
+				SecretKey: "${MINIO_SK_TEST}",
+			},
+		},
+	}
+	expandConfigEnvVars(cfg)
+	if cfg.Storage.Minio.AccessKey != "expanded-ak" {
+		t.Errorf("AccessKey = %q, want %q", cfg.Storage.Minio.AccessKey, "expanded-ak")
+	}
+	if cfg.Storage.Minio.SecretKey != "expanded-sk" {
+		t.Errorf("SecretKey = %q, want %q", cfg.Storage.Minio.SecretKey, "expanded-sk")
+	}
+}
+
+// TestExpandConfigEnvVars_StorageNilMinio 验证 storage.minio 为 nil 时
+// expandConfigEnvVars 不会 panic。
+func TestExpandConfigEnvVars_StorageNilMinio(t *testing.T) {
+	cfg := &Config{} // Storage.Minio == nil
+	// 不应 panic
+	expandConfigEnvVars(cfg)
+	if cfg.Storage.Minio != nil {
+		t.Error("Storage.Minio should remain nil")
+	}
+}
+
+// TestExpandConfigEnvVars_StorageMinioEmptyEnv 验证 ${ENV_VAR} 引用未设置的
+// 环境变量时，展开结果为空字符串（与 LLM APIKey 的处理一致）。
+func TestExpandConfigEnvVars_StorageMinioEmptyEnv(t *testing.T) {
+	cfg := &Config{
+		Storage: StorageConfig{
+			Minio: &MinioConfig{
+				AccessKey: "${MINIO_AK_DEFINITELY_NOT_SET_XYZ}",
+				SecretKey: "${MINIO_SK_DEFINITELY_NOT_SET_XYZ}",
+			},
+		},
+	}
+	expandConfigEnvVars(cfg)
+	if cfg.Storage.Minio.AccessKey != "" {
+		t.Errorf("AccessKey = %q, want empty string", cfg.Storage.Minio.AccessKey)
+	}
+	if cfg.Storage.Minio.SecretKey != "" {
+		t.Errorf("SecretKey = %q, want empty string", cfg.Storage.Minio.SecretKey)
+	}
+}
