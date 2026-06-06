@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,8 +23,13 @@ type Manager struct {
 	storage       storage.Storage
 }
 
-// NewManager 创建 Memory Manager
+// NewManager 创建 Memory Manager。
+// store 用于附件读写，必须非 nil（启动时通过 storage.New(cfg.Storage) 创建）。
 func NewManager(memoryDir string, retentionDays int, log *logger.Logger, store storage.Storage) *Manager {
+	if store == nil {
+		panic("memory: NewManager: storage must not be nil")
+	}
+
 	// 确保目录存在
 	os.MkdirAll(memoryDir, 0755)
 
@@ -75,9 +81,6 @@ func (m *Manager) CreateSession(sessionID string) error {
 	}
 	if err := os.MkdirAll(m.chatsDir(sessionID), 0755); err != nil {
 		return fmt.Errorf("创建 chats 目录失败: %w", err)
-	}
-	if err := os.MkdirAll(m.attachmentsDir(sessionID), 0755); err != nil {
-		return fmt.Errorf("创建 attachments 目录失败: %w", err)
 	}
 
 	// 写入 SESSION.md（告知 LLM 附件目录位置）
@@ -293,15 +296,18 @@ func (m *Manager) GetLatestChatRecord(sessionID string) (*ChatRecord, error) {
 
 // SaveAttachment 保存附件
 func (m *Manager) SaveAttachment(sessionID string, filename string, content []byte) (string, error) {
-	// 确保 attachments 目录存在
-	os.MkdirAll(m.attachmentsDir(sessionID), 0755)
-
 	// 文件名安全处理
 	safeName := sanitizeFilename(filename)
 
 	fullPath := filepath.Join(m.attachmentsDir(sessionID), safeName)
 
-	if err := os.WriteFile(fullPath, content, 0644); err != nil {
+	if err := m.storage.Write(
+		context.Background(),
+		fullPath,
+		bytes.NewReader(content),
+		int64(len(content)),
+		"",
+	); err != nil {
 		return "", fmt.Errorf("保存附件失败: %w", err)
 	}
 

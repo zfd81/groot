@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -190,9 +191,11 @@ func TestManager_CreateSession(t *testing.T) {
 		t.Error("CreateSession() 未创建 chats 目录")
 	}
 
+	// attachments 目录采用懒创建策略：CreateSession 不预先创建，首次 SaveAttachment
+	// 时由 storage.Write 自动建目录（local 模式），minio 模式则根本不需要目录概念。
 	attachmentsDir := filepath.Join(sessionDir, "attachments")
-	if _, err := os.Stat(attachmentsDir); os.IsNotExist(err) {
-		t.Error("CreateSession() 未创建 attachments 目录")
+	if _, err := os.Stat(attachmentsDir); !os.IsNotExist(err) {
+		t.Errorf("CreateSession() 不应预先创建 attachments 目录, got err=%v", err)
 	}
 
 	// 验证 history.json
@@ -664,4 +667,41 @@ func TestManager_SaveChatRecord_AtomicWrite(t *testing.T) {
 	if got.Status != "completed" {
 		t.Errorf("原子写入后 status 应为 completed, got %s", got.Status)
 	}
+}
+
+func TestManager_SaveAttachment_WritesViaStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+
+	sessionID := "test_save_attach"
+	if err := mgr.CreateSession(sessionID); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	content := []byte("hello attachment")
+	path, err := mgr.SaveAttachment(sessionID, "report.pdf", content)
+	if err != nil {
+		t.Fatalf("SaveAttachment: %v", err)
+	}
+
+	// 验证文件确实落到了预期路径（local 模式下应直接读得到）
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("content mismatch: got %q, want %q", got, content)
+	}
+}
+
+func TestNewManager_PanicsOnNilStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on nil storage")
+		}
+	}()
+	_ = NewManager(tmpDir, 7, log, nil)
 }
