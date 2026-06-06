@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,14 +17,16 @@ import (
 	"github.com/zfd81/groot/internal/storage"
 )
 
-// spyStorage 包装一个 storage.Storage，记录 Write 调用以验证 SaveAttachment
-// 真的通过抽象层而不是直接 os.WriteFile。
+// spyStorage 包装一个 storage.Storage，记录 Write / DeleteDir 调用以验证
+// SaveAttachment / Cleanup 真的通过抽象层而不是直接 os.WriteFile / os.RemoveAll。
 type spyStorage struct {
 	storage.Storage
-	writeCalled bool
-	lastPath    string
-	lastSize    int64
-	lastCT      string
+	writeCalled       bool
+	lastPath          string
+	lastSize          int64
+	lastCT            string
+	deleteDirCalled   bool
+	lastDeleteDirPath string
 }
 
 func (s *spyStorage) Write(ctx context.Context, path string, r io.Reader, size int64, ct string) error {
@@ -32,6 +35,26 @@ func (s *spyStorage) Write(ctx context.Context, path string, r io.Reader, size i
 	s.lastSize = size
 	s.lastCT = ct
 	return s.Storage.Write(ctx, path, r, size, ct)
+}
+
+func (s *spyStorage) DeleteDir(ctx context.Context, path string) error {
+	s.deleteDirCalled = true
+	s.lastDeleteDirPath = path
+	return s.Storage.DeleteDir(ctx, path)
+}
+
+// failingStorage 故意让 DeleteDir 失败，验证 Cleanup 在附件删除失败时
+// 不删元数据（保持原子性）。
+type failingStorage struct {
+	storage.Storage
+	deleteDirErr error
+}
+
+func (s *failingStorage) DeleteDir(ctx context.Context, path string) error {
+	if s.deleteDirErr != nil {
+		return s.deleteDirErr
+	}
+	return s.Storage.DeleteDir(ctx, path)
 }
 
 func initTestLogger() *logger.Logger {
@@ -753,6 +776,88 @@ func TestManager_SaveAttachment_AutoCreatesAttachmentsDir(t *testing.T) {
 		t.Fatalf("attachments dir should exist after SaveAttachment, stat err: %v", err)
 	} else if !info.IsDir() {
 		t.Fatal("attachments path should be a directory")
+	}
+}
+
+func TestManager_Cleanup_DeletesAttachmentsViaStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	spy := &spyStorage{Storage: storage.NewLocal()}
+	mgr := NewManager(tmpDir, 1, log, spy) // retention=1
+
+	sessionID := "test_cleanup_attach"
+	if err := mgr.CreateSession(sessionID); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := mgr.SaveAttachment(sessionID, "x.txt", []byte("data")); err != nil {
+		t.Fatalf("SaveAttachment: %v", err)
+	}
+
+	// 把 sessionDir 时间往前改 2 天，让它过期
+	sessionDir := filepath.Join(tmpDir, sessionID)
+	old := time.Now().AddDate(0, 0, -2)
+	if err := os.Chtimes(sessionDir, old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	deleted, err := mgr.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 session deleted, got %d", deleted)
+	}
+
+	// 验证 storage.DeleteDir 被调用，且参数是 attachments 路径
+	if !spy.deleteDirCalled {
+		t.Fatal("storage.DeleteDir was not called during cleanup")
+	}
+	expectedAttDir := filepath.Join(tmpDir, sessionID, "attachments")
+	if spy.lastDeleteDirPath != expectedAttDir {
+		t.Errorf("DeleteDir path = %q, want %q", spy.lastDeleteDirPath, expectedAttDir)
+	}
+
+	// 元数据也应被删
+	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
+		t.Errorf("sessionDir should not exist after cleanup, stat err: %v", err)
+	}
+}
+
+func TestManager_Cleanup_AttachmentDeleteFailureKeepsSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	failing := &failingStorage{
+		Storage:      storage.NewLocal(),
+		deleteDirErr: errors.New("simulated minio failure"),
+	}
+	mgr := NewManager(tmpDir, 1, log, failing)
+
+	sessionID := "test_cleanup_failure"
+	if err := mgr.CreateSession(sessionID); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := mgr.SaveAttachment(sessionID, "x.txt", []byte("data")); err != nil {
+		t.Fatalf("SaveAttachment: %v", err)
+	}
+
+	sessionDir := filepath.Join(tmpDir, sessionID)
+	old := time.Now().AddDate(0, 0, -2)
+	if err := os.Chtimes(sessionDir, old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	deleted, err := mgr.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	// 因为附件删除失败，整个 session 应该被跳过、不计入 deleted
+	if deleted != 0 {
+		t.Errorf("expected 0 session deleted (skipped due to attach failure), got %d", deleted)
+	}
+
+	// session 元数据应该仍然存在
+	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+		t.Error("sessionDir should still exist when attachment deletion fails")
 	}
 }
 

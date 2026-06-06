@@ -385,6 +385,15 @@ func (m *Manager) Cleanup(ctx context.Context) (int, error) {
 		}
 
 		if info.ModTime().Before(cutoff) {
+			// 先删附件（走 storage 抽象，确保 minio 模式下也能清理）。
+			// 任何一步失败时 continue 跳过，避免"附件残留 + 元数据被删"的
+			// 不一致状态——失败的 session 在下次 Cleanup 时会自动重试。
+			attachmentsDir := m.attachmentsDir(sessionID)
+			if err := m.storage.DeleteDir(ctx, attachmentsDir); err != nil {
+				m.log.Error("清理附件失败: " + sessionID + ", error: " + err.Error())
+				continue
+			}
+			// 再删元数据（history.json / chats / SESSION.md 等本地文件）
 			if err := os.RemoveAll(sessionDir); err != nil {
 				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
 				continue
