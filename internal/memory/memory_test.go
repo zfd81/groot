@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,24 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/storage"
 )
+
+// spyStorage 包装一个 storage.Storage，记录 Write 调用以验证 SaveAttachment
+// 真的通过抽象层而不是直接 os.WriteFile。
+type spyStorage struct {
+	storage.Storage
+	writeCalled bool
+	lastPath    string
+	lastSize    int64
+	lastCT      string
+}
+
+func (s *spyStorage) Write(ctx context.Context, path string, r io.Reader, size int64, ct string) error {
+	s.writeCalled = true
+	s.lastPath = path
+	s.lastSize = size
+	s.lastCT = ct
+	return s.Storage.Write(ctx, path, r, size, ct)
+}
 
 func initTestLogger() *logger.Logger {
 	return logger.New(config.LoggingConfig{Level: "debug", Format: "json", Output: []string{"stdout"}})
@@ -672,9 +691,10 @@ func TestManager_SaveChatRecord_AtomicWrite(t *testing.T) {
 func TestManager_SaveAttachment_WritesViaStorage(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	spy := &spyStorage{Storage: storage.NewLocal()}
+	mgr := NewManager(tmpDir, 7, log, spy)
 
-	sessionID := "test_save_attach"
+	sessionID := "test_save_attach_via_storage"
 	if err := mgr.CreateSession(sessionID); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -685,7 +705,21 @@ func TestManager_SaveAttachment_WritesViaStorage(t *testing.T) {
 		t.Fatalf("SaveAttachment: %v", err)
 	}
 
-	// 验证文件确实落到了预期路径（local 模式下应直接读得到）
+	// 验证 storage.Write 真的被调用
+	if !spy.writeCalled {
+		t.Fatal("storage.Write was not called")
+	}
+	if spy.lastPath != path {
+		t.Errorf("storage.Write path = %q, want %q", spy.lastPath, path)
+	}
+	if spy.lastSize != int64(len(content)) {
+		t.Errorf("storage.Write size = %d, want %d", spy.lastSize, len(content))
+	}
+	if spy.lastCT != "" {
+		t.Errorf("storage.Write contentType = %q, want empty", spy.lastCT)
+	}
+
+	// 同时验证内容确实落盘（spy 透传到了 NewLocal）
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -695,12 +729,44 @@ func TestManager_SaveAttachment_WritesViaStorage(t *testing.T) {
 	}
 }
 
+func TestManager_SaveAttachment_AutoCreatesAttachmentsDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+
+	sessionID := "test_lazy_attach_dir"
+	if err := mgr.CreateSession(sessionID); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// 验证 CreateSession 后 attachments 目录不存在（懒创建契约）
+	attDir := filepath.Join(tmpDir, sessionID, "attachments")
+	if _, err := os.Stat(attDir); !os.IsNotExist(err) {
+		t.Fatalf("attachments dir should not exist after CreateSession, stat err: %v", err)
+	}
+
+	// SaveAttachment 后应自动创建 attachments 目录并写入文件
+	if _, err := mgr.SaveAttachment(sessionID, "x.txt", []byte("data")); err != nil {
+		t.Fatalf("SaveAttachment: %v", err)
+	}
+	if info, err := os.Stat(attDir); err != nil {
+		t.Fatalf("attachments dir should exist after SaveAttachment, stat err: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("attachments path should be a directory")
+	}
+}
+
 func TestNewManager_PanicsOnNilStorage(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
 	defer func() {
-		if r := recover(); r == nil {
+		r := recover()
+		if r == nil {
 			t.Fatal("expected panic on nil storage")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "storage must not be nil") {
+			t.Fatalf("expected panic message about nil storage, got: %v", r)
 		}
 	}()
 	_ = NewManager(tmpDir, 7, log, nil)

@@ -1,3 +1,12 @@
+// Package memory 管理会话的元数据与附件存储。
+//
+// 存储职责划分：
+//   - 附件（attachments/<file>）通过 storage.Storage 接口读写，便于将
+//     底层后端切换为 MinIO 等对象存储；
+//   - 会话元数据（history.json、chats/*.json、SESSION.md）继续走本地
+//     文件系统 + 原子 rename，因为它们小、需要原子写、未来计划迁
+//     PostgreSQL，与对象存储路径不同
+//     （详见 docs/superpowers/specs/2026-06-06-storage-interface-design.md 2.1.3 节）。
 package memory
 
 import (
@@ -301,6 +310,8 @@ func (m *Manager) SaveAttachment(sessionID string, filename string, content []by
 
 	fullPath := filepath.Join(m.attachmentsDir(sessionID), safeName)
 
+	// TODO: 当 SaveAttachment 升级为接受 ctx 参数后，把这里替换为调用方传入的 ctx，
+	// 以支持 minio 模式下的请求级超时与取消。
 	if err := m.storage.Write(
 		context.Background(),
 		fullPath,
