@@ -29,8 +29,10 @@ type FileInfo struct {
 //
 // storage 层不做任何路径拼接，调用方传什么就用什么。
 type Storage interface {
-	// Write 写入数据流到指定 path。size < 0 表示长度未知（minio 会用分片上传）。
-	// contentType 为空时实现可按文件名扩展名推断或留空。
+	// Write 写入数据流到指定 path。
+	// size >= 0 时必须等于 r 的实际字节数（不一致时返回错误）；
+	// size < 0 表示长度未知（minio 会用分片上传，local 直接读到 EOF）。
+	// contentType 为空时实现侧应当原样保留为空，由调用方决定是否提供。
 	Write(ctx context.Context, path string, r io.Reader, size int64, contentType string) error
 
 	// Read 返回指定 path 的内容流，调用方负责 Close。
@@ -38,6 +40,7 @@ type Storage interface {
 	Read(ctx context.Context, path string) (io.ReadCloser, error)
 
 	// Delete 删除指定 path 的单个文件。不存在返回 ErrNotFound。
+	// path 是目录时返回 ErrIsDir（与 Read 对称）。
 	Delete(ctx context.Context, path string) error
 
 	// DeleteDir 递归删除指定目录及其所有内容。
@@ -45,9 +48,11 @@ type Storage interface {
 	DeleteDir(ctx context.Context, path string) error
 
 	// Stat 返回 path 的元信息。不存在返回 ErrNotFound。
+	// path 是目录时返回 IsDir=true 的 FileInfo。
 	Stat(ctx context.Context, path string) (*FileInfo, error)
 
-	// List 列出指定目录下的文件（不递归）。
+	// List 列出指定目录下的直接子项（不递归），包括子文件和子目录。
+	// 子目录在结果中以 IsDir=true 表示。
 	// 目录不存在返回 ErrNotFound，目录为空返回空切片。
 	List(ctx context.Context, dir string) ([]*FileInfo, error)
 }
