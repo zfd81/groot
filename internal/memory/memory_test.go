@@ -11,6 +11,7 @@ import (
 
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
+	"github.com/zfd81/groot/internal/storage"
 )
 
 func initTestLogger() *logger.Logger {
@@ -160,7 +161,7 @@ func TestSanitizeFilename(t *testing.T) {
 func TestNewManager(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	if mgr.GetMemoryDir() != tmpDir {
 		t.Errorf("NewManager().GetMemoryDir() = %s, want %s", mgr.GetMemoryDir(), tmpDir)
@@ -170,7 +171,7 @@ func TestNewManager(t *testing.T) {
 func TestManager_CreateSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_001"
 	err := mgr.CreateSession(sessionID)
@@ -204,7 +205,7 @@ func TestManager_CreateSession(t *testing.T) {
 func TestManager_CreateSession_WritesSessionMd(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_md"
 	err := mgr.CreateSession(sessionID)
@@ -242,7 +243,7 @@ func TestManager_CreateSession_WritesSessionMd(t *testing.T) {
 func TestManager_ExistsSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_002"
 
@@ -261,7 +262,7 @@ func TestManager_ExistsSession(t *testing.T) {
 func TestManager_GetHistory(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_003"
 	mgr.CreateSession(sessionID)
@@ -283,7 +284,7 @@ func TestManager_GetHistory(t *testing.T) {
 func TestManager_GetHistory_NotExist(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	_, err := mgr.GetHistory("nonexistent")
 	if err == nil {
@@ -294,7 +295,7 @@ func TestManager_GetHistory_NotExist(t *testing.T) {
 func TestManager_AppendMessage(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_004"
 	mgr.CreateSession(sessionID)
@@ -327,7 +328,7 @@ func TestManager_AppendMessage(t *testing.T) {
 func TestManager_GetRoundCount(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_005"
 	mgr.CreateSession(sessionID)
@@ -350,7 +351,7 @@ func TestManager_GetRoundCount(t *testing.T) {
 func TestManager_SaveChatRecord(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_006"
 	mgr.CreateSession(sessionID)
@@ -382,7 +383,7 @@ func TestManager_SaveChatRecord(t *testing.T) {
 func TestManager_GetChatRecord(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_007"
 	mgr.CreateSession(sessionID)
@@ -410,7 +411,7 @@ func TestManager_GetChatRecord(t *testing.T) {
 func TestManager_SaveAttachment(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_008"
 	mgr.CreateSession(sessionID)
@@ -436,7 +437,7 @@ func TestManager_SaveAttachment(t *testing.T) {
 func TestManager_ListSessions(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	// 创建多个会话
 	for i := 1; i <= 5; i++ {
@@ -469,7 +470,7 @@ func TestManager_ListSessions(t *testing.T) {
 func TestManager_ListSessions_Pagination(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	// 创建 10 个会话
 	for i := 1; i <= 10; i++ {
@@ -505,7 +506,7 @@ func TestManager_ListSessions_Pagination(t *testing.T) {
 func TestManager_Cleanup(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 1, log) // 保留 1 天
+	mgr := NewManager(tmpDir, 1, log, storage.NewLocal()) // 保留 1 天
 
 	// 创建旧会话，然后修改目录 ModTime 为 2 天前
 	sessionID := "test_session_old"
@@ -542,7 +543,7 @@ func TestManager_Cleanup(t *testing.T) {
 func TestManager_GetContextMessages(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_context"
 	mgr.CreateSession(sessionID)
@@ -615,7 +616,7 @@ func TestManager_GetContextMessages(t *testing.T) {
 func TestManager_SaveHistory_AtomicWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_atomic"
 	mgr.CreateSession(sessionID)
@@ -640,7 +641,7 @@ func TestManager_SaveHistory_AtomicWrite(t *testing.T) {
 func TestManager_SaveChatRecord_AtomicWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log)
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_chat_atomic"
 	mgr.CreateSession(sessionID)

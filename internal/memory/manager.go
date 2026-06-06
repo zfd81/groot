@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zfd81/groot/internal/logger"
+	"github.com/zfd81/groot/internal/storage"
 )
 
 // Manager Memory 接口的实现
@@ -18,10 +19,11 @@ type Manager struct {
 	memoryDir     string
 	retentionDays int
 	log           *logger.Logger
+	storage       storage.Storage
 }
 
 // NewManager 创建 Memory Manager
-func NewManager(memoryDir string, retentionDays int, log *logger.Logger) *Manager {
+func NewManager(memoryDir string, retentionDays int, log *logger.Logger, store storage.Storage) *Manager {
 	// 确保目录存在
 	os.MkdirAll(memoryDir, 0755)
 
@@ -29,6 +31,7 @@ func NewManager(memoryDir string, retentionDays int, log *logger.Logger) *Manage
 		memoryDir:     memoryDir,
 		retentionDays: retentionDays,
 		log:           log,
+		storage:       store,
 	}
 }
 

@@ -33,6 +33,7 @@ import (
 	"github.com/zfd81/groot/internal/message/senders"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
+	"github.com/zfd81/groot/internal/storage"
 )
 
 var (
@@ -287,9 +288,16 @@ func startServer(homeDir string, port int) {
 	}
 	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()), zap.String("dir", mcpDir))
 
+	// Initialize storage backend
+	store, err := storage.New(cfg.Storage)
+	if err != nil {
+		log.Error("无法初始化存储后端", zap.Error(err))
+		os.Exit(1)
+	}
+
 	// Initialize memory manager
 	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
-	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
+	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log, store)
 	log.Info("Memory 初始化完成", zap.String("dir", memoryDir))
 
 	// Initialize runtime state

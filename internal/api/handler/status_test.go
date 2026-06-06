@@ -13,6 +13,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
+	"github.com/zfd81/groot/internal/storage"
 )
 
 // newStatusTestContext 构造一个带 sid path param 的 RequestContext。
@@ -39,7 +40,7 @@ func TestStatusHandler_IncludesSubAgents(t *testing.T) {
 
 	// status handler 在 active chat 路径上仍会调 memory.ExistsSession 拿轮数；
 	// 给一个真实的 Manager 指向临时目录即可，会话不存在不会报错。
-	mem := memory.NewManager(t.TempDir(), 7, logger.NewNop())
+	mem := memory.NewManager(t.TempDir(), 7, logger.NewNop(), storage.NewLocal())
 	h := NewStatusHandler(rt, mem)
 
 	rc := newStatusTestContext("sess")
@@ -102,7 +103,7 @@ func TestStatusHandler_IncludesSubAgents(t *testing.T) {
 // 这是 SnapshotProgress 不会被调用的分支——确保没有空指针问题。
 func TestStatusHandler_IdleNoActiveChat(t *testing.T) {
 	rt := agent.NewRuntimeState()
-	mem := memory.NewManager(t.TempDir(), 7, logger.NewNop())
+	mem := memory.NewManager(t.TempDir(), 7, logger.NewNop(), storage.NewLocal())
 	h := NewStatusHandler(rt, mem)
 
 	rc := newStatusTestContext("missing-sess")
@@ -123,7 +124,7 @@ func TestStatusHandler_IdleNoActiveChat(t *testing.T) {
 // TestStatusHandler_MissingSidReturns400 验证 sid path param 缺失时返 400。
 func TestStatusHandler_MissingSidReturns400(t *testing.T) {
 	rt := agent.NewRuntimeState()
-	mem := memory.NewManager(t.TempDir(), 7, logger.NewNop())
+	mem := memory.NewManager(t.TempDir(), 7, logger.NewNop(), storage.NewLocal())
 	h := NewStatusHandler(rt, mem)
 
 	rc := app.NewContext(0)

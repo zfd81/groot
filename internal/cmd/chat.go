@@ -25,6 +25,7 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/message/senders"
+	"github.com/zfd81/groot/internal/storage"
 )
 
 // RunChat starts the chat TUI.
@@ -132,8 +133,14 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 		return nil, fmt.Errorf("无法加载MCP配置: %w", err)
 	}
 
+	// Storage backend
+	store, err := storage.New(cfg.Storage)
+	if err != nil {
+		return nil, fmt.Errorf("无法初始化存储后端: %w", err)
+	}
+
 	// Memory manager
-	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log)
+	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log, store)
 
 	// Runtime state
 	runtimeState := agent.NewRuntimeState()
