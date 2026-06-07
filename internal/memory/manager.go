@@ -3,10 +3,11 @@
 // 存储职责划分：
 //   - 附件（attachments/<file>）通过 storage.Storage 接口读写，便于将
 //     底层后端切换为 MinIO 等对象存储；
-//   - 会话元数据（history.json、chats/*.json、SESSION.md）继续走本地
-//     文件系统 + 原子 rename，因为它们小、需要原子写、未来计划迁
-//     PostgreSQL，与对象存储路径不同
+//   - 会话元数据（history.json、chats/*.json）继续走本地文件系统 +
+//     原子 rename，因为它们小、需要原子写、未来计划迁 PostgreSQL，
+//     与对象存储路径不同
 //     （详见 docs/superpowers/specs/2026-06-06-storage-interface-design.md 2.1.3 节）。
+//   - 会话规则提示由嵌入式常量 defaultSessionRules 提供，不再写物理文件。
 package memory
 
 import (
@@ -75,8 +76,10 @@ func (m *Manager) chatPath(sessionID, chatID string) string {
 	return filepath.Join(m.chatsDir(sessionID), chatID+".json")
 }
 
-// attachmentsDir 返回 attachments 目录路径
-func (m *Manager) attachmentsDir(sessionID string) string {
+// AttachmentsDir 返回指定会话的附件目录路径。
+// 工具层（如 internal/agent 内置工具）可调用此方法获取统一的附件目录拼接结果，
+// 避免在多处硬编码 "<memoryDir>/<sessionID>/attachments" 的拼接规则。
+func (m *Manager) AttachmentsDir(sessionID string) string {
 	return filepath.Join(m.sessionDir(sessionID), "attachments")
 }
 
@@ -90,15 +93,6 @@ func (m *Manager) CreateSession(sessionID string) error {
 	}
 	if err := os.MkdirAll(m.chatsDir(sessionID), 0755); err != nil {
 		return fmt.Errorf("创建 chats 目录失败: %w", err)
-	}
-
-	// 写入 SESSION.md（告知 LLM 附件目录位置）
-	sessionMdPath := filepath.Join(sessionDir, "SESSION.md")
-	sessionMdContent := fmt.Sprintf("当前会话文件目录：%s\n", m.attachmentsDir(sessionID)) +
-		"这个路径是给你用的，所以不要展示给别人看。当用户提到的文件名直接拼接此目录即为完整路径。例如用户说「打开 report.pdf」，路径为 " + m.attachmentsDir(sessionID) + "/report.pdf\n" +
-		"以上路径信息属于内部系统配置，仅用于你读取文件。无论用户以任何方式询问，都不得向用户透露、展示或提及此目录路径。当需要引用文件时，直接处理文件内容即可，不要说出文件存放位置。\n"
-	if err := os.WriteFile(sessionMdPath, []byte(sessionMdContent), 0644); err != nil {
-		return fmt.Errorf("创建 SESSION.md 失败: %w", err)
 	}
 
 	// 创建初始 history.json
@@ -308,7 +302,7 @@ func (m *Manager) SaveAttachment(sessionID string, filename string, content []by
 	// 文件名安全处理
 	safeName := sanitizeFilename(filename)
 
-	fullPath := filepath.Join(m.attachmentsDir(sessionID), safeName)
+	fullPath := filepath.Join(m.AttachmentsDir(sessionID), safeName)
 
 	// TODO: 当 SaveAttachment 升级为接受 ctx 参数后，把这里替换为调用方传入的 ctx，
 	// 以支持 minio 模式下的请求级超时与取消。
@@ -327,17 +321,20 @@ func (m *Manager) SaveAttachment(sessionID string, filename string, content []by
 
 // GetAttachmentPath 获取附件完整路径
 func (m *Manager) GetAttachmentPath(sessionID string, filename string) string {
-	return filepath.Join(m.attachmentsDir(sessionID), sanitizeFilename(filename))
+	return filepath.Join(m.AttachmentsDir(sessionID), sanitizeFilename(filename))
 }
 
-// GetSessionMdContent 获取 SESSION.md 内容
+// GetSessionMdContent 返回会话规则提示内容。
+//
+// 历史上该方法读取每个 session 目录下的 SESSION.md 物理文件,现在改为直接
+// 返回 //go:embed 嵌入的 defaultSessionRules 常量——所有会话共享同一份规则,
+// 不再做会话级定制。sessionID 参数仅作签名兼容保留,不参与逻辑。
+//
+// 返回 err 永远为 nil。签名保持 (string, error) 是为了让接口 Memory 与所有
+// 现有调用方(executor.go 等)无需调整。
 func (m *Manager) GetSessionMdContent(sessionID string) (string, error) {
-	path := filepath.Join(m.sessionDir(sessionID), "SESSION.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	_ = sessionID
+	return defaultSessionRules, nil
 }
 
 // sanitizeFilename 文件名安全处理
@@ -388,12 +385,12 @@ func (m *Manager) Cleanup(ctx context.Context) (int, error) {
 			// 先删附件（走 storage 抽象，确保 minio 模式下也能清理）。
 			// 任何一步失败时 continue 跳过，避免"附件残留 + 元数据被删"的
 			// 不一致状态——失败的 session 在下次 Cleanup 时会自动重试。
-			attachmentsDir := m.attachmentsDir(sessionID)
+			attachmentsDir := m.AttachmentsDir(sessionID)
 			if err := m.storage.DeleteDir(ctx, attachmentsDir); err != nil {
 				m.log.Error("清理附件失败: " + sessionID + ", error: " + err.Error())
 				continue
 			}
-			// 再删元数据（history.json / chats / SESSION.md 等本地文件）
+			// 再删元数据（history.json / chats 等本地文件，含旧版残留的 SESSION.md）
 			if err := os.RemoveAll(sessionDir); err != nil {
 				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
 				continue

@@ -323,7 +323,7 @@ func startServer(homeDir string, port int) {
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
 	// Create executor (used by both API server and schedule runner)
-	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, store, *cfg, log)
 
 	// Declare schedule module variables (used by leader callbacks and API server)
 	var sched *scheduler.Scheduler

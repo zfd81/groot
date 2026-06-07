@@ -162,7 +162,7 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
 
 	// Create executor
-	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, store, *cfg, log)
 
 	// Create API server (schedule disabled in embed mode)
 	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)

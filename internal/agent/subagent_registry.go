@@ -354,8 +354,12 @@ func buildSubAgentEntry(
 //  2. parentModelName   — 父任务运行时 model（编排模式默认）
 //  3. e.LLMCfg.DefaultModel — 配置默认值兜底
 //
+// extraTools 由调用方（call_agent）注入额外的请求级工具——目前主要是
+// groot_file_list / groot_file_read，让通过 call_agent 调度的子 Agent
+// 也能访问当前会话附件。可空。
+//
 // 返回 InvokableTool 供 call_agent.InvokableRun 直接调用。
-func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string) (tool.InvokableTool, error) {
+func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, extraTools ...tool.BaseTool) (tool.InvokableTool, error) {
 	// 单测注入路径：跳过真实 LLM 构造
 	if e.testTool != nil {
 		return e.testTool, nil
@@ -374,6 +378,11 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 		return nil, fmt.Errorf("chat model: %w", err)
 	}
 
+	// 子 Agent 工具集 = MCP 工具 + 主 Agent 透传的内置工具（groot_file_list 等）。
+	// extraTools 在前，与主 Agent 顺序保持一致；MCP 工具列表跟随其后。
+	tools := append([]tool.BaseTool{}, extraTools...)
+	tools = append(tools, e.MCPManager.GetTools()...)
+
 	agentCfg := &adk.ChatModelAgentConfig{
 		Name:          e.Name,
 		Description:   e.Description,
@@ -381,7 +390,7 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 		Model:         chatModel,
 		MaxIterations: e.MaxIterations,
 		ToolsConfig: adk.ToolsConfig{
-			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: e.MCPManager.GetTools()},
+			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools},
 			// 叶子节点（子 Agent）不需要 EmitInternalEvents，由父 Agent 透出
 		},
 	}

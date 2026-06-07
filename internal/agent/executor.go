@@ -14,6 +14,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
+	"github.com/zfd81/groot/internal/storage"
 )
 
 // TaskStatus represents task status (temporary definition until memory module)
@@ -91,6 +92,7 @@ type Executor struct {
 	subAgentRegistry  *SubAgentRegistry
 	tokenAccumulators *TokenAccumulators
 	runtimeState      *RuntimeState
+	storage           storage.Storage // 启动期实例化，供内置文件工具读写附件
 	config            config.Config
 	logger            *logger.Logger
 }
@@ -103,6 +105,7 @@ func NewExecutor(
 	mcpMgr *mcp.Manager,
 	subAgentReg *SubAgentRegistry,
 	runtime *RuntimeState,
+	store storage.Storage,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
@@ -114,6 +117,7 @@ func NewExecutor(
 		subAgentRegistry:  subAgentReg,
 		tokenAccumulators: NewTokenAccumulators(),
 		runtimeState:      runtime,
+		storage:           store,
 		config:            cfg,
 		logger:            log,
 	}
@@ -133,6 +137,10 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 	// 区分 Solo / 编排模式：
 	// - Solo：task.AgentName 指向已注册子 Agent，使用其 Instruction/MCP/Skill 直接执行
 	// - 编排（默认/主 Agent）：挂载 call_agent 工具 + 打开 EmitInternalEvents
+	//
+	// 两条路径都注入 groot_file_list / groot_file_read 内置文件工具，
+	// 让 LLM 能主动列出和读取当前会话附件。顺序固定为
+	// [groot_file_list, groot_file_read, call_agent?]，call_agent 仅编排模式追加。
 	var (
 		agentName      = MainAgentName
 		agentMdContent = ""
@@ -142,6 +150,14 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		emitInternal   = false
 		soloErr        error
 	)
+
+	// 内置文件工具（请求级，sessionID 作为字段写入）
+	if e.storage != nil && e.memoryManager != nil {
+		extraTools = append(extraTools,
+			NewGrootFileListTool(e.storage, e.memoryManager, sessionID),
+			NewGrootFileReadTool(e.storage, e.memoryManager, sessionID),
+		)
+	}
 
 	if task.AgentName != "" && task.AgentName != MainAgentName {
 		// Solo 模式
@@ -194,8 +210,9 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				TokenAccumulators: e.tokenAccumulators,
 				Log:               e.logger,
 				ParentRound:       task.Round,
+				Storage:           e.storage,
 			})
-			extraTools = []tool.BaseTool{callAgent}
+			extraTools = append(extraTools, callAgent)
 			emitInternal = true
 		}
 	}

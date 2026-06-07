@@ -247,41 +247,66 @@ func TestManager_CreateSession(t *testing.T) {
 	}
 }
 
-func TestManager_CreateSession_WritesSessionMd(t *testing.T) {
+// TestManager_CreateSession_DoesNotWriteSessionMd 验证 CreateSession 不再写
+// SESSION.md 物理文件——会话规则改为通过嵌入式常量 defaultSessionRules 提供，
+// 由 GetSessionMdContent 直接返回。
+func TestManager_CreateSession_DoesNotWriteSessionMd(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
 	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
 	sessionID := "test_session_md"
-	err := mgr.CreateSession(sessionID)
-	if err != nil {
+	if err := mgr.CreateSession(sessionID); err != nil {
 		t.Fatalf("CreateSession() 失败: %v", err)
 	}
 
-	// 验证 SESSION.md 已创建在会话根目录
 	sessionMdPath := filepath.Join(tmpDir, sessionID, "SESSION.md")
-	data, err := os.ReadFile(sessionMdPath)
-	if err != nil {
-		t.Fatalf("SESSION.md 未创建: %v", err)
+	if _, err := os.Stat(sessionMdPath); !os.IsNotExist(err) {
+		t.Errorf("CreateSession() 不应再创建 SESSION.md 物理文件, got err=%v", err)
 	}
+}
 
-	content := string(data)
-	attachmentsDir := filepath.Join(tmpDir, sessionID, "attachments")
+// TestManager_GetSessionMdContent_ReturnsConstant 验证 GetSessionMdContent
+// 返回非空规则常量,且与传入的 sessionID 无关(包括不存在的 sessionID)。
+func TestManager_GetSessionMdContent_ReturnsConstant(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
 
-	if !strings.Contains(content, "当前会话文件目录") {
-		t.Error("SESSION.md 应包含引导文本")
+	cases := []string{"existing_session", "non_existent_session", ""}
+	var first string
+	for i, sid := range cases {
+		content, err := mgr.GetSessionMdContent(sid)
+		if err != nil {
+			t.Fatalf("GetSessionMdContent(%q) 返回 err: %v", sid, err)
+		}
+		if content == "" {
+			t.Errorf("GetSessionMdContent(%q) 返回空内容", sid)
+		}
+		// 必须包含两个内置工具名,确保规则正文被正确嵌入。
+		if !strings.Contains(content, "groot_file_list") || !strings.Contains(content, "groot_file_read") {
+			t.Errorf("GetSessionMdContent(%q) 内容缺失工具名: %s", sid, content)
+		}
+		if i == 0 {
+			first = content
+		} else if content != first {
+			t.Errorf("GetSessionMdContent 应返回与 sessionID 无关的常量,但 %q 与 %q 内容不同", cases[0], sid)
+		}
 	}
-	if !strings.Contains(content, attachmentsDir) {
-		t.Errorf("SESSION.md 应包含 attachments 目录路径: %s, 内容: %s", attachmentsDir, content)
-	}
+}
 
-	// 验证 GetSessionMdContent 可读取
-	mdContent, err := mgr.GetSessionMdContent(sessionID)
-	if err != nil {
-		t.Fatalf("GetSessionMdContent() 失败: %v", err)
-	}
-	if mdContent != content {
-		t.Error("GetSessionMdContent() 返回内容与文件内容不一致")
+// TestManager_AttachmentsDir_Exported 验证导出方法 AttachmentsDir 拼接路径符合
+// "<memoryDir>/<sessionID>/attachments" 规则。
+func TestManager_AttachmentsDir_Exported(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+
+	sessionID := "test_attachments_dir"
+	got := mgr.AttachmentsDir(sessionID)
+	want := filepath.Join(tmpDir, sessionID, "attachments")
+	if got != want {
+		t.Errorf("AttachmentsDir(%q) = %q, want %q", sessionID, got, want)
 	}
 }
 
