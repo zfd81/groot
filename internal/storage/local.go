@@ -27,6 +27,9 @@ func (l *Local) ensureAbs(path string) error {
 	return nil
 }
 
+// Write 实现单文件原子写:同目录 <path>.tmp → f.Sync() → os.Rename。
+// 任何中途失败都不会污染目标 path——目标要么保留旧内容、要么是完整新内容。
+// 入口处会清理上一次崩溃可能遗留的孤儿 .tmp 文件。
 func (l *Local) Write(ctx context.Context, path string, r io.Reader, size int64, contentType string) error {
 	if err := l.ensureAbs(path); err != nil {
 		return err
@@ -34,21 +37,42 @@ func (l *Local) Write(ctx context.Context, path string, r io.Reader, size int64,
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("storage: mkdir %s: %w", filepath.Dir(path), err)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+
+	tmp := path + ".tmp"
+
+	// 入口兜底清理:消除上一次进程崩溃残留的孤儿 .tmp。
+	// 仅当文件存在且无法删除时报错;不存在视为正常路径。
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("storage: cleanup orphan tmp %s: %w", tmp, err)
+	}
+
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		return fmt.Errorf("storage: open %s: %w", path, err)
+		return fmt.Errorf("storage: open %s: %w", tmp, err)
 	}
 
 	n, err := io.Copy(f, r)
 	if err != nil {
 		f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("storage: write %s: %w", path, err)
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("storage: sync %s: %w", path, err)
+	}
 	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("storage: close %s: %w", path, err)
 	}
 	if size >= 0 && n != size {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("storage: write %s: declared size %d but wrote %d bytes", path, size, n)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("storage: rename %s -> %s: %w", tmp, path, err)
 	}
 	return nil
 }

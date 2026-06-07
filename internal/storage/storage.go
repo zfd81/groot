@@ -34,6 +34,10 @@ type Storage interface {
 	// size < 0 表示长度未知（minio 会用分片上传，local 直接读到 EOF）。
 	// contentType 为空时实现侧的行为因后端而异（local 留空、minio 兜底为
 	// application/octet-stream），调用方如关心跨实现一致性应显式提供。
+	//
+	// 契约：单文件原子写——目标 path 要么保留旧内容、要么写出完整新内容，
+	// 不会留下半成品。local 通过同目录 .tmp + Sync + Rename 实现，
+	// minio 由 PutObject 协议契约天然保证。
 	Write(ctx context.Context, path string, r io.Reader, size int64, contentType string) error
 
 	// Read 返回指定 path 的内容流，调用方负责 Close。
@@ -62,10 +66,12 @@ type Storage interface {
 	// 行为契约：
 	//   - src 不存在时返回 ErrNotFound
 	//   - dst 已存在时按"覆盖"语义处理（实现负责清理）
-	//   - local 实现：os.Rename，同文件系统下原子；支持文件和目录
-	//   - minio 实现：CopyObject + RemoveObject 两步，仅对单 object 有效
-	//     （对象存储无目录概念，需移动多个对象请由调用方拆分）；
-	//     非原子，失败时尽量回滚保证 src 完整，但进程崩溃可能留下 src 与 dst 各一份，
-	//     业务层需保证幂等
+	//   - local 实现：os.Rename，同文件系统下原子；文件 / 目录均原子
+	//   - minio 实现（文件）：CopyObject + RemoveObject 两步补偿
+	//   - minio 实现（目录）：枚举前缀 → Phase A 全量 Copy → Phase B 全量 Delete，
+	//     Phase A 成功后 dst 即权威完整副本；Phase B 失败时 src 残留，
+	//     业务层应以 dst 为准并做幂等清理
+	//   - minio 两种形态都不是真正的原子，进程崩溃可能让 src 与 dst 共存，
+	//     业务层需保证幂等。详见设计文档 §1.12
 	Rename(ctx context.Context, src, dst string) error
 }

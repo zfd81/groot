@@ -464,3 +464,171 @@ func TestMinio_RenameDeleteFailureAndRollbackFailure(t *testing.T) {
 		t.Error("dst should still exist (rollback also failed)")
 	}
 }
+
+// ===== 目录级 Rename 测试 =====
+
+func TestMinio_RenameDir_Success(t *testing.T) {
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+
+	for _, k := range []string{"a/x.txt", "a/sub/y.txt", "a/sub/z.txt"} {
+		_ = ms.Write(ctx, k, strings.NewReader("data:"+k), -1, "")
+	}
+	// 旁路对象不应被影响
+	_ = ms.Write(ctx, "other/p.txt", strings.NewReader("p"), 1, "")
+
+	if err := ms.Rename(ctx, "a", "b"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	// 所有 a/ 下的对象应迁移到 b/
+	for _, k := range []string{"a/x.txt", "a/sub/y.txt", "a/sub/z.txt"} {
+		if _, ok := fc.objects[k]; ok {
+			t.Errorf("%s should be removed from src", k)
+		}
+	}
+	for _, k := range []string{"b/x.txt", "b/sub/y.txt", "b/sub/z.txt"} {
+		if _, ok := fc.objects[k]; !ok {
+			t.Errorf("%s should exist at dst", k)
+		}
+	}
+	// 旁路对象不变
+	if _, ok := fc.objects["other/p.txt"]; !ok {
+		t.Error("other/p.txt should be untouched")
+	}
+}
+
+func TestMinio_RenameDir_SrcNotFoundNoObjectNoPrefix(t *testing.T) {
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	err := ms.Rename(context.Background(), "ghost", "dst")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestMinio_RenameDir_PhaseACopyFailure_RollsBackDst(t *testing.T) {
+	// 全部 CopyObject 失败时（copyErr 一旦置位影响所有 Copy），
+	// 已 Copy 的子对象应被回滚清空，src 必须完整。
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	for _, k := range []string{"a/x.txt", "a/y.txt"} {
+		_ = ms.Write(ctx, k, strings.NewReader("d"), 1, "")
+	}
+	// 第一次 Copy 就失败
+	fc.copyErr = errors.New("simulated copy failure")
+
+	if err := ms.Rename(ctx, "a", "b"); err == nil {
+		t.Fatal("expected error from Phase A copy failure")
+	}
+	// src 完整
+	for _, k := range []string{"a/x.txt", "a/y.txt"} {
+		if _, ok := fc.objects[k]; !ok {
+			t.Errorf("src %s should be intact", k)
+		}
+	}
+	// dst 应该没有任何对象（首个 Copy 就失败，没有需要回滚的）
+	for k := range fc.objects {
+		if strings.HasPrefix(k, "b/") {
+			t.Errorf("dst should be empty after Phase A failure, found %s", k)
+		}
+	}
+}
+
+// partialCopyClient 让指定 key 的 CopyObject 失败，其他 key 正常成功。
+// 用于测试 Phase A 中后续 Copy 失败 → 已 Copy 的对象需回滚。
+type partialCopyClient struct {
+	*fakeMinioClient
+	failCopyToKey map[string]bool
+}
+
+func (p *partialCopyClient) CopyObject(ctx context.Context, dstBucket, dstKey, srcBucket, srcKey string) error {
+	if p.failCopyToKey[dstKey] {
+		return errors.New("simulated copy failure for " + dstKey)
+	}
+	return p.fakeMinioClient.CopyObject(ctx, dstBucket, dstKey, srcBucket, srcKey)
+}
+
+func TestMinio_RenameDir_PhaseAPartialFailure_RollsBackCopied(t *testing.T) {
+	// Phase A 中第二个对象 Copy 失败 → 第一个已 Copy 的 dst 子对象应被回滚
+	fc := &partialCopyClient{
+		fakeMinioClient: newFakeClient(),
+		failCopyToKey:   map[string]bool{"b/y.txt": true},
+	}
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+
+	// 写入两个对象（fakeMinioClient.objects 是 map，迭代顺序不保证，
+	// 但只要任一对象失败，回滚都应清空 dst）
+	for _, k := range []string{"a/x.txt", "a/y.txt"} {
+		_ = ms.Write(ctx, k, strings.NewReader("d"), 1, "")
+	}
+
+	if err := ms.Rename(ctx, "a", "b"); err == nil {
+		t.Fatal("expected error from partial Phase A failure")
+	}
+	// src 完整
+	for _, k := range []string{"a/x.txt", "a/y.txt"} {
+		if _, ok := fc.objects[k]; !ok {
+			t.Errorf("src %s should be intact", k)
+		}
+	}
+	// dst 不应有任何已迁移对象（要么没 Copy 成功，要么被回滚清掉）
+	for k := range fc.objects {
+		if strings.HasPrefix(k, "b/") {
+			t.Errorf("dst should be empty after Phase A rollback, found %s", k)
+		}
+	}
+}
+
+func TestMinio_RenameDir_PhaseBDeleteFailure_DstAuthoritative(t *testing.T) {
+	// Phase B 删 src 失败 → 不回滚 dst（dst 已是权威完整副本）
+	fc := &fakeRollbackClient{
+		fakeMinioClient: newFakeClient(),
+		failKeys:        map[string]bool{"a/y.txt": true}, // 删第二个 src 对象失败
+	}
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	for _, k := range []string{"a/x.txt", "a/y.txt"} {
+		_ = ms.Write(ctx, k, strings.NewReader("d"), 1, "")
+	}
+
+	err := ms.Rename(ctx, "a", "b")
+	if err == nil {
+		t.Fatal("expected Phase B error")
+	}
+	if !strings.Contains(err.Error(), "delete src") {
+		t.Errorf("expected error to wrap 'delete src', got: %v", err)
+	}
+	// dst 必须完整存在（这是收敛原则的核心）
+	for _, k := range []string{"b/x.txt", "b/y.txt"} {
+		if _, ok := fc.objects[k]; !ok {
+			t.Errorf("dst %s should exist (Phase A succeeded, Phase B does not roll back)", k)
+		}
+	}
+	// src 中删除失败的对象仍存在（待业务层幂等清理）
+	if _, ok := fc.objects["a/y.txt"]; !ok {
+		t.Error("a/y.txt should remain (delete failed) — business layer cleanup needed")
+	}
+}
+
+func TestMinio_RenameDir_DstHasStalePrefix_GetsCleaned(t *testing.T) {
+	// dst 处已存在残留前缀（上次崩溃留下），Phase 0 应彻底清掉
+	fc := newFakeClient()
+	ms := newMinioForTest(fc)
+	ctx := context.Background()
+	_ = ms.Write(ctx, "a/x.txt", strings.NewReader("new"), 3, "")
+	// dst 处的脏数据
+	_ = ms.Write(ctx, "b/stale.txt", strings.NewReader("stale"), 5, "")
+
+	if err := ms.Rename(ctx, "a", "b"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if _, ok := fc.objects["b/stale.txt"]; ok {
+		t.Error("dst stale prefix should have been cleaned")
+	}
+	if got := fc.objects["b/x.txt"]; string(got) != "new" {
+		t.Errorf("dst should have new content, got %q", got)
+	}
+}

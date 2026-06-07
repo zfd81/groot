@@ -283,3 +283,137 @@ func TestLocal_RenameAutoCreatesDstParent(t *testing.T) {
 	}
 	rc.Close()
 }
+
+// failingReader 在读取过半后返回错误，模拟 io.Copy 中途失败。
+type failingReader struct {
+	data []byte
+	pos  int
+	fail int // 读到第 fail 字节后返回错误
+}
+
+func (f *failingReader) Read(p []byte) (int, error) {
+	if f.pos >= f.fail {
+		return 0, errors.New("simulated read failure")
+	}
+	remaining := f.fail - f.pos
+	if remaining > len(p) {
+		remaining = len(p)
+	}
+	if remaining > len(f.data)-f.pos {
+		remaining = len(f.data) - f.pos
+	}
+	copy(p, f.data[f.pos:f.pos+remaining])
+	f.pos += remaining
+	return remaining, nil
+}
+
+func TestLocal_WriteAtomic_PreservesOldOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	ls := NewLocal()
+	ctx := context.Background()
+	path := filepath.Join(dir, "x.txt")
+
+	// 先写入旧内容
+	if err := ls.Write(ctx, path, strings.NewReader("OLD-CONTENT"), 11, ""); err != nil {
+		t.Fatalf("seed Write: %v", err)
+	}
+
+	// 第二次写入中途失败，目标必须保留旧内容
+	r := &failingReader{data: []byte("NEW-PARTIAL"), fail: 4}
+	if err := ls.Write(ctx, path, r, -1, ""); err == nil {
+		t.Fatal("expected write to fail")
+	}
+
+	rc, err := ls.Read(ctx, path)
+	if err != nil {
+		t.Fatalf("Read after failed Write: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(got) != "OLD-CONTENT" {
+		t.Fatalf("path corrupted: got %q, want OLD-CONTENT", got)
+	}
+
+	// .tmp 不应残留（io.Copy 失败分支会 os.Remove）
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("tmp should be cleaned, stat err: %v", err)
+	}
+}
+
+func TestLocal_WriteAtomic_NoTargetWhenNeverExisted(t *testing.T) {
+	dir := t.TempDir()
+	ls := NewLocal()
+	ctx := context.Background()
+	path := filepath.Join(dir, "fresh.txt")
+
+	r := &failingReader{data: []byte("NEW-PARTIAL"), fail: 4}
+	if err := ls.Write(ctx, path, r, -1, ""); err == nil {
+		t.Fatal("expected write to fail")
+	}
+
+	// 目标不存在则失败后仍不存在（不应留下半成品）
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("target should not exist after failed Write, stat err: %v", err)
+	}
+	// tmp 也不应残留
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("tmp should be cleaned, stat err: %v", err)
+	}
+}
+
+func TestLocal_WriteAtomic_CleansOrphanTmp(t *testing.T) {
+	dir := t.TempDir()
+	ls := NewLocal()
+	ctx := context.Background()
+	path := filepath.Join(dir, "x.txt")
+
+	// 模拟上一次崩溃残留的孤儿 .tmp
+	if err := os.WriteFile(path+".tmp", []byte("STALE"), 0644); err != nil {
+		t.Fatalf("seed orphan tmp: %v", err)
+	}
+
+	if err := ls.Write(ctx, path, strings.NewReader("HELLO"), 5, ""); err != nil {
+		t.Fatalf("Write should succeed despite orphan tmp: %v", err)
+	}
+
+	rc, err := ls.Read(ctx, path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(got) != "HELLO" {
+		t.Errorf("got %q, want HELLO", got)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("tmp should be cleaned after successful Write, stat err: %v", err)
+	}
+}
+
+func TestLocal_WriteAtomic_SizeMismatchPreservesOld(t *testing.T) {
+	dir := t.TempDir()
+	ls := NewLocal()
+	ctx := context.Background()
+	path := filepath.Join(dir, "x.txt")
+
+	if err := ls.Write(ctx, path, strings.NewReader("OLD"), 3, ""); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// 声明 100 字节但只有 5 字节 → Write 应失败且保留旧内容
+	if err := ls.Write(ctx, path, strings.NewReader("hello"), 100, ""); err == nil {
+		t.Fatal("expected size mismatch error")
+	}
+	rc, err := ls.Read(ctx, path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	rc.Close()
+	if string(got) != "OLD" {
+		t.Errorf("path should keep OLD value, got %q", got)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("tmp should be cleaned, stat err: %v", err)
+	}
+}

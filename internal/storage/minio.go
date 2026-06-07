@@ -216,34 +216,120 @@ func objectInfoToFileInfo(info minio.ObjectInfo, isDir bool) *FileInfo {
 	}
 }
 
+// Rename 同时支持文件和目录，与 os.Rename 语义一致。
+//
+// 实现策略：
+//   - 先 StatObject(src) 探测，命中走文件分支；
+//   - 不命中再 ListObjects(prefix=src+"/", MaxKeys=1) 探测，命中走目录分支；
+//   - 都不命中返回 ErrNotFound。
+//
+// 两条分支都不是真正的原子，通过补偿逻辑让语义尽量接近原子；最坏情况
+// （src 与 dst 双份共存）由业务层幂等扫描兜底。详见设计文档 §1.12。
 func (m *Minio) Rename(ctx context.Context, src, dst string) error {
-	// 1. 源必须存在
-	if _, err := m.client.StatObject(ctx, m.bucket, src, minio.StatObjectOptions{}); err != nil {
-		if isNotExist(err) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("storage: minio stat %s: %w", src, err)
+	// 1. 判别文件还是目录
+	_, statErr := m.client.StatObject(ctx, m.bucket, src, minio.StatObjectOptions{})
+	if statErr == nil {
+		return m.renameFile(ctx, src, dst)
 	}
-	// 2. 清理可能残留的 dst（上次崩溃或回滚失败遗留）。
-	//    若 dst 不存在（NoSuchKey）→ 跳过；
-	//    若 dst 存在 → 删；
-	//    若 stat 因其他错误（如网络）失败 → 直接报错，不靠 CopyObject 兜底。
-	if _, err := m.client.StatObject(ctx, m.bucket, dst, minio.StatObjectOptions{}); err == nil {
-		if rmErr := m.client.RemoveObject(ctx, m.bucket, dst, minio.RemoveObjectOptions{}); rmErr != nil {
-			return fmt.Errorf("storage: minio rename cleanup dst %s: %w", dst, rmErr)
-		}
-	} else if !isNotExist(err) {
-		return fmt.Errorf("storage: minio rename stat dst %s: %w", dst, err)
+	if !isNotExist(statErr) {
+		return fmt.Errorf("storage: minio stat %s: %w", src, statErr)
 	}
-	// 3. CopyObject (服务端 copy，不下载)
+	// src 没有同名对象，看是否存在 src+"/" 前缀
+	prefix := strings.TrimSuffix(src, "/") + "/"
+	hit := false
+	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true, MaxKeys: 1}) {
+		if obj.Err != nil {
+			return fmt.Errorf("storage: minio rename probe %s: %w", src, obj.Err)
+		}
+		hit = true
+		break
+	}
+	if !hit {
+		return ErrNotFound
+	}
+	return m.renameDir(ctx, src, dst)
+}
+
+// renameFile 执行单 object 的重命名：清 dst 残留 → CopyObject → RemoveObject src。
+// 任一步失败按设计文档 §1.12.1 故障路径表恢复；最后一步失败时尽力回滚 dst。
+func (m *Minio) renameFile(ctx context.Context, src, dst string) error {
+	// 2. 清理 dst 残留（裸对象）
+	if err := m.cleanupDstObject(ctx, dst); err != nil {
+		return err
+	}
+	// 3. 服务端 Copy
 	if err := m.client.CopyObject(ctx, m.bucket, dst, m.bucket, src); err != nil {
 		return fmt.Errorf("storage: minio rename copy %s -> %s: %w", src, dst, err)
 	}
-	// 4. RemoveObject src，失败则尽力回滚
+	// 4. 删源，失败尽力回滚
 	if err := m.client.RemoveObject(ctx, m.bucket, src, minio.RemoveObjectOptions{}); err != nil {
-		// 尽力回滚：删掉已复制的 dst（即使失败也只能把原错误返回）
 		_ = m.client.RemoveObject(ctx, m.bucket, dst, minio.RemoveObjectOptions{})
 		return fmt.Errorf("storage: minio rename delete src %s: %w", src, err)
+	}
+	return nil
+}
+
+// renameDir 执行目录（前缀）的重命名：
+//
+//	Phase 0: 清 dst 残留（裸对象 + 同名前缀都兜底清理）
+//	Phase A: 枚举 src+"/" 下所有 key，逐个 CopyObject 到 dst+"/"
+//	         任一失败 → 回滚已 Copy 的 dst 子对象 → 返回错误，src 完整
+//	Phase B: 全部 Copy 完成后，逐个 RemoveObject src+"/" 下的对象
+//	         失败不回滚（dst 已是权威新位置），返回错误让业务层幂等扫描兜底
+func (m *Minio) renameDir(ctx context.Context, src, dst string) error {
+	srcPrefix := strings.TrimSuffix(src, "/") + "/"
+	dstPrefix := strings.TrimSuffix(dst, "/") + "/"
+
+	// Phase 0: 清 dst 残留（同时兜两种形态：裸对象 + 同名前缀）
+	if err := m.cleanupDstObject(ctx, dst); err != nil {
+		return err
+	}
+	if err := m.client.RemoveObjectsRecursive(ctx, m.bucket, dstPrefix); err != nil {
+		return fmt.Errorf("storage: minio rename cleanup dst dir %s: %w", dst, err)
+	}
+
+	// Phase A: 枚举并 Copy
+	var keys []string
+	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{Prefix: srcPrefix, Recursive: true}) {
+		if obj.Err != nil {
+			return fmt.Errorf("storage: minio rename list %s: %w", src, obj.Err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	copied := make([]string, 0, len(keys))
+	for _, srcKey := range keys {
+		dstKey := dstPrefix + strings.TrimPrefix(srcKey, srcPrefix)
+		if err := m.client.CopyObject(ctx, m.bucket, dstKey, m.bucket, srcKey); err != nil {
+			// 回滚：删掉已 Copy 的 dst 子对象，让 dst 回到空状态
+			for _, k := range copied {
+				_ = m.client.RemoveObject(ctx, m.bucket, k, minio.RemoveObjectOptions{})
+			}
+			return fmt.Errorf("storage: minio rename copy %s -> %s: %w", srcKey, dstKey, err)
+		}
+		copied = append(copied, dstKey)
+	}
+
+	// Phase B: 逐个删源
+	for _, srcKey := range keys {
+		if err := m.client.RemoveObject(ctx, m.bucket, srcKey, minio.RemoveObjectOptions{}); err != nil {
+			// 不回滚 dst：dst 此时已是权威完整副本，业务层下一轮幂等扫描清理 src 残留
+			return fmt.Errorf("storage: minio rename delete src %s: %w", srcKey, err)
+		}
+	}
+	return nil
+}
+
+// cleanupDstObject 删除 dst 处可能残留的裸对象。dst 不存在视为正常返回 nil。
+func (m *Minio) cleanupDstObject(ctx context.Context, dst string) error {
+	_, err := m.client.StatObject(ctx, m.bucket, dst, minio.StatObjectOptions{})
+	if err == nil {
+		if rmErr := m.client.RemoveObject(ctx, m.bucket, dst, minio.RemoveObjectOptions{}); rmErr != nil {
+			return fmt.Errorf("storage: minio rename cleanup dst %s: %w", dst, rmErr)
+		}
+		return nil
+	}
+	if !isNotExist(err) {
+		return fmt.Errorf("storage: minio rename stat dst %s: %w", dst, err)
 	}
 	return nil
 }
