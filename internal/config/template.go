@@ -1,10 +1,9 @@
 package config
 
-// GenerateConfigTemplate returns a config template with helpful comments.
+// GenerateConfigTemplate 返回带注释的 config.yaml 模板。
 //
-// Storage 块特殊约定：minio 子节使用"先缩进后 #"格式（如 "  #minio:"），
-// 而非常规的"先 # 后缩进"。这样用户只需删除 # 字符即可启用 minio 配置，
-// YAML 缩进自动正确。修改时请勿改成 "#  minio:" 形式，会破坏可用性。
+// 注意：MinIO 等基础设施凭据已剥离到 ~/.groot/env.yaml，本模板不再生成
+// storage 注释块；如需启用 MinIO，请编辑 env.yaml。
 func GenerateConfigTemplate() string {
 	return `# Groot Agent 配置文件
 # 请根据实际情况修改以下配置
@@ -97,14 +96,7 @@ llm:
 
 # 存储抽象层配置
 # 默认使用本地磁盘存储（无需任何配置）。如需切换到 MinIO 对象存储，
-# 取消以下 minio 块的注释并填入连接信息。
-storage:
-  #minio:
-  #  endpoint: localhost:9000          # MinIO 服务地址（host:port）
-  #  access_key: ${MINIO_ACCESS_KEY}   # 访问密钥（建议使用环境变量）
-  #  secret_key: ${MINIO_SECRET_KEY}   # 密钥
-  #  bucket: groot                     # 存储桶名称
-  #  use_ssl: false                    # 是否启用 HTTPS
+# 请编辑 ~/.groot/env.yaml（基础设施凭据独立存放，与本文件解耦）。
 
 # 日志配置
 #logging:

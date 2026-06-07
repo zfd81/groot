@@ -31,6 +31,12 @@ func Load(homeDir string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// 基础设施凭据（如 storage.minio）只通过 env.yaml 注入：
+	// 即便 config.yaml 里残留了 storage.minio 节也不再生效。
+	if err := loadEnvFile(cfg, homeDir); err != nil {
+		return nil, fmt.Errorf("failed to load env file: %w", err)
+	}
+
 	// Apply defaults for missing optional fields
 	applyDefaults(cfg)
 

@@ -191,3 +191,67 @@ func TestRunInit_PreservesExistingGrootMd(t *testing.T) {
 		t.Errorf("用户自定义 GROOT.md 被覆盖\n期望:\n%s\n实际:\n%s", custom, string(data))
 	}
 }
+
+// TestRunInit_CreatesEnvYaml 验证 init 写入 env.yaml；内容应为全注释模板，
+// 默认对应 local 模式（不启用 MinIO）。
+func TestRunInit_CreatesEnvYaml(t *testing.T) {
+	home := t.TempDir()
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit failed: %v", err)
+	}
+	envPath := filepath.Join(home, "env.yaml")
+	stat, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("env.yaml 未创建: %v", err)
+	}
+	// 凭据文件权限要求 0600（仅当前用户可读写）
+	if perm := stat.Mode().Perm(); perm != 0o600 {
+		t.Errorf("env.yaml 权限 = %o, want 0600（凭据文件应私密）", perm)
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	// 模板应是全注释（无生效的 minio: 顶层节）
+	for _, line := range strings.Split(got, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "minio:" {
+			t.Errorf("env.yaml 模板默认应全注释，不应包含生效的 'minio:' 行")
+		}
+	}
+	// 但应包含被注释掉的 minio 引导，方便用户启用
+	if !strings.Contains(got, "#minio:") {
+		t.Error("env.yaml 模板应包含 '#minio:' 注释行作为启用引导")
+	}
+	if !strings.Contains(got, "${MINIO_ACCESS_KEY}") {
+		t.Error("env.yaml 模板应包含 ${MINIO_ACCESS_KEY} 引导")
+	}
+}
+
+// TestRunInit_PreservesExistingEnvYaml 验证已存在的 env.yaml 不会被 init 覆盖
+//（用户填好的 MinIO 凭据安全）。
+func TestRunInit_PreservesExistingEnvYaml(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	custom := "minio:\n  endpoint: my-real-minio:9000\n  access_key: my-ak\n"
+	envPath := filepath.Join(home, "env.yaml")
+	if err := os.WriteFile(envPath, []byte(custom), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit failed: %v", err)
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != custom {
+		t.Errorf("用户自定义 env.yaml 被覆盖\n期望:\n%s\n实际:\n%s", custom, string(data))
+	}
+}

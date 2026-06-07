@@ -76,6 +76,11 @@ func RunInit(homeDir string) error {
 		return err
 	}
 
+	// 创建环境配置文件 env.yaml（基础设施凭据，默认全注释 → local 模式）
+	if err := createEnvFile(homeDir); err != nil {
+		return err
+	}
+
 	// 创建默认 GROOT.md（含子 Agent 调度引导段）
 	if err := createGrootMdFile(homeDir); err != nil {
 		return err
@@ -138,6 +143,28 @@ func createConfigFile(homeDir string) error {
 	return nil
 }
 
+// createEnvFile 在 homeDir 写入 env.yaml；已存在则跳过避免覆盖用户填好的凭据。
+// 默认内容**全注释**，等价于本地磁盘存储模式（零配置）。
+func createEnvFile(homeDir string) error {
+	envPath := filepath.Join(homeDir, config.EnvFileName)
+
+	_, err := os.Stat(envPath)
+	if err == nil {
+		fmt.Println("环境配置文件 env.yaml 已存在，跳过创建")
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("检查环境配置文件失败: %w", err)
+	}
+
+	if err := os.WriteFile(envPath, []byte(config.GenerateEnvTemplate()), 0600); err != nil {
+		return fmt.Errorf("创建环境配置文件失败: %w", err)
+	}
+
+	fmt.Println("环境配置文件 env.yaml 创建成功")
+	return nil
+}
+
 // defaultGrootMdContent 是 groot init 写入的默认 GROOT.md 内容；
 // 末尾「子 Agent 调度」段引导主 Agent 在拥有 call_agent 工具时如何使用子 Agent。
 const defaultGrootMdContent = `# GROOT.md
@@ -182,6 +209,8 @@ func printNextSteps(homeDir string) {
 	fmt.Printf("     vim %s/config.yaml\n", shortPath)
 	fmt.Println("  2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）")
 	fmt.Println("     export OPENAI_API_KEY=\"your-api-key\"")
-	fmt.Println("  3. 启动服务")
+	fmt.Println("  3. （可选）启用 MinIO 对象存储：编辑环境配置文件")
+	fmt.Printf("     vim %s/env.yaml   # 默认全注释 → 本地磁盘存储\n", shortPath)
+	fmt.Println("  4. 启动服务")
 	fmt.Println("     groot")
 }
