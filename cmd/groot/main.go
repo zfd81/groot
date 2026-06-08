@@ -410,7 +410,7 @@ func startServer(homeDir string, port int) {
 	}
 
 	// Initialize cluster
-	clusterInst := cluster.New(homeDir, cfg.Server.Host, cfg.Server.Port, log)
+	clusterInst := cluster.New(homeDir, cfg.Server.Host, cfg.Server.Port, log, store)
 	clusterInst.SetCallbacks(startLeaderTasks, stopLeaderTasks)
 
 	if err := clusterInst.Join(context.Background()); err != nil {

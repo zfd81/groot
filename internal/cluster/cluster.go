@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/logger"
+	istorage "github.com/zfd81/groot/internal/storage"
 )
 
 const (
@@ -27,6 +29,7 @@ type Cluster struct {
 	role    string
 	mu      sync.RWMutex
 	log     *logger.Logger
+	store   istorage.Storage
 
 	onBecomeLeader func()
 	onLoseLeader   func()
@@ -36,12 +39,13 @@ type Cluster struct {
 }
 
 // New creates a new Cluster instance.
-func New(homeDir, host string, port int, log *logger.Logger) *Cluster {
+func New(homeDir, host string, port int, log *logger.Logger, store istorage.Storage) *Cluster {
 	return &Cluster{
 		homeDir: homeDir,
 		host:    host,
 		port:    port,
 		log:     log,
+		store:   store,
 	}
 }
 
@@ -55,7 +59,7 @@ func (c *Cluster) SetCallbacks(onBecomeLeader, onLoseLeader func()) {
 func (c *Cluster) Join(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	membersDir, err := EnsureMembersDir(c.homeDir)
+	membersDir, err := EnsureMembersDir(c.homeDir, c.store)
 	if err != nil {
 		return err
 	}
@@ -78,9 +82,9 @@ func (c *Cluster) Leave() {
 		return
 	}
 
-	membersDir, _ := EnsureMembersDir(c.homeDir)
+	membersDir, _ := EnsureMembersDir(c.homeDir, c.store)
 	if membersDir != "" {
-		if err := RemoveFile(membersDir, c.regID); err != nil {
+		if err := RemoveFile(c.store, membersDir, c.regID); err != nil {
 			c.log.Error("删除注册文件失败", zap.Error(err))
 		}
 	}
@@ -129,7 +133,7 @@ func (c *Cluster) heartbeat(membersDir string) {
 
 	// Check if own file still exists
 	ownPath := filepath.Join(membersDir, c.regID)
-	if _, err := os.Stat(ownPath); os.IsNotExist(err) {
+	if _, err := c.store.Stat(context.Background(), ownPath); errors.Is(err, istorage.ErrNotFound) {
 		// File lost -- re-register
 		if c.role == RoleLeader {
 			if c.onLoseLeader != nil {
@@ -149,7 +153,7 @@ func (c *Cluster) heartbeat(membersDir string) {
 
 func (c *Cluster) register(membersDir string) {
 	// List existing members to determine role
-	members, err := ListMembers(membersDir)
+	members, err := ListMembers(c.store, membersDir)
 	if err != nil {
 		c.log.Error("列出成员失败", zap.Error(err))
 		c.role = RoleFollower
@@ -161,7 +165,7 @@ func (c *Cluster) register(membersDir string) {
 	c.role = DetermineRole(c.regID, members, heartbeatTimeout)
 
 	pid := os.Getpid()
-	if err := WriteRegistration(membersDir, c.regID, c.role, c.host, c.port, pid); err != nil {
+	if err := WriteRegistration(c.store, membersDir, c.regID, c.role, c.host, c.port, pid); err != nil {
 		c.log.Error("写入注册文件失败", zap.Error(err))
 		return
 	}
@@ -179,36 +183,32 @@ func (c *Cluster) register(membersDir string) {
 
 func (c *Cluster) leaderHeartbeat(membersDir string) {
 	pid := os.Getpid()
-	if err := WriteRegistration(membersDir, c.regID, RoleLeader, c.host, c.port, pid); err != nil {
+	if err := WriteRegistration(c.store, membersDir, c.regID, RoleLeader, c.host, c.port, pid); err != nil {
 		c.log.Error("心跳写入失败", zap.Error(err))
 		return
 	}
 
 	// Clean up stale registration files
-	entries, err := os.ReadDir(membersDir)
+	members, err := ListMembers(c.store, membersDir)
 	if err != nil {
 		return
 	}
-	for _, entry := range entries {
-		if entry.Name() == c.regID {
+	for _, m := range members {
+		if m.ID == c.regID {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if time.Since(info.ModTime()) > heartbeatTimeout {
-			if err := RemoveFile(membersDir, entry.Name()); err != nil {
-				c.log.Error("清理超时文件失败", zap.String("file", entry.Name()), zap.Error(err))
+		if time.Since(m.Mtime) > heartbeatTimeout {
+			if err := RemoveFile(c.store, membersDir, m.ID); err != nil {
+				c.log.Error("清理超时文件失败", zap.String("file", m.ID), zap.Error(err))
 			} else {
-				c.log.Info("清理超时注册文件", zap.String("file", entry.Name()))
+				c.log.Info("清理超时注册文件", zap.String("file", m.ID))
 			}
 		}
 	}
 }
 
 func (c *Cluster) followerHeartbeat(membersDir string) {
-	members, _ := ListMembers(membersDir)
+	members, _ := ListMembers(c.store, membersDir)
 
 	// Filter alive members
 	now := time.Now()
@@ -228,23 +228,18 @@ func (c *Cluster) followerHeartbeat(membersDir string) {
 		// Become leader
 		c.role = RoleLeader
 		pid := os.Getpid()
-		WriteRegistration(membersDir, c.regID, RoleLeader, c.host, c.port, pid)
+		WriteRegistration(c.store, membersDir, c.regID, RoleLeader, c.host, c.port, pid)
 
 		c.log.Info("提升为 leader", zap.String("reg_id", c.regID))
 
 		// Clean up stale files
-		entries, _ := os.ReadDir(membersDir)
-		for _, entry := range entries {
-			if entry.Name() == c.regID {
+		for _, m := range members {
+			if m.ID == c.regID {
 				continue
 			}
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if time.Since(info.ModTime()) > heartbeatTimeout {
-				RemoveFile(membersDir, entry.Name())
-				c.log.Info("清理超时注册文件", zap.String("file", entry.Name()))
+			if time.Since(m.Mtime) > heartbeatTimeout {
+				RemoveFile(c.store, membersDir, m.ID)
+				c.log.Info("清理超时注册文件", zap.String("file", m.ID))
 			}
 		}
 
@@ -253,6 +248,6 @@ func (c *Cluster) followerHeartbeat(membersDir string) {
 		}
 	} else {
 		pid := os.Getpid()
-		WriteRegistration(membersDir, c.regID, RoleFollower, c.host, c.port, pid)
+		WriteRegistration(c.store, membersDir, c.regID, RoleFollower, c.host, c.port, pid)
 	}
 }

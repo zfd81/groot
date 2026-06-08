@@ -13,7 +13,8 @@ import (
 func TestCluster_JoinAsLeader_NoExistingMembers(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
-	c := New(homeDir, "127.0.0.1", 8080, log)
+	store := newTestStore()
+	c := New(homeDir, "127.0.0.1", 8080, log, store)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -47,9 +48,10 @@ func TestCluster_JoinAsLeader_NoExistingMembers(t *testing.T) {
 func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	// start first instance (leader)
-	leader := New(homeDir, "127.0.0.1", 8080, log)
+	leader := New(homeDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -67,7 +69,7 @@ func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 	// Small delay to ensure different regID (same-millisecond startup is not
 	// a real-world concern per design doc).
 	time.Sleep(time.Millisecond)
-	follower := New(homeDir, "127.0.0.1", 8081, log)
+	follower := New(homeDir, "127.0.0.1", 8081, log, store)
 	err = follower.Join(ctx)
 	if err != nil {
 		t.Fatalf("follower Join failed: %v", err)
@@ -82,8 +84,9 @@ func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 func TestCluster_Heartbeat_FileLost(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
-	c := New(homeDir, "127.0.0.1", 8080, log)
+	c := New(homeDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -97,7 +100,7 @@ func TestCluster_Heartbeat_FileLost(t *testing.T) {
 
 	// simulate file deletion
 	membersDir := filepath.Join(homeDir, "cluster", "members")
-	RemoveFile(membersDir, oldRegID)
+	RemoveFile(store, membersDir, oldRegID)
 
 	// wait for heartbeat to re-register
 	time.Sleep(3500 * time.Millisecond)
@@ -114,8 +117,9 @@ func TestCluster_Heartbeat_FileLost(t *testing.T) {
 func TestCluster_Heartbeat_LeaderCleanupStale(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
-	leader := New(homeDir, "127.0.0.1", 8080, log)
+	leader := New(homeDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -127,7 +131,7 @@ func TestCluster_Heartbeat_LeaderCleanupStale(t *testing.T) {
 
 	// write a stale file manually (simulating dead instance)
 	membersDir := filepath.Join(homeDir, "cluster", "members")
-	WriteRegistration(membersDir, "20200101000000001", "follower", "127.0.0.1", 9000, 99999)
+	WriteRegistration(store, membersDir, "20200101000000001", "follower", "127.0.0.1", 9000, 99999)
 
 	// set its mtime to old
 	oldTime := time.Now().Add(-10 * time.Second)
@@ -145,8 +149,9 @@ func TestCluster_Heartbeat_LeaderCleanupStale(t *testing.T) {
 func TestCluster_Leave(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
-	c := New(homeDir, "127.0.0.1", 8080, log)
+	c := New(homeDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -169,12 +174,13 @@ func TestCluster_Leave(t *testing.T) {
 func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Start leader
-	leader := New(homeDir, "127.0.0.1", 8080, log)
+	leader := New(homeDir, "127.0.0.1", 8080, log, store)
 	if err := leader.Join(ctx); err != nil {
 		t.Fatalf("leader Join failed: %v", err)
 	}
@@ -184,7 +190,7 @@ func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 
 	// Start follower
 	time.Sleep(time.Millisecond)
-	follower := New(homeDir, "127.0.0.1", 8081, log)
+	follower := New(homeDir, "127.0.0.1", 8081, log, store)
 	if err := follower.Join(ctx); err != nil {
 		t.Fatalf("follower Join failed: %v", err)
 	}
@@ -219,9 +225,10 @@ func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 func TestCluster_Callbacks_OnBecomeLeader(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	becomeCalled := make(chan struct{}, 1)
-	c := New(homeDir, "127.0.0.1", 8080, log)
+	c := New(homeDir, "127.0.0.1", 8080, log, store)
 	c.SetCallbacks(func() {
 		becomeCalled <- struct{}{}
 	}, nil)
@@ -247,9 +254,10 @@ func TestCluster_Callbacks_OnBecomeLeader(t *testing.T) {
 func TestCluster_Callbacks_OnLoseLeader(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	loseCalled := make(chan struct{}, 1)
-	c := New(homeDir, "127.0.0.1", 8080, log)
+	c := New(homeDir, "127.0.0.1", 8080, log, store)
 	c.SetCallbacks(nil, func() {
 		loseCalled <- struct{}{}
 	})
@@ -268,7 +276,7 @@ func TestCluster_Callbacks_OnLoseLeader(t *testing.T) {
 
 	// Delete the registration file to simulate crash
 	membersDir := filepath.Join(homeDir, "cluster", "members")
-	RemoveFile(membersDir, c.RegID())
+	RemoveFile(store, membersDir, c.RegID())
 
 	// Wait for heartbeat to detect file loss and trigger onLoseLeader
 	select {
@@ -284,9 +292,10 @@ func TestCluster_Callbacks_OnLoseLeader(t *testing.T) {
 func TestCluster_Callbacks_OnPromotionFromFollower(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	becomeCalled := make(chan struct{}, 1)
-	follower := New(homeDir, "127.0.0.1", 8081, log)
+	follower := New(homeDir, "127.0.0.1", 8081, log, store)
 	follower.SetCallbacks(func() {
 		becomeCalled <- struct{}{}
 	}, nil)
@@ -295,7 +304,7 @@ func TestCluster_Callbacks_OnPromotionFromFollower(t *testing.T) {
 	defer cancel()
 
 	// Start leader first
-	leader := New(homeDir, "127.0.0.1", 8080, log)
+	leader := New(homeDir, "127.0.0.1", 8080, log, store)
 	if err := leader.Join(ctx); err != nil {
 		t.Fatalf("leader Join failed: %v", err)
 	}
@@ -333,14 +342,15 @@ func TestCluster_Callbacks_OnPromotionFromFollower(t *testing.T) {
 func TestCluster_MultipleInstances_SingleLeader(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	instances := []*Cluster{
-		New(homeDir, "127.0.0.1", 8080, log),
-		New(homeDir, "127.0.0.1", 8081, log),
-		New(homeDir, "127.0.0.1", 8082, log),
+		New(homeDir, "127.0.0.1", 8080, log, store),
+		New(homeDir, "127.0.0.1", 8081, log, store),
+		New(homeDir, "127.0.0.1", 8082, log, store),
 	}
 
 	for i, inst := range instances {
@@ -377,19 +387,20 @@ func TestCluster_MultipleInstances_SingleLeader(t *testing.T) {
 func TestCluster_FollowerHeartbeat_NoStaleCleanup(t *testing.T) {
 	homeDir := t.TempDir()
 	log := logger.NewNop()
+	store := newTestStore()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Start leader (smaller ID)
-	leader := New(homeDir, "127.0.0.1", 8080, log)
+	leader := New(homeDir, "127.0.0.1", 8080, log, store)
 	if err := leader.Join(ctx); err != nil {
 		t.Fatalf("leader Join failed: %v", err)
 	}
 
 	// Start follower (larger ID)
 	time.Sleep(time.Millisecond)
-	follower := New(homeDir, "127.0.0.1", 8081, log)
+	follower := New(homeDir, "127.0.0.1", 8081, log, store)
 	if err := follower.Join(ctx); err != nil {
 		t.Fatalf("follower Join failed: %v", err)
 	}
@@ -399,7 +410,7 @@ func TestCluster_FollowerHeartbeat_NoStaleCleanup(t *testing.T) {
 
 	// Add a stale file with old mtime
 	staleID := "20200101000000001"
-	WriteRegistration(membersDir, staleID, RoleFollower, "127.0.0.1", 9000, 99999)
+	WriteRegistration(store, membersDir, staleID, RoleFollower, "127.0.0.1", 9000, 99999)
 	oldTime := time.Now().Add(-10 * time.Second)
 	os.Chtimes(filepath.Join(membersDir, staleID), oldTime, oldTime)
 
@@ -415,7 +426,7 @@ func TestCluster_FollowerHeartbeat_NoStaleCleanup(t *testing.T) {
 	// The follower should NOT clean it because it stays as follower
 	// (its own ID is larger than the leader's)
 	staleID2 := "20200101000000002"
-	WriteRegistration(membersDir, staleID2, RoleFollower, "127.0.0.1", 9001, 99998)
+	WriteRegistration(store, membersDir, staleID2, RoleFollower, "127.0.0.1", 9001, 99998)
 	oldTime2 := time.Now().Add(-10 * time.Second)
 	os.Chtimes(filepath.Join(membersDir, staleID2), oldTime2, oldTime2)
 
