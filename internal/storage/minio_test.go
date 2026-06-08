@@ -18,6 +18,9 @@ type fakeMinioClient struct {
 	objects map[string][]byte // key -> body
 	stats   map[string]minio.ObjectInfo
 
+	bucketExists    bool
+	bucketExistsErr error
+
 	putErr           error
 	getErr           error
 	statErr          error
@@ -29,9 +32,17 @@ type fakeMinioClient struct {
 
 func newFakeClient() *fakeMinioClient {
 	return &fakeMinioClient{
-		objects: map[string][]byte{},
-		stats:   map[string]minio.ObjectInfo{},
+		objects:      map[string][]byte{},
+		stats:        map[string]minio.ObjectInfo{},
+		bucketExists: true,
 	}
+}
+
+func (f *fakeMinioClient) BucketExists(ctx context.Context, bucket string) (bool, error) {
+	if f.bucketExistsErr != nil {
+		return false, f.bucketExistsErr
+	}
+	return f.bucketExists, nil
 }
 
 func (f *fakeMinioClient) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, opts minio.PutObjectOptions) error {
@@ -630,5 +641,65 @@ func TestMinio_RenameDir_DstHasStalePrefix_GetsCleaned(t *testing.T) {
 	}
 	if got := fc.objects["b/x.txt"]; string(got) != "new" {
 		t.Errorf("dst should have new content, got %q", got)
+	}
+}
+
+// ===== 启动 fail-fast 探活测试 =====
+
+func TestNewMinio_FailFast_BucketNotExist(t *testing.T) {
+	fc := newFakeClient()
+	fc.bucketExists = false
+
+	_, err := newMinioWithClient(fc, "missing-bucket")
+	if err == nil {
+		t.Fatal("expected error when bucket does not exist, got nil")
+	}
+	if !strings.Contains(err.Error(), "bucket") {
+		t.Errorf("expected error to mention 'bucket', got: %v", err)
+	}
+	// 探针不应该被写入（Step 1 失败时不应继续到 Step 2）
+	for k := range fc.objects {
+		if strings.HasPrefix(k, "__startup/probe-") {
+			t.Errorf("probe key %s should not have been written when bucket check failed", k)
+		}
+	}
+}
+
+func TestNewMinio_FailFast_PutFails(t *testing.T) {
+	fc := newFakeClient()
+	fc.bucketExists = true
+	fc.putErr = errors.New("permission denied")
+
+	_, err := newMinioWithClient(fc, "groot")
+	if err == nil {
+		t.Fatal("expected error when probe put fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("expected error to wrap put failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "probe put") {
+		t.Errorf("expected error to mention 'probe put', got: %v", err)
+	}
+}
+
+func TestNewMinio_FailFast_OK(t *testing.T) {
+	fc := newFakeClient()
+	fc.bucketExists = true
+
+	ms, err := newMinioWithClient(fc, "groot")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if ms == nil {
+		t.Fatal("expected non-nil *Minio")
+	}
+	if ms.bucket != "groot" {
+		t.Errorf("bucket = %q, want groot", ms.bucket)
+	}
+	// 探针写入后必须被删除：fc.objects 不应含任何 __startup/probe-* key
+	for k := range fc.objects {
+		if strings.HasPrefix(k, "__startup/probe-") {
+			t.Errorf("probe key %s should have been removed after successful probe", k)
+		}
 	}
 }

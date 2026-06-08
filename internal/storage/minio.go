@@ -14,6 +14,7 @@ import (
 
 // minioAPI 抽象 MinIO 客户端调用，便于单元测试 mock。
 type minioAPI interface {
+	BucketExists(ctx context.Context, bucket string) (bool, error)
 	PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, opts minio.PutObjectOptions) error
 	GetObject(ctx context.Context, bucket, key string, opts minio.GetObjectOptions) (io.ReadCloser, error)
 	StatObject(ctx context.Context, bucket, key string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
@@ -25,6 +26,10 @@ type minioAPI interface {
 
 // minioClient 是 minioAPI 的真实实现，包装 *minio.Client。
 type minioClient struct{ c *minio.Client }
+
+func (m *minioClient) BucketExists(ctx context.Context, bucket string) (bool, error) {
+	return m.c.BucketExists(ctx, bucket)
+}
 
 func (m *minioClient) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, opts minio.PutObjectOptions) error {
 	_, err := m.c.PutObject(ctx, bucket, key, r, size, opts)
@@ -95,6 +100,9 @@ type Minio struct {
 var _ Storage = (*Minio)(nil)
 
 // NewMinio 用提供的 endpoint / 密钥 / bucket 创建一个 minio 存储实例。
+//
+// 启动时会执行 fail-fast 探活（BucketExists + PutObject + RemoveObject），
+// 任一步骤失败立即返回 error，避免运行时首次写入才暴露连接或权限问题。
 func NewMinio(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Minio, error) {
 	c, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
@@ -103,7 +111,56 @@ func NewMinio(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Mini
 	if err != nil {
 		return nil, fmt.Errorf("storage: init minio client: %w", err)
 	}
-	return &Minio{client: &minioClient{c: c}, bucket: bucket}, nil
+	return newMinioWithClient(&minioClient{c: c}, bucket)
+}
+
+// newMinioWithClient 在给定 minioAPI 客户端上执行启动探活并返回 *Minio。
+// 抽出独立函数便于单元测试注入 mock。
+//
+// 探活三步（任一失败立即返回包装后的 error）：
+//  1. BucketExists：确认 bucket 存在且账号有访问权限
+//  2. PutObject 写入保留前缀 __startup/probe-{ts}：验证写权限
+//  3. RemoveObject 删除该探针：验证删权限并清理痕迹
+//
+// 每步独立 10 秒 timeout，避免单次网络 hang 拖死启动。
+func newMinioWithClient(client minioAPI, bucket string) (*Minio, error) {
+	// Step 1: bucket 连通性 + 读权限校验
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		exists, err := client.BucketExists(ctx, bucket)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("storage: minio probe bucket %s: %w", bucket, err)
+		}
+		if !exists {
+			return nil, fmt.Errorf("storage: minio probe bucket %s: bucket does not exist", bucket)
+		}
+	}
+
+	// Step 2: 写探针，验证 PutObject 权限
+	probeKey := fmt.Sprintf("__startup/probe-%d", time.Now().UnixNano())
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := client.PutObject(ctx, bucket, probeKey, strings.NewReader(""), 0, minio.PutObjectOptions{
+			ContentType: "application/octet-stream",
+		})
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("storage: minio probe put %s: %w", probeKey, err)
+		}
+	}
+
+	// Step 3: 删探针，验证 RemoveObject 权限并清理痕迹
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := client.RemoveObject(ctx, bucket, probeKey, minio.RemoveObjectOptions{})
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("storage: minio probe remove %s: %w", probeKey, err)
+		}
+	}
+
+	return &Minio{client: client, bucket: bucket}, nil
 }
 
 func isNotExist(err error) bool {
