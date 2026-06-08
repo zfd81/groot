@@ -43,9 +43,10 @@ type localSyncManager struct {
 }
 
 // NewSyncManager 创建 SyncManager。
-// store 为 nil 或 remoteBase 为空时返回 disabledSyncManager。
+// store 为 nil 时返回 disabledSyncManager(local 模式)。
+// remoteBase 为空字符串在 minio 模式下表示 bucket 根,是合法值。
 func NewSyncManager(homeDir, remoteBase string, store istorage.Storage) SyncManager {
-	if store == nil || remoteBase == "" {
+	if store == nil {
 		return &disabledSyncManager{}
 	}
 	return &localSyncManager{homeDir: homeDir, remoteBase: remoteBase, store: store}
