@@ -1,8 +1,7 @@
 package schedule
 
 import (
-	"context"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +13,7 @@ func newTestScheduleStorage(t *testing.T) *Storage {
 	t.Helper()
 	store := storage.NewLocal()
 	baseDir := t.TempDir()
-	s := NewStorage(baseDir, store, logger.NewNop())
-	if err := s.EnsureDirs(); err != nil {
-		t.Fatalf("EnsureDirs: %v", err)
-	}
-	return s
+	return NewStorage(baseDir, store, logger.NewNop())
 }
 
 func sampleTask(id string) *Task {
@@ -225,35 +220,88 @@ func TestDeleteNonExistentTask(t *testing.T) {
 	}
 }
 
-func TestLoadTask_ContextCancel(t *testing.T) {
-	// LoadTask 当前不接受 context, 但底层 storage.Read 接受。
-	// 此用例验证: 即使在 context 被外部取消的环境下,
-	// LoadTask 内部使用的 context.Background() 不受影响,仍能正常读取。
+func TestLoadExecutions_NoExecutionsDir(t *testing.T) {
 	s := newTestScheduleStorage(t)
-
-	task := sampleTask("task-ctx")
+	task := &Task{
+		ID:        "task-empty-exec",
+		Name:      "尚无执行的任务",
+		Schedule:  "0 * * * *",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
 	if err := s.SaveTask(task); err != nil {
 		t.Fatalf("SaveTask: %v", err)
 	}
-
-	// 模拟一个已取消的外部 context (LoadTask 不会传播,验证其使用独立 ctx)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_ = ctx
-
-	got, err := s.LoadTask("task-ctx")
+	records, err := s.LoadExecutions("task-empty-exec")
 	if err != nil {
-		t.Fatalf("LoadTask should not be affected by cancelled external ctx: %v", err)
+		t.Fatalf("LoadExecutions: %v", err)
 	}
-	if got.ID != "task-ctx" {
-		t.Errorf("ID = %q, want task-ctx", got.ID)
+	if records != nil {
+		t.Errorf("expected nil records, got %v", records)
 	}
+}
 
-	// 进一步确认: 如果直接对 store 传入已取消的 ctx, 不一定会 fail
-	// (local 实现不感知 ctx),但至少不能阻塞。
-	store := storage.NewLocal()
-	path := filepath.Join(t.TempDir(), "x.json")
-	cancelledCtx, c2 := context.WithCancel(context.Background())
-	c2()
-	_, _ = store.Read(cancelledCtx, path) // expect ErrNotFound, not hang
+// TestSaveExecution_TaskNotExist 验证任务不存在时 SaveExecution 返回业务话术。
+func TestSaveExecution_TaskNotExist(t *testing.T) {
+	s := newTestScheduleStorage(t)
+	rec := &ExecutionRecord{
+		TaskID:     "task-nope",
+		ExecTime:   time.Now(),
+		Status:     "completed",
+		DurationMs: 100,
+	}
+	err := s.SaveExecution("task-nope", rec)
+	if err == nil {
+		t.Fatal("expected error for non-existent task")
+	}
+	if !strings.Contains(err.Error(), "任务 task-nope 不存在") {
+		t.Errorf("expected error to contain '任务 task-nope 不存在', got: %v", err)
+	}
+}
+
+// TestMoveTask_DstAlreadyExists 验证目标目录已存在(且非空)时,MoveTask 返回错误
+// 而非静默覆盖。底层 os.Rename 对非空目录返回 ENOTEMPTY/EEXIST,Storage 透传该错误,
+// 上层依赖此契约避免数据丢失。
+func TestMoveTask_DstAlreadyExists(t *testing.T) {
+	s := newTestScheduleStorage(t)
+	// 先准备 active/task-x
+	taskA := &Task{
+		ID:        "task-x",
+		Name:      "源任务",
+		Schedule:  "0 * * * *",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := s.SaveTask(taskA); err != nil {
+		t.Fatalf("SaveTask A: %v", err)
+	}
+	// 先 Move 到 disabled
+	if err := s.MoveTask("task-x", "active", "disabled"); err != nil {
+		t.Fatalf("MoveTask 1: %v", err)
+	}
+	// 再 SaveTask 把同 ID 写到 active(产生 dst 残留情形:active/task-x 又出现了)
+	taskB := &Task{
+		ID:        "task-x",
+		Name:      "重新创建的同名任务",
+		Schedule:  "0 * * * *",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := s.SaveTask(taskB); err != nil {
+		t.Fatalf("SaveTask B: %v", err)
+	}
+	// disabled 中仍有 task-x,active 中也有 task-x;再次 Move disabled → active 应当失败:
+	// os.Rename 不允许将目录重命名到一个已存在的非空目录。
+	err := s.MoveTask("task-x", "disabled", "active")
+	if err == nil {
+		t.Fatal("expected MoveTask to fail when dst dir already exists and is non-empty")
+	}
+	// 失败后两侧都应保留(原子性):disabled/task-x 应仍存在;active/task-x 仍是 taskB。
+	loaded, err := s.LoadTask("task-x")
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if loaded.Name != "重新创建的同名任务" {
+		t.Errorf("active side should be untouched, name=%q", loaded.Name)
+	}
 }

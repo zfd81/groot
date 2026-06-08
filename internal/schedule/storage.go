@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -27,21 +26,6 @@ type Storage struct {
 // NewStorage creates a new storage instance
 func NewStorage(baseDir string, store istorage.Storage, log *logger.Logger) *Storage {
 	return &Storage{baseDir: baseDir, store: store, log: log}
-}
-
-// EnsureDirs 在 local 模式下预建 active/disabled/archive;minio 模式下
-// Storage.Write 自动建前缀,本方法 noop。
-func (s *Storage) EnsureDirs() error {
-	if _, ok := s.store.(*istorage.Local); !ok {
-		return nil
-	}
-	for _, dir := range []string{"active", "disabled", "archive"} {
-		path := filepath.Join(s.baseDir, dir)
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return fmt.Errorf("创建目录 %s 失败: %w", path, err)
-		}
-	}
-	return nil
 }
 
 // SaveTask atomically writes a task.json to active/{id}/
