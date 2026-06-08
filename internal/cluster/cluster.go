@@ -59,10 +59,7 @@ func (c *Cluster) SetCallbacks(onBecomeLeader, onLoseLeader func()) {
 func (c *Cluster) Join(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	membersDir, err := EnsureMembersDir(c.homeDir, c.store)
-	if err != nil {
-		return err
-	}
+	membersDir := filepath.Join(c.homeDir, "cluster", "members")
 
 	c.register(membersDir)
 
@@ -82,11 +79,9 @@ func (c *Cluster) Leave() {
 		return
 	}
 
-	membersDir, _ := EnsureMembersDir(c.homeDir, c.store)
-	if membersDir != "" {
-		if err := RemoveFile(c.store, membersDir, c.regID); err != nil {
-			c.log.Error("删除注册文件失败", zap.Error(err))
-		}
+	membersDir := filepath.Join(c.homeDir, "cluster", "members")
+	if err := RemoveFile(c.store, membersDir, c.regID); err != nil {
+		c.log.Error("删除注册文件失败", zap.Error(err))
 	}
 
 	c.regID = ""
@@ -133,14 +128,23 @@ func (c *Cluster) heartbeat(membersDir string) {
 
 	// Check if own file still exists
 	ownPath := filepath.Join(membersDir, c.regID)
-	if _, err := c.store.Stat(context.Background(), ownPath); errors.Is(err, istorage.ErrNotFound) {
-		// File lost -- re-register
-		if c.role == RoleLeader {
-			if c.onLoseLeader != nil {
-				c.onLoseLeader()
+	_, err := c.store.Stat(context.Background(), ownPath)
+	if err != nil {
+		if errors.Is(err, istorage.ErrNotFound) {
+			// File lost -- re-register
+			if c.role == RoleLeader {
+				if c.onLoseLeader != nil {
+					c.onLoseLeader()
+				}
 			}
+			c.register(membersDir)
+			return
 		}
-		c.register(membersDir)
+		// 其他错误(权限/IO/网络): 跳过本轮心跳,避免在不确定状态下乐观写入
+		c.log.Warn("自检失败,跳过本轮心跳",
+			zap.String("path", ownPath),
+			zap.Error(err),
+		)
 		return
 	}
 
@@ -191,6 +195,7 @@ func (c *Cluster) leaderHeartbeat(membersDir string) {
 	// Clean up stale registration files
 	members, err := ListMembers(c.store, membersDir)
 	if err != nil {
+		c.log.Warn("列出成员失败,跳过本轮 stale 清理", zap.Error(err))
 		return
 	}
 	for _, m := range members {
@@ -208,7 +213,11 @@ func (c *Cluster) leaderHeartbeat(membersDir string) {
 }
 
 func (c *Cluster) followerHeartbeat(membersDir string) {
-	members, _ := ListMembers(c.store, membersDir)
+	members, err := ListMembers(c.store, membersDir)
+	if err != nil {
+		c.log.Warn("列出成员失败,跳过本轮心跳", zap.Error(err))
+		return
+	}
 
 	// Filter alive members
 	now := time.Now()

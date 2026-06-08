@@ -181,6 +181,11 @@ func (l *Logger) Debug(msg string, fields ...zap.Field) {
 	l.zap.Debug(msg, fields...)
 }
 
+// Warn logs warning message
+func (l *Logger) Warn(msg string, fields ...zap.Field) {
+	l.zap.Warn(msg, fields...)
+}
+
 // Error logs error message
 func (l *Logger) Error(msg string, fields ...zap.Field) {
 	l.zap.Error(msg, fields...)

@@ -1,6 +1,9 @@
 package cluster
 
 import (
+	"context"
+	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,13 +28,18 @@ func TestWriteRegistrationFile(t *testing.T) {
 	if len(members) != 1 || members[0].ID != "20260515143022123" {
 		t.Errorf("expected single member 20260515143022123, got %+v", members)
 	}
-	// 验证文件内容(role|host:port|pid)通过 ReadRegistration
-	content, err := ReadRegistration(store, dir, "20260515143022123")
+	// 验证文件内容(role|host:port|pid)
+	rc, err := store.Read(context.Background(), filepath.Join(dir, "20260515143022123"))
 	if err != nil {
-		t.Fatalf("ReadRegistration: %v", err)
+		t.Fatalf("Read: %v", err)
 	}
-	if content != "leader|127.0.0.1:8080|12345" {
-		t.Errorf("unexpected content: %q", content)
+	content, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(content) != "leader|127.0.0.1:8080|12345" {
+		t.Errorf("unexpected content: %q", string(content))
 	}
 }
 
@@ -103,18 +111,6 @@ func TestRemoveFile_NonExistent(t *testing.T) {
 	// 不存在视为成功(幂等)
 	if err := RemoveFile(store, dir, "non-existent"); err != nil {
 		t.Fatalf("RemoveFile should be idempotent, got: %v", err)
-	}
-}
-
-func TestEnsureMembersDir(t *testing.T) {
-	store := newTestStore()
-	homeDir := t.TempDir()
-	membersDir, err := EnsureMembersDir(homeDir, store)
-	if err != nil {
-		t.Fatalf("EnsureMembersDir failed: %v", err)
-	}
-	if membersDir == "" {
-		t.Error("expected non-empty membersDir")
 	}
 }
 
