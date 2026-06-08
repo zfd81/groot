@@ -116,25 +116,38 @@ func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 	}, nil
 }
 
-// ListSessions 查询会话列表
-func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
-	entries, err := m.storage.List(context.Background(), m.memoryDir)
+// listSessionIDs 返回 memoryDir 下所有有效 session ID(目录 + 含 history.json)。
+// memoryDir 不存在时返回空切片(用于首次启动 / 已被全部清理)。
+func (m *Manager) listSessionIDs(ctx context.Context) ([]string, error) {
+	entries, err := m.storage.List(ctx, m.memoryDir)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			return []SessionInfo{}, 0, nil
+			return nil, nil
 		}
-		return nil, 0, fmt.Errorf("读取记忆目录失败: %w", err)
+		return nil, fmt.Errorf("读取记忆目录失败: %w", err)
 	}
-
-	var sessions []SessionInfo
+	var ids []string
 	for _, entry := range entries {
 		if !entry.IsDir {
 			continue
 		}
 		sessionID := filepath.Base(entry.Path)
-		if !m.ExistsSession(sessionID) {
-			continue
+		if m.ExistsSession(sessionID) {
+			ids = append(ids, sessionID)
 		}
+	}
+	return ids, nil
+}
+
+// ListSessions 查询会话列表
+func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
+	ids, err := m.listSessionIDs(context.Background())
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var sessions []SessionInfo
+	for _, sessionID := range ids {
 		info, err := m.GetSessionInfo(sessionID)
 		if err != nil {
 			m.log.Info("获取会话信息失败: " + sessionID + ", error: " + err.Error())
@@ -356,28 +369,15 @@ func sanitizeFilename(name string) string {
 // 任何 session 删除失败时跳过该 session(deleted 计数不增加),下次 Cleanup
 // 会自动重试,避免出现"元数据已删但附件残留"或反向的不一致状态。
 func (m *Manager) Cleanup(ctx context.Context) (int, error) {
-	entries, err := m.storage.List(ctx, m.memoryDir)
+	ids, err := m.listSessionIDs(ctx)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("读取记忆目录失败: %w", err)
+		return 0, err
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -m.retentionDays)
 	deleted := 0
 
-	for _, entry := range entries {
-		if !entry.IsDir {
-			continue
-		}
-
-		sessionID := filepath.Base(entry.Path)
-
-		if !m.ExistsSession(sessionID) {
-			continue
-		}
-
+	for _, sessionID := range ids {
 		sessionDir := m.sessionDir(sessionID)
 		info, err := m.storage.Stat(ctx, sessionDir)
 		if err != nil {

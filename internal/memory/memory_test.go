@@ -850,7 +850,7 @@ func TestManager_Cleanup_DeletesAttachmentsViaStorage(t *testing.T) {
 	}
 }
 
-func TestManager_Cleanup_AttachmentDeleteFailureKeepsSession(t *testing.T) {
+func TestManager_Cleanup_DeleteDirFailureKeepsSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
 	failing := &failingStorage{
@@ -908,4 +908,60 @@ func TestNewManager_PanicsOnNilStorage(t *testing.T) {
 		}
 	}()
 	_ = NewManager(tmpDir, 7, log, nil)
+}
+
+// TestManager_ListSessions_NonExistentMemoryDir 验证 memoryDir 不存在时
+// ListSessions 返回空切片而非 error(首次启动 / 全部清理后场景)。
+func TestManager_ListSessions_NonExistentMemoryDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	nonExistent := filepath.Join(tmpDir, "does-not-exist")
+	log := initTestLogger()
+	mgr := NewManager(nonExistent, 7, log, storage.NewLocal())
+
+	sessions, total, err := mgr.ListSessions(10, 0)
+	if err != nil {
+		t.Fatalf("expected nil err for non-existent memoryDir, got: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("expected total=0, got %d", total)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("expected empty sessions, got %d", len(sessions))
+	}
+}
+
+// TestManager_Cleanup_NonExistentMemoryDir 验证 memoryDir 不存在时
+// Cleanup 返回 (0, nil) 而非 error。
+func TestManager_Cleanup_NonExistentMemoryDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	nonExistent := filepath.Join(tmpDir, "does-not-exist")
+	log := initTestLogger()
+	mgr := NewManager(nonExistent, 7, log, storage.NewLocal())
+
+	deleted, err := mgr.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil err for non-existent memoryDir, got: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected deleted=0, got %d", deleted)
+	}
+}
+
+// TestManager_GetChatRecord_NotExist 验证 chat record 不存在时返回
+// 业务话术 "对话记录不存在" 而不是裸的 storage.ErrNotFound。
+func TestManager_GetChatRecord_NotExist(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := initTestLogger()
+	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+
+	if err := mgr.CreateSession("test-session"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	_, err := mgr.GetChatRecord("test-session", "nonexistent-chat-id")
+	if err == nil {
+		t.Fatal("expected error for non-existent chat record")
+	}
+	if !strings.Contains(err.Error(), "对话记录不存在") {
+		t.Errorf("expected error to contain '对话记录不存在', got: %v", err)
+	}
 }
