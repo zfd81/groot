@@ -1,21 +1,12 @@
-// Package memory 管理会话的元数据与附件存储。
-//
-// 存储职责划分：
-//   - 附件（attachments/<file>）通过 storage.Storage 接口读写，便于将
-//     底层后端切换为 MinIO 等对象存储；
-//   - 会话元数据（history.json、chats/*.json）继续走本地文件系统 +
-//     原子 rename，因为它们小、需要原子写、未来计划迁 PostgreSQL，
-//     与对象存储路径不同
-//     （详见 docs/superpowers/specs/2026-06-06-storage-interface-design.md 2.1.3 节）。
-//   - 会话规则提示由嵌入式常量 defaultSessionRules 提供，不再写物理文件。
 package memory
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,13 +26,14 @@ type Manager struct {
 
 // NewManager 创建 Memory Manager。
 // store 用于附件读写，必须非 nil（启动时通过 storage.New(cfg.Storage) 创建）。
+//
+// 不在此处预创建 memoryDir：所有目录由 storage.Write 在第一次写入时按需建立
+// （local 实现内部 MkdirAll，minio 模式下目录是隐式前缀）。这样在 minio 模式
+// 下不会在进程 cwd 下意外创建一个名为 memoryDir 的本地目录。
 func NewManager(memoryDir string, retentionDays int, log *logger.Logger, store storage.Storage) *Manager {
 	if store == nil {
 		panic("memory: NewManager: storage must not be nil")
 	}
-
-	// 确保目录存在
-	os.MkdirAll(memoryDir, 0755)
 
 	return &Manager{
 		memoryDir:     memoryDir,
@@ -83,32 +75,22 @@ func (m *Manager) AttachmentsDir(sessionID string) string {
 	return filepath.Join(m.sessionDir(sessionID), "attachments")
 }
 
-// CreateSession 创建新会话
+// CreateSession 创建新会话。
+// 仅写入初始 history.json,所有上层目录(sessionDir / chats / attachments)
+// 由 storage.Write 按需建立——chats 目录将在首次 SaveChatRecord 时创建,
+// attachments 目录将在首次 SaveAttachment 时创建。
 func (m *Manager) CreateSession(sessionID string) error {
-	sessionDir := m.sessionDir(sessionID)
-
-	// 创建目录结构
-	if err := os.MkdirAll(sessionDir, 0755); err != nil {
-		return fmt.Errorf("创建会话目录失败: %w", err)
-	}
-	if err := os.MkdirAll(m.chatsDir(sessionID), 0755); err != nil {
-		return fmt.Errorf("创建 chats 目录失败: %w", err)
-	}
-
-	// 创建初始 history.json
 	history := &History{
 		SessionID: sessionID,
 		CreatedAt: time.Now(),
 		Messages:  []Message{},
 	}
-
 	return m.saveHistory(sessionID, history)
 }
 
 // ExistsSession 检查会话是否存在
 func (m *Manager) ExistsSession(sessionID string) bool {
-	historyPath := m.historyPath(sessionID)
-	_, err := os.Stat(historyPath)
+	_, err := m.storage.Stat(context.Background(), m.historyPath(sessionID))
 	return err == nil
 }
 
@@ -136,17 +118,20 @@ func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 
 // ListSessions 查询会话列表
 func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
-	entries, err := os.ReadDir(m.memoryDir)
+	entries, err := m.storage.List(context.Background(), m.memoryDir)
 	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return []SessionInfo{}, 0, nil
+		}
 		return nil, 0, fmt.Errorf("读取记忆目录失败: %w", err)
 	}
 
 	var sessions []SessionInfo
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir {
 			continue
 		}
-		sessionID := entry.Name()
+		sessionID := filepath.Base(entry.Path)
 		if !m.ExistsSession(sessionID) {
 			continue
 		}
@@ -177,29 +162,36 @@ func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
 	return sessions[offset:end], total, nil
 }
 
-// saveHistory 保存 history.json（原子写入：tmp + rename）
+// saveHistory 保存 history.json。
+// 原子写入由 storage.Write 内部保证(local 走 tmp+rename, minio 由 PutObject 协议保证)。
 func (m *Manager) saveHistory(sessionID string, history *History) error {
 	data, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化 history 失败: %w", err)
 	}
-
-	tmpPath := m.historyPath(sessionID) + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("写入临时文件失败: %w", err)
-	}
-
-	return os.Rename(tmpPath, m.historyPath(sessionID))
+	return m.storage.Write(
+		context.Background(),
+		m.historyPath(sessionID),
+		bytes.NewReader(data),
+		int64(len(data)),
+		"application/json",
+	)
 }
 
 // GetHistory 获取会话历史
 func (m *Manager) GetHistory(sessionID string) (*History, error) {
-	data, err := os.ReadFile(m.historyPath(sessionID))
+	rc, err := m.storage.Read(context.Background(), m.historyPath(sessionID))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("会话不存在: %s", sessionID)
 		}
 		return nil, fmt.Errorf("读取 history 失败: %w", err)
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("读取 history 内容失败: %w", err)
 	}
 
 	var history History
@@ -246,32 +238,36 @@ func (m *Manager) GetContextMessages(sessionID string, windowSize int) ([]Messag
 	return history.Messages[len(history.Messages)-windowSize:], nil
 }
 
-// SaveChatRecord 保存详细对话记录（原子写入：tmp + rename）
+// SaveChatRecord 保存详细对话记录。
+// 原子写入由 storage.Write 内部保证;chats 目录在首次写入时由 Write 自动建立。
 func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
-	// 确保 chats 目录存在
-	os.MkdirAll(m.chatsDir(sessionID), 0755)
-
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化 chat record 失败: %w", err)
 	}
-
-	tmpPath := m.chatPath(sessionID, record.ChatID) + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("写入临时文件失败: %w", err)
-	}
-
-	return os.Rename(tmpPath, m.chatPath(sessionID, record.ChatID))
+	return m.storage.Write(
+		context.Background(),
+		m.chatPath(sessionID, record.ChatID),
+		bytes.NewReader(data),
+		int64(len(data)),
+		"application/json",
+	)
 }
 
 // GetChatRecord 获取单次对话详情
 func (m *Manager) GetChatRecord(sessionID string, chatID string) (*ChatRecord, error) {
-	data, err := os.ReadFile(m.chatPath(sessionID, chatID))
+	rc, err := m.storage.Read(context.Background(), m.chatPath(sessionID, chatID))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("对话记录不存在: %s", chatID)
 		}
 		return nil, fmt.Errorf("读取 chat record 失败: %w", err)
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("读取 chat record 内容失败: %w", err)
 	}
 
 	var record ChatRecord
@@ -353,10 +349,18 @@ func sanitizeFilename(name string) string {
 	return name
 }
 
-// Cleanup 清理过期会话
+// Cleanup 清理过期会话。
+//
+// 一次性删除整个 sessionDir(含 attachments / history.json / chats / 旧版残留
+// SESSION.md)——所有内容都在 sessionDir 子树内,storage.DeleteDir 递归处理。
+// 任何 session 删除失败时跳过该 session(deleted 计数不增加),下次 Cleanup
+// 会自动重试,避免出现"元数据已删但附件残留"或反向的不一致状态。
 func (m *Manager) Cleanup(ctx context.Context) (int, error) {
-	entries, err := os.ReadDir(m.memoryDir)
+	entries, err := m.storage.List(ctx, m.memoryDir)
 	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("读取记忆目录失败: %w", err)
 	}
 
@@ -364,40 +368,33 @@ func (m *Manager) Cleanup(ctx context.Context) (int, error) {
 	deleted := 0
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir {
 			continue
 		}
 
-		sessionID := entry.Name()
+		sessionID := filepath.Base(entry.Path)
 
 		if !m.ExistsSession(sessionID) {
 			continue
 		}
 
 		sessionDir := m.sessionDir(sessionID)
-		info, err := os.Stat(sessionDir)
+		info, err := m.storage.Stat(ctx, sessionDir)
 		if err != nil {
 			m.log.Info("跳过会话（无法获取目录信息）: " + sessionID + ", error: " + err.Error())
 			continue
 		}
 
-		if info.ModTime().Before(cutoff) {
-			// 先删附件（走 storage 抽象，确保 minio 模式下也能清理）。
-			// 任何一步失败时 continue 跳过，避免"附件残留 + 元数据被删"的
-			// 不一致状态——失败的 session 在下次 Cleanup 时会自动重试。
-			attachmentsDir := m.AttachmentsDir(sessionID)
-			if err := m.storage.DeleteDir(ctx, attachmentsDir); err != nil {
-				m.log.Error("清理附件失败: " + sessionID + ", error: " + err.Error())
-				continue
-			}
-			// 再删元数据（history.json / chats 等本地文件，含旧版残留的 SESSION.md）
-			if err := os.RemoveAll(sessionDir); err != nil {
+		if info.ModTime.Before(cutoff) {
+			// 一次性删整个 sessionDir。任何失败时跳过,下次重试,
+			// 保证"元数据 + 附件"始终同步。
+			if err := m.storage.DeleteDir(ctx, sessionDir); err != nil {
 				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
 				continue
 			}
 			deleted++
 			roundCount := m.GetRoundCount(sessionID)
-			m.log.Info("清理会话: " + sessionID + ", 最后活跃: " + info.ModTime().Format("2006-01-02") + ", 轮数: " + fmt.Sprintf("%d", roundCount))
+			m.log.Info("清理会话: " + sessionID + ", 最后活跃: " + info.ModTime.Format("2006-01-02") + ", 轮数: " + fmt.Sprintf("%d", roundCount))
 		}
 	}
 

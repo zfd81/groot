@@ -43,8 +43,8 @@ func (s *spyStorage) DeleteDir(ctx context.Context, path string) error {
 	return s.Storage.DeleteDir(ctx, path)
 }
 
-// failingStorage 故意让 DeleteDir 失败，验证 Cleanup 在附件删除失败时
-// 不删元数据（保持原子性）。
+// failingStorage 故意让 DeleteDir 失败，验证 Cleanup 在 sessionDir 删除失败时
+// 跳过该 session,既不计入 deleted 也不破坏目录(保持原子性)。
 type failingStorage struct {
 	storage.Storage
 	deleteDirErr error
@@ -228,9 +228,11 @@ func TestManager_CreateSession(t *testing.T) {
 		t.Error("CreateSession() 未创建会话目录")
 	}
 
+	// chats 目录采用懒创建策略：CreateSession 不预先创建,首次 SaveChatRecord
+	// 时由 storage.Write 自动建目录。
 	chatsDir := filepath.Join(sessionDir, "chats")
-	if _, err := os.Stat(chatsDir); os.IsNotExist(err) {
-		t.Error("CreateSession() 未创建 chats 目录")
+	if _, err := os.Stat(chatsDir); !os.IsNotExist(err) {
+		t.Errorf("CreateSession() 不应预先创建 chats 目录, got err=%v", err)
 	}
 
 	// attachments 目录采用懒创建策略：CreateSession 不预先创建，首次 SaveAttachment
@@ -833,13 +835,13 @@ func TestManager_Cleanup_DeletesAttachmentsViaStorage(t *testing.T) {
 		t.Errorf("expected 1 session deleted, got %d", deleted)
 	}
 
-	// 验证 storage.DeleteDir 被调用，且参数是 attachments 路径
+	// 验证 storage.DeleteDir 被调用，且参数是整个 sessionDir(一次性删,
+	// attachments 在 sessionDir 子树内被一并递归清理)
 	if !spy.deleteDirCalled {
 		t.Fatal("storage.DeleteDir was not called during cleanup")
 	}
-	expectedAttDir := filepath.Join(tmpDir, sessionID, "attachments")
-	if spy.lastDeleteDirPath != expectedAttDir {
-		t.Errorf("DeleteDir path = %q, want %q", spy.lastDeleteDirPath, expectedAttDir)
+	if spy.lastDeleteDirPath != sessionDir {
+		t.Errorf("DeleteDir path = %q, want %q", spy.lastDeleteDirPath, sessionDir)
 	}
 
 	// 元数据也应被删
@@ -875,17 +877,17 @@ func TestManager_Cleanup_AttachmentDeleteFailureKeepsSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
-	// 因为附件删除失败，整个 session 应该被跳过、不计入 deleted
+	// 因为 DeleteDir(sessionDir) 失败，整个 session 应该被跳过、不计入 deleted
 	if deleted != 0 {
-		t.Errorf("expected 0 session deleted (skipped due to attach failure), got %d", deleted)
+		t.Errorf("expected 0 session deleted (skipped due to DeleteDir failure), got %d", deleted)
 	}
 
-	// session 元数据应该仍然存在
+	// session 元数据应该仍然存在(DeleteDir 失败语义:既不删元数据也不删附件)
 	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
-		t.Error("sessionDir should still exist when attachment deletion fails")
+		t.Error("sessionDir should still exist when DeleteDir fails")
 	}
 
-	// 附件目录也应该仍然存在（验证原子性：DeleteDir 失败时既不删元数据也不删附件）
+	// 附件目录也应该仍然存在
 	attDir := filepath.Join(tmpDir, sessionID, "attachments")
 	if _, err := os.Stat(attDir); os.IsNotExist(err) {
 		t.Error("attachments dir should still exist when DeleteDir fails")
