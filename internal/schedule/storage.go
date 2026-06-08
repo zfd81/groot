@@ -1,8 +1,12 @@
 package schedule
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,21 +14,27 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/logger"
+	istorage "github.com/zfd81/groot/internal/storage"
 )
 
 // Storage handles file-based persistence for scheduled tasks
 type Storage struct {
 	baseDir string // {GROOT_HOME}/schedules
+	store   istorage.Storage
 	log     *logger.Logger
 }
 
 // NewStorage creates a new storage instance
-func NewStorage(baseDir string, log *logger.Logger) *Storage {
-	return &Storage{baseDir: baseDir, log: log}
+func NewStorage(baseDir string, store istorage.Storage, log *logger.Logger) *Storage {
+	return &Storage{baseDir: baseDir, store: store, log: log}
 }
 
-// EnsureDirs creates the active/disabled/archive directories if they don't exist
+// EnsureDirs 在 local 模式下预建 active/disabled/archive;minio 模式下
+// Storage.Write 自动建前缀,本方法 noop。
 func (s *Storage) EnsureDirs() error {
+	if _, ok := s.store.(*istorage.Local); !ok {
+		return nil
+	}
 	for _, dir := range []string{"active", "disabled", "archive"} {
 		path := filepath.Join(s.baseDir, dir)
 		if err := os.MkdirAll(path, 0755); err != nil {
@@ -36,11 +46,6 @@ func (s *Storage) EnsureDirs() error {
 
 // SaveTask atomically writes a task.json to active/{id}/
 func (s *Storage) SaveTask(task *Task) error {
-	dir := filepath.Join(s.baseDir, "active", task.ID)
-	if err := os.MkdirAll(filepath.Join(dir, "executions"), 0755); err != nil {
-		return err
-	}
-
 	task.UpdatedAt = task.CreatedAt
 	if task.CreatedAt.IsZero() {
 		task.CreatedAt = task.UpdatedAt
@@ -51,21 +56,25 @@ func (s *Storage) SaveTask(task *Task) error {
 		return err
 	}
 
-	taskPath := filepath.Join(dir, "task.json")
-	tmpPath := taskPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, taskPath)
+	taskPath := filepath.Join(s.baseDir, "active", task.ID, "task.json")
+	return s.store.Write(context.Background(), taskPath, bytes.NewReader(data), int64(len(data)), "application/json")
 }
 
 // LoadTask reads a task.json by ID, searching active/disabled/archive
 func (s *Storage) LoadTask(taskID string) (*Task, error) {
 	for _, status := range []string{"active", "disabled", "archive"} {
 		path := filepath.Join(s.baseDir, status, taskID, "task.json")
-		data, err := os.ReadFile(path)
+		rc, err := s.store.Read(context.Background(), path)
 		if err != nil {
-			continue
+			if errors.Is(err, istorage.ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		data, readErr := io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
+			return nil, readErr
 		}
 		var task Task
 		if err := json.Unmarshal(data, &task); err != nil {
@@ -80,9 +89,14 @@ func (s *Storage) LoadTask(taskID string) (*Task, error) {
 func (s *Storage) DeleteTask(taskID string) error {
 	for _, status := range []string{"active", "disabled", "archive"} {
 		dir := filepath.Join(s.baseDir, status, taskID)
-		if _, err := os.Stat(dir); err == nil {
-			return os.RemoveAll(dir)
+		_, err := s.store.Stat(context.Background(), dir)
+		if err != nil {
+			if errors.Is(err, istorage.ErrNotFound) {
+				continue
+			}
+			return err
 		}
+		return s.store.DeleteDir(context.Background(), dir)
 	}
 	return fmt.Errorf("任务 %s 不存在", taskID)
 }
@@ -91,17 +105,20 @@ func (s *Storage) DeleteTask(taskID string) error {
 func (s *Storage) MoveTask(taskID, from, to string) error {
 	srcDir := filepath.Join(s.baseDir, from, taskID)
 	dstDir := filepath.Join(s.baseDir, to, taskID)
-	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		return fmt.Errorf("任务 %s 不在 %s 中", taskID, from)
+	if _, err := s.store.Stat(context.Background(), srcDir); err != nil {
+		if errors.Is(err, istorage.ErrNotFound) {
+			return fmt.Errorf("任务 %s 不在 %s 中", taskID, from)
+		}
+		return err
 	}
-	return os.Rename(srcDir, dstDir)
+	return s.store.Rename(context.Background(), srcDir, dstDir)
 }
 
 // GetTaskStatus returns the current status directory for a task
 func (s *Storage) GetTaskStatus(taskID string) string {
 	for _, status := range []string{"active", "disabled", "archive"} {
 		dir := filepath.Join(s.baseDir, status, taskID)
-		if _, err := os.Stat(dir); err == nil {
+		if _, err := s.store.Stat(context.Background(), dir); err == nil {
 			return status
 		}
 	}
@@ -115,23 +132,14 @@ func (s *Storage) SaveExecution(taskID string, record *ExecutionRecord) error {
 		return fmt.Errorf("任务 %s 不存在", taskID)
 	}
 
-	execDir := filepath.Join(s.baseDir, status, taskID, "executions")
-	if err := os.MkdirAll(execDir, 0755); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	filename := record.ExecTime.Format("2006-01-02-150405") + ".json"
-	path := filepath.Join(execDir, filename)
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	path := filepath.Join(s.baseDir, status, taskID, "executions", filename)
+	return s.store.Write(context.Background(), path, bytes.NewReader(data), int64(len(data)), "application/json")
 }
 
 // LoadExecutions loads all execution records for a task
@@ -142,9 +150,9 @@ func (s *Storage) LoadExecutions(taskID string) ([]ExecutionRecord, error) {
 	}
 
 	execDir := filepath.Join(s.baseDir, status, taskID, "executions")
-	entries, err := os.ReadDir(execDir)
+	entries, err := s.store.List(context.Background(), execDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, istorage.ErrNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -152,17 +160,23 @@ func (s *Storage) LoadExecutions(taskID string) ([]ExecutionRecord, error) {
 
 	var records []ExecutionRecord
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir || filepath.Ext(entry.Path) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(execDir, entry.Name()))
+		rc, err := s.store.Read(context.Background(), entry.Path)
 		if err != nil {
-			s.log.Info("读取执行记录失败: "+entry.Name(), zap.Error(err))
+			s.log.Info("读取执行记录失败: "+filepath.Base(entry.Path), zap.Error(err))
+			continue
+		}
+		data, readErr := io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
+			s.log.Info("读取执行记录内容失败: "+filepath.Base(entry.Path), zap.Error(readErr))
 			continue
 		}
 		var record ExecutionRecord
 		if err := json.Unmarshal(data, &record); err != nil {
-			s.log.Info("解析执行记录失败: "+entry.Name(), zap.Error(err))
+			s.log.Info("解析执行记录失败: "+filepath.Base(entry.Path), zap.Error(err))
 			continue
 		}
 		records = append(records, record)
@@ -192,9 +206,9 @@ func (s *Storage) ListAllTasks() ([]*Task, error) {
 
 func (s *Storage) listTasksIn(status string) ([]*Task, error) {
 	dir := filepath.Join(s.baseDir, status)
-	entries, err := os.ReadDir(dir)
+	entries, err := s.store.List(context.Background(), dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, istorage.ErrNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -202,11 +216,17 @@ func (s *Storage) listTasksIn(status string) ([]*Task, error) {
 
 	var tasks []*Task
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name(), "task.json"))
+		taskPath := filepath.Join(entry.Path, "task.json")
+		rc, err := s.store.Read(context.Background(), taskPath)
 		if err != nil {
+			continue
+		}
+		data, readErr := io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
 			continue
 		}
 		var task Task

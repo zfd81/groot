@@ -334,7 +334,7 @@ func startServer(homeDir string, port int) {
 
 	// Initialize schedule module (storage and runner needed regardless of leader status)
 	scheduleDir := filepath.Join(homeDir, "schedules")
-	scheduleStorage = schedule.NewStorage(scheduleDir, log)
+	scheduleStorage = schedule.NewStorage(scheduleDir, store, log)
 	if err := scheduleStorage.EnsureDirs(); err != nil {
 		log.Error("无法创建调度目录", zap.Error(err))
 	}
