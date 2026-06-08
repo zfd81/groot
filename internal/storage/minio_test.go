@@ -703,3 +703,54 @@ func TestNewMinio_FailFast_OK(t *testing.T) {
 		}
 	}
 }
+
+// TestNewMinio_FailFast_BucketExistsErr 覆盖 Step 1 中 BucketExists RPC 本身报错的失败路径
+// （与"返回 false"是不同的失败语义：网络不通/权限拒绝等）。
+func TestNewMinio_FailFast_BucketExistsErr(t *testing.T) {
+	fc := newFakeClient()
+	underlying := errors.New("network unreachable")
+	fc.bucketExistsErr = underlying
+
+	_, err := newMinioWithClient(fc, "groot")
+	if err == nil {
+		t.Fatal("expected error when BucketExists returns error, got nil")
+	}
+	// 错误必须 wrap 底层 error，使调用方能 errors.Is 还原根因
+	if !errors.Is(err, underlying) {
+		t.Errorf("expected error to wrap underlying network error (errors.Is), got: %v", err)
+	}
+	// 错误信息也应包含底层错误文本
+	if !strings.Contains(err.Error(), "network unreachable") {
+		t.Errorf("expected error to contain 'network unreachable', got: %v", err)
+	}
+	// Step 1 失败时绝不应继续到 Step 2 写探针
+	for k := range fc.objects {
+		if strings.HasPrefix(k, "__startup/probe-") {
+			t.Errorf("probe key %s should not have been written when BucketExists errored", k)
+		}
+	}
+}
+
+// TestNewMinio_FailFast_RemoveFails 覆盖 Step 3 探针删除失败路径
+// （对应"账号有 PutObject 但没 DeleteObject 权限"的真实场景）。
+func TestNewMinio_FailFast_RemoveFails(t *testing.T) {
+	fc := newFakeClient()
+	fc.bucketExists = true
+	fc.removeErr = errors.New("access denied")
+
+	_, err := newMinioWithClient(fc, "groot")
+	if err == nil {
+		t.Fatal("expected error when probe remove fails, got nil")
+	}
+	// 关键断言：错误信息必须包含 "probe remove"，证明确实走到了 Step 3
+	// （否则可能是 Step 1/2 提前失败，未真正校验删权限）
+	if !strings.Contains(err.Error(), "probe remove") {
+		t.Errorf("expected error to mention 'probe remove' (Step 3), got: %v", err)
+	}
+	// 也应包含底层错误文本
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("expected error to wrap 'access denied', got: %v", err)
+	}
+	// Step 2 写入的探针因 Step 3 失败而残留 —— 这是已知代价（fail-fast 优先）
+	// 此处不强制断言探针是否仍在，只确认错误正确报出删权限问题。
+}

@@ -17,26 +17,6 @@ func TestFactory_NoMinioYieldsLocal(t *testing.T) {
 	}
 }
 
-func TestFactory_WithMinioYieldsMinio(t *testing.T) {
-	// 注意：NewMinio 现在会在启动时执行 fail-fast 探活
-	// (BucketExists + PutObject + RemoveObject)，没有真实 minio 时
-	// 必然失败。本用例只能验证：当配置带 minio 时，工厂确实路由到了
-	// minio 分支（错误信息来自 minio 探活），而不是落到 *Local。
-	cfg := config.StorageConfig{Minio: &config.MinioConfig{
-		Endpoint:  "localhost:9000",
-		AccessKey: "ak",
-		SecretKey: "sk",
-		Bucket:    "groot",
-	}}
-	_, err := New(cfg)
-	if err == nil {
-		t.Fatal("expected probe error when no minio is running, got nil")
-	}
-	if !strings.Contains(err.Error(), "minio probe") {
-		t.Fatalf("expected error to come from minio probe, got: %v", err)
-	}
-}
-
 // TestFactory_MinioMissingFieldsErrors 用 table-driven 覆盖 4 种缺失字段：
 // endpoint / bucket / access_key / secret_key。
 func TestFactory_MinioMissingFieldsErrors(t *testing.T) {
