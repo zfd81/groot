@@ -12,9 +12,10 @@ import (
 
 func TestCluster_JoinAsLeader_NoExistingMembers(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
-	c := New(homeDir, "127.0.0.1", 8080, log, store)
+	c := New(membersDir, "127.0.0.1", 8080, log, store)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -33,7 +34,6 @@ func TestCluster_JoinAsLeader_NoExistingMembers(t *testing.T) {
 	}
 
 	// verify file was created
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 	files, _ := os.ReadDir(membersDir)
 	if len(files) != 1 {
 		t.Fatalf("expected 1 registration file, got %d", len(files))
@@ -47,11 +47,12 @@ func TestCluster_JoinAsLeader_NoExistingMembers(t *testing.T) {
 
 func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
 	// start first instance (leader)
-	leader := New(homeDir, "127.0.0.1", 8080, log, store)
+	leader := New(membersDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -69,7 +70,7 @@ func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 	// Small delay to ensure different regID (same-millisecond startup is not
 	// a real-world concern per design doc).
 	time.Sleep(time.Millisecond)
-	follower := New(homeDir, "127.0.0.1", 8081, log, store)
+	follower := New(membersDir, "127.0.0.1", 8081, log, store)
 	err = follower.Join(ctx)
 	if err != nil {
 		t.Fatalf("follower Join failed: %v", err)
@@ -83,10 +84,11 @@ func TestCluster_JoinAsFollower_ExistingLeader(t *testing.T) {
 
 func TestCluster_Heartbeat_FileLost(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
-	c := New(homeDir, "127.0.0.1", 8080, log, store)
+	c := New(membersDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -99,7 +101,6 @@ func TestCluster_Heartbeat_FileLost(t *testing.T) {
 	oldRegID := c.RegID()
 
 	// simulate file deletion
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 	RemoveFile(store, membersDir, oldRegID)
 
 	// wait for heartbeat to re-register
@@ -116,10 +117,11 @@ func TestCluster_Heartbeat_FileLost(t *testing.T) {
 
 func TestCluster_Heartbeat_LeaderCleanupStale(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
-	leader := New(homeDir, "127.0.0.1", 8080, log, store)
+	leader := New(membersDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -130,7 +132,6 @@ func TestCluster_Heartbeat_LeaderCleanupStale(t *testing.T) {
 	defer leader.Leave()
 
 	// write a stale file manually (simulating dead instance)
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 	WriteRegistration(store, membersDir, "20200101000000001", "follower", "127.0.0.1", 9000, 99999)
 
 	// set its mtime to old
@@ -148,10 +149,11 @@ func TestCluster_Heartbeat_LeaderCleanupStale(t *testing.T) {
 
 func TestCluster_Leave(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
-	c := New(homeDir, "127.0.0.1", 8080, log, store)
+	c := New(membersDir, "127.0.0.1", 8080, log, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -162,7 +164,6 @@ func TestCluster_Leave(t *testing.T) {
 
 	c.Leave()
 
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 	files, _ := os.ReadDir(membersDir)
 	if len(files) != 0 {
 		t.Errorf("expected 0 files after Leave, got %d", len(files))
@@ -173,6 +174,7 @@ func TestCluster_Leave(t *testing.T) {
 // cleanly leaves, the follower detects it and promotes to leader.
 func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
@@ -180,7 +182,7 @@ func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 	defer cancel()
 
 	// Start leader
-	leader := New(homeDir, "127.0.0.1", 8080, log, store)
+	leader := New(membersDir, "127.0.0.1", 8080, log, store)
 	if err := leader.Join(ctx); err != nil {
 		t.Fatalf("leader Join failed: %v", err)
 	}
@@ -190,7 +192,7 @@ func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 
 	// Start follower
 	time.Sleep(time.Millisecond)
-	follower := New(homeDir, "127.0.0.1", 8081, log, store)
+	follower := New(membersDir, "127.0.0.1", 8081, log, store)
 	if err := follower.Join(ctx); err != nil {
 		t.Fatalf("follower Join failed: %v", err)
 	}
@@ -213,7 +215,6 @@ func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 	}
 
 	// Verify only follower's file remains
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 	files, _ := os.ReadDir(membersDir)
 	if len(files) != 1 {
 		t.Errorf("expected 1 file after promotion, got %d", len(files))
@@ -224,11 +225,12 @@ func TestCluster_FollowerPromotionOnLeaderLeave(t *testing.T) {
 // when an instance registers as leader (first instance).
 func TestCluster_Callbacks_OnBecomeLeader(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
 	becomeCalled := make(chan struct{}, 1)
-	c := New(homeDir, "127.0.0.1", 8080, log, store)
+	c := New(membersDir, "127.0.0.1", 8080, log, store)
 	c.SetCallbacks(func() {
 		becomeCalled <- struct{}{}
 	}, nil)
@@ -253,11 +255,12 @@ func TestCluster_Callbacks_OnBecomeLeader(t *testing.T) {
 // when a leader's registration file is deleted (simulating crash).
 func TestCluster_Callbacks_OnLoseLeader(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
 	loseCalled := make(chan struct{}, 1)
-	c := New(homeDir, "127.0.0.1", 8080, log, store)
+	c := New(membersDir, "127.0.0.1", 8080, log, store)
 	c.SetCallbacks(nil, func() {
 		loseCalled <- struct{}{}
 	})
@@ -275,7 +278,6 @@ func TestCluster_Callbacks_OnLoseLeader(t *testing.T) {
 	}
 
 	// Delete the registration file to simulate crash
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 	RemoveFile(store, membersDir, c.RegID())
 
 	// Wait for heartbeat to detect file loss and trigger onLoseLeader
@@ -291,11 +293,12 @@ func TestCluster_Callbacks_OnLoseLeader(t *testing.T) {
 // is called when a follower promotes to leader.
 func TestCluster_Callbacks_OnPromotionFromFollower(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
 	becomeCalled := make(chan struct{}, 1)
-	follower := New(homeDir, "127.0.0.1", 8081, log, store)
+	follower := New(membersDir, "127.0.0.1", 8081, log, store)
 	follower.SetCallbacks(func() {
 		becomeCalled <- struct{}{}
 	}, nil)
@@ -304,7 +307,7 @@ func TestCluster_Callbacks_OnPromotionFromFollower(t *testing.T) {
 	defer cancel()
 
 	// Start leader first
-	leader := New(homeDir, "127.0.0.1", 8080, log, store)
+	leader := New(membersDir, "127.0.0.1", 8080, log, store)
 	if err := leader.Join(ctx); err != nil {
 		t.Fatalf("leader Join failed: %v", err)
 	}
@@ -338,9 +341,10 @@ func TestCluster_Callbacks_OnPromotionFromFollower(t *testing.T) {
 }
 
 // TestCluster_MultipleInstances_SingleLeader verifies that with 3 instances
-// sharing the same homeDir, exactly one is leader.
+// sharing the same membersDir, exactly one is leader.
 func TestCluster_MultipleInstances_SingleLeader(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
@@ -348,9 +352,9 @@ func TestCluster_MultipleInstances_SingleLeader(t *testing.T) {
 	defer cancel()
 
 	instances := []*Cluster{
-		New(homeDir, "127.0.0.1", 8080, log, store),
-		New(homeDir, "127.0.0.1", 8081, log, store),
-		New(homeDir, "127.0.0.1", 8082, log, store),
+		New(membersDir, "127.0.0.1", 8080, log, store),
+		New(membersDir, "127.0.0.1", 8081, log, store),
+		New(membersDir, "127.0.0.1", 8082, log, store),
 	}
 
 	for i, inst := range instances {
@@ -386,6 +390,7 @@ func TestCluster_MultipleInstances_SingleLeader(t *testing.T) {
 // does not clean up stale registration files — only the leader does.
 func TestCluster_FollowerHeartbeat_NoStaleCleanup(t *testing.T) {
 	homeDir := t.TempDir()
+	membersDir := filepath.Join(homeDir, "cluster", "members")
 	log := logger.NewNop()
 	store := newTestStore()
 
@@ -393,20 +398,18 @@ func TestCluster_FollowerHeartbeat_NoStaleCleanup(t *testing.T) {
 	defer cancel()
 
 	// Start leader (smaller ID)
-	leader := New(homeDir, "127.0.0.1", 8080, log, store)
+	leader := New(membersDir, "127.0.0.1", 8080, log, store)
 	if err := leader.Join(ctx); err != nil {
 		t.Fatalf("leader Join failed: %v", err)
 	}
 
 	// Start follower (larger ID)
 	time.Sleep(time.Millisecond)
-	follower := New(homeDir, "127.0.0.1", 8081, log, store)
+	follower := New(membersDir, "127.0.0.1", 8081, log, store)
 	if err := follower.Join(ctx); err != nil {
 		t.Fatalf("follower Join failed: %v", err)
 	}
 	defer follower.Leave()
-
-	membersDir := filepath.Join(homeDir, "cluster", "members")
 
 	// Add a stale file with old mtime
 	staleID := "20200101000000001"

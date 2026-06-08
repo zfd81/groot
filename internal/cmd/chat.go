@@ -97,11 +97,9 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	hlog.SetOutput(io.Discard) // 禁止 Hertz 内部日志输出到 stderr，防止破坏 TUI 渲染
 
 	// Resolve directories
-	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
 	skillsDir := filepath.Join(homeDir, "skills")
 	mcpDir := filepath.Join(homeDir, "mcp")
 
-	os.MkdirAll(memoryDir, 0755)
 	os.MkdirAll(skillsDir, 0755)
 	os.MkdirAll(mcpDir, 0755)
 
@@ -139,8 +137,19 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 		return nil, fmt.Errorf("无法初始化存储后端: %w", err)
 	}
 
+	// 按 storage 类型计算 memory basePath:
+	//   local 模式:绝对路径(${homeDir}/memory),向后兼容
+	//   minio 模式:相对 object-key 前缀("memory")
+	var memoryBaseDir string
+	if cfg.Storage.Minio != nil {
+		memoryBaseDir = "memory"
+	} else {
+		memoryBaseDir = config.ResolvePath(cfg.Memory.Directory, homeDir)
+		os.MkdirAll(memoryBaseDir, 0755)
+	}
+
 	// Memory manager
-	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log, store)
+	memMgr := memory.NewManager(memoryBaseDir, cfg.Memory.RetentionDays, log, store)
 
 	// Runtime state
 	runtimeState := agent.NewRuntimeState()
@@ -165,7 +174,7 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, store, *cfg, log)
 
 	// Create API server (schedule disabled in embed mode)
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)
+	srv := api.NewServer(*cfg, homeDir, memoryBaseDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)
 
 	// Start server in goroutine — hertz.Run() blocks, so we need to start it
 	// in the background and then poll for health.

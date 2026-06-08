@@ -295,10 +295,23 @@ func startServer(homeDir string, port int) {
 		os.Exit(1)
 	}
 
+	// 按 storage 类型计算各模块的运行时 basePath:
+	//   local 模式:绝对路径($GROOT_HOME 下),向后兼容旧部署
+	//   minio 模式:相对 object-key 前缀,跨节点共享同一 bucket 命名空间
+	var memoryBaseDir, scheduleBaseDir, clusterMembersDir string
+	if cfg.Storage.Minio != nil {
+		memoryBaseDir = "memory"
+		scheduleBaseDir = "schedules"
+		clusterMembersDir = "cluster/members"
+	} else {
+		memoryBaseDir = config.ResolvePath(cfg.Memory.Directory, homeDir)
+		scheduleBaseDir = filepath.Join(homeDir, "schedules")
+		clusterMembersDir = filepath.Join(homeDir, "cluster", "members")
+	}
+
 	// Initialize memory manager
-	memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
-	memMgr := memory.NewManager(memoryDir, cfg.Memory.RetentionDays, log, store)
-	log.Info("Memory 初始化完成", zap.String("dir", memoryDir))
+	memMgr := memory.NewManager(memoryBaseDir, cfg.Memory.RetentionDays, log, store)
+	log.Info("Memory 初始化完成", zap.String("dir", memoryBaseDir))
 
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
@@ -333,8 +346,7 @@ func startServer(homeDir string, port int) {
 	var scheduleRunner *schedule.Runner
 
 	// Initialize schedule module (storage and runner needed regardless of leader status)
-	scheduleDir := filepath.Join(homeDir, "schedules")
-	scheduleStorage = schedule.NewStorage(scheduleDir, store, log)
+	scheduleStorage = schedule.NewStorage(scheduleBaseDir, store, log)
 	scheduleRunner = schedule.NewRunner(exec, memMgr, msgLayer, scheduleStorage, log)
 
 	// Define leader task callbacks
@@ -410,7 +422,7 @@ func startServer(homeDir string, port int) {
 	}
 
 	// Initialize cluster
-	clusterInst := cluster.New(homeDir, cfg.Server.Host, cfg.Server.Port, log, store)
+	clusterInst := cluster.New(clusterMembersDir, cfg.Server.Host, cfg.Server.Port, log, store)
 	clusterInst.SetCallbacks(startLeaderTasks, stopLeaderTasks)
 
 	if err := clusterInst.Join(context.Background()); err != nil {
@@ -423,7 +435,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
+	srv := api.NewServer(*cfg, homeDir, memoryBaseDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

@@ -22,14 +22,14 @@ const (
 
 // Cluster manages instance registration, heartbeat, and leader election.
 type Cluster struct {
-	homeDir string
-	host    string
-	port    int
-	regID   string
-	role    string
-	mu      sync.RWMutex
-	log     *logger.Logger
-	store   istorage.Storage
+	membersDir string
+	host       string
+	port       int
+	regID      string
+	role       string
+	mu         sync.RWMutex
+	log        *logger.Logger
+	store      istorage.Storage
 
 	onBecomeLeader func()
 	onLoseLeader   func()
@@ -39,13 +39,18 @@ type Cluster struct {
 }
 
 // New creates a new Cluster instance.
-func New(homeDir, host string, port int, log *logger.Logger, store istorage.Storage) *Cluster {
+//
+// membersDir is the full path (or object-key prefix) of the cluster members
+// directory. The caller is responsible for composing the full path
+// (e.g. "${homeDir}/cluster/members" in local mode, "cluster/members" in
+// minio mode); cluster does not append any sub-path internally.
+func New(membersDir, host string, port int, log *logger.Logger, store istorage.Storage) *Cluster {
 	return &Cluster{
-		homeDir: homeDir,
-		host:    host,
-		port:    port,
-		log:     log,
-		store:   store,
+		membersDir: membersDir,
+		host:       host,
+		port:       port,
+		log:        log,
+		store:      store,
 	}
 }
 
@@ -59,7 +64,7 @@ func (c *Cluster) SetCallbacks(onBecomeLeader, onLoseLeader func()) {
 func (c *Cluster) Join(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	membersDir := filepath.Join(c.homeDir, "cluster", "members")
+	membersDir := c.membersDir
 
 	c.register(membersDir)
 
@@ -79,7 +84,7 @@ func (c *Cluster) Leave() {
 		return
 	}
 
-	membersDir := filepath.Join(c.homeDir, "cluster", "members")
+	membersDir := c.membersDir
 	if err := RemoveFile(c.store, membersDir, c.regID); err != nil {
 		c.log.Error("删除注册文件失败", zap.Error(err))
 	}
