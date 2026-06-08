@@ -30,6 +30,12 @@
     - [1.8.7 受 sync 管理的资源对象白名单](#187-受-sync-管理的资源对象白名单)
     - [1.8.8 push/pull 后的生效方式](#188-pushpull-后的生效方式)
     - [1.8.9 典型运维流程](#189-典型运维流程)
+  - [1.9 已知限制与后续清理项](#19-已知限制与后续清理项)
+    - [1.9.1 Local.Rename 目录覆盖契约偏离](#191-localrename-目录覆盖契约偏离)
+    - [1.9.2 minio mtime 秒级精度边界](#192-minio-mtime-秒级精度边界)
+    - [1.9.3 attachment temp 目录路径耦合 memory](#193-attachment-temp-目录路径耦合-memory)
+    - [1.9.4 main.go / chat.go basePath 分流逻辑重复](#194-maingo--chatgo-basepath-分流逻辑重复)
+    - [1.9.5 Memory.Directory 自定义绝对路径与 attachment temp 解耦](#195-memorydirectory-自定义绝对路径与-attachment-temp-解耦)
 
 ---
 
@@ -439,6 +445,51 @@ push / pull 命令在执行结束时输出提示——若本次同步涉及"需�
 ```
 
 新节点接入是部署运维步骤（创建 env.yaml、首次 pull、启动），不属于本期开发范围。
+
+
+### 1.9 已知限制与后续清理项
+
+本节记录运行时数据接入 Storage 抽象层（Plan A，2026-06-08）实施过程中发现但未在本期修复的偏离与限制。每条都给出场景、风险评估与后续修复方向，作为下次迭代的入口。
+
+#### 1.9.1 Local.Rename 目录覆盖契约偏离
+
+`Storage.Rename` 接口契约写"dst 已存在时按覆盖语义处理（实现负责清理）"，但 [internal/storage/local.go](../../../internal/storage/local.go) 当前直接走 `os.Rename`：POSIX `rename(2)` 对**非空目录**返回 `ENOTEMPTY/EEXIST`，**不覆盖**。`schedule.MoveTask` 在 dst 残留场景下会失败而非覆盖，与接口契约不一致。
+
+- **影响**：`MoveTask` 在重启恢复 / 异常中断后的幂等性受影响。当前 `internal/schedule/storage_test.go::TestMoveTask_DstAlreadyExists` 断言的是"失败 + 两侧数据保留"行为（实测真相），不是接口契约。
+- **风险评估**：低。`schedule.MoveTask` 主流程在写入新 task 前 caller 应保证目标目录不存在；只有异常恢复路径会触发，且失败可重试。
+- **修复方向**：`Local.Rename` 目录场景下先 `os.RemoveAll(dst)` 再 `os.Rename`，与 `Minio.renameDir` 的 Phase 0 清理逻辑对齐。注意需要更新 `TestMoveTask_DstAlreadyExists` 测试断言。
+
+#### 1.9.2 minio mtime 秒级精度边界
+
+`MemberInfo.Mtime` 在 local 模式来自 fs mtime（纳秒精度），minio 模式来自 S3 `LastModified`（秒级精度）。`heartbeatTimeout = 7s` 边界附近理论上可能产生 ±1s 的判活误差。
+
+- **影响**：minio 模式下网络抖动 + 心跳延迟叠加时，可能误判活节点为过期，触发 leader 错误清理。被清节点在下一轮自检 ErrNotFound 时会自动 re-register 自愈。
+- **风险评估**：低。有自愈机制兜底，无数据损坏，无 split-brain。
+- **修复方向**：把 `heartbeatTimeout` 调到 `≥ 2 × heartbeatInterval + 1s` 缓冲，降低 false positive 概率。属于运维参数调优，无需代码改造。
+
+#### 1.9.3 attachment temp 目录路径耦合 memory
+
+`attachment.NewHandler` 的本地暂存目录写在 `${homeDir}/memory/temp/{taskID}/`，这是历史耦合（旧版 attachment 复用 memory 路径），与 attachment 自身职责不直接相关。
+
+- **影响**：可读性下降。新读者会以为 attachment 与 memory 模块有隐式联系。
+- **风险评估**：极低。纯命名问题，行为正确。
+- **修复方向**：单独发一个 commit 把 attachment temp 目录迁到 `${homeDir}/attachments/temp/`，需要附带运维迁移脚本（清理旧 `memory/temp/` 残留）。不要混进其它改动。
+
+#### 1.9.4 main.go / chat.go basePath 分流逻辑重复
+
+`cmd/groot/main.go` 与 `internal/cmd/chat.go` 都有相同的 `if cfg.Storage.Minio != nil { ... } else { ... }` basePath 分流块。当前两个 callsite 内联各自维护。
+
+- **影响**：DRY 违反。如果增加第三个 entry point 或第四个模块的 basePath，重复成本会上升。
+- **风险评估**：低。两份代码都很短（一个 4 行 if/else，一个 11 行），同步成本可接受。
+- **修复方向**：第三个 callsite 出现时再抽 `config.RuntimePaths(cfg, homeDir) struct{ Memory, Schedule, ClusterMembers string }`。当前不抽。
+
+#### 1.9.5 Memory.Directory 自定义绝对路径与 attachment temp 解耦
+
+旧实现下，如果用户把 `cfg.Memory.Directory` 配置为绝对路径（如 `/data/memory`），attachment temp 会跟着落到 `/data/memory/temp/`。Plan A 改造后 attachment temp 始终落在 `${homeDir}/memory/temp/`，与 `cfg.Memory.Directory` 解耦。
+
+- **影响**：行为变化。把 memory 数据放在主目录之外的用户，attachment temp 仍留在主目录。
+- **风险评估**：低。temp 目录是上传 base64 中转，纯临时、最终归宿是 `Storage` 接口下的附件存储；本地 temp 落点对运维监控基本无意义。
+- **修复方向**：与 1.9.3 一并处理（新独立 attachment temp 路径），不再蹭 memory.Directory。如确有用户需要可配置，未来给 attachment 单独加配置项。
 
 
 ---
