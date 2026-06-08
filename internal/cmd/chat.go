@@ -174,7 +174,11 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, store, *cfg, log)
 
 	// Create API server (schedule disabled in embed mode)
-	srv := api.NewServer(*cfg, homeDir, memoryBaseDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)
+	// attachment handler 的 temp 目录是纯本地暂存(base64 上传中转),与 storage
+	// 后端无关。minio 模式下 memoryBaseDir 是 object-key 前缀,不能直接用作本地
+	// temp 路径,这里始终传绝对本地路径。
+	attachmentTempBase := filepath.Join(homeDir, "memory")
+	srv := api.NewServer(*cfg, homeDir, attachmentTempBase, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, nil)
 
 	// Start server in goroutine — hertz.Run() blocks, so we need to start it
 	// in the background and then poll for health.

@@ -311,7 +311,10 @@ func startServer(homeDir string, port int) {
 
 	// Initialize memory manager
 	memMgr := memory.NewManager(memoryBaseDir, cfg.Memory.RetentionDays, log, store)
-	log.Info("Memory 初始化完成", zap.String("dir", memoryBaseDir))
+	// minio 模式下 base 是 object-key 前缀(非本地路径),local 模式下是绝对目录
+	log.Info("Memory 初始化完成",
+		zap.String("base", memoryBaseDir),
+		zap.Bool("minio", cfg.Storage.Minio != nil))
 
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
@@ -435,7 +438,11 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, memoryBaseDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
+	// attachment handler 的 temp 目录是纯本地暂存(base64 上传中转),与 storage
+	// 后端无关。即便 minio 模式下 memoryBaseDir 是相对的 object-key 前缀,
+	// attachment 也必须使用绝对本地路径,避免在进程 cwd 下创建 memory/temp/。
+	attachmentTempBase := filepath.Join(homeDir, "memory")
+	srv := api.NewServer(*cfg, homeDir, attachmentTempBase, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

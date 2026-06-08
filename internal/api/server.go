@@ -28,11 +28,16 @@ type Server struct {
 	logger *logger.Logger
 }
 
-// NewServer creates a new API server
+// NewServer creates a new API server.
+//
+// attachmentTempBase 是 attachment handler 的本地暂存基础目录(必须为绝对路径,
+// 与 storage 后端无关)。attachment handler 会在 {attachmentTempBase}/temp/{taskID}/
+// 下落地 base64 上传的临时文件,这是纯本地文件系统操作,minio 模式下也使用本地
+// 暂存(因此不能传 minio 模式下用作 object-key 前缀的相对路径)。
 func NewServer(
 	cfg config.Config,
 	homeDir string,
-	memoryDir string,
+	attachmentTempBase string,
 	log *logger.Logger,
 	mem *memory.Manager,
 	runtime *agent.RuntimeState,
@@ -55,8 +60,8 @@ func NewServer(
 		server.WithMaxRequestBodySize(maxBodySize),
 	)
 
-	// Create attachment handler (temp directory is fixed at {memoryDir}/temp)
-	attHandler := attachment.NewHandler(cfg.Attachment, memoryDir)
+	// Create attachment handler (temp directory is fixed at {attachmentTempBase}/temp)
+	attHandler := attachment.NewHandler(cfg.Attachment, attachmentTempBase)
 
 	// Create middleware
 	authMW := middleware.NewAuthMiddleware(cfg.Security)
