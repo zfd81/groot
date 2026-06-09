@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/zfd81/groot/internal/storage"
 )
@@ -143,4 +144,53 @@ func TestNewSyncManager_LocalMode_Disabled(t *testing.T) {
 	if err := mgr.Pull(nil); err == nil {
 		t.Error("expected ErrSyncDisabled in local mode")
 	}
+}
+
+// TestSyncManager_Push_AnchorsLocalMtime 验证 push 完成后立刻再 diff,
+// 不会因为远端 LastModified 与本地 mtime 含义不同而被错误判为 Modified。
+// 这正是 spec §1.8.3 锚定语义在生产中起作用的关键场景。
+func TestSyncManager_Push_AnchorsLocalMtime(t *testing.T) {
+	mgr, homeDir, _ := newTestManager(t)
+
+	// 准备文件并把本地 mtime 设到 1h 前,模拟"用户在很久前编辑过这个文件"
+	makeFile(t, homeDir, "GROOT.md", "# v1\n")
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(homeDir, "GROOT.md"), old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	if err := mgr.Push([]string{"GROOT.md"}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	// push 完立即 diff,应当 IsEmpty
+	d, err := mgr.Diff([]string{"GROOT.md"})
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !d.IsEmpty() {
+		t.Errorf("expected IsEmpty after push (mtime anchored), got %+v", d)
+	}
+}
+
+// TestSyncManager_Pull_AnchorsLocalMtime 同上,验证 pull 后 diff 也 IsEmpty。
+func TestSyncManager_Pull_AnchorsLocalMtime(t *testing.T) {
+	mgr, homeDir, remoteDir := newTestManager(t)
+
+	// 远端有文件,本地没有
+	makeFile(t, remoteDir, "GROOT.md", "# v1\n")
+
+	if err := mgr.Pull([]string{"GROOT.md"}); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	// pull 完立即 diff,应当 IsEmpty
+	d, err := mgr.Diff([]string{"GROOT.md"})
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !d.IsEmpty() {
+		t.Errorf("expected IsEmpty after pull (mtime anchored), got %+v", d)
+	}
+	_ = homeDir
 }

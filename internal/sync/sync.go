@@ -188,22 +188,50 @@ func (m *localSyncManager) pullOne(ctx context.Context, rel string) error {
 
 // --- 文件级 push/pull 操作 ---
 
-// pushFile 把本地文件写到远端(通过 Storage 接口原子写)。
+// pushFile 把本地文件写到远端(通过 Storage 接口原子写),
+// 写完后立即 Stat 远端拿到 LastModified,把本地文件 mtime 锚定到该时间。
+//
+// 锚定语义见 spec §1.8.3:本地 mtime 与远端 LastModified 是不同含义的时间锚点
+// (本地是内容修改时间,远端是 object 上传时间,push/pull 完成时刻必然不同),
+// sync 完成后必须把双侧时间对齐到同一锚点(取远端 LastModified),
+// 否则下一次 diff 会把刚刚 sync 过的文件错误判为 Modified。
 func pushFile(ctx context.Context, store istorage.Storage, localPath, remotePath string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return err
+	}
+	if err := store.Write(ctx, remotePath, f, info.Size(), ""); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+
+	// 锚定本地 mtime 到远端 LastModified
+	ri, err := store.Stat(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("stat remote after push: %w", err)
+	}
+	if err := os.Chtimes(localPath, ri.ModTime, ri.ModTime); err != nil {
+		return fmt.Errorf("chtimes after push: %w", err)
+	}
+	return nil
+}
+
+// pullFile 把远端文件写到本地,使用 tmp+rename 保证原子写;
+// rename 完成后立即把本地 mtime 锚定到远端 LastModified
+// (锚定语义同 pushFile)。
+func pullFile(ctx context.Context, store istorage.Storage, remotePath, localPath string) error {
+	// 入口先拿远端元数据,后面用作 mtime 锚点
+	ri, err := store.Stat(ctx, remotePath)
 	if err != nil {
 		return err
 	}
-	return store.Write(ctx, remotePath, f, info.Size(), "")
-}
 
-// pullFile 把远端文件写到本地,使用 tmp+rename 保证原子写。
-func pullFile(ctx context.Context, store istorage.Storage, remotePath, localPath string) error {
 	rc, err := store.Read(ctx, remotePath)
 	if err != nil {
 		return err
@@ -240,7 +268,15 @@ func pullFile(ctx context.Context, store istorage.Storage, remotePath, localPath
 		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, localPath)
+	if err := os.Rename(tmp, localPath); err != nil {
+		return err
+	}
+
+	// 锚定本地 mtime 到远端 LastModified
+	if err := os.Chtimes(localPath, ri.ModTime, ri.ModTime); err != nil {
+		return fmt.Errorf("chtimes after pull: %w", err)
+	}
+	return nil
 }
 
 // cleanTmpFiles 递归删除 homeDir 下 resolved paths 范围内的所有 *.tmp 文件。

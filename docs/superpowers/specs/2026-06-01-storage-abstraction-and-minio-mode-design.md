@@ -285,6 +285,26 @@ mtime 比较允许 ±1s 误差（MinIO LastModified 与本地文件系统 mtime 
 
 本地侧与 MinIO 侧均通过 `Storage.Stat` 获取 size / mtime 后直接比较，不做 hash 计算，不修改 `Storage` 接口与 `FileInfo` 结构体。
 
+**push/pull 完成后必须把本地 mtime 锚定到远端 LastModified。** 这一步是判等算法在生产中工作的关键前提：
+
+- 本地 `os.FileInfo.ModTime()` 含义是"文件内容最后修改时间"
+- MinIO `LastModified` 含义是"object 上传时间"
+- 同一个文件做 push 时，远端 LastModified 必然晚于本地 mtime（差几十秒到几分钟很正常），如果 sync 完不锚定，下一次 diff 就会把刚刚 push 过的文件错误判为 Modified
+
+实现层面：
+- `pushFile` 写完远端后立即 `Storage.Stat` 拿到 LastModified，再 `os.Chtimes(localPath, t, t)` 锚定
+- `pullFile` 入口 `Storage.Stat` 拿到 LastModified，写完本地 rename 之后 `os.Chtimes(localPath, t, t)` 锚定
+
+锚定后两侧 mtime 完全一致（在 1s 容差内），后续 diff 直接判 Same。用户后续编辑文件时本地 mtime 会被 OS 自然更新，diff 检测到偏离锚点 → 判 Modified → 提示用户该 push，符合预期。
+
+**已知副作用：** push/pull 后本地文件的 `ls -l` / `stat` 显示的"修改时间"是上传/拉取时间，不再反映用户最后一次编辑的时间。运维若依赖 mtime 判断"我什么时候改的"会有误差。这是 sync 工具显式表达"该文件已与远端对齐"的正确语义，无规避方案。
+
+**不识别冲突。** 当前判等只能给出"一致 / 不一致"的二元事实，不区分本地改还是远端改，更不能识别"双侧都改"的冲突场景：
+- `groot push` 把所有 Modified 文件无脑推到远端，可能覆盖远端他人改动
+- `groot pull` 反向同理，可能覆盖本地未推送的修改
+
+工具假设的工作模型是"运维在一台节点集中编辑，push 出去，其他节点 pull 接收"的**单写多读**场景，方向由命令名（`push`/`pull`）显式表达。多写多机同时编辑同一资源不在本期支持范围；如未来需要冲突检测，再引入"本地账本"记录上次 sync 时双侧时间，diff 时三方比较（本地当前 vs 账本 vs 远端当前）。
+
 #### 1.8.4 命令设计
 
 ```bash
