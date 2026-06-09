@@ -21,6 +21,11 @@ type SyncManager interface {
 	Push(paths []string) error
 	Pull(paths []string) error
 	Diff(paths []string) (DiffResult, error)
+	// CleanTmpResidue 删除 paths 范围内的所有 *.tmp 文件
+	// (上次 pull 中途崩溃可能留下的残留)。
+	// 调用方应当在 Diff/Pull 之前调用,确保 diff 反映真实状态。
+	// best-effort,失败不返回错误。
+	CleanTmpResidue(paths []string) error
 }
 
 // ErrSyncDisabled 表示当前未启用 minio 模式,sync 命令不可用。
@@ -34,6 +39,7 @@ func (d *disabledSyncManager) Pull(_ []string) error { return ErrSyncDisabled }
 func (d *disabledSyncManager) Diff(_ []string) (DiffResult, error) {
 	return DiffResult{}, ErrSyncDisabled
 }
+func (d *disabledSyncManager) CleanTmpResidue(_ []string) error { return ErrSyncDisabled }
 
 // localSyncManager 是可用的 SyncManager 实现:本地侧走 os.*,远端侧走 Storage 接口。
 type localSyncManager struct {
@@ -277,6 +283,16 @@ func pullFile(ctx context.Context, store istorage.Storage, remotePath, localPath
 		return fmt.Errorf("chtimes after pull: %w", err)
 	}
 	return nil
+}
+
+// CleanTmpResidue 删除 paths 范围内所有 *.tmp 残留(上次 pull 中途崩溃留下)。
+// best-effort:遍历错误吞掉、删除错误吞掉,本步失败不阻塞后续 Diff/Pull。
+func (m *localSyncManager) CleanTmpResidue(paths []string) error {
+	resolved, err := resolveSyncPaths(paths)
+	if err != nil {
+		return err
+	}
+	return cleanTmpFiles(m.homeDir, resolved)
 }
 
 // cleanTmpFiles 递归删除 homeDir 下 resolved paths 范围内的所有 *.tmp 文件。

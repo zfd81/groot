@@ -169,3 +169,24 @@ func TestComputeDiff_RecursiveDir(t *testing.T) {
 		}
 	}
 }
+
+// TestComputeDiff_SkipsTmpFiles 验证 ComputeDiff 跳过 *.tmp 残留文件。
+// 它们是 sync 工具自己用作原子写中转的临时产物,不应被列入 diff
+// (否则在 diff/pull 输出里会展示为"差异",甚至被 push 推到远端)。
+func TestComputeDiff_SkipsTmpFiles(t *testing.T) {
+	localDir := t.TempDir()
+	remoteDir := t.TempDir()
+
+	makeFile(t, localDir, "skills/weather/SKILL.md", "weather\n")
+	makeFile(t, localDir, "skills/weather/SKILL.md.tmp", "stale residue\n")
+	makeFile(t, localDir, "skills/weather/probe.tmp", "another residue\n")
+
+	store := storage.NewLocal()
+	result, err := ComputeDiff(store, localDir, remoteDir, []string{"skills"})
+	if err != nil {
+		t.Fatalf("ComputeDiff: %v", err)
+	}
+	if len(result.Added) != 1 || result.Added[0] != "skills/weather/SKILL.md" {
+		t.Errorf("expected Added=[skills/weather/SKILL.md] (no .tmp), got %+v", result.Added)
+	}
+}

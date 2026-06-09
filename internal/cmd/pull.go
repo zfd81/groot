@@ -68,6 +68,11 @@ func RunPull(flags *PullFlags) error {
 
 	mgr := isync.NewSyncManager(homeDir, "", store)
 
+	// 先清理 *.tmp 残留(上次 pull 中途崩溃可能留下),
+	// 否则后续 Diff 会把它们当成 "本地多余文件" 错误地展示给用户。
+	// CleanTmpResidue 是 best-effort,失败不阻塞 pull 继续。
+	_ = mgr.CleanTmpResidue(flags.Paths)
+
 	fmt.Println("Scanning differences...")
 	diff, err := mgr.Diff(flags.Paths)
 	if err != nil {

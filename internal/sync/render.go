@@ -15,43 +15,43 @@ var needsRestartPaths = []string{
 }
 
 // RenderDiff 把 DiffResult 渲染为可读输出写入 w。
-// direction 为 "push" 或 "pull"。
+// direction 为 "push" / "pull" / "diff" 之一,决定 4 分组的语义:
+//
+//   - DiffResult.Added 永远是"本地有/远端没有"
+//   - DiffResult.Removed 永远是"远端有/本地没有"
+//
+// push 命令:Added → 推到远端(标 Added);Removed → 从远端删(标 Removed)
+// pull 命令:Added → 从本地删(标 "Removed locally");Removed → 拉到本地(标 "Added locally")
+// diff 命令:用中性措辞("Local only" / "Remote only" / "Modified")
 func RenderDiff(w io.Writer, d DiffResult, direction string) {
 	if d.IsEmpty() {
 		fmt.Fprintln(w, "No differences found — already in sync.")
 		return
 	}
 
-	arrow := "HOME → MinIO"
-	verb := "push"
-	if direction == "pull" {
-		arrow = "MinIO → HOME"
-		verb = "pull"
-	}
-	fmt.Fprintf(w, "\nChanges to %s (%s):\n", verb, arrow)
-
-	if len(d.Added) > 0 {
-		fmt.Fprintln(w, "  Added:")
-		for _, f := range d.Added {
-			fmt.Fprintf(w, "    %s\n", f)
-		}
-	}
-	if len(d.Modified) > 0 {
-		fmt.Fprintln(w, "  Modified:")
-		for _, f := range d.Modified {
-			fmt.Fprintf(w, "    %s\n", f)
-		}
-	}
-	if len(d.Removed) > 0 {
-		fmt.Fprintln(w, "  Removed:")
-		for _, f := range d.Removed {
-			fmt.Fprintf(w, "    %s\n", f)
-		}
+	switch direction {
+	case "pull":
+		fmt.Fprintln(w, "\nChanges to pull (MinIO → HOME):")
+		// pull 视角:本地多余 = 要删本地;双侧不同 = 拉远端覆盖本地;远端多余 = 拉到本地
+		printGroup(w, "  Removed locally:", d.Added)
+		printGroup(w, "  Modified locally (overwritten by remote):", d.Modified)
+		printGroup(w, "  Added locally:", d.Removed)
+	case "diff":
+		fmt.Fprintln(w, "\nDifferences (HOME ↔ MinIO):")
+		printGroup(w, "  Local only:", d.Added)
+		printGroup(w, "  Modified (size or mtime differs):", d.Modified)
+		printGroup(w, "  Remote only:", d.Removed)
+	default: // "push"
+		fmt.Fprintln(w, "\nChanges to push (HOME → MinIO):")
+		printGroup(w, "  Added:", d.Added)
+		printGroup(w, "  Modified:", d.Modified)
+		printGroup(w, "  Removed:", d.Removed)
 	}
 
 	// pull 时如果涉及需重启的资源,给出提示
 	if direction == "pull" {
-		allChanged := append(append(d.Added, d.Modified...), d.Removed...)
+		allChanged := append(append([]string(nil), d.Added...), d.Modified...)
+		allChanged = append(allChanged, d.Removed...)
 		if anyNeedsRestart(allChanged) {
 			fmt.Fprintln(w, "\n⚠  Some resources require a service restart to take effect:")
 			fmt.Fprintln(w, "   config.yaml, mcp configs, subagent entry files (agent.md).")
@@ -59,6 +59,16 @@ func RenderDiff(w io.Writer, d DiffResult, direction string) {
 		}
 	}
 	fmt.Fprintln(w)
+}
+
+func printGroup(w io.Writer, header string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintln(w, header)
+	for _, f := range items {
+		fmt.Fprintf(w, "    %s\n", f)
+	}
 }
 
 // anyNeedsRestart 判断变更列表中是否含需重启的资源。

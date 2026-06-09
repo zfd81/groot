@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	istorage "github.com/zfd81/groot/internal/storage"
@@ -101,6 +102,9 @@ type localFile struct {
 // walkLocalFiles 遍历 absPath 下所有文件(递归),返回相对于 base 的路径。
 // 如果 absPath 本身就是文件,只返回一个元素。
 // 如果 absPath 不存在,返回空切片(非错误)。
+//
+// 跳过 *.tmp 文件——它们是 sync 工具自己用作原子写中转的临时产物,
+// 不应被纳入 diff 视野(否则会被错误展示为差异、甚至被 push 推到远端)。
 func walkLocalFiles(absPath, base string) ([]localFile, error) {
 	var files []localFile
 	info, err := os.Stat(absPath)
@@ -111,6 +115,9 @@ func walkLocalFiles(absPath, base string) ([]localFile, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
+		if isTmpFile(info.Name()) {
+			return nil, nil
+		}
 		rel, _ := filepath.Rel(base, absPath)
 		files = append(files, localFile{relPath: filepath.ToSlash(rel), info: info})
 		return files, nil
@@ -122,11 +129,19 @@ func walkLocalFiles(absPath, base string) ([]localFile, error) {
 		if fi.IsDir() {
 			return nil
 		}
+		if isTmpFile(fi.Name()) {
+			return nil
+		}
 		rel, _ := filepath.Rel(base, path)
 		files = append(files, localFile{relPath: filepath.ToSlash(rel), info: fi})
 		return nil
 	})
 	return files, err
+}
+
+// isTmpFile 判断文件名是否是 sync 工具的 *.tmp 中转文件。
+func isTmpFile(name string) bool {
+	return strings.HasSuffix(name, ".tmp")
 }
 
 // --- 远端遍历 ---
