@@ -95,6 +95,15 @@ func main() {
 		case "tail":
 			handleTailCommand(args[1:])
 			return
+		case "push":
+			handlePushCommand(args[1:])
+			return
+		case "pull":
+			handlePullCommand(args[1:])
+			return
+		case "diff":
+			handleDiffCommand(args[1:])
+			return
 		default:
 			fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", command)
 			printHelp()
@@ -167,6 +176,42 @@ func handleTailCommand(args []string) {
 	}
 
 	if err := cmd.RunTail(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func handlePushCommand(args []string) {
+	flags, err := cmd.ParsePushFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+	if err := cmd.RunPush(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func handlePullCommand(args []string) {
+	flags, err := cmd.ParsePullFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+	if err := cmd.RunPull(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleDiffCommand(args []string) {
+	flags, err := cmd.ParseDiffFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+	if err := cmd.RunDiff(flags); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -498,6 +543,9 @@ func printHelp() {
 	fmt.Println("  schedule          管理定时任务（list/inspect/history 等）")
 	fmt.Println("  chat              打开交互式聊天界面")
 	fmt.Println("  tail              实时日志查看")
+	fmt.Println("  push              将本地配置推送到 MinIO（minio 模式）")
+	fmt.Println("  pull              从 MinIO 拉取配置到本地（minio 模式）")
+	fmt.Println("  diff              显示本地与 MinIO 的配置差异（minio 模式）")
 	fmt.Println()
 	fmt.Println("选项:")
 	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
