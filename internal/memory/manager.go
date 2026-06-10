@@ -9,7 +9,6 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/zfd81/groot/internal/logger"
@@ -68,17 +67,9 @@ func (m *Manager) chatPath(sessionID, chatID string) string {
 	return filepath.Join(m.chatsDir(sessionID), chatID+".json")
 }
 
-// AttachmentsDir 返回指定会话的附件目录路径。
-// 工具层（如 internal/agent 内置工具）可调用此方法获取统一的附件目录拼接结果，
-// 避免在多处硬编码 "<memoryDir>/<sessionID>/attachments" 的拼接规则。
-func (m *Manager) AttachmentsDir(sessionID string) string {
-	return filepath.Join(m.sessionDir(sessionID), "attachments")
-}
-
 // CreateSession 创建新会话。
-// 仅写入初始 history.json,所有上层目录(sessionDir / chats / attachments)
-// 由 storage.Write 按需建立——chats 目录将在首次 SaveChatRecord 时创建,
-// attachments 目录将在首次 SaveAttachment 时创建。
+// 仅写入初始 history.json，所有上层目录(sessionDir / chats)
+// 由 storage.Write 按需建立——chats 目录将在首次 SaveChatRecord 时创建。
 func (m *Manager) CreateSession(sessionID string) error {
 	history := &History{
 		SessionID: sessionID,
@@ -306,33 +297,6 @@ func (m *Manager) GetLatestChatRecord(sessionID string) (*ChatRecord, error) {
 	return m.GetChatRecord(sessionID, latest.ChatID)
 }
 
-// SaveAttachment 保存附件
-func (m *Manager) SaveAttachment(sessionID string, filename string, content []byte) (string, error) {
-	// 文件名安全处理
-	safeName := sanitizeFilename(filename)
-
-	fullPath := filepath.Join(m.AttachmentsDir(sessionID), safeName)
-
-	// TODO: 当 SaveAttachment 升级为接受 ctx 参数后，把这里替换为调用方传入的 ctx，
-	// 以支持 minio 模式下的请求级超时与取消。
-	if err := m.storage.Write(
-		context.Background(),
-		fullPath,
-		bytes.NewReader(content),
-		int64(len(content)),
-		"",
-	); err != nil {
-		return "", fmt.Errorf("保存附件失败: %w", err)
-	}
-
-	return fullPath, nil
-}
-
-// GetAttachmentPath 获取附件完整路径
-func (m *Manager) GetAttachmentPath(sessionID string, filename string) string {
-	return filepath.Join(m.AttachmentsDir(sessionID), sanitizeFilename(filename))
-}
-
 // GetSessionMdContent 返回会话规则提示内容。
 //
 // 历史上该方法读取每个 session 目录下的 SESSION.md 物理文件,现在改为直接
@@ -344,22 +308,6 @@ func (m *Manager) GetAttachmentPath(sessionID string, filename string) string {
 func (m *Manager) GetSessionMdContent(sessionID string) (string, error) {
 	_ = sessionID
 	return defaultSessionRules, nil
-}
-
-// sanitizeFilename 文件名安全处理
-func sanitizeFilename(name string) string {
-	name = strings.ReplaceAll(name, "/", "_")
-	name = strings.ReplaceAll(name, "\\", "_")
-	name = strings.ReplaceAll(name, "..", "_")
-
-	// 限制长度
-	if len(name) > 255 {
-		ext := filepath.Ext(name)
-		base := name[:255-len(ext)]
-		name = base + ext
-	}
-
-	return name
 }
 
 // Cleanup 清理过期会话。

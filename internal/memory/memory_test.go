@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -151,54 +150,6 @@ func TestGenerateStepID_Uniqueness(t *testing.T) {
 	}
 }
 
-func TestSanitizeFilename(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "正常文件名",
-			input:    "test.txt",
-			expected: "test.txt",
-		},
-		{
-			name:     "包含斜杠",
-			input:    "path/test.txt",
-			expected: "path_test.txt",
-		},
-		{
-			name:     "包含反斜杠",
-			input:    "path\\test.txt",
-			expected: "path_test.txt",
-		},
-		{
-			name:     "包含双点",
-			input:    "..test.txt",
-			expected: "_test.txt",
-		},
-		{
-			name:     "路径穿越尝试",
-			input:    "../secret.txt",
-			expected: "__secret.txt",
-		},
-		{
-			name:     "过长文件名",
-			input:    strings.Repeat("a", 300) + ".txt",
-			expected: strings.Repeat("a", 251) + ".txt",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizeFilename(tt.input)
-			if result != tt.expected {
-				t.Errorf("sanitizeFilename(%s) = %s, want %s", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
 // Manager 测试
 
 func TestNewManager(t *testing.T) {
@@ -269,7 +220,7 @@ func TestManager_CreateSession_DoesNotWriteSessionMd(t *testing.T) {
 }
 
 // TestManager_GetSessionMdContent_ReturnsConstant 验证 GetSessionMdContent
-// 返回非空规则常量,且与传入的 sessionID 无关(包括不存在的 sessionID)。
+// 返回值与传入的 sessionID 无关(包括不存在的 sessionID)。
 func TestManager_GetSessionMdContent_ReturnsConstant(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
@@ -282,33 +233,11 @@ func TestManager_GetSessionMdContent_ReturnsConstant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetSessionMdContent(%q) 返回 err: %v", sid, err)
 		}
-		if content == "" {
-			t.Errorf("GetSessionMdContent(%q) 返回空内容", sid)
-		}
-		// 必须包含两个内置工具名,确保规则正文被正确嵌入。
-		if !strings.Contains(content, "groot_file_list") || !strings.Contains(content, "groot_file_read") {
-			t.Errorf("GetSessionMdContent(%q) 内容缺失工具名: %s", sid, content)
-		}
 		if i == 0 {
 			first = content
 		} else if content != first {
 			t.Errorf("GetSessionMdContent 应返回与 sessionID 无关的常量,但 %q 与 %q 内容不同", cases[0], sid)
 		}
-	}
-}
-
-// TestManager_AttachmentsDir_Exported 验证导出方法 AttachmentsDir 拼接路径符合
-// "<memoryDir>/<sessionID>/attachments" 规则。
-func TestManager_AttachmentsDir_Exported(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
-
-	sessionID := "test_attachments_dir"
-	got := mgr.AttachmentsDir(sessionID)
-	want := filepath.Join(tmpDir, sessionID, "attachments")
-	if got != want {
-		t.Errorf("AttachmentsDir(%q) = %q, want %q", sessionID, got, want)
 	}
 }
 
@@ -477,32 +406,6 @@ func TestManager_GetChatRecord(t *testing.T) {
 
 	if got.Instruction != "测试指令" {
 		t.Errorf("GetChatRecord().Instruction = %s, want 测试指令", got.Instruction)
-	}
-}
-
-func TestManager_SaveAttachment(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
-
-	sessionID := "test_session_008"
-	mgr.CreateSession(sessionID)
-
-	content := []byte("test file content")
-	path, err := mgr.SaveAttachment(sessionID, "test.txt", content)
-	if err != nil {
-		t.Fatalf("SaveAttachment() 失败: %v", err)
-	}
-
-	// 验证文件存在
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Error("SaveAttachment() 未创建文件")
-	}
-
-	// 验证内容
-	data, _ := os.ReadFile(path)
-	if string(data) != "test file content" {
-		t.Errorf("SaveAttachment() 内容错误: got %s, want test file content", string(data))
 	}
 }
 
@@ -738,118 +641,6 @@ func TestManager_SaveChatRecord_AtomicWrite(t *testing.T) {
 	}
 }
 
-func TestManager_SaveAttachment_WritesViaStorage(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	spy := &spyStorage{Storage: storage.NewLocal()}
-	mgr := NewManager(tmpDir, 7, log, spy)
-
-	sessionID := "test_save_attach_via_storage"
-	if err := mgr.CreateSession(sessionID); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-
-	content := []byte("hello attachment")
-	path, err := mgr.SaveAttachment(sessionID, "report.pdf", content)
-	if err != nil {
-		t.Fatalf("SaveAttachment: %v", err)
-	}
-
-	// 验证 storage.Write 真的被调用
-	if !spy.writeCalled {
-		t.Fatal("storage.Write was not called")
-	}
-	if spy.lastPath != path {
-		t.Errorf("storage.Write path = %q, want %q", spy.lastPath, path)
-	}
-	if spy.lastSize != int64(len(content)) {
-		t.Errorf("storage.Write size = %d, want %d", spy.lastSize, len(content))
-	}
-	if spy.lastCT != "" {
-		t.Errorf("storage.Write contentType = %q, want empty", spy.lastCT)
-	}
-
-	// 同时验证内容确实落盘（spy 透传到了 NewLocal）
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !bytes.Equal(got, content) {
-		t.Fatalf("content mismatch: got %q, want %q", got, content)
-	}
-}
-
-func TestManager_SaveAttachment_AutoCreatesAttachmentsDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
-
-	sessionID := "test_lazy_attach_dir"
-	if err := mgr.CreateSession(sessionID); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-
-	// 验证 CreateSession 后 attachments 目录不存在（懒创建契约）
-	attDir := filepath.Join(tmpDir, sessionID, "attachments")
-	if _, err := os.Stat(attDir); !os.IsNotExist(err) {
-		t.Fatalf("attachments dir should not exist after CreateSession, stat err: %v", err)
-	}
-
-	// SaveAttachment 后应自动创建 attachments 目录并写入文件
-	if _, err := mgr.SaveAttachment(sessionID, "x.txt", []byte("data")); err != nil {
-		t.Fatalf("SaveAttachment: %v", err)
-	}
-	if info, err := os.Stat(attDir); err != nil {
-		t.Fatalf("attachments dir should exist after SaveAttachment, stat err: %v", err)
-	} else if !info.IsDir() {
-		t.Fatal("attachments path should be a directory")
-	}
-}
-
-func TestManager_Cleanup_DeletesAttachmentsViaStorage(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	spy := &spyStorage{Storage: storage.NewLocal()}
-	mgr := NewManager(tmpDir, 1, log, spy) // retention=1
-
-	sessionID := "test_cleanup_attach"
-	if err := mgr.CreateSession(sessionID); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	if _, err := mgr.SaveAttachment(sessionID, "x.txt", []byte("data")); err != nil {
-		t.Fatalf("SaveAttachment: %v", err)
-	}
-
-	// 把 sessionDir 时间往前改 2 天，让它过期
-	sessionDir := filepath.Join(tmpDir, sessionID)
-	old := time.Now().AddDate(0, 0, -2)
-	if err := os.Chtimes(sessionDir, old, old); err != nil {
-		t.Fatalf("Chtimes: %v", err)
-	}
-
-	deleted, err := mgr.Cleanup(context.Background())
-	if err != nil {
-		t.Fatalf("Cleanup: %v", err)
-	}
-	if deleted != 1 {
-		t.Errorf("expected 1 session deleted, got %d", deleted)
-	}
-
-	// 验证 storage.DeleteDir 被调用，且参数是整个 sessionDir(一次性删,
-	// attachments 在 sessionDir 子树内被一并递归清理)
-	if !spy.deleteDirCalled {
-		t.Fatal("storage.DeleteDir was not called during cleanup")
-	}
-	if spy.lastDeleteDirPath != sessionDir {
-		t.Errorf("DeleteDir path = %q, want %q", spy.lastDeleteDirPath, sessionDir)
-	}
-
-	// 元数据也应被删
-	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
-		t.Errorf("sessionDir should not exist after cleanup, stat err: %v", err)
-	}
-}
-
 func TestManager_Cleanup_DeleteDirFailureKeepsSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	log := initTestLogger()
@@ -862,9 +653,6 @@ func TestManager_Cleanup_DeleteDirFailureKeepsSession(t *testing.T) {
 	sessionID := "test_cleanup_failure"
 	if err := mgr.CreateSession(sessionID); err != nil {
 		t.Fatalf("CreateSession: %v", err)
-	}
-	if _, err := mgr.SaveAttachment(sessionID, "x.txt", []byte("data")); err != nil {
-		t.Fatalf("SaveAttachment: %v", err)
 	}
 
 	sessionDir := filepath.Join(tmpDir, sessionID)
@@ -882,15 +670,9 @@ func TestManager_Cleanup_DeleteDirFailureKeepsSession(t *testing.T) {
 		t.Errorf("expected 0 session deleted (skipped due to DeleteDir failure), got %d", deleted)
 	}
 
-	// session 元数据应该仍然存在(DeleteDir 失败语义:既不删元数据也不删附件)
+	// session 元数据应该仍然存在(DeleteDir 失败语义：不删元数据)
 	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
 		t.Error("sessionDir should still exist when DeleteDir fails")
-	}
-
-	// 附件目录也应该仍然存在
-	attDir := filepath.Join(tmpDir, sessionID, "attachments")
-	if _, err := os.Stat(attDir); os.IsNotExist(err) {
-		t.Error("attachments dir should still exist when DeleteDir fails")
 	}
 }
 

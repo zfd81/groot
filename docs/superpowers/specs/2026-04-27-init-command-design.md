@@ -46,10 +46,12 @@ groot tail [选项]         # 实时日志查看（已有）
    - 工作目录根目录
    - `skills/` 子目录
    - `mcp/` 子目录
+   - `subagents/` 子目录
    - `memory/` 子目录
    - `logs/` 子目录
-   - `cluster/members/` 子目录（用于集群管理的成员注册文件存放）
+   - `cluster/members/` 子目录（仅 local 模式有意义；minio 模式下集群目录走 object key 前缀）
 3. 检查并创建配置模板文件 `config.yaml`
+4. 检查并创建基础设施环境配置模板 `env.yaml`（**全注释模板**，启用 MinIO 时取消注释）
 
 **目录/文件检查逻辑**：
 
@@ -65,10 +67,12 @@ groot tail [选项]         # 实时日志查看（已有）
 工作目录 ~/.groot 已存在，跳过创建
 目录 skills 已存在，跳过创建
 目录 mcp 已存在，跳过创建
+目录 subagents 创建成功
 目录 memory 创建成功
 目录 logs 创建成功
 目录 cluster/members 创建成功
 配置文件 config.yaml 已存在，跳过创建
+环境配置 env.yaml 创建成功
 
 初始化完成
 
@@ -77,11 +81,13 @@ groot tail [选项]         # 实时日志查看（已有）
      vim ~/.groot/config.yaml
   2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）
      export OPENAI_API_KEY="your-api-key"
-  3. 启动服务
+  3. （可选）如需启用 MinIO 对象存储，编辑 env.yaml
+     vim ~/.groot/env.yaml
+  4. 启动服务
      groot
 ```
 
-**配置模板内容**：
+**`config.yaml` 模板内容**（不再生成 `storage:` 节，凭据走 env.yaml）：
 
 ```yaml
 # Groot Agent 配置文件
@@ -108,6 +114,28 @@ llm:
 # 其他配置项均有默认值，可按需修改
 # 完整配置说明请参考：https://github.com/zfd81/groot
 ```
+
+**`env.yaml` 模板内容**（由 `config.GenerateEnvTemplate()` 生成，全注释）：
+
+```yaml
+# Groot 基础设施环境配置
+# 存放 MinIO 等外部服务的连接凭据，与业务配置 (config.yaml) 解耦。
+#
+# 默认情况下整个文件为注释，附件等文件存储走本地磁盘（零配置）。
+# 如需启用 MinIO 对象存储，取消下方 minio 块的注释并填入连接信息：
+#   - 删除整个文件 → 回退到本地磁盘存储
+#   - 删除 minio 节（或保持注释）→ 回退到本地磁盘存储
+#   - 完整填写 minio 节 → 启用 MinIO
+
+#minio:
+#  endpoint: localhost:9000          # MinIO 服务地址（host:port）
+#  access_key: ${MINIO_ACCESS_KEY}   # 访问密钥（建议使用环境变量）
+#  secret_key: ${MINIO_SECRET_KEY}   # 密钥（建议使用环境变量）
+#  bucket: groot                     # 存储桶名称
+#  use_ssl: false                    # 是否启用 HTTPS
+```
+
+> 模板使用"先缩进后 #"格式（如 `#  endpoint:`），用户删掉行首 `#` 后 yaml 缩进自动正确。env.yaml 加载机制详见 [存储抽象层设计](2026-06-06-storage-interface-design.md) §1.6 / §1.7。
 
 ### 三、`groot` 启动流程改动
 

@@ -354,9 +354,10 @@ func buildSubAgentEntry(
 //  2. parentModelName   — 父任务运行时 model（编排模式默认）
 //  3. e.LLMCfg.DefaultModel — 配置默认值兜底
 //
-// extraTools 由调用方（call_agent）注入额外的请求级工具——目前主要是
-// groot_file_list / groot_file_read，让通过 call_agent 调度的子 Agent
-// 也能访问当前会话附件。可空。
+// BuildAgentTool 构造子 Agent 工具实例，model 选择优先级：
+//  1. e.AgentMdModel    — agent.md 显式声明（钉死特定模型）
+//  2. parentModelName   — 父任务运行时 model（编排模式默认）
+//  3. e.LLMCfg.DefaultModel — 配置默认值兜底
 //
 // 返回 InvokableTool 供 call_agent.InvokableRun 直接调用。
 func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, extraTools ...tool.BaseTool) (tool.InvokableTool, error) {
@@ -378,8 +379,7 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 		return nil, fmt.Errorf("chat model: %w", err)
 	}
 
-	// 子 Agent 工具集 = MCP 工具 + 主 Agent 透传的内置工具（groot_file_list 等）。
-	// extraTools 在前，与主 Agent 顺序保持一致；MCP 工具列表跟随其后。
+	// 子 Agent 工具集 = MCP 工具 + 调用方透传的额外工具（可空）。
 	tools := append([]tool.BaseTool{}, extraTools...)
 	tools = append(tools, e.MCPManager.GetTools()...)
 

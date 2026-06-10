@@ -106,9 +106,7 @@ Groot 提供 RESTful HTTP API，客户端通过 API 与 AI Agent 交互。核心
 | `round` | int | 轮次编号 |
 | `timestamp` | time | 记录时间戳 |
 | `instruction` | string | 用户指令 |
-| `attachments` | []string | 附件文件名列表 |
 | `result` | string | 执行结果摘要 |
-| `result_attachments` | []string | 结果附件列表 |
 | `status` | string | 执行状态：`completed` / `failed` / `cancelled` |
 | `started_at` | time | 开始时间 |
 | `ended_at` | time | 结束时间 |
@@ -125,9 +123,7 @@ Groot 提供 RESTful HTTP API，客户端通过 API 与 AI Agent 交互。核心
 | `chat_id` | string | 对话 ID |
 | `timestamp` | time | 时间戳 |
 | `instruction` | string | 用户指令 |
-| `attachments` | []string | 附件文件名列表 |
 | `result` | string | 执行结果摘要 |
-| `result_attachments` | []string | 结果附件列表 |
 | `status` | string | 执行状态：`completed` / `failed` / `cancelled` |
 | `duration` | int | 执行耗时（秒） |
 | `steps_count` | int | 步骤数量 |
@@ -221,7 +217,7 @@ POST /chat 请求到达
   │
   ├─ 2. 会话处理（见 3.4）
   │     ├─ 提取 X-Session-ID
-  │     ├─ 新建会话：生成 session_id → 创建会话目录和 SESSION.md
+  │     ├─ 新建会话：生成 session_id → 调用 memory.CreateSession 写一份空 history.json（目录由 storage.Write 按需建立）
   │     └─ 继续会话：检查并发（有活跃对话 → 409）→ 读取历史消息
   │
   ├─ 3. 模型选择（见 3.5）
@@ -494,10 +490,10 @@ data: [DONE]
 
 ```
 data: {"role":"assistant","reasoning_content":"用户要求读取文件..."}
-data: {"role":"assistant","tool_calls":[{"id":"call_001","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]}
+data: {"role":"assistant","tool_calls":[{"id":"call_001","type":"function","function":{"name":"groot_file_read","arguments":"{\"name\":\"report.pdf\"}"}}]}
 data: {"role":"assistant","finish_reason":"tool_calls"}
-data: {"role":"tool","tool_call_id":"call_001","tool_name":"file_read","content":"127.0.0.1 localhost"}
-data: {"role":"assistant","content":"文件内容为：127.0.0.1 localhost"}
+data: {"role":"tool","tool_call_id":"call_001","tool_name":"groot_file_read","content":"...文件文本..."}
+data: {"role":"assistant","content":"文件内容已读取"}
 data: {"role":"assistant","finish_reason":"stop"}
 data: [DONE]
 ```
@@ -507,8 +503,8 @@ data: [DONE]
 ```
 data: {"role":"assistant","tool_calls":[{"id":"call_001",...},{"id":"call_002",...}]}
 data: {"role":"assistant","finish_reason":"tool_calls"}
-data: {"role":"tool","tool_call_id":"call_001","tool_name":"file_read","content":"结果A"}
-data: {"role":"tool","tool_call_id":"call_002","tool_name":"file_read","content":"结果B"}
+data: {"role":"tool","tool_call_id":"call_001","tool_name":"groot_file_read","content":"结果A"}
+data: {"role":"tool","tool_call_id":"call_002","tool_name":"groot_file_read","content":"结果B"}
 data: {"role":"assistant","content":"两个文件已读取..."}
 data: {"role":"assistant","finish_reason":"stop"}
 data: [DONE]
@@ -602,9 +598,7 @@ data: [DONE]
     "round": 4,
     "timestamp": "2026-04-18T10:30:00Z",
     "instruction": "用户指令",
-    "attachments": ["data.csv"],
     "result": "执行结果摘要",
-    "result_attachments": [],
     "status": "completed",
     "started_at": "2026-04-18T10:30:00Z",
     "ended_at": "2026-04-18T10:30:45Z",
@@ -674,9 +668,7 @@ data: [DONE]
         "chat_id": "chat_20260418103000523",
         "timestamp": "2026-04-18T10:00:00Z",
         "instruction": "用户指令",
-        "attachments": ["data.csv"],
         "result": "执行结果",
-        "result_attachments": [],
         "status": "completed",
         "duration": 45,
         "steps_count": 3,

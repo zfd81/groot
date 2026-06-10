@@ -226,10 +226,11 @@ llm:
 
 | 工具类型 | 名称 | 描述 |
 |---------|------|------|
-| Skill | pdf_analyzer | 分析PDF文档并生成摘要 |
+| 内置 | call_agent | 调用指定子 Agent 执行任务（仅主 Agent 编排模式） |
+| 内置 | schedule_* | 8 件套定时任务管理工具（仅主 Agent） |
+| Skill | pdf_analyzer | 分析 PDF 文档并生成摘要 |
 | Skill | code_generator | 根据需求生成代码 |
-| MCP | file_read | 读取文件内容 |
-| MCP | http_get | 发送HTTP GET请求 |
+| MCP | http_get | 发送 HTTP GET 请求（用户配置的 MCP server 提供） |
 
 ### 2.4 目录结构
 
@@ -251,23 +252,25 @@ llm:
 │   ├── disabled/                  # 已禁用任务
 │   └── archive/                   # 已归档任务
 ├── {memoryDir}/                   # 记忆模块目录（可配置位置，默认 memory）
-│   ├── temp/                      # 附件处理临时目录（固定在 memory 目录下）
-│   └── {session_id}/              # 会话目录
-│       ├── SESSION.md              # 会话文件目录提示（LLM 上下文注入）
+│   ├── temp/                      # 附件请求级暂存目录（attachment.NewHandler 始终落 ${homeDir}/memory/temp/）
+│   └── {session_id}/              # 会话目录（local 模式真实目录；minio 模式 object key 前缀）
 │       ├── history.json           # 对话历史（含执行元数据摘要）
-│       ├── attachments/           # 附件目录
+│       ├── attachments/           # 附件目录（落到 storage.Storage）
 │       │   └── {filename}         # 附件文件
 │       └── chats/                 # 详细执行记录目录
 │           └── chat_{timestamp}.json  # 单次对话完整记录
 ├── {logDir}/                      # 日志目录（可配置位置，默认 logs）
 │   └── groot-{date}.log           # 日志文件
+├── env.yaml                       # 节点本地基础设施配置（MinIO 凭据，可选）
 ```
 
 **目录说明：**
-- `skills`、`mcp`、`api` 目录固定在 `{GROOT_HOME}` 下，不可配置
-- `memory` 目录可通过 `memory.directory` 配置，支持相对/绝对路径
-- `temp` 目录固定在 memory 目录下，位置取决于 memory.directory 配置
-- `logs` 目录可通过 `logging.file.directory` 配置，支持相对/绝对路径
+- `skills`、`mcp`、`api`、`subagents` 目录固定在 `{GROOT_HOME}` 下，不可配置
+- `memory` 目录在 local 模式下作为绝对路径前缀；minio 模式下作为 object key 前缀（`memory`），实际数据落在 MinIO bucket
+- `temp` 目录固定为 `${homeDir}/memory/temp/`（与 `cfg.Memory.Directory` 解耦），是请求级 base64 中转，最终归宿是 storage.Storage 下的附件存储
+- `logs` 目录可通过 `logging.file.directory` 配置，支持相对/绝对路径，**永远落本地磁盘**（即便 minio 模式也不上传日志）
+- `env.yaml` 是节点本地配置（含 MinIO 凭据），不参与集群同步；详见 [存储抽象层设计](2026-06-06-storage-interface-design.md) §1.6
+- 不再有 `SESSION.md`：会话规则改为 `//go:embed session_rules.md` 嵌入二进制
 
 ---
 
@@ -345,7 +348,7 @@ llm:
 ├─ 6. 构建 Agent 上下文
 │   ├─ 系统指令（buildSystemInstruction），按序拼接：
 │   │   ├─ 1. GROOT.md（项目规范）
-│   │   ├─ 2. SESSION.md（会话文件目录提示，新会话首轮由 CreateSession 写入）
+│   │   ├─ 2. defaultSessionRules（嵌入二进制的会话规则，通过 GetSessionMdContent 取出）
 │   │   ├─ 3. prompt（用户传入的系统提示词）
 │   │   ├─ 4. Skills 指令
 │   │   └─ 5. 执行规则
@@ -476,9 +479,8 @@ buildUserMessage()
 **附件存储目录结构：**
 
 ```
-{GROOT_HOME}/memory/
+{GROOT_HOME}/memory/                # local 模式；minio 模式下为 object key 前缀
 ├── 20260418103000523_a1b2/     # 会话A
-│   ├── SESSION.md                    # 会话文件目录提示
 │   ├── history.json                 # 对话历史
 │   ├── attachments/                 # 附件目录
 │   │   ├── report.pdf               # 第1轮上传
@@ -486,8 +488,7 @@ buildUserMessage()
 │   │   ├── data.csv                 # 第3轮上传（覆盖第1轮）
 │   │   └── chart.png                # 第3轮上传
 │   └── chats/                       # 详细执行记录
-├── 20260418103500123_b2c3/     # 会话B
-│   ├── SESSION.md
+├── 20260418103500523_b2c3/     # 会话B
 │   ├── history.json
 │   ├── attachments/
 │   │   └── config.json
@@ -496,22 +497,22 @@ buildUserMessage()
 ```
 
 **特点：**
+- 所有目录结构均为逻辑约定，由 `storage.Storage` 接口透明承载（local 模式真实磁盘目录；minio 模式按对象 key 前缀模拟）
 - 附件保存在会话目录下的 `attachments/` 子目录
 - 保留原始文件名，同名文件会覆盖
 - 附件随会话清理而删除（memory 清理任务）
 
-**会话文件目录提示（SESSION.md）：**
+**会话规则注入（defaultSessionRules）：**
 
-新会话创建时，在会话根目录生成 `SESSION.md` 文件，内容：
+会话规则不再写入磁盘 `SESSION.md`，改为以 `//go:embed session_rules.md` 形式嵌入二进制（`internal/memory/session_rules.md`）。
 
-```
-本会话涉及的文件均存放在以下目录：/home/groot/memory/20260418103000523_a1b2/attachments
-如需读取文件内容，请从该目录中查找对应的文件名。
-```
+`memory.Manager.GetSessionMdContent(sessionID)` 实现忽略 sessionID 直接返回该常量。所有会话共享同一份规则。
 
-引擎启动时，`buildSystemInstruction` 读取 SESSION.md 并注入系统指令（位于 GROOT.md 之后、prompt 之前）。LLM 从系统指令获知附件目录位置，结合对话上下文中的文件名，自行构建路径并通过 MCP `file_read` 工具读取。
+引擎启动时，`buildSystemInstruction` 调用 `GetSessionMdContent(sessionID)` 取出规则，注入系统指令（位于 GROOT.md 之后、prompt 之前）。
 
-不再将附件路径拼接进用户消息中。
+LLM 从系统指令获知"使用 `groot_file_list` / `groot_file_read` 内置工具按文件名读取当前会话附件"，无需感知物理路径或后端类型。
+
+> 详细规则正文与改造说明见 [Memory 模块设计](2026-05-11-memory-design.md) §1.10。
 
 **历史消息传递方式：**
 
@@ -797,34 +798,38 @@ Memory 模块负责会话数据的持久化存储。基于文件系统（JSON）
 ```go
 // ActiveChat 活跃对话状态（内存中）
 type ActiveChat struct {
-    SessionID  string        `json:"session_id"`
-    ChatID     string        `json:"chat_id"`
-    Status     string        `json:"status"`      // running
-    Progress   *ChatProgress `json:"progress"`
-    StartTime  time.Time     `json:"start_time"`
-    CancelCh   chan struct{} `json:"-"`           // 取消信号通道
+    SessionID string        `json:"session_id"`
+    ChatID    string        `json:"chat_id"`
+    Status    string        `json:"status"`      // running, cancelled, completed
+    Progress  *ChatProgress `json:"progress"`
+    StartTime time.Time     `json:"start_time"`
 }
 
 // ChatProgress 对话进度
 type ChatProgress struct {
-    CurrentStep    int `json:"current_step"`
-    StepsCompleted int `json:"steps_completed"`
-    Percentage     int `json:"percentage"`
+    CurrentStep    int                `json:"current_step"`
+    StepsCompleted int                `json:"steps_completed"`
+    Percentage     int                `json:"percentage"`
+    SubAgents      []SubAgentProgress `json:"sub_agents,omitempty"`
 }
 ```
 
 #### 4.5.2 接口定义
 
 ```go
-type RuntimeStateManager interface {
-    Register(sessionID, chatID string) (*ActiveChat, error)
-    Get(sessionID string) (*ActiveChat, bool)
-    UpdateProgress(sessionID string, progress *ChatProgress) error
-    Cancel(sessionID string) error
-    Delete(sessionID string)                // 移除活跃状态（对话完成后调用）
-    IsRunning(sessionID string) bool
-    RunningCount() int
+type RuntimeState struct {
+    activeChats sync.Map // session_id -> *ActiveChat
 }
+
+func (r *RuntimeState) Register(sessionID, chatID string) (*ActiveChat, error)
+func (r *RuntimeState) Get(sessionID string) (*ActiveChat, bool)
+func (r *RuntimeState) UpdateProgress(sessionID string, progress *ChatProgress) error
+func (r *RuntimeState) Delete(sessionID string)                // 移除活跃状态（对话完成后调用）
+func (r *RuntimeState) IsRunning(sessionID string) bool
+func (r *RuntimeState) RunningCount() int
+func (r *RuntimeState) SnapshotProgress(sessionID string) *ChatProgress
+func (r *RuntimeState) AddSubAgent(sessionID, name string)
+func (r *RuntimeState) RemoveSubAgent(sessionID, name string)
 ```
 
 **职责边界：**
@@ -836,10 +841,12 @@ RuntimeState 只负责**活跃对话状态管理**（注册、查询、取消、
 | `Register` | 原子注册活跃对话，已存在则返回错误 |
 | `Get` | 获取活跃对话状态 |
 | `UpdateProgress` | 更新执行进度 |
-| `Cancel` | 取消对话（close CancelCh，使用 sync.Once 防 panic） |
+| `SnapshotProgress` | 返回 Progress 的深拷贝，并发安全 |
 | `Delete` | 移除活跃状态（对话完成后清理） |
 | `IsRunning` | 检查会话是否有活跃对话 |
 | `RunningCount` | 返回当前活跃对话总数 |
+| `AddSubAgent` | 标记子 Agent 开始运行 |
+| `RemoveSubAgent` | 从 SubAgents 列表移除子 Agent |
 
 #### 4.5.3 并发控制
 
@@ -871,7 +878,7 @@ POST /chat (sid=xxx):
   │
   ├─ 2. 执行过程
   │     ├─ RuntimeState.UpdateProgress() 更新进度
-  │     └─ DELETE /chat/{sid} → RuntimeState.Cancel() → close(CancelCh)
+  │     └─ 客户端断开 SSE 连接后，HTTP 请求上下文自动取消，Agent 终止执行
   │
   ├─ 3. 执行完成（由 Executor 处理）
   │     ├─ Executor 构建 ChatRecord、Message

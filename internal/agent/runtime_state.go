@@ -47,12 +47,11 @@ type SubAgentProgress struct {
 
 // ChatResult 对话结果
 type ChatResult struct {
-	Status            string
-	Result            string
-	ResultAttachments []string
-	Duration          int
-	Steps             []memory.Step
-	Error             *memory.Error
+	Status   string
+	Result   string
+	Duration int
+	Steps    []memory.Step
+	Error    *memory.Error
 }
 
 // RuntimeState 运行时状态管理器

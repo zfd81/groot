@@ -204,7 +204,6 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	// 10. 处理附件
-	var attachmentNames []string
 	var multimodalContents []agent.MultimodalContent
 	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
 		for _, att := range req.Attachments {
@@ -220,15 +219,6 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 					rc.JSON(400, utils.H{"status": "attachment_decode_error", "message": "附件解码失败: " + att.Name + ", error: " + err.Error()})
 					return
 				}
-
-				// 保存附件
-				_, err = h.memory.SaveAttachment(sessionID, att.Name, content)
-				if err != nil {
-					rc.JSON(500, utils.H{"status": "error", "message": "附件保存失败: " + att.Name})
-					return
-				}
-
-				attachmentNames = append(attachmentNames, att.Name)
 
 				// 构建 MultimodalContent 传递给 LLM
 				mc := agent.MultimodalContent{
@@ -251,19 +241,18 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 11. 构建 Task 对象
 	task := &agent.Task{
-		ID:              chatID,
-		Instruction:     req.Instruction,
-		Prompt:          req.Prompt,
-		Status:          agent.StatusRunning,
-		StartTime:       time.Now(),
-		Steps:           []agent.StepRecord{},
-		Attachments:        attachmentNames,
+		ID:                 chatID,
+		Instruction:        req.Instruction,
+		Prompt:             req.Prompt,
+		Status:             agent.StatusRunning,
+		StartTime:          time.Now(),
+		Steps:              []agent.StepRecord{},
 		MultiModalContents: multimodalContents,
 		Progress:           &agent.ProgressInfo{},
-		Round:           round,
-		HistoryMessages: historyMessages,
-		ModelName:       modelName,
-		AgentName:       requestedAgent,
+		Round:              round,
+		HistoryMessages:    historyMessages,
+		ModelName:          modelName,
+		AgentName:          requestedAgent,
 	}
 	// 12. 设置 SSE 响应头
 	rc.Response.Header.Set("X-Session-ID", sessionID)

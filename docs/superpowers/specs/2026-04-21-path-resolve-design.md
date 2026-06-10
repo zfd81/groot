@@ -7,11 +7,14 @@
 **固定目录：** 位置固定，不可通过配置更改。
 - `skills/` - Skills 定义目录，固定在 `{GROOT_HOME}/skills`
 - `mcp/` - MCP 配置目录，固定在 `{GROOT_HOME}/mcp`
-- `temp/` - 附件处理临时目录，固定在 `{memoryDir}/temp`（位置取决于 memory.directory 配置）
+- `subagents/` - 子 Agent 定义目录，固定在 `{GROOT_HOME}/subagents`
+- `cluster/` - 集群成员目录，固定在 `{GROOT_HOME}/cluster`（minio 模式下走 object key 前缀，由 `Storage.List` 模拟）
+- `temp/` - 附件请求级暂存目录，固定在 `{GROOT_HOME}/memory/temp`（与 `cfg.Memory.Directory` 解耦）
+- `env.yaml` - 节点本地基础设施配置文件，固定为 `{GROOT_HOME}/env.yaml`
 
 **可配置目录：** 支持相对路径和绝对路径配置。
-- `memory/` - 会话记忆目录
-- `logs/` - 日志文件目录
+- `memory/` - 会话记忆目录（minio 模式下作为 object key 前缀生效）
+- `logs/` - 日志文件目录（永远落本地磁盘）
 
 ## 设计方案
 
@@ -21,13 +24,14 @@
 
 | 目录 | 固定位置 | 说明 |
 |------|----------|------|
-| `skills` | `{GROOT_HOME}/skills` | Skills 定义目录 |
-| `mcp` | `{GROOT_HOME}/mcp` | MCP 配置目录 |
-| `temp` | `{memoryDir}/temp` | 附件处理临时目录（固定在 memory 目录下） |
+| `skills` | `{GROOT_HOME}/skills` | 全局 Skills 定义目录 |
+| `mcp` | `{GROOT_HOME}/mcp` | 全局 MCP 配置目录 |
+| `subagents` | `{GROOT_HOME}/subagents` | 子 Agent 定义目录 |
+| `cluster` | `{GROOT_HOME}/cluster` | 集群成员目录（local 模式真实目录；minio 模式 object key 前缀 `cluster/members`） |
+| `temp` | `{GROOT_HOME}/memory/temp` | 附件请求级暂存目录（即便用户把 `memory.directory` 配为绝对路径，temp 仍落 `${homeDir}/memory/temp`） |
+| `env.yaml` | `{GROOT_HOME}/env.yaml` | 基础设施凭据（含 MinIO，可选；不参与集群同步） |
 
-**说明：** temp 目录的位置取决于 memory.directory 配置：
-- 若 memory.directory = "memory"（默认），则 temp = `{GROOT_HOME}/memory/temp`
-- 若 memory.directory = "/data/groot/memory"，则 temp = `/data/groot/memory/temp`
+**说明：** temp 目录与 `memory.directory` 解耦——历史实现下 temp 跟随 `memory.directory` 移动，但 v3.8 之后 attachment Handler 始终用 `${homeDir}/memory/temp` 作为基目录，避免 minio 模式下用户配置造成困惑。已知影响参见 [存储抽象与 MinIO 模式设计](2026-06-01-storage-abstraction-and-minio-mode-design.md) §1.9.5。
 
 ### 2. 可配置目录（支持相对/绝对路径）
 
@@ -35,8 +39,8 @@
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `memory.directory` | `memory` | 会话记忆目录 |
-| `logging.file.directory` | `logs` | 日志文件目录 |
+| `memory.directory` | `memory` | 会话记忆目录（local 模式 = 文件系统路径；minio 模式 = object key 前缀，绝对路径前缀会被 `filepath.Join` 处理） |
+| `logging.file.directory` | `logs` | 日志文件目录（永远本地磁盘） |
 
 **路径解析规则：**
 
@@ -69,22 +73,21 @@ func ResolvePath(path, homeDir string) string {
 
 文件: `internal/config/config.go`
 
-**AttachmentConfig（移除 TempDirectory）：**
+**AttachmentConfig（不含 TempDirectory）：**
 ```go
 type AttachmentConfig struct {
     MaxSize      int      `yaml:"max_size"`
     MaxTotalSize int      `yaml:"max_total_size"`
     MaxCount     int      `yaml:"max_count"`
     AllowedTypes []string `yaml:"allowed_types"`
-    // TempDirectory 已移除，固定为 {memoryDir}/temp
 }
 ```
 
-**SkillsConfig（移除 Directory）：**
+**SkillsConfig（不含 Directory）：**
 ```go
 type SkillsConfig struct {
     HotReload HotReloadConfig `yaml:"hot_reload"`
-    // Directory 已移除，固定为 {GROOT_HOME}/skills
+    // Skills 目录固定为 {GROOT_HOME}/skills
 }
 ```
 
@@ -99,10 +102,17 @@ type SkillsConfig struct {
 // 固定目录路径
 skillsDir := filepath.Join(homeDir, "skills")
 mcpDir := filepath.Join(homeDir, "mcp")
+subAgentsDir := filepath.Join(homeDir, "subagents")
 
-// 可配置目录路径（使用 ResolvePath）
+// 可配置目录路径(使用 ResolvePath)
 memoryDir := config.ResolvePath(cfg.Memory.Directory, homeDir)
 cfg.Logging.File.Directory = config.ResolvePath(cfg.Logging.File.Directory, homeDir)
+
+// minio 模式下:再为运行时模块按对象 key 前缀计算 basePath
+//   memoryBase   = "memory"
+//   scheduleBase = "schedules"
+//   clusterBase  = "cluster/members"
+// 详见 [存储抽象与 MinIO 模式设计](2026-06-01-storage-abstraction-and-minio-mode-design.md) §1.7.1
 ```
 
 ### 6. Attachment Handler
@@ -110,9 +120,9 @@ cfg.Logging.File.Directory = config.ResolvePath(cfg.Logging.File.Directory, home
 文件: `internal/attachment/handler.go`
 
 ```go
-func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
-    // temp 目录固定在 memory 目录下
-    tempDir := filepath.Join(memoryDir, "temp")
+func NewHandler(cfg config.AttachmentConfig, homeDir string) *Handler {
+    // temp 目录固定为 ${homeDir}/memory/temp,与 cfg.Memory.Directory 解耦
+    tempDir := filepath.Join(homeDir, "memory", "temp")
     os.MkdirAll(tempDir, 0755)
     ...
 }
@@ -125,14 +135,17 @@ func NewHandler(cfg config.AttachmentConfig, memoryDir string) *Handler {
 | `internal/config/config.go` | 修改 | 移除 MCPConfig、SkillsConfig.Directory、AttachmentConfig.TempDirectory |
 | `internal/config/defaults.go` | 修改 | 移除相关默认配置值 |
 | `internal/config/loader.go` | 修改 | 移除相关默认填充逻辑 |
-| `internal/attachment/handler.go` | 修改 | NewHandler 参数改为 memoryDir，temp 固定为 memoryDir/temp |
-| `internal/api/server.go` | 修改 | NewServer 增加 memoryDir 参数 |
-| `cmd/groot/main.go` | 修改 | 使用固定路径，移除 TempDirectory 解析 |
+| `internal/config/env.go` | 新增 | 加载 `env.yaml`（MinIO 凭据） |
+| `internal/config/env_template.go` | 新增 | `init` 子命令生成的全注释 env.yaml 模板 |
+| `internal/attachment/handler.go` | 修改 | NewHandler 参数改为 homeDir，temp 固定为 `${homeDir}/memory/temp` |
+| `internal/api/server.go` | 修改 | NewServer 增加 homeDir 参数 |
+| `cmd/groot/main.go` | 修改 | 使用固定路径；按 storage 类型分别拼 memoryBase / scheduleBase / clusterBase |
 | `README.md` | 修改 | 更新目录配置说明 |
 
 ## 设计原因
 
-1. **简化配置：** skills、mcp 目录通常不需要自定义位置，固定路径减少配置复杂度。
+1. **简化配置：** skills、mcp、subagents 目录通常不需要自定义位置，固定路径减少配置复杂度。
 2. **避免错误：** 固定路径避免用户配置错误导致工具加载失败。
-3. **temp 目录归属：** temp 是附件处理的临时目录，逻辑上属于 memory 模块，放在 memory 目录下更合理。
+3. **temp 与 memory 解耦：** 旧设计下 temp 跟随 `memory.directory` 移动；改造后 temp 始终落在 `${homeDir}/memory/temp`，原因：minio 模式下 `memory.directory` 是 object key 前缀（不是本地路径），temp 必须落本地。
 4. **保持灵活性：** memory 和 logs 目录可能需要放在不同存储位置（如 SSD 或网络存储），保留可配置性。
+5. **env.yaml 节点本地化：** 含 MinIO 凭据等基础设施信息，每个节点独立维护，不参与 sync 分发。

@@ -293,10 +293,9 @@ func TestRuntimeState_SnapshotProgress_Nonexistent(t *testing.T) {
 
 func TestChatResult(t *testing.T) {
 	result := &ChatResult{
-		Status:            "completed",
-		Result:            "test result content",
-		ResultAttachments: []string{"file1.txt", "file2.txt"},
-		Duration:          5000,
+		Status:   "completed",
+		Result:   "test result content",
+		Duration: 5000,
 		Steps: []memory.Step{
 			{StepID: "step_001", Type: "tool", Name: "test_tool", Status: "success"},
 		},
@@ -304,10 +303,6 @@ func TestChatResult(t *testing.T) {
 
 	if result.Status != "completed" {
 		t.Errorf("ChatResult.Status = %s, want completed", result.Status)
-	}
-
-	if len(result.ResultAttachments) != 2 {
-		t.Errorf("ChatResult.ResultAttachments length = %d, want 2", len(result.ResultAttachments))
 	}
 
 	if len(result.Steps) != 1 {

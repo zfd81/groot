@@ -12,7 +12,6 @@ import (
 
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/storage"
 )
 
 // CallAgentArgument 工具入参。
@@ -49,17 +48,11 @@ type CallAgentTool struct {
 	maxTaskLen        int
 	maxResultLen      int
 	execTimeout       time.Duration
-	memory       *memory.Manager
-	// runtimeState 用于在子 Agent 运行期间对外暴露 sub_agents 状态
-	// （/chat/status API 读取该字段）。为 nil 时跳过状态记录。
+	memory            *memory.Manager
 	runtimeState      *RuntimeState
 	tokenAccumulators *TokenAccumulators
 	log               *logger.Logger
 	parentRound       int
-	// storage 透传给 BuildAgentTool，让子 Agent 也能挂载内置文件工具
-	// （groot_file_list / groot_file_read），与主 Agent 行为对齐。
-	// 为 nil 时跳过内置工具注入。
-	storage storage.Storage
 }
 
 // CallAgentToolConfig 是 NewCallAgentTool 的命名参数集合。
@@ -75,7 +68,6 @@ type CallAgentToolConfig struct {
 	TokenAccumulators *TokenAccumulators
 	Log               *logger.Logger
 	ParentRound       int
-	Storage           storage.Storage
 }
 
 // NewCallAgentTool 构造一个请求级 CallAgentTool。
@@ -92,7 +84,6 @@ func NewCallAgentTool(cfg CallAgentToolConfig) *CallAgentTool {
 		tokenAccumulators: cfg.TokenAccumulators,
 		log:               cfg.Log,
 		parentRound:       cfg.ParentRound,
-		storage:           cfg.Storage,
 	}
 }
 
@@ -146,17 +137,8 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 
 	// 现场按运行时父 model 构造子 Agent Tool —— 让子 Agent 跟随主 Agent 当前 model。
 	// 详细优先级见 SubAgentEntry.BuildAgentTool 注释。
-	// 同时把 groot_file_list / groot_file_read 注入子 Agent 的 extraTools，
-	// 让子 Agent 也能访问当前会话附件，与主 Agent 行为对齐。
 	parentModel := ParentModelFromContext(ctx)
-	var extraTools []tool.BaseTool
-	if t.storage != nil && t.memory != nil {
-		extraTools = append(extraTools,
-			NewGrootFileListTool(t.storage, t.memory, t.sessionID),
-			NewGrootFileReadTool(t.storage, t.memory, t.sessionID),
-		)
-	}
-	subTool, buildErr := entry.BuildAgentTool(execCtx, parentModel, extraTools...)
+	subTool, buildErr := entry.BuildAgentTool(execCtx, parentModel)
 	if buildErr != nil {
 		return "", fmt.Errorf("build subagent tool: %w", buildErr)
 	}

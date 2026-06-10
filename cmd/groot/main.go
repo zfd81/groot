@@ -384,7 +384,7 @@ func startServer(homeDir string, port int) {
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
 	// Create executor (used by both API server and schedule runner)
-	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, store, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
 
 	// Declare schedule module variables (used by leader callbacks and API server)
 	var sched *scheduler.Scheduler
@@ -483,11 +483,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	// attachment handler 的 temp 目录是纯本地暂存(base64 上传中转),与 storage
-	// 后端无关。即便 minio 模式下 memoryBaseDir 是相对的 object-key 前缀,
-	// attachment 也必须使用绝对本地路径,避免在进程 cwd 下创建 memory/temp/。
-	attachmentTempBase := filepath.Join(homeDir, "memory")
-	srv := api.NewServer(*cfg, homeDir, attachmentTempBase, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

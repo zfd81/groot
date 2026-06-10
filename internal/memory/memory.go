@@ -21,10 +21,6 @@ type Memory interface {
 	GetChatRecord(sessionID string, chatID string) (*ChatRecord, error)
 	GetLatestChatRecord(sessionID string) (*ChatRecord, error)
 
-	// 附件管理
-	SaveAttachment(sessionID string, filename string, content []byte) (string, error)
-	GetAttachmentPath(sessionID string, filename string) string
-
 	// 会话文件目录提示
 	GetSessionMdContent(sessionID string) (string, error)
 

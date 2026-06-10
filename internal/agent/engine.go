@@ -561,13 +561,15 @@ func (e *Engine) buildUserMessage(instruction string, attachments []MultimodalCo
 
 		switch att.Type {
 		case "image":
+			// Detail 故意不设。OpenAI 协议中 detail 是可选字段，
+			// 不传由后端按自身默认行为处理；部分 OpenAI 兼容后端
+			// （如本地 Qwen 推理网关）只接受 low/high，会拒绝 auto。
 			parts = append(parts, schema.MessageInputPart{
 				Type: schema.ChatMessagePartTypeImageURL,
 				Image: &schema.MessageInputImage{
 					MessagePartCommon: schema.MessagePartCommon{
 						URL: toPtr(dataURL),
 					},
-					Detail: schema.ImageURLDetailAuto,
 				},
 			})
 		case "audio":

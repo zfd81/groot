@@ -28,8 +28,8 @@ TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次�
   助手回答内容（Markdown 渲染）...
 
   🤔 Thinking...                                  ← 思考过程（灰色斜体）
-  🔧 调用工具: file_read                          ← 工具/技能调用标签
-     ├─ path = /etc/hosts
+  🔧 调用工具: groot_file_read                    ← 工具/技能调用标签
+     ├─ name = report.pdf
 
   ┌─ 补全浮层（条件显示，叠加在 viewport 底部）────┐
   │  /exit      退出聊天                             │  ← 圆角边框覆盖层

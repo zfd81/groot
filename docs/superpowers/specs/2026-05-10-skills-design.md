@@ -263,7 +263,7 @@ description: "分析PDF文档内容，提取关键信息并生成结构化摘要
 
 ## 执行步骤
 
-1. 使用 file_operations.file_read 工具读取PDF文件
+1. 使用 groot_file_read 内置工具按文件名读取 PDF 附件
 2. 提取文档的关键内容和结构
 3. 根据文档类型生成相应的结构化摘要
 4. 输出结构化的分析结果

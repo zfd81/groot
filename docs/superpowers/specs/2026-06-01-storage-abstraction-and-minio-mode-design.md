@@ -21,15 +21,9 @@
     - [1.7.3 schedule 模块](#173-schedule-模块)
     - [1.7.4 cluster 模块](#174-cluster-模块)
   - [1.8 集群共享配置同步](#18-集群共享配置同步)
-    - [1.8.1 资源对象定义](#181-资源对象定义)
-    - [1.8.2 SyncManager 接口](#182-syncmanager-接口)
-    - [1.8.3 diff 判等算法](#183-diff-判等算法)
-    - [1.8.4 命令设计](#184-命令设计)
-    - [1.8.5 命令默认行为](#185-命令默认行为)
-    - [1.8.6 镜像同步语义与执行顺序](#186-镜像同步语义与执行顺序)
-    - [1.8.7 受 sync 管理的资源对象白名单](#187-受-sync-管理的资源对象白名单)
-    - [1.8.8 push/pull 后的生效方式](#188-pushpull-后的生效方式)
-    - [1.8.9 典型运维流程](#189-典型运维流程)
+    - [1.8.1 minio 模式下的资源生效方式](#181-minio-模式下的资源生效方式)
+    - [1.8.2 典型运维流程](#182-典型运维流程)
+    - [1.8.3 不识别冲突](#183-不识别冲突)
   - [1.9 已知限制与后续清理项](#19-已知限制与后续清理项)
     - [1.9.1 Local.Rename 目录覆盖契约偏离](#191-localrename-目录覆盖契约偏离)
     - [1.9.2 minio mtime 秒级精度边界](#192-minio-mtime-秒级精度边界)
@@ -140,7 +134,7 @@ memory / schedule / cluster 三个模块的持久化操作统一走 `Storage` �
 
 #### 1.7.2 memory 模块
 
-memory 模块把所有文件读写改走 `Storage` 接口，业务层不再持有原子写逻辑：
+memory 模块把所有文件读写改走 `Storage` 接口，业务层不再持有原子写逻辑。详细设计见 [Memory 模块设计](2026-05-11-memory-design.md) §1.7。
 
 | 操作 | 改造前 | 改造后 |
 |------|--------|--------|
@@ -149,16 +143,15 @@ memory 模块把所有文件读写改走 `Storage` 接口，业务层不再持�
 | `GetHistory` | `os.ReadFile` | `storage.Read` |
 | `GetChatRecord` | `os.ReadFile` | `storage.Read` |
 | `ExistsSession` | `os.Stat(history.json)` | `storage.Stat` + `errors.Is(ErrNotFound)` |
-| `ListSessions` | `os.ReadDir(memoryDir)` | `storage.List(memoryDir)` |
+| `ListSessions` | `os.ReadDir(memoryDir)` | `storage.List(memoryDir)`（`listSessionIDs` helper 统一封装） |
 | `CreateSession` | `os.MkdirAll(sessionDir/chatsDir)` | 仅调用 `saveHistory`（`Write` 自动建目录） |
-| `Cleanup`（附件） | 已走 `storage.DeleteDir` | 不变 |
-| `Cleanup`（元数据） | `os.RemoveAll(sessionDir)` | `storage.DeleteDir(sessionDir)`（递归含附件） |
+| `Cleanup` | 分项删 history.json + chats/ + attachments | 单次 `storage.DeleteDir(sessionDir)` 整目录递归删，失败时跳过整个 session 下次重试 |
 
-注：`SaveAttachment` 已在前期接入 `storage.Write`，本期无需改动。
+`Manager` 注入 `storage.Storage` 字段：`NewManager(memoryDir, retentionDays, log, store)`，`store == nil` 时 panic。Manager **不预创建** `memoryDir`（避免 minio 模式下污染 cwd）。
 
 #### 1.7.3 schedule 模块
 
-`schedule.Storage` 结构体由直接操作 `os.*` 改为持有 `storage.Storage` 接口实例：
+`schedule.Storage` 结构体由直接操作 `os.*` 改为持有 `storage.Storage` 接口实例。详细设计见 [定时任务调度系统设计](2026-05-11-schedule-design.md) §1.7。
 
 | 操作 | 改造前 | 改造后 |
 |------|--------|--------|
@@ -168,288 +161,70 @@ memory 模块把所有文件读写改走 `Storage` 接口，业务层不再持�
 | `LoadExecutions` | `os.ReadDir` + `os.ReadFile` | `storage.List` + `storage.Read` |
 | `listTasksIn` | `os.ReadDir` + `os.ReadFile` | `storage.List` + `storage.Read` |
 | `MoveTask` | `os.Rename(srcDir, dstDir)` | `storage.Rename`（minio 走目录级补偿流程，详见 [存储抽象层设计](2026-06-06-storage-interface-design.md) §1.12.2） |
-| `DeleteTask` | `os.RemoveAll` | `storage.DeleteDir` |
-| `EnsureDirs` | `os.MkdirAll` × 3 | local 模式预建 active/disabled/archive 三目录；minio 模式 noop（`Write` 自动建前缀） |
+| `DeleteTask` | `os.RemoveAll` | 先 `storage.Stat` 探测三个状态 → `storage.DeleteDir` |
+| `EnsureDirs` | `os.MkdirAll` × 3 | **已删除**：所有目录由 `storage.Write` 在首次写入时按需建立 |
 | `GetTaskStatus` | `os.Stat` 三连 | `storage.Stat` 三连 |
+
+`NewStorage(baseDir, store, log)`：由调用方在启动期注入 `istorage.Storage` 单例。
 
 #### 1.7.4 cluster 模块
 
-cluster 模块的心跳协调通过 `Storage` 接口读写成员文件：
+cluster 模块的心跳协调通过 `Storage` 接口读写成员文件。详细设计见 [集群管理设计](2026-05-15-cluster-management-design.md)。
 
 | 操作 | 改造前 | 改造后 |
 |------|--------|--------|
-| `WriteRegistration` | `os.WriteFile` | `storage.Write`（内容格式不变：`role\|host:port\|pid`） |
-| `ListMembers` | `os.ReadDir` + `entry.Info().ModTime()` | `storage.List(membersDir)` → 读取 `FileInfo.ModTime` |
-| `RemoveFile` | `os.Remove` | `storage.Delete`（`ErrNotFound` 视为已删除） |
-| `EnsureMembersDir` | `os.MkdirAll` | local 模式预建目录；minio 模式 noop |
-| `heartbeat` 自检（`os.Stat(ownPath)`） | `os.Stat` | `storage.Stat` + `errors.Is(ErrNotFound)` |
+| `WriteRegistration` | `os.WriteFile` | `storage.Write`（内容格式不变：`role\|host:port\|pid`，单文件原子） |
+| `ListMembers` | `os.ReadDir` + `entry.Info().ModTime()` | `storage.List(membersDir)` → 读取 `FileInfo.ModTime`；`ErrNotFound` 视同空切片 |
+| `RemoveFile` | `os.Remove` | `storage.Delete`（`ErrNotFound` 视为已删除，幂等） |
+| `EnsureMembersDir` | `os.MkdirAll` | **已删除**：所有目录由 `storage.Write` 在首次写入时按需建立 |
+| `ReadRegistration` | `os.ReadFile` 解析 role/host/port/pid | **已删除**：选举与心跳只需 ModTime 与 ID，不解析对象内容 |
+| `heartbeat` 自检 | `os.Stat(ownPath)` | `storage.Stat` + `errors.Is(ErrNotFound)`；非 NotFound 错误记 WARN 跳过本轮 |
 
 心跳判活仍以 `FileInfo.ModTime` 为锚——local 模式下是文件系统 mtime，minio 模式下是 MinIO `LastModified`，语义一致；在 ±秒级精度差异内不影响 `heartbeatTimeout = 7s` 的判定。
+
+`Cluster.New(membersDir, host, port, log, store)`：由调用方拼好 `membersDir` 后注入，cluster 包不再做 `GROOT_HOME` 拼接。
 
 
 ### 1.8 集群共享配置同步
 
-minio 模式下，集群共享配置通过 `groot push/pull/diff` 命令在本地 HOME 与 MinIO 之间同步。业务运行时仍直接读本地 HOME 文件。
+minio 模式下，集群共享配置（`config.yaml` / `skills/` / `subagents/` / `mcp/` / `GROOT.md`）通过 `groot push` / `groot pull` / `groot diff` 命令在本地 HOME 与 MinIO 之间显式同步。业务运行时仍直接读本地 HOME 文件。
 
-#### 1.8.1 资源对象定义
+sync 模块是独立的功能模块，不在本 spec 描述范围。详细设计见 [sync 模块设计](2026-06-08-sync-design.md)，包括：
 
-sync 操作的最小单位是"资源对象"。不同类型的资源定义不同的资源对象：
+- 同步资源白名单与禁止操作（§1.2 / §1.3）
+- SyncManager 接口（含 `CleanTmpResidue` best-effort 清理）（§1.4）
+- DiffResult 语义（双侧锚定 "本地 vs 远端"，命令层重新解释）（§1.5）
+- ComputeDiff 算法（size + mtime + 1s 容差，`*.tmp` 全链路过滤）（§1.6）
+- push 流程与 mtime 锚定到远端 LastModified（§1.8）
+- pull 的 Phase A → Phase B 顺序保证（§1.9）
+- push / pull / diff 三种渲染输出（§1.10）
+- 重启提示判定（§1.10.5，仅 pull 输出）
+- CLI 接口（含 `-y/--yes`）（§1.12）
+- 安全约束（路径遍历防护、skill 目录原子性）（§1.14）
 
-| 资源类型 | 资源对象 | 说明 |
-|---------|---------|------|
-| config.yaml | 文件本身 | 集群共享主配置文件 |
-| GROOT.md | 文件本身 | 系统指令文件 |
-| skills | skill 目录 | 不支持单独操作 SKILL.md，必须操作整个目录 |
-| mcp | 单个 JSON 文件 | mcp 配置文件是独立资源对象 |
-| subagents | 子 Agent 目录 | 递归推送：含 agent.md、skills/ 下所有 skill 目录、mcp/ 下所有 JSON 文件 |
-| subagents/{name}/agent.md | 单个 Markdown 文件 | 子 Agent 定义文件，可单独操作 |
-| subagents/{name}/skills | skill 目录 | 与全局 skills 规则一致：必须操作整个目录 |
-| subagents/{name}/mcp | 单个 JSON 文件 | 与全局 mcp 规则一致：独立资源对象 |
+本 spec 与 sync spec 的职责划分：
 
-**特殊资源对象：`subagents/{name}/agent.md`**
+- **本 spec**：从存储抽象视角说明"哪些资源参与 sync、minio 模式启用 sync 的前提条件、运维场景"
+- **sync spec**：sync 模块自身的功能、接口、命令、错误处理细节
 
-子 Agent 的定义文件是独立的文件级资源对象，可以单独 push/pull：
-
-```bash
-groot push subagents/db-agent/agent.md  # 只推送定义文件
-groot push subagents/db-agent           # 推送整个子 Agent（递归：含 agent.md、skills/、mcp/）
-```
-
-**资源对象层级结构**：
-
-```
-config.yaml (文件)
-GROOT.md (文件)
-├─ skills/ (类别)
-│  └─ weather/ (目录资源对象)
-│     └─ SKILL.md (非资源对象，随目录同步)
-├─ mcp/ (类别)
-│  └─ database.json (文件资源对象)
-└─ subagents/ (类别)
-   └─ db-agent/ (目录资源对象)
-      ├─ agent.md (文件资源对象，可单独操作)
-      ├─ skills/ (子类别)
-      │  └─ weather/ (目录资源对象)
-      │     └─ SKILL.md (非资源对象)
-      └─ mcp/ (子类别)
-         └─ database.json (文件资源对象)
-```
-
-**禁止操作**：
-
-- ❌ `groot push skills/weather/SKILL.md` — 必须操作 `skills/weather/` 目录
-- ❌ `groot push subagents/db-agent/skills/sql/SKILL.md` — 必须操作 `subagents/db-agent/skills/sql/` 目录
-- ❌ `groot push env.yaml` — env.yaml 不在 sync 白名单，命令拒绝（含 MinIO 凭据，节点本地）
-
-**目录递归规则**：
-
-- 目录资源对象：`groot push subagents/db-agent` 递归推送该子 Agent 下所有可 sync 资源
-- 类别目录：`groot push subagents/db-agent/skills` 递归推送该目录下所有 skill 目录
-- 文件资源对象：`groot push subagents/db-agent/agent.md` 只推送这一个文件
-- 递归深度根据资源对象层级自然终止，无需手动指定深度参数
-
-#### 1.8.2 SyncManager 接口
-
-```go
-// internal/sync/sync.go
-
-type SyncManager interface {
-    Push(paths []string) error                        // HOME → MinIO
-    Pull(paths []string) error                        // MinIO → HOME
-    Diff(paths []string) (DiffResult, error)          // 显示差异，不修改
-}
-
-type DiffResult struct {
-    Added    []string   // 本地有，远端没有
-    Modified []string   // 本地和远端不同
-    Removed  []string   // 远端有，本地没有
-    Same     []string   // 一致
-}
-```
-
-local 模式下 `SyncManager` 不可用，命令提示"未启用 minio 模式"。
-
-**实现分工**：`internal/sync/` 包内同时操作"本地 HOME"与"远端 MinIO"两侧。本地侧直接走 `os.*`（HOME 永远是本地文件系统，不会切到别的存储后端，无抽象需要）；远端侧通过 `Storage`（minio 实现的接口实例）操作 MinIO，**不直接 import minio-go**——保证 sync 模块与 storage 实现的解耦。
-
-#### 1.8.3 diff 判等算法
-
-push/pull 在执行前都要先扫描双边差异。判等采用 **size + mtime** 双字段比较：
-
-```
-- 双边 size 不同 → 直接判定 Modified
-- size 相同，mtime 不同 → 判定 Modified
-- size 与 mtime 均相同 → 判定 Same
-```
-
-mtime 比较允许 ±1s 误差（MinIO LastModified 与本地文件系统 mtime 精度差异）。
-
-本地侧与 MinIO 侧均通过 `Storage.Stat` 获取 size / mtime 后直接比较，不做 hash 计算，不修改 `Storage` 接口与 `FileInfo` 结构体。
-
-**push/pull 完成后必须把本地 mtime 锚定到远端 LastModified。** 这一步是判等算法在生产中工作的关键前提：
-
-- 本地 `os.FileInfo.ModTime()` 含义是"文件内容最后修改时间"
-- MinIO `LastModified` 含义是"object 上传时间"
-- 同一个文件做 push 时，远端 LastModified 必然晚于本地 mtime（差几十秒到几分钟很正常），如果 sync 完不锚定，下一次 diff 就会把刚刚 push 过的文件错误判为 Modified
-
-实现层面：
-- `pushFile` 写完远端后立即 `Storage.Stat` 拿到 LastModified，再 `os.Chtimes(localPath, t, t)` 锚定
-- `pullFile` 入口 `Storage.Stat` 拿到 LastModified，写完本地 rename 之后 `os.Chtimes(localPath, t, t)` 锚定
-
-锚定后两侧 mtime 完全一致（在 1s 容差内），后续 diff 直接判 Same。用户后续编辑文件时本地 mtime 会被 OS 自然更新，diff 检测到偏离锚点 → 判 Modified → 提示用户该 push，符合预期。
-
-**已知副作用：** push/pull 后本地文件的 `ls -l` / `stat` 显示的"修改时间"是上传/拉取时间，不再反映用户最后一次编辑的时间。运维若依赖 mtime 判断"我什么时候改的"会有误差。这是 sync 工具显式表达"该文件已与远端对齐"的正确语义，无规避方案。
-
-**不识别冲突。** 当前判等只能给出"一致 / 不一致"的二元事实，不区分本地改还是远端改，更不能识别"双侧都改"的冲突场景：
-- `groot push` 把所有 Modified 文件无脑推到远端，可能覆盖远端他人改动
-- `groot pull` 反向同理，可能覆盖本地未推送的修改
-
-工具假设的工作模型是"运维在一台节点集中编辑，push 出去，其他节点 pull 接收"的**单写多读**场景，方向由命令名（`push`/`pull`）显式表达。多写多机同时编辑同一资源不在本期支持范围；如未来需要冲突检测，再引入"本地账本"记录上次 sync 时双侧时间，diff 时三方比较（本地当前 vs 账本 vs 远端当前）。
-
-#### 1.8.4 命令设计
-
-```bash
-# 显示本地和 MinIO 差异（只读，不修改）
-groot diff [path...]
-
-# 推送本地到 MinIO
-groot push [path...]
-groot push                                    # 默认推送所有受 sync 管理的资源
-groot push config.yaml                        # 推送主配置文件
-groot push skills                             # 推送整个 skills/
-groot push skills/weather                     # 推送单个 skill 目录
-groot push subagents                          # 推送整个 subagents/
-groot push subagents/db-agent                 # 推送单个子 Agent（递归）
-groot push subagents/db-agent/agent.md        # 只推送定义文件
-groot push subagents/db-agent/skills          # 推送该子 Agent 的所有 skills（递归）
-groot push subagents/db-agent/skills/weather  # 推送该子 Agent 的单个 skill
-groot push mcp                                # 推送整个 mcp/
-groot push mcp/database.json                  # 推送单个 mcp 配置
-groot push GROOT.md                           # 推送系统指令文件
-groot push skills subagents mcp               # 推送多个类别
-
-# 从 MinIO 拉取到本地（参数同 push）
-groot pull [path...]
-
-# 保留现有命令
-groot status                                  # 查看运行实例状态（与 sync 无关）
-groot skill install/uninstall/list            # 仅操作本地 HOME
-```
-
-**命令名说明**：现有 `groot status` 已用于"运行实例状态查询"，不与 sync 复用。集群共享配置的 diff 使用独立动词 `groot diff`，语义明确、无歧义。
-
-#### 1.8.5 命令默认行为
-
-```
-1. 扫描差异（本地 vs MinIO）
-2. 显示完整 diff：
-   - Added: [资源对象列表]
-   - Modified: [资源对象列表]
-   - Removed: [资源对象列表]
-3. 提示：Continue? (y/n)
-4. 等待用户输入
-   - y → 执行同步
-   - n 或 Ctrl+C → 取消
-```
-
-**交互示例**：
-
-```bash
-$ groot push skills
-
-Scanning differences...
-
-Changes to push (HOME → MinIO):
-  Added:
-    skills/weather/SKILL.md
-    skills/weather/handler.go
-  Modified:
-    skills/translator/SKILL.md
-  Removed:
-    skills/deprecated/old.md
-
-Continue? (y/n): _
-```
-
-#### 1.8.6 镜像同步语义与执行顺序
-
-**同步语义**：
-
-```
-push:  HOME → MinIO
-  - 本地新增 → MinIO 新增
-  - 本地修改 → MinIO 覆盖
-  - 本地删除 → MinIO 删除（镜像）
-
-pull:  MinIO → HOME
-  - MinIO 新增 → HOME 新增
-  - MinIO 修改 → HOME 覆盖
-  - MinIO 删除 → HOME 删除（镜像）
-```
-
-镜像同步保证删除操作能传播，不留"幽灵文件"。
-
-**push 执行策略**：逐资源对象原子。单次命令对每个资源对象的操作（新增 / 修改 / 删除）独立提交。多资源对象之间不保证整体事务——先成功的已写入，失败的资源对象在 diff 输出中标识，重新执行 push 即可补齐。MinIO 不支持跨 object 事务，这是 S3 协议的客观限制。
-
-**pull 执行策略**：先写后删 + 单文件原子。
-
-```
-Phase A: 写入所有"新增"和"修改"的本地文件
-  对每个目标文件：
-    1. 写到 ${目标路径}.tmp（同目录，保证 rename 在同文件系统内原子）
-    2. fsync
-    3. rename 到目标路径
-  Phase A 中途失败：已写入的部分保留为完整内容；未写入的本地文件保持原样
-  → 业务读取得到的要么是旧版本、要么是新版本，不会读到半成品
-
-Phase B: 删除所有"远端已不存在"的本地文件
-  仅在 Phase A 全部成功后才执行
-  Phase B 中途失败：已删的不可逆，未删的下次 pull 自动补齐
-```
-
-**严格遵守 Phase A → Phase B 顺序**：先删后写的顺序在中途崩溃时会同时丢失被删文件和未写完的新文件——既丢已 pull 的内容、又没拿到新内容；先写后删保证任意中断点本地都至少有一份完整内容（可能是旧版本，下次 pull 收敛即可）。
-
-**pull 启动时的 tmp 残留清理**：上次 pull Phase A 中途崩溃可能留下 `*.tmp` 文件。pull 命令在扫描差异**之前**先递归遍历目标目录，删除所有名为 `*.tmp` 的文件，确保新一轮 pull 从干净状态开始。
-
-**关于 sync 路径下的文件管控**：sync 工具对受 sync 管理的路径（白名单内）拥有完整管控权——pull 启动时清理 `*.tmp`、push 镜像同步删除"远端不存在的本地文件"，都会在没有提示的情况下移除文件。**用户不应在白名单内的目录下放置任何与同步无关的文件**，尤其不应放置以 `.tmp` 结尾的文件，否则会在每次 pull 启动时被清理。这一约束适用于 `skills/`、`subagents/`、`mcp/`、`config.yaml`、`GROOT.md` 全部 sync 范围。
-
-| 保证维度 | push | pull |
-|---------|------|------|
-| 整体原子（一次命令所有变更同生死） | ❌ MinIO 不支持 | ❌ 多文件之间不原子 |
-| 单文件原子（单个文件写到一半被中断不会留半成品） | ✅ MinIO PUT 原子 | ✅ rename 系统调用 |
-| 失败可恢复 | ✅ 重新执行 push | ✅ 重新执行 pull（启动时清 tmp，先写后删保证不丢内容） |
-
-#### 1.8.7 受 sync 管理的资源对象白名单
-
-```go
-var SyncableResourceRoots = []string{
-    "config.yaml",
-    "skills",
-    "subagents",
-    "mcp",
-    "GROOT.md",
-}
-```
-
-push / pull 仅处理白名单内的资源对象。`env.yaml` **不在白名单**——它属于节点本地配置，含 MinIO 凭据，每个节点独立维护，是 push/pull 自身的前置条件，无法靠 sync 自身分发。`memory/` `schedules/` `cluster/` 也不在白名单——它们是运行时数据，由 `Storage` 接口直连 MinIO，不需要 sync。
-
-#### 1.8.8 push/pull 后的生效方式
+#### 1.8.1 minio 模式下的资源生效方式
 
 | 资源对象 | pull 后是否立即生效 | 说明 |
 |---------|------------------|------|
 | `config.yaml` | ❌ 需重启 | 主配置在启动期加载，运行时不重读 |
-| `skills/<skill>/` | ✅ 立即生效 | eino Backend 无缓存，pull 写入后下次读取自动获取 |
-| `subagents/<name>/skills/<skill>/` | ✅ 立即生效 | 子 Agent 实例运行时读 skill 内容，与全局 skills 同样走 eino Backend 无缓存路径 |
+| `skills/<skill>/` | ✅ 立即生效 | eino Backend 无缓存，下次执行自动获取 |
+| `subagents/<name>/skills/<skill>/` | ✅ 立即生效 | 子 Agent 实例运行时按需读 skill 内容 |
 | `GROOT.md` | ✅ 立即生效 | grootmd 模块按需读取 |
 | `mcp/<server>.json` | ❌ 需重启 | MCP 配置不支持热加载 |
-| `subagents/<name>/agent.md` | ❌ 需重启 | 子 Agent 入口在启动期固化进 entry.Tool |
+| `subagents/<name>/agent.md` | ❌ 需重启 | 子 Agent 入口在启动期注册 |
 | `subagents/<name>/mcp/<server>.json` | ❌ 需重启 | 同上 |
-| `subagents/<name>/`（目录新增/删除） | ❌ 需重启 | 子 Agent 注册仅在启动期扫描入口 |
+| `subagents/<name>/`（目录新增/删除） | ❌ 需重启 | 子 Agent 注册仅在启动期扫描 |
 
-**关于 skills 的热加载差异**：所有 skills（主 Agent 与子 Agent 共用）的 SKILL.md 与脚本内容均通过 eino Backend 在运行期按需读取，无缓存层，pull 后下次执行自动可见新内容。子 Agent 的 **入口**（agent.md / mcp 配置）则在启动期固化进 `entry.Tool` 注册表，pull 后必须重启才能感知。两者是不同生命周期的资源，分别对待。
+`groot pull` 在执行结束时输出"需重启"提示——若本次同步涉及上表中"❌ 需重启"类资源，提示用户手动重启服务。`groot push` 与 `groot diff` 不输出此提示。
 
-push / pull 命令在执行结束时输出提示——若本次同步涉及"需重启"类资源，提示用户手动重启服务。
+具体判定算法见 [sync 模块设计](2026-06-08-sync-design.md) §1.10.5。
 
-#### 1.8.9 典型运维流程
+#### 1.8.2 典型运维流程
 
 ```
 单主机多实例（同 HOME）：
@@ -465,6 +240,15 @@ push / pull 命令在执行结束时输出提示——若本次同步涉及"需�
 ```
 
 新节点接入是部署运维步骤（创建 env.yaml、首次 pull、启动），不属于本期开发范围。
+
+#### 1.8.3 不识别冲突
+
+当前判等只能给出"一致 / 不一致"的二元事实，不区分本地改还是远端改，更不能识别"双侧都改"的冲突场景：
+
+- `groot push` 把所有 Modified 文件推到远端，可能覆盖远端他人改动
+- `groot pull` 反向同理，可能覆盖本地未推送的修改
+
+工具假设的工作模型是"运维在一台节点集中编辑，push 出去，其他节点 pull 接收"的**单写多读**场景，方向由命令名（`push`/`pull`）显式表达。多写多机同时编辑同一资源不在本期支持范围；如未来需要冲突检测，再引入"本地账本"记录上次 sync 时双侧时间，diff 时三方比较（本地当前 vs 账本 vs 远端当前）。
 
 
 ### 1.9 已知限制与后续清理项
