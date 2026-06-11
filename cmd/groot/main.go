@@ -25,15 +25,17 @@ import (
 	"github.com/zfd81/groot/internal/cluster"
 	"github.com/zfd81/groot/internal/cmd"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/filesystem"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/message/senders"
+	"github.com/zfd81/groot/internal/repo"
+	"github.com/zfd81/groot/internal/repo/repofactory"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
-	"github.com/zfd81/groot/internal/storage"
 )
 
 var (
@@ -181,13 +183,34 @@ func handleTailCommand(args []string) {
 	}
 }
 
+// openSyncRepo 为 push/pull/diff 子命令加载配置并打开数据库,返回 ResourceRepo。
+// SQLite 模式下 ResourceRepo 使用本地文件系统实现,此时 sync 命令会因
+// NewSyncManager 内的 disabledSyncManager 返回 ErrSyncDisabled。
+func openSyncRepo(homeDir string) repo.ResourceRepo {
+	cfg, err := config.Load(homeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载配置失败: %s\n", err)
+		os.Exit(1)
+	}
+	sqlxDB, dbDialect, err := db.Open(cfg.Database, homeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化数据库失败: %s\n", err)
+		os.Exit(1)
+	}
+	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
+	// Note: sqlxDB is intentionally not closed here; the process exits after the command.
+	return repos.Resource
+}
+
 func handlePushCommand(args []string) {
 	flags, err := cmd.ParsePushFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
-	if err := cmd.RunPush(flags); err != nil {
+	homeDir := cmd.GetDefaultHome()
+	r := openSyncRepo(homeDir)
+	if err := cmd.RunPush(flags, r); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -199,7 +222,9 @@ func handlePullCommand(args []string) {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
-	if err := cmd.RunPull(flags); err != nil {
+	homeDir := cmd.GetDefaultHome()
+	r := openSyncRepo(homeDir)
+	if err := cmd.RunPull(flags, r); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -211,7 +236,9 @@ func handleDiffCommand(args []string) {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
-	if err := cmd.RunDiff(flags); err != nil {
+	homeDir := cmd.GetDefaultHome()
+	r := openSyncRepo(homeDir)
+	if err := cmd.RunDiff(flags, r); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -333,33 +360,19 @@ func startServer(homeDir string, port int) {
 	}
 	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()), zap.String("dir", mcpDir))
 
-	// Initialize storage backend
-	store, err := storage.New(cfg.Storage)
+	// Initialize database and repositories
+	sqlxDB, dbDialect, err := db.Open(cfg.Database, homeDir)
 	if err != nil {
-		log.Error("无法初始化存储后端", zap.Error(err))
+		log.Error("无法初始化数据库", zap.Error(err))
 		os.Exit(1)
 	}
-
-	// 按 storage 类型计算各模块的运行时 basePath:
-	//   local 模式:绝对路径($GROOT_HOME 下),向后兼容旧部署
-	//   minio 模式:相对 object-key 前缀,跨节点共享同一 bucket 命名空间
-	var memoryBaseDir, scheduleBaseDir, clusterMembersDir string
-	if cfg.Storage.Minio != nil {
-		memoryBaseDir = "memory"
-		scheduleBaseDir = "schedules"
-		clusterMembersDir = "cluster/members"
-	} else {
-		memoryBaseDir = config.ResolvePath(cfg.Memory.Directory, homeDir)
-		scheduleBaseDir = filepath.Join(homeDir, "schedules")
-		clusterMembersDir = filepath.Join(homeDir, "cluster", "members")
-	}
+	defer sqlxDB.Close()
+	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
+	log.Info("数据库初始化完成", zap.Int("dialect", int(dbDialect)))
 
 	// Initialize memory manager
-	memMgr := memory.NewManager(memoryBaseDir, cfg.Memory.RetentionDays, log, store)
-	// minio 模式下 base 是 object-key 前缀(非本地路径),local 模式下是绝对目录
-	log.Info("Memory 初始化完成",
-		zap.String("base", memoryBaseDir),
-		zap.Bool("minio", cfg.Storage.Minio != nil))
+	memMgr := memory.NewManager(cfg.Memory.RetentionDays, log, repos.Memory)
+	log.Info("Memory 初始化完成")
 
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
@@ -394,7 +407,7 @@ func startServer(homeDir string, port int) {
 	var scheduleRunner *schedule.Runner
 
 	// Initialize schedule module (storage and runner needed regardless of leader status)
-	scheduleStorage = schedule.NewStorage(scheduleBaseDir, store, log)
+	scheduleStorage = schedule.NewStorage(repos.Schedule, log)
 	scheduleRunner = schedule.NewRunner(exec, memMgr, msgLayer, scheduleStorage, log)
 
 	// Define leader task callbacks
@@ -470,7 +483,7 @@ func startServer(homeDir string, port int) {
 	}
 
 	// Initialize cluster
-	clusterInst := cluster.New(clusterMembersDir, cfg.Server.Host, cfg.Server.Port, log, store)
+	clusterInst := cluster.New(cfg.Server.Host, cfg.Server.Port, log, repos.Member)
 	clusterInst.SetCallbacks(startLeaderTasks, stopLeaderTasks)
 
 	if err := clusterInst.Join(context.Background()); err != nil {

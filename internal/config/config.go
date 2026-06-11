@@ -14,12 +14,12 @@ type Config struct {
 	Memory     MemoryConfig     `yaml:"memory"`
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
-	Schedule  ScheduleConfig  `yaml:"schedule"`
-	Message   MessageConfig   `yaml:"message"`
-	SubAgent  SubAgentConfig  `yaml:"subagent"`
-	Security  SecurityConfig  `yaml:"security"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Storage   StorageConfig   `yaml:"storage"`
+	Schedule   ScheduleConfig   `yaml:"schedule"`
+	Message    MessageConfig    `yaml:"message"`
+	SubAgent   SubAgentConfig   `yaml:"subagent"`
+	Security   SecurityConfig   `yaml:"security"`
+	Logging    LoggingConfig    `yaml:"logging"`
+	Database   *DatabaseConfig  `yaml:"-"` // loaded from env.yaml, not config.yaml
 }
 
 // AgentConfig holds agent metadata
@@ -164,19 +164,13 @@ type LogFileConfig struct {
 	MaxAge          int    `yaml:"max_age"`
 }
 
-// StorageConfig 存储抽象层配置。
-// Minio 非 nil 时使用 MinIO 对象存储；nil 表示使用本地磁盘存储（零配置）。
-type StorageConfig struct {
-	Minio *MinioConfig `yaml:"minio"`
-}
-
-// MinioConfig 描述连接 MinIO 集群所需信息。
-type MinioConfig struct {
-	Endpoint  string `yaml:"endpoint"`
-	AccessKey string `yaml:"access_key"`
-	SecretKey string `yaml:"secret_key"`
-	Bucket    string `yaml:"bucket"`
-	UseSSL    bool   `yaml:"use_ssl"`
+// DatabaseConfig 数据库连接配置（来自 env.yaml）
+type DatabaseConfig struct {
+	Driver          string `yaml:"driver"`            // "sqlite" | "mysql" | "postgres"
+	DSN             string `yaml:"dsn"`               // 连接字符串，支持 ${ENV_VAR}
+	MaxOpenConns    int    `yaml:"max_open_conns"`    // 默认 20
+	MaxIdleConns    int    `yaml:"max_idle_conns"`    // 默认 5
+	ConnMaxLifetime string `yaml:"conn_max_lifetime"` // 默认 "30m"
 }
 
 // ExpandEnv replaces ${VAR_NAME} with environment variable values

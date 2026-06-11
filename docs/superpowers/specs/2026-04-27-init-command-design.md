@@ -44,14 +44,15 @@ groot tail [选项]         # 实时日志查看（已有）
 1. 确定工作目录（通过 `GROOT_HOME` 环境变量或默认 `~/.groot`）
 2. 检查并创建目录（每个目录单独处理）：
    - 工作目录根目录
-   - `skills/` 子目录
-   - `mcp/` 子目录
-   - `subagents/` 子目录
-   - `memory/` 子目录
-   - `logs/` 子目录
-   - `cluster/members/` 子目录（仅 local 模式有意义；minio 模式下集群目录走 object key 前缀）
+   - `skills/` 子目录（共享配置：技能集）
+   - `mcp/` 子目录（共享配置：MCP 服务定义）
+   - `subagents/` 子目录（共享配置：子 Agent 定义）
+   - `logs/` 子目录（运行日志）
 3. 检查并创建配置模板文件 `config.yaml`
-4. 检查并创建基础设施环境配置模板 `env.yaml`（**全注释模板**，启用 MinIO 时取消注释）
+4. 检查并创建基础设施环境配置模板 `env.yaml`（**全注释模板**，启用数据库后端时取消注释）
+5. 检查并创建 `GROOT.md`（主 Agent 全局指导）
+
+> **不再创建** `memory/`、`schedules/`、`cluster/members/` 子目录：运行时数据（会话/对话、定时任务、集群成员）已迁入数据库（SQLite/MySQL/PostgreSQL）。SQLite 模式下数据库文件为 `~/.groot/groot.db`，由首次启动时自动创建。
 
 **目录/文件检查逻辑**：
 
@@ -68,11 +69,10 @@ groot tail [选项]         # 实时日志查看（已有）
 目录 skills 已存在，跳过创建
 目录 mcp 已存在，跳过创建
 目录 subagents 创建成功
-目录 memory 创建成功
 目录 logs 创建成功
-目录 cluster/members 创建成功
 配置文件 config.yaml 已存在，跳过创建
 环境配置 env.yaml 创建成功
+GROOT.md 创建成功
 
 初始化完成
 
@@ -81,8 +81,8 @@ groot tail [选项]         # 实时日志查看（已有）
      vim ~/.groot/config.yaml
   2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）
      export OPENAI_API_KEY="your-api-key"
-  3. （可选）如需启用 MinIO 对象存储，编辑 env.yaml
-     vim ~/.groot/env.yaml
+  3. （可选）启用数据库后端：编辑环境配置文件
+     vim ~/.groot/env.yaml   # 默认全注释 → SQLite 本地模式
   4. 启动服务
      groot
 ```

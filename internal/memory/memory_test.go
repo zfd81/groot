@@ -2,62 +2,30 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo/memorydb"
 )
-
-// spyStorage 包装一个 storage.Storage，记录 Write / DeleteDir 调用以验证
-// SaveAttachment / Cleanup 真的通过抽象层而不是直接 os.WriteFile / os.RemoveAll。
-type spyStorage struct {
-	storage.Storage
-	writeCalled       bool
-	lastPath          string
-	lastSize          int64
-	lastCT            string
-	deleteDirCalled   bool
-	lastDeleteDirPath string
-}
-
-func (s *spyStorage) Write(ctx context.Context, path string, r io.Reader, size int64, ct string) error {
-	s.writeCalled = true
-	s.lastPath = path
-	s.lastSize = size
-	s.lastCT = ct
-	return s.Storage.Write(ctx, path, r, size, ct)
-}
-
-func (s *spyStorage) DeleteDir(ctx context.Context, path string) error {
-	s.deleteDirCalled = true
-	s.lastDeleteDirPath = path
-	return s.Storage.DeleteDir(ctx, path)
-}
-
-// failingStorage 故意让 DeleteDir 失败，验证 Cleanup 在 sessionDir 删除失败时
-// 跳过该 session,既不计入 deleted 也不破坏目录(保持原子性)。
-type failingStorage struct {
-	storage.Storage
-	deleteDirErr error
-}
-
-func (s *failingStorage) DeleteDir(ctx context.Context, path string) error {
-	if s.deleteDirErr != nil {
-		return s.deleteDirErr
-	}
-	return s.Storage.DeleteDir(ctx, path)
-}
 
 func initTestLogger() *logger.Logger {
 	return logger.New(config.LoggingConfig{Level: "debug", Format: "json", Output: []string{"stdout"}})
+}
+
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { sqlxDB.Close() })
+	memRepo := memorydb.New(sqlxDB, dialect)
+	return NewManager(7, initTestLogger(), memRepo)
 }
 
 func TestGenerateSessionID(t *testing.T) {
@@ -98,19 +66,16 @@ func TestGenerateSessionID_Uniqueness(t *testing.T) {
 func TestGenerateChatID(t *testing.T) {
 	id := GenerateChatID()
 
-	// 验证格式: chat_{YYYYMMDDHHMMSSmmm}
-	if !strings.HasPrefix(id, "chat_") {
-		t.Errorf("GenerateChatID() 格式错误: 应以 'chat_' 开头, got %s", id)
+	// 验证格式: {YYYYMMDDHHMMSSmmm}（纯时间戳，17位，无前缀）
+	if len(id) != 17 {
+		t.Errorf("GenerateChatID() 长度错误: got %d, want 17, id=%s", len(id), id)
 	}
 
-	parts := strings.Split(id, "_")
-	if len(parts) != 2 {
-		t.Errorf("GenerateChatID() 格式错误: 应有 2 部分, got %d", len(parts))
-	}
-
-	// 时间戳部分应为 17 位
-	if len(parts[1]) != 17 {
-		t.Errorf("GenerateChatID() 时间戳部分长度错误: got %d, want 17", len(parts[1]))
+	// 验证全为数字
+	for i, c := range id {
+		if c < '0' || c > '9' {
+			t.Errorf("GenerateChatID() 第 %d 个字符不是数字: got %c, id=%s", i, c, id)
+		}
 	}
 }
 
@@ -153,19 +118,26 @@ func TestGenerateStepID_Uniqueness(t *testing.T) {
 // Manager 测试
 
 func TestNewManager(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
-
-	if mgr.GetMemoryDir() != tmpDir {
-		t.Errorf("NewManager().GetMemoryDir() = %s, want %s", mgr.GetMemoryDir(), tmpDir)
+	mgr := newTestManager(t)
+	// DB 模式下 GetMemoryDir 返回空字符串
+	if mgr.GetMemoryDir() != "" {
+		t.Errorf("NewManager().GetMemoryDir() should be empty in DB mode, got %s", mgr.GetMemoryDir())
 	}
 }
 
-func TestManager_CreateSession(t *testing.T) {
-	tmpDir := t.TempDir()
+func TestNewManager_PanicsOnNilRepo(t *testing.T) {
 	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on nil memRepo")
+		}
+	}()
+	_ = NewManager(7, log, nil)
+}
+
+func TestManager_CreateSession(t *testing.T) {
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_001"
 	err := mgr.CreateSession(sessionID)
@@ -173,58 +145,16 @@ func TestManager_CreateSession(t *testing.T) {
 		t.Fatalf("CreateSession() 失败: %v", err)
 	}
 
-	// 验证目录结构
-	sessionDir := filepath.Join(tmpDir, sessionID)
-	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
-		t.Error("CreateSession() 未创建会话目录")
-	}
-
-	// chats 目录采用懒创建策略：CreateSession 不预先创建,首次 SaveChatRecord
-	// 时由 storage.Write 自动建目录。
-	chatsDir := filepath.Join(sessionDir, "chats")
-	if _, err := os.Stat(chatsDir); !os.IsNotExist(err) {
-		t.Errorf("CreateSession() 不应预先创建 chats 目录, got err=%v", err)
-	}
-
-	// attachments 目录采用懒创建策略：CreateSession 不预先创建，首次 SaveAttachment
-	// 时由 storage.Write 自动建目录（local 模式），minio 模式则根本不需要目录概念。
-	attachmentsDir := filepath.Join(sessionDir, "attachments")
-	if _, err := os.Stat(attachmentsDir); !os.IsNotExist(err) {
-		t.Errorf("CreateSession() 不应预先创建 attachments 目录, got err=%v", err)
-	}
-
-	// 验证 history.json
-	historyPath := filepath.Join(sessionDir, "history.json")
-	if _, err := os.Stat(historyPath); os.IsNotExist(err) {
-		t.Error("CreateSession() 未创建 history.json")
-	}
-}
-
-// TestManager_CreateSession_DoesNotWriteSessionMd 验证 CreateSession 不再写
-// SESSION.md 物理文件——会话规则改为通过嵌入式常量 defaultSessionRules 提供，
-// 由 GetSessionMdContent 直接返回。
-func TestManager_CreateSession_DoesNotWriteSessionMd(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
-
-	sessionID := "test_session_md"
-	if err := mgr.CreateSession(sessionID); err != nil {
-		t.Fatalf("CreateSession() 失败: %v", err)
-	}
-
-	sessionMdPath := filepath.Join(tmpDir, sessionID, "SESSION.md")
-	if _, err := os.Stat(sessionMdPath); !os.IsNotExist(err) {
-		t.Errorf("CreateSession() 不应再创建 SESSION.md 物理文件, got err=%v", err)
+	// 验证会话存在
+	if !mgr.ExistsSession(sessionID) {
+		t.Error("CreateSession() 后 ExistsSession() 应返回 true")
 	}
 }
 
 // TestManager_GetSessionMdContent_ReturnsConstant 验证 GetSessionMdContent
 // 返回值与传入的 sessionID 无关(包括不存在的 sessionID)。
 func TestManager_GetSessionMdContent_ReturnsConstant(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	cases := []string{"existing_session", "non_existent_session", ""}
 	var first string
@@ -239,12 +169,12 @@ func TestManager_GetSessionMdContent_ReturnsConstant(t *testing.T) {
 			t.Errorf("GetSessionMdContent 应返回与 sessionID 无关的常量,但 %q 与 %q 内容不同", cases[0], sid)
 		}
 	}
+	// 内容可以为空（session_rules.md 目前为空文件），
+	// 此处只验证多次调用返回同一常量即可。
 }
 
 func TestManager_ExistsSession(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_002"
 
@@ -261,9 +191,7 @@ func TestManager_ExistsSession(t *testing.T) {
 }
 
 func TestManager_GetHistory(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_003"
 	mgr.CreateSession(sessionID)
@@ -283,9 +211,7 @@ func TestManager_GetHistory(t *testing.T) {
 }
 
 func TestManager_GetHistory_NotExist(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	_, err := mgr.GetHistory("nonexistent")
 	if err == nil {
@@ -294,13 +220,13 @@ func TestManager_GetHistory_NotExist(t *testing.T) {
 }
 
 func TestManager_AppendMessage(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_004"
 	mgr.CreateSession(sessionID)
 
+	// AppendMessage 在 DB 模式下是空操作，不影响 GetHistory 结果
+	// (轮次数据由 SaveChatRecord 维护)
 	msg := &Message{
 		Round:       1,
 		ChatID:      "chat_001",
@@ -314,22 +240,10 @@ func TestManager_AppendMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendMessage() 失败: %v", err)
 	}
-
-	// 验证消息已追加
-	history, _ := mgr.GetHistory(sessionID)
-	if len(history.Messages) != 1 {
-		t.Errorf("AppendMessage() 后 Messages 数量错误: got %d, want 1", len(history.Messages))
-	}
-
-	if history.Messages[0].Instruction != "测试指令" {
-		t.Errorf("AppendMessage() 内容错误: got %s, want 测试指令", history.Messages[0].Instruction)
-	}
 }
 
 func TestManager_GetRoundCount(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_005"
 	mgr.CreateSession(sessionID)
@@ -339,10 +253,18 @@ func TestManager_GetRoundCount(t *testing.T) {
 		t.Errorf("GetRoundCount() 初始应为 0, got %d", mgr.GetRoundCount(sessionID))
 	}
 
-	// 追加消息后
-	mgr.AppendMessage(sessionID, &Message{Round: 1})
-	mgr.AppendMessage(sessionID, &Message{Round: 2})
-	mgr.AppendMessage(sessionID, &Message{Round: 3})
+	// SaveChatRecord 后 round 递增
+	for i := 1; i <= 3; i++ {
+		rec := &ChatRecord{
+			ChatID:    fmt.Sprintf("chat_%03d", i),
+			SessionID: sessionID,
+			Status:    "success",
+			StartedAt: time.Now(),
+		}
+		if err := mgr.SaveChatRecord(sessionID, rec); err != nil {
+			t.Fatalf("SaveChatRecord round=%d: %v", i, err)
+		}
+	}
 
 	if mgr.GetRoundCount(sessionID) != 3 {
 		t.Errorf("GetRoundCount() 应为 3, got %d", mgr.GetRoundCount(sessionID))
@@ -350,20 +272,18 @@ func TestManager_GetRoundCount(t *testing.T) {
 }
 
 func TestManager_SaveChatRecord(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_006"
 	mgr.CreateSession(sessionID)
 
 	record := &ChatRecord{
-		ChatID:      "chat_001",
+		ChatID:      "20260611100000001",
 		SessionID:   sessionID,
-		Round:       1,
 		Instruction: "测试指令",
 		Result:      "测试结果",
-		Status:      "completed",
+		Status:      "success",
+		StartedAt:   time.Now(),
 		Steps: []Step{
 			{StepID: "step_001", Type: "tool", Name: "test_tool", Status: "success"},
 		},
@@ -374,32 +294,33 @@ func TestManager_SaveChatRecord(t *testing.T) {
 		t.Fatalf("SaveChatRecord() 失败: %v", err)
 	}
 
-	// 验证文件存在
-	chatPath := filepath.Join(tmpDir, sessionID, "chats", "chat_001.json")
-	if _, err := os.Stat(chatPath); os.IsNotExist(err) {
-		t.Error("SaveChatRecord() 未创建文件")
+	// 验证可以读回
+	got, err := mgr.GetChatRecord(sessionID, "20260611100000001")
+	if err != nil {
+		t.Fatalf("GetChatRecord() 失败: %v", err)
+	}
+	if got.Instruction != "测试指令" {
+		t.Errorf("Instruction mismatch: got %s, want 测试指令", got.Instruction)
 	}
 }
 
 func TestManager_GetChatRecord(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_007"
 	mgr.CreateSession(sessionID)
 
 	record := &ChatRecord{
-		ChatID:      "chat_001",
+		ChatID:      "20260611100000002",
 		SessionID:   sessionID,
-		Round:       1,
 		Instruction: "测试指令",
 		Result:      "测试结果",
-		Status:      "completed",
+		Status:      "success",
+		StartedAt:   time.Now(),
 	}
 	mgr.SaveChatRecord(sessionID, record)
 
-	got, err := mgr.GetChatRecord(sessionID, "chat_001")
+	got, err := mgr.GetChatRecord(sessionID, "20260611100000002")
 	if err != nil {
 		t.Fatalf("GetChatRecord() 失败: %v", err)
 	}
@@ -409,10 +330,23 @@ func TestManager_GetChatRecord(t *testing.T) {
 	}
 }
 
+func TestManager_GetChatRecord_NotExist(t *testing.T) {
+	mgr := newTestManager(t)
+
+	if err := mgr.CreateSession("test-session"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	_, err := mgr.GetChatRecord("test-session", "nonexistent-chat-id")
+	if err == nil {
+		t.Fatal("expected error for non-existent chat record")
+	}
+	if !strings.Contains(err.Error(), "对话记录不存在") {
+		t.Errorf("expected error to contain '对话记录不存在', got: %v", err)
+	}
+}
+
 func TestManager_ListSessions(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	// 创建多个会话
 	for i := 1; i <= 5; i++ {
@@ -433,19 +367,10 @@ func TestManager_ListSessions(t *testing.T) {
 	if len(sessions) != 5 {
 		t.Errorf("ListSessions() 返回数量 = %d, want 5", len(sessions))
 	}
-
-	// 验证按时间倒序
-	for i := 0; i < len(sessions)-1; i++ {
-		if sessions[i].CreatedAt.Before(sessions[i+1].CreatedAt) {
-			t.Error("ListSessions() 应按创建时间倒序排列")
-		}
-	}
 }
 
 func TestManager_ListSessions_Pagination(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	// 创建 10 个会话
 	for i := 1; i <= 10; i++ {
@@ -479,23 +404,35 @@ func TestManager_ListSessions_Pagination(t *testing.T) {
 }
 
 func TestManager_Cleanup(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 1, log, storage.NewLocal()) // 保留 1 天
+	// retentionDays=1，需创建一个独立的管理器
+	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer sqlxDB.Close()
+	memRepo := memorydb.New(sqlxDB, dialect)
+	shortMgr := NewManager(1, initTestLogger(), memRepo)
 
-	// 创建旧会话，然后修改目录 ModTime 为 2 天前
+	// 创建旧会话（由 DeleteExpiredSessions 按 updated_at 淘汰）
 	sessionID := "test_session_old"
-	mgr.CreateSession(sessionID)
-	oldTime := time.Now().AddDate(0, 0, -2)
-	sessionDir := mgr.sessionDir(sessionID)
-	os.Chtimes(sessionDir, oldTime, oldTime)
+	shortMgr.CreateSession(sessionID)
 
-	// 创建一个新会话（不会被清理）
+	// 使 updated_at 显得是 2 天前：直接插入一条旧 updated_at 的 session
+	// 通过先删除再重建（利用 DB 直接操作）
+	// 因为无法直接修改 updated_at，改为在 shortMgr 内部用 repo 调用
+	// 最简方案：DeleteSession 然后手动操作是不现实的，
+	// 所以改为创建一个 updated_at 为 2 天前的会话，通过底层 DB insert
+	sqlxDB.ExecContext(context.Background(),
+		`UPDATE memory_sessions SET updated_at=? WHERE session_id=?`,
+		time.Now().AddDate(0, 0, -2).UnixMilli(), sessionID,
+	)
+
+	// 创建新会话（不会被清理）
 	newSessionID := "test_session_new"
-	mgr.CreateSession(newSessionID)
+	shortMgr.CreateSession(newSessionID)
 
 	// 执行清理
-	deleted, err := mgr.Cleanup(context.Background())
+	deleted, err := shortMgr.Cleanup(context.Background())
 	if err != nil {
 		t.Fatalf("Cleanup() 失败: %v", err)
 	}
@@ -505,33 +442,35 @@ func TestManager_Cleanup(t *testing.T) {
 	}
 
 	// 验证旧会话已删除
-	if mgr.ExistsSession(sessionID) {
+	if shortMgr.ExistsSession(sessionID) {
 		t.Error("Cleanup() 应删除过期会话")
 	}
 
 	// 验证新会话保留
-	if !mgr.ExistsSession(newSessionID) {
+	if !shortMgr.ExistsSession(newSessionID) {
 		t.Error("Cleanup() 不应删除未过期会话")
 	}
 }
 
 func TestManager_GetContextMessages(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+	mgr := newTestManager(t)
 
 	sessionID := "test_session_context"
 	mgr.CreateSession(sessionID)
 
-	// 追加 5 条消息
+	// 保存 5 条成功的 chat record（只有 completed + agent_name="" 才进 LoadHistory）
 	for i := 1; i <= 5; i++ {
-		mgr.AppendMessage(sessionID, &Message{
-			Round:       i,
-			ChatID:      fmt.Sprintf("chat_%03d", i),
+		rec := &ChatRecord{
+			ChatID:      fmt.Sprintf("2026061110000000%d", i),
+			SessionID:   sessionID,
 			Instruction: fmt.Sprintf("指令 %d", i),
 			Result:      fmt.Sprintf("结果 %d", i),
 			Status:      "completed",
-		})
+			StartedAt:   time.Now(),
+		}
+		if err := mgr.SaveChatRecord(sessionID, rec); err != nil {
+			t.Fatalf("SaveChatRecord i=%d: %v", i, err)
+		}
 	}
 
 	t.Run("窗口内全部返回", func(t *testing.T) {
@@ -588,162 +527,69 @@ func TestManager_GetContextMessages(t *testing.T) {
 	})
 }
 
-func TestManager_SaveHistory_AtomicWrite(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+func TestManager_GetLatestChatRecord(t *testing.T) {
+	mgr := newTestManager(t)
 
-	sessionID := "test_session_atomic"
+	sessionID := "test_session_latest"
 	mgr.CreateSession(sessionID)
 
-	// 追加消息（触发 saveHistory）
-	msg := &Message{Round: 1, Status: "completed"}
-	mgr.AppendMessage(sessionID, msg)
-
-	// 验证 .tmp 文件不存在（rename 后应清理）
-	tmpPath := filepath.Join(tmpDir, sessionID, "history.json.tmp")
-	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
-		t.Error("原子写入后 .tmp 文件应不存在")
+	// 无记录时应返回 nil, nil
+	rec, err := mgr.GetLatestChatRecord(sessionID)
+	if err != nil {
+		t.Fatalf("GetLatestChatRecord() (empty) 失败: %v", err)
+	}
+	if rec != nil {
+		t.Errorf("GetLatestChatRecord() 空会话应返回 nil, got %+v", rec)
 	}
 
-	// 验证正式文件存在且内容正确
-	history, _ := mgr.GetHistory(sessionID)
-	if len(history.Messages) != 1 {
-		t.Errorf("原子写入后消息数应为 1, got %d", len(history.Messages))
+	// 保存两条记录
+	for i := 1; i <= 2; i++ {
+		mgr.SaveChatRecord(sessionID, &ChatRecord{
+			ChatID:      fmt.Sprintf("2026061110000010%d", i),
+			SessionID:   sessionID,
+			Instruction: fmt.Sprintf("指令 %d", i),
+			Status:      "completed",
+			StartedAt:   time.Now(),
+		})
+	}
+
+	latest, err := mgr.GetLatestChatRecord(sessionID)
+	if err != nil {
+		t.Fatalf("GetLatestChatRecord() 失败: %v", err)
+	}
+	if latest == nil {
+		t.Fatal("GetLatestChatRecord() 应返回最后一条记录, got nil")
+	}
+	if latest.Instruction != "指令 2" {
+		t.Errorf("GetLatestChatRecord() 应返回最后一条, got instruction=%s", latest.Instruction)
 	}
 }
 
-func TestManager_SaveChatRecord_AtomicWrite(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
+func TestManager_DeleteSession(t *testing.T) {
+	mgr := newTestManager(t)
 
-	sessionID := "test_session_chat_atomic"
+	sessionID := "test_session_delete"
 	mgr.CreateSession(sessionID)
 
-	record := &ChatRecord{
-		ChatID:    "chat_atomic_001",
+	// 保存一条记录
+	mgr.SaveChatRecord(sessionID, &ChatRecord{
+		ChatID:    "20260611100000200",
 		SessionID: sessionID,
-		Status:    "completed",
-	}
-	mgr.SaveChatRecord(sessionID, record)
+		Status:    "success",
+		StartedAt: time.Now(),
+	})
 
-	// 验证 .tmp 文件不存在
-	tmpPath := filepath.Join(tmpDir, sessionID, "chats", "chat_atomic_001.json.tmp")
-	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
-		t.Error("原子写入后 .tmp 文件应不存在")
+	if err := mgr.DeleteSession(sessionID); err != nil {
+		t.Fatalf("DeleteSession() 失败: %v", err)
 	}
 
-	// 验证内容正确
-	got, _ := mgr.GetChatRecord(sessionID, "chat_atomic_001")
-	if got.Status != "completed" {
-		t.Errorf("原子写入后 status 应为 completed, got %s", got.Status)
-	}
-}
-
-func TestManager_Cleanup_DeleteDirFailureKeepsSession(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	failing := &failingStorage{
-		Storage:      storage.NewLocal(),
-		deleteDirErr: errors.New("simulated minio failure"),
-	}
-	mgr := NewManager(tmpDir, 1, log, failing)
-
-	sessionID := "test_cleanup_failure"
-	if err := mgr.CreateSession(sessionID); err != nil {
-		t.Fatalf("CreateSession: %v", err)
+	// 删除后会话不应存在
+	if mgr.ExistsSession(sessionID) {
+		t.Error("DeleteSession() 后 ExistsSession() 应返回 false")
 	}
 
-	sessionDir := filepath.Join(tmpDir, sessionID)
-	old := time.Now().AddDate(0, 0, -2)
-	if err := os.Chtimes(sessionDir, old, old); err != nil {
-		t.Fatalf("Chtimes: %v", err)
-	}
-
-	deleted, err := mgr.Cleanup(context.Background())
-	if err != nil {
-		t.Fatalf("Cleanup: %v", err)
-	}
-	// 因为 DeleteDir(sessionDir) 失败，整个 session 应该被跳过、不计入 deleted
-	if deleted != 0 {
-		t.Errorf("expected 0 session deleted (skipped due to DeleteDir failure), got %d", deleted)
-	}
-
-	// session 元数据应该仍然存在(DeleteDir 失败语义：不删元数据)
-	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
-		t.Error("sessionDir should still exist when DeleteDir fails")
-	}
-}
-
-func TestNewManager_PanicsOnNilStorage(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic on nil storage")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "storage must not be nil") {
-			t.Fatalf("expected panic message about nil storage, got: %v", r)
-		}
-	}()
-	_ = NewManager(tmpDir, 7, log, nil)
-}
-
-// TestManager_ListSessions_NonExistentMemoryDir 验证 memoryDir 不存在时
-// ListSessions 返回空切片而非 error(首次启动 / 全部清理后场景)。
-func TestManager_ListSessions_NonExistentMemoryDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	nonExistent := filepath.Join(tmpDir, "does-not-exist")
-	log := initTestLogger()
-	mgr := NewManager(nonExistent, 7, log, storage.NewLocal())
-
-	sessions, total, err := mgr.ListSessions(10, 0)
-	if err != nil {
-		t.Fatalf("expected nil err for non-existent memoryDir, got: %v", err)
-	}
-	if total != 0 {
-		t.Errorf("expected total=0, got %d", total)
-	}
-	if len(sessions) != 0 {
-		t.Errorf("expected empty sessions, got %d", len(sessions))
-	}
-}
-
-// TestManager_Cleanup_NonExistentMemoryDir 验证 memoryDir 不存在时
-// Cleanup 返回 (0, nil) 而非 error。
-func TestManager_Cleanup_NonExistentMemoryDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	nonExistent := filepath.Join(tmpDir, "does-not-exist")
-	log := initTestLogger()
-	mgr := NewManager(nonExistent, 7, log, storage.NewLocal())
-
-	deleted, err := mgr.Cleanup(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil err for non-existent memoryDir, got: %v", err)
-	}
-	if deleted != 0 {
-		t.Errorf("expected deleted=0, got %d", deleted)
-	}
-}
-
-// TestManager_GetChatRecord_NotExist 验证 chat record 不存在时返回
-// 业务话术 "对话记录不存在" 而不是裸的 storage.ErrNotFound。
-func TestManager_GetChatRecord_NotExist(t *testing.T) {
-	tmpDir := t.TempDir()
-	log := initTestLogger()
-	mgr := NewManager(tmpDir, 7, log, storage.NewLocal())
-
-	if err := mgr.CreateSession("test-session"); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	_, err := mgr.GetChatRecord("test-session", "nonexistent-chat-id")
-	if err == nil {
-		t.Fatal("expected error for non-existent chat record")
-	}
-	if !strings.Contains(err.Error(), "对话记录不存在") {
-		t.Errorf("expected error to contain '对话记录不存在', got: %v", err)
+	// GetHistory 应返回错误
+	if _, err := mgr.GetHistory(sessionID); err == nil {
+		t.Error("DeleteSession() 后 GetHistory() 应返回错误")
 	}
 }

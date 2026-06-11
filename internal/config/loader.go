@@ -173,9 +173,8 @@ func expandConfigEnvVars(cfg *Config) {
 		cfg.Security.Auth.APIKey.Keys[i] = keyInfo
 	}
 
-	// Expand storage.minio credentials
-	if cfg.Storage.Minio != nil {
-		cfg.Storage.Minio.AccessKey = ExpandEnv(cfg.Storage.Minio.AccessKey)
-		cfg.Storage.Minio.SecretKey = ExpandEnv(cfg.Storage.Minio.SecretKey)
+	// Expand database DSN
+	if cfg.Database != nil {
+		cfg.Database.DSN = ExpandEnv(cfg.Database.DSN)
 	}
 }

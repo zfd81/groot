@@ -5,9 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo/resourcelocal"
 )
 
 // makeFile 在 dir 下创建文件,内容为 content,返回绝对路径。
@@ -29,8 +28,8 @@ func TestComputeDiff_Added(t *testing.T) {
 
 	makeFile(t, localDir, "config.yaml", "agent:\n  name: groot\n")
 
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"config.yaml"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"config.yaml"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
@@ -49,8 +48,8 @@ func TestComputeDiff_Removed(t *testing.T) {
 	// 只在远端有文件
 	makeFile(t, remoteDir, "GROOT.md", "# GROOT\n")
 
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"GROOT.md"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"GROOT.md"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
@@ -67,15 +66,8 @@ func TestComputeDiff_Same(t *testing.T) {
 	makeFile(t, localDir, "config.yaml", content)
 	makeFile(t, remoteDir, "config.yaml", content)
 
-	// 同步两侧 mtime
-	now := time.Now().Truncate(time.Second)
-	for _, dir := range []string{localDir, remoteDir} {
-		path := filepath.Join(dir, "config.yaml")
-		_ = os.Chtimes(path, now, now)
-	}
-
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"config.yaml"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"config.yaml"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
@@ -91,8 +83,8 @@ func TestComputeDiff_Modified_SizeDiff(t *testing.T) {
 	makeFile(t, localDir, "GROOT.md", "# v2\n")
 	makeFile(t, remoteDir, "GROOT.md", "# v1 (longer content)\n")
 
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"GROOT.md"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"GROOT.md"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
@@ -101,50 +93,23 @@ func TestComputeDiff_Modified_SizeDiff(t *testing.T) {
 	}
 }
 
-func TestComputeDiff_Modified_MtimeDiff(t *testing.T) {
+// TestComputeDiff_Modified_SameSizeDiffContent 验证 size 相同但内容不同时
+// (hash 不同)判为 Modified。
+func TestComputeDiff_Modified_SameSizeDiffContent(t *testing.T) {
 	localDir := t.TempDir()
 	remoteDir := t.TempDir()
 
-	content := "same content\n"
-	makeFile(t, localDir, "GROOT.md", content)
-	makeFile(t, remoteDir, "GROOT.md", content)
+	// 相同长度,不同内容 → hash 不同 → Modified
+	makeFile(t, localDir, "GROOT.md", "aaaa\n")
+	makeFile(t, remoteDir, "GROOT.md", "bbbb\n")
 
-	// 本地文件 mtime 比远端早 5s (超过 1s 容差)
-	older := time.Now().Add(-5 * time.Second).Truncate(time.Second)
-	newer := time.Now().Truncate(time.Second)
-	_ = os.Chtimes(filepath.Join(localDir, "GROOT.md"), older, older)
-	_ = os.Chtimes(filepath.Join(remoteDir, "GROOT.md"), newer, newer)
-
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"GROOT.md"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"GROOT.md"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
 	if len(result.Modified) != 1 {
-		t.Errorf("expected Modified=[GROOT.md], got %+v", result)
-	}
-}
-
-func TestComputeDiff_MtimeTolerance(t *testing.T) {
-	localDir := t.TempDir()
-	remoteDir := t.TempDir()
-
-	content := "same content\n"
-	makeFile(t, localDir, "GROOT.md", content)
-	makeFile(t, remoteDir, "GROOT.md", content)
-
-	// 本地与远端 mtime 差 < 1s → 判为 Same
-	base := time.Now().Truncate(time.Second)
-	_ = os.Chtimes(filepath.Join(localDir, "GROOT.md"), base, base)
-	_ = os.Chtimes(filepath.Join(remoteDir, "GROOT.md"), base, base)
-
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"GROOT.md"})
-	if err != nil {
-		t.Fatalf("ComputeDiff: %v", err)
-	}
-	if len(result.Same) != 1 {
-		t.Errorf("expected Same (within tolerance), got %+v", result)
+		t.Errorf("expected Modified=[GROOT.md] (same size, diff hash), got %+v", result)
 	}
 }
 
@@ -155,8 +120,8 @@ func TestComputeDiff_RecursiveDir(t *testing.T) {
 	makeFile(t, localDir, "skills/weather/SKILL.md", "weather skill\n")
 	makeFile(t, localDir, "skills/weather/handler.go", "package main\n")
 
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"skills/weather"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"skills/weather"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
@@ -181,8 +146,8 @@ func TestComputeDiff_SkipsTmpFiles(t *testing.T) {
 	makeFile(t, localDir, "skills/weather/SKILL.md.tmp", "stale residue\n")
 	makeFile(t, localDir, "skills/weather/probe.tmp", "another residue\n")
 
-	store := storage.NewLocal()
-	result, err := ComputeDiff(store, localDir, remoteDir, []string{"skills"})
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"skills"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}

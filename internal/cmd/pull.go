@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/zfd81/groot/internal/config"
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo"
 	isync "github.com/zfd81/groot/internal/sync"
 )
 
@@ -40,8 +38,8 @@ func ParsePullFlags(args []string) (*PullFlags, error) {
 func printPullHelp() {
 	fmt.Println("用法: groot pull [path...] [-y]")
 	fmt.Println()
-	fmt.Println("将 MinIO 的集群共享配置镜像拉取到本地 HOME。")
-	fmt.Println("仅在 minio 模式下可用。")
+	fmt.Println("将数据库的集群共享配置镜像拉取到本地 HOME。")
+	fmt.Println("仅在 MySQL/PostgreSQL 模式下可用。")
 	fmt.Println()
 	fmt.Println("参数:")
 	fmt.Println("  path...   要拉取的资源路径（可多个），省略时拉取全部白名单资源")
@@ -51,22 +49,11 @@ func printPullHelp() {
 	fmt.Println("  -h, --help  显示帮助")
 }
 
-// RunPull 执行 groot pull。
-func RunPull(flags *PullFlags) error {
+// RunPull 执行 groot pull。r 为 ResourceRepo,由 main.go 注入。
+func RunPull(flags *PullFlags, r repo.ResourceRepo) error {
 	homeDir := GetDefaultHome()
-	cfg, err := config.Load(homeDir)
-	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
-	}
-	if cfg.Storage.Minio == nil {
-		return errors.New("groot pull 仅在 minio 模式下可用\n请在 ~/.groot/env.yaml 中配置 minio 节")
-	}
-	store, err := storage.New(cfg.Storage)
-	if err != nil {
-		return fmt.Errorf("初始化存储失败: %w", err)
-	}
 
-	mgr := isync.NewSyncManager(homeDir, "", store)
+	mgr := isync.NewSyncManager(homeDir, r)
 
 	// 先清理 *.tmp 残留(上次 pull 中途崩溃可能留下),
 	// 否则后续 Diff 会把它们当成 "本地多余文件" 错误地展示给用户。

@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/logger"
-	istorage "github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo"
 )
 
 const (
@@ -20,16 +20,16 @@ const (
 	heartbeatTimeout  = 7 * time.Second
 )
 
-// Cluster manages instance registration, heartbeat, and leader election.
+// Cluster manages instance registration, heartbeat, and leader election
+// using a MemberRepo for persistence.
 type Cluster struct {
-	membersDir string
-	host       string
-	port       int
-	regID      string
-	role       string
-	mu         sync.RWMutex
-	log        *logger.Logger
-	store      istorage.Storage
+	host  string
+	port  int
+	regID string
+	role  string
+	mu    sync.RWMutex
+	log   *logger.Logger
+	repo  repo.MemberRepo
 
 	onBecomeLeader func()
 	onLoseLeader   func()
@@ -38,20 +38,9 @@ type Cluster struct {
 	cancel context.CancelFunc
 }
 
-// New creates a new Cluster instance.
-//
-// membersDir is the full path (or object-key prefix) of the cluster members
-// directory. The caller is responsible for composing the full path
-// (e.g. "${homeDir}/cluster/members" in local mode, "cluster/members" in
-// minio mode); cluster does not append any sub-path internally.
-func New(membersDir, host string, port int, log *logger.Logger, store istorage.Storage) *Cluster {
-	return &Cluster{
-		membersDir: membersDir,
-		host:       host,
-		port:       port,
-		log:        log,
-		store:      store,
-	}
+// New creates a new Cluster instance backed by memberRepo.
+func New(host string, port int, log *logger.Logger, memberRepo repo.MemberRepo) *Cluster {
+	return &Cluster{host: host, port: port, log: log, repo: memberRepo}
 }
 
 // SetCallbacks sets the callbacks for leader role changes.
@@ -63,12 +52,8 @@ func (c *Cluster) SetCallbacks(onBecomeLeader, onLoseLeader func()) {
 // Join registers this instance in the cluster and starts the heartbeat loop.
 func (c *Cluster) Join(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
-
-	membersDir := c.membersDir
-
-	c.register(membersDir)
-
-	go c.run(membersDir)
+	c.register()
+	go c.run()
 	return nil
 }
 
@@ -79,16 +64,12 @@ func (c *Cluster) Leave() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	if c.regID == "" {
 		return
 	}
-
-	membersDir := c.membersDir
-	if err := RemoveFile(c.store, membersDir, c.regID); err != nil {
-		c.log.Error("删除注册文件失败", zap.Error(err))
+	if err := c.repo.Remove(context.Background(), c.regID); err != nil {
+		c.log.Error("删除注册记录失败", zap.Error(err))
 	}
-
 	c.regID = ""
 }
 
@@ -113,155 +94,117 @@ func (c *Cluster) Role() string {
 	return c.role
 }
 
-func (c *Cluster) run(membersDir string) {
+func (c *Cluster) run() {
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			c.heartbeat(membersDir)
+			c.heartbeat()
 		}
 	}
 }
 
-func (c *Cluster) heartbeat(membersDir string) {
+func (c *Cluster) heartbeat() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Check if own file still exists
-	ownPath := filepath.Join(membersDir, c.regID)
-	_, err := c.store.Stat(context.Background(), ownPath)
+	_, err := c.repo.Get(c.ctx, c.regID)
 	if err != nil {
-		if errors.Is(err, istorage.ErrNotFound) {
-			// File lost -- re-register
-			if c.role == RoleLeader {
-				if c.onLoseLeader != nil {
-					c.onLoseLeader()
-				}
+		if errors.Is(err, repo.ErrNotFound) {
+			if c.role == RoleLeader && c.onLoseLeader != nil {
+				c.onLoseLeader()
 			}
-			c.register(membersDir)
+			c.register()
 			return
 		}
-		// 其他错误(权限/IO/网络): 跳过本轮心跳,避免在不确定状态下乐观写入
-		c.log.Warn("自检失败,跳过本轮心跳",
-			zap.String("path", ownPath),
-			zap.Error(err),
-		)
+		c.log.Warn("自检失败,跳过本轮心跳", zap.Error(err))
 		return
 	}
 
 	if c.role == RoleLeader {
-		c.leaderHeartbeat(membersDir)
+		c.leaderHeartbeat()
 	} else {
-		c.followerHeartbeat(membersDir)
+		c.followerHeartbeat()
 	}
 }
 
-func (c *Cluster) register(membersDir string) {
-	// List existing members to determine role
-	members, err := ListMembers(c.store, membersDir)
+func (c *Cluster) register() {
+	members, err := c.repo.ListAll(c.ctx)
 	if err != nil {
 		c.log.Error("列出成员失败", zap.Error(err))
 		c.role = RoleFollower
 		return
 	}
-
 	c.regID = GenerateRegID()
-
 	c.role = DetermineRole(c.regID, members, heartbeatTimeout)
-
 	pid := os.Getpid()
-	if err := WriteRegistration(c.store, membersDir, c.regID, c.role, c.host, c.port, pid); err != nil {
-		c.log.Error("写入注册文件失败", zap.Error(err))
+	m := &repo.Member{
+		RegID: c.regID, Role: c.role,
+		Host: c.host, Port: c.port, Pid: pid,
+		HeartbeatAt: time.Now(), CreatedAt: time.Now(),
+	}
+	if err := c.repo.Register(c.ctx, m); err != nil {
+		c.log.Error("写入注册记录失败", zap.Error(err))
 		return
 	}
-
 	c.log.Info("集群注册完成",
 		zap.String("reg_id", c.regID),
 		zap.String("role", c.role),
 		zap.Int("pid", pid),
 	)
-
 	if c.role == RoleLeader && c.onBecomeLeader != nil {
 		c.onBecomeLeader()
 	}
 }
 
-func (c *Cluster) leaderHeartbeat(membersDir string) {
-	pid := os.Getpid()
-	if err := WriteRegistration(c.store, membersDir, c.regID, RoleLeader, c.host, c.port, pid); err != nil {
+func (c *Cluster) leaderHeartbeat() {
+	if err := c.repo.Heartbeat(c.ctx, c.regID); err != nil {
 		c.log.Error("心跳写入失败", zap.Error(err))
 		return
 	}
-
-	// Clean up stale registration files
-	members, err := ListMembers(c.store, membersDir)
-	if err != nil {
-		c.log.Warn("列出成员失败,跳过本轮 stale 清理", zap.Error(err))
-		return
+	if err := c.repo.UpdateRole(c.ctx, c.regID, RoleLeader); err != nil {
+		c.log.Error("角色更新失败", zap.Error(err))
 	}
-	for _, m := range members {
-		if m.ID == c.regID {
-			continue
-		}
-		if time.Since(m.Mtime) > heartbeatTimeout {
-			if err := RemoveFile(c.store, membersDir, m.ID); err != nil {
-				c.log.Error("清理超时文件失败", zap.String("file", m.ID), zap.Error(err))
-			} else {
-				c.log.Info("清理超时注册文件", zap.String("file", m.ID))
-			}
-		}
+	n, err := c.repo.RemoveExpired(c.ctx, time.Now().Add(-heartbeatTimeout))
+	if err != nil {
+		c.log.Warn("清理超时成员失败", zap.Error(err))
+	} else if n > 0 {
+		c.log.Info("清理超时成员", zap.Int("count", n))
 	}
 }
 
-func (c *Cluster) followerHeartbeat(membersDir string) {
-	members, err := ListMembers(c.store, membersDir)
+func (c *Cluster) followerHeartbeat() {
+	members, err := c.repo.ListAll(c.ctx)
 	if err != nil {
 		c.log.Warn("列出成员失败,跳过本轮心跳", zap.Error(err))
 		return
 	}
-
-	// Filter alive members
 	now := time.Now()
-	var alive []MemberInfo
+	var alive []*repo.Member
 	for _, m := range members {
-		if now.Sub(m.Mtime) < heartbeatTimeout {
+		if now.Sub(m.HeartbeatAt) < heartbeatTimeout {
 			alive = append(alive, m)
 		}
 	}
-
-	// Sort alive members by ID
-	sort.Slice(alive, func(i, j int) bool {
-		return alive[i].ID < alive[j].ID
-	})
-
-	if len(alive) > 0 && c.regID == alive[0].ID {
-		// Become leader
+	sort.Slice(alive, func(i, j int) bool { return alive[i].RegID < alive[j].RegID })
+	if len(alive) > 0 && alive[0].RegID == c.regID {
 		c.role = RoleLeader
-		pid := os.Getpid()
-		WriteRegistration(c.store, membersDir, c.regID, RoleLeader, c.host, c.port, pid)
-
+		c.repo.UpdateRole(c.ctx, c.regID, RoleLeader)
 		c.log.Info("提升为 leader", zap.String("reg_id", c.regID))
-
-		// Clean up stale files
-		for _, m := range members {
-			if m.ID == c.regID {
-				continue
-			}
-			if time.Since(m.Mtime) > heartbeatTimeout {
-				RemoveFile(c.store, membersDir, m.ID)
-				c.log.Info("清理超时注册文件", zap.String("file", m.ID))
-			}
-		}
-
+		c.repo.RemoveExpired(c.ctx, time.Now().Add(-heartbeatTimeout))
 		if c.onBecomeLeader != nil {
 			c.onBecomeLeader()
 		}
 	} else {
-		pid := os.Getpid()
-		WriteRegistration(c.store, membersDir, c.regID, RoleFollower, c.host, c.port, pid)
+		c.repo.Heartbeat(c.ctx, c.regID)
 	}
+}
+
+// GenerateRegID generates a 17-digit millisecond timestamp reg ID.
+func GenerateRegID() string {
+	s := time.Now().Format("20060102150405.000")
+	return strings.Replace(s, ".", "", 1)
 }

@@ -242,7 +242,7 @@ func scheduleHistory(scheduleDir, taskID string) error {
 	for _, r := range records {
 		duration := fmt.Sprintf("%dms", r.DurationMs)
 		fmt.Printf("%-20s  %-15s  %-10s  %-10s  %-10d\n",
-			r.ExecTime.Format("2006-01-02 15:04:05"), r.TriggerType, r.Status, duration, r.StepCount)
+			r.StartedAt.Format("2006-01-02 15:04:05"), r.TriggerType, r.Status, duration, r.StepCount)
 	}
 
 	fmt.Printf("\n共 %d 条记录\n", len(records))

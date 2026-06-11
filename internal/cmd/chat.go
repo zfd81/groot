@@ -19,13 +19,14 @@ import (
 	"github.com/zfd81/groot/internal/api"
 	"github.com/zfd81/groot/internal/cmd/chat"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/filesystem"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/message/senders"
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo/repofactory"
 )
 
 // RunChat starts the chat TUI.
@@ -131,25 +132,15 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 		return nil, fmt.Errorf("无法加载MCP配置: %w", err)
 	}
 
-	// Storage backend
-	store, err := storage.New(cfg.Storage)
+	// Database and repositories
+	sqlxDB, dbDialect, err := db.Open(cfg.Database, homeDir)
 	if err != nil {
-		return nil, fmt.Errorf("无法初始化存储后端: %w", err)
+		return nil, fmt.Errorf("无法初始化数据库: %w", err)
 	}
-
-	// 按 storage 类型计算 memory basePath:
-	//   local 模式:绝对路径(${homeDir}/memory),向后兼容
-	//   minio 模式:相对 object-key 前缀("memory")
-	var memoryBaseDir string
-	if cfg.Storage.Minio != nil {
-		memoryBaseDir = "memory"
-	} else {
-		memoryBaseDir = config.ResolvePath(cfg.Memory.Directory, homeDir)
-		os.MkdirAll(memoryBaseDir, 0755)
-	}
+	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 
 	// Memory manager
-	memMgr := memory.NewManager(memoryBaseDir, cfg.Memory.RetentionDays, log, store)
+	memMgr := memory.NewManager(cfg.Memory.RetentionDays, log, repos.Memory)
 
 	// Runtime state
 	runtimeState := agent.NewRuntimeState()

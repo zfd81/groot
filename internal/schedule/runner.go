@@ -92,10 +92,10 @@ func (r *Runner) Run(taskID string) func() {
 		// Build execution record
 		record := &ExecutionRecord{
 			TaskID:      task.ID,
-			ExecTime:    startTime,
+			StartedAt:   startTime,
 			TriggerType: triggerType,
 			SessionID:   sessionID,
-			ChatID:      fmt.Sprintf("chat_%s", startTime.Format("20060102150405")),
+			ChatID:      startTime.Format("20060102150405"),
 			Status:      status,
 			DurationMs:  durationMs,
 			StepCount:   stepCount,
@@ -158,7 +158,7 @@ func (r *Runner) RunImmediate(task *Task) error {
 
 	record := &ExecutionRecord{
 		TaskID:      task.ID,
-		ExecTime:    startTime,
+		StartedAt:   startTime,
 		TriggerType: "manual",
 		SessionID:   sessionID,
 		Status:      status,

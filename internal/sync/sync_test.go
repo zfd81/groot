@@ -4,18 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo/resourcelocal"
 )
 
-// newTestManager 创建测试用 SyncManager:homeDir 和 remoteBase 都是 tmpdir。
+// newTestManager 创建测试用 SyncManager:homeDir 使用 tmpdir,远端使用另一个 tmpdir 的 resourcelocal。
 func newTestManager(t *testing.T) (*localSyncManager, string, string) {
 	t.Helper()
 	homeDir := t.TempDir()
 	remoteDir := t.TempDir()
-	store := storage.NewLocal()
-	mgr := NewSyncManager(homeDir, remoteDir, store).(*localSyncManager)
+	r := resourcelocal.New(remoteDir)
+	mgr := NewSyncManager(homeDir, r).(*localSyncManager)
 	return mgr, homeDir, remoteDir
 }
 
@@ -133,8 +132,8 @@ func TestSyncManager_Pull_CleanTmpFiles(t *testing.T) {
 }
 
 func TestNewSyncManager_LocalMode_Disabled(t *testing.T) {
-	// store 为 nil 或 remoteBase 为空时返回 disabled 实现
-	mgr := NewSyncManager("", "", nil)
+	// r 为 nil 时返回 disabled 实现
+	mgr := NewSyncManager("", nil)
 	if _, err := mgr.Diff(nil); err == nil {
 		t.Error("expected ErrSyncDisabled in local mode")
 	}
@@ -146,18 +145,12 @@ func TestNewSyncManager_LocalMode_Disabled(t *testing.T) {
 	}
 }
 
-// TestSyncManager_Push_AnchorsLocalMtime 验证 push 完成后立刻再 diff,
-// 不会因为远端 LastModified 与本地 mtime 含义不同而被错误判为 Modified。
-// 这正是 spec §1.8.3 锚定语义在生产中起作用的关键场景。
-func TestSyncManager_Push_AnchorsLocalMtime(t *testing.T) {
+// TestSyncManager_Push_IdempotentAfterPush 验证 push 完成后立刻再 diff,
+// 内容相同(size+hash 一致)时应当 IsEmpty。
+func TestSyncManager_Push_IdempotentAfterPush(t *testing.T) {
 	mgr, homeDir, _ := newTestManager(t)
 
-	// 准备文件并把本地 mtime 设到 1h 前,模拟"用户在很久前编辑过这个文件"
 	makeFile(t, homeDir, "GROOT.md", "# v1\n")
-	old := time.Now().Add(-time.Hour).Truncate(time.Second)
-	if err := os.Chtimes(filepath.Join(homeDir, "GROOT.md"), old, old); err != nil {
-		t.Fatalf("Chtimes: %v", err)
-	}
 
 	if err := mgr.Push([]string{"GROOT.md"}); err != nil {
 		t.Fatalf("Push: %v", err)
@@ -169,12 +162,12 @@ func TestSyncManager_Push_AnchorsLocalMtime(t *testing.T) {
 		t.Fatalf("Diff: %v", err)
 	}
 	if !d.IsEmpty() {
-		t.Errorf("expected IsEmpty after push (mtime anchored), got %+v", d)
+		t.Errorf("expected IsEmpty after push (content-hash based), got %+v", d)
 	}
 }
 
-// TestSyncManager_Pull_AnchorsLocalMtime 同上,验证 pull 后 diff 也 IsEmpty。
-func TestSyncManager_Pull_AnchorsLocalMtime(t *testing.T) {
+// TestSyncManager_Pull_IdempotentAfterPull 验证 pull 后 diff 也 IsEmpty。
+func TestSyncManager_Pull_IdempotentAfterPull(t *testing.T) {
 	mgr, homeDir, remoteDir := newTestManager(t)
 
 	// 远端有文件,本地没有
@@ -190,7 +183,7 @@ func TestSyncManager_Pull_AnchorsLocalMtime(t *testing.T) {
 		t.Fatalf("Diff: %v", err)
 	}
 	if !d.IsEmpty() {
-		t.Errorf("expected IsEmpty after pull (mtime anchored), got %+v", d)
+		t.Errorf("expected IsEmpty after pull (content-hash based), got %+v", d)
 	}
 	_ = homeDir
 }

@@ -1,27 +1,39 @@
-package schedule
+package schedule_test
 
 import (
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo/scheduledb"
+	"github.com/zfd81/groot/internal/schedule"
 )
 
-func newTestScheduleStorage(t *testing.T) *Storage {
+// newTestScheduleStorage creates a Storage backed by an in-memory SQLite DB.
+func newTestScheduleStorage(t *testing.T) *schedule.Storage {
 	t.Helper()
-	store := storage.NewLocal()
-	baseDir := t.TempDir()
-	return NewStorage(baseDir, store, logger.NewNop())
+	sqlxDB, err := sqlx.Open("sqlite3", ":memory:?_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { sqlxDB.Close() })
+	if err := db.Migrate(sqlxDB, db.DialectSQLite); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return schedule.NewStorage(scheduledb.New(sqlxDB, db.DialectSQLite), logger.NewNop())
 }
 
-func sampleTask(id string) *Task {
-	return &Task{
+func sampleTask(id string) *schedule.Task {
+	return &schedule.Task{
 		ID:        id,
 		Name:      "test task " + id,
 		Schedule:  "0 0 * * *",
-		TaskDef:   TaskDef{Instruction: "echo hello"},
+		TaskDef:   schedule.TaskDef{Instruction: "echo hello"},
 		CreatedAt: time.Now().UTC().Truncate(time.Second),
 	}
 }
@@ -83,6 +95,7 @@ func TestMoveTask(t *testing.T) {
 		t.Errorf("after move, GetTaskStatus = %q, want %q", status, "archive")
 	}
 
+	// Moving from wrong source status should fail.
 	if err := s.MoveTask("task-move", "active", "archive"); err == nil {
 		t.Errorf("MoveTask from non-existent source should fail")
 	}
@@ -117,26 +130,26 @@ func TestSaveAndLoadExecutions(t *testing.T) {
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
-	rec1 := &ExecutionRecord{
+	rec1 := &schedule.ExecutionRecord{
 		TaskID:     "task-exec",
-		ExecTime:   now.Add(-2 * time.Hour),
+		StartedAt:  now.Add(-2 * time.Hour),
 		Status:     "completed",
 		DurationMs: 100,
 	}
-	rec2 := &ExecutionRecord{
+	rec2 := &schedule.ExecutionRecord{
 		TaskID:     "task-exec",
-		ExecTime:   now.Add(-1 * time.Hour),
+		StartedAt:  now.Add(-1 * time.Hour),
 		Status:     "failed",
 		DurationMs: 200,
 	}
-	rec3 := &ExecutionRecord{
+	rec3 := &schedule.ExecutionRecord{
 		TaskID:     "task-exec",
-		ExecTime:   now,
+		StartedAt:  now,
 		Status:     "completed",
 		DurationMs: 300,
 	}
 
-	for _, rec := range []*ExecutionRecord{rec1, rec2, rec3} {
+	for _, rec := range []*schedule.ExecutionRecord{rec1, rec2, rec3} {
 		if err := s.SaveExecution("task-exec", rec); err != nil {
 			t.Fatalf("SaveExecution: %v", err)
 		}
@@ -150,15 +163,15 @@ func TestSaveAndLoadExecutions(t *testing.T) {
 		t.Fatalf("len(records) = %d, want 3", len(records))
 	}
 
-	// Records should be sorted by ExecTime DESC (newest first)
-	if !records[0].ExecTime.Equal(rec3.ExecTime) {
-		t.Errorf("records[0].ExecTime = %v, want %v", records[0].ExecTime, rec3.ExecTime)
+	// Records should be sorted by StartedAt DESC (newest first).
+	if !records[0].StartedAt.Equal(rec3.StartedAt) {
+		t.Errorf("records[0].StartedAt = %v, want %v", records[0].StartedAt, rec3.StartedAt)
 	}
-	if !records[1].ExecTime.Equal(rec2.ExecTime) {
-		t.Errorf("records[1].ExecTime = %v, want %v", records[1].ExecTime, rec2.ExecTime)
+	if !records[1].StartedAt.Equal(rec2.StartedAt) {
+		t.Errorf("records[1].StartedAt = %v, want %v", records[1].StartedAt, rec2.StartedAt)
 	}
-	if !records[2].ExecTime.Equal(rec1.ExecTime) {
-		t.Errorf("records[2].ExecTime = %v, want %v", records[2].ExecTime, rec1.ExecTime)
+	if !records[2].StartedAt.Equal(rec1.StartedAt) {
+		t.Errorf("records[2].StartedAt = %v, want %v", records[2].StartedAt, rec1.StartedAt)
 	}
 }
 
@@ -169,14 +182,10 @@ func TestListAllTasks(t *testing.T) {
 	t2 := sampleTask("task-B")
 	t3 := sampleTask("task-C")
 
-	if err := s.SaveTask(t1); err != nil {
-		t.Fatalf("SaveTask: %v", err)
-	}
-	if err := s.SaveTask(t2); err != nil {
-		t.Fatalf("SaveTask: %v", err)
-	}
-	if err := s.SaveTask(t3); err != nil {
-		t.Fatalf("SaveTask: %v", err)
+	for _, task := range []*schedule.Task{t1, t2, t3} {
+		if err := s.SaveTask(task); err != nil {
+			t.Fatalf("SaveTask %s: %v", task.ID, err)
+		}
 	}
 
 	if err := s.MoveTask("task-B", "active", "disabled"); err != nil {
@@ -220,9 +229,9 @@ func TestDeleteNonExistentTask(t *testing.T) {
 	}
 }
 
-func TestLoadExecutions_NoExecutionsDir(t *testing.T) {
+func TestLoadExecutions_NoExecutions(t *testing.T) {
 	s := newTestScheduleStorage(t)
-	task := &Task{
+	task := &schedule.Task{
 		ID:        "task-empty-exec",
 		Name:      "尚无执行的任务",
 		Schedule:  "0 * * * *",
@@ -241,12 +250,11 @@ func TestLoadExecutions_NoExecutionsDir(t *testing.T) {
 	}
 }
 
-// TestSaveExecution_TaskNotExist 验证任务不存在时 SaveExecution 返回业务话术。
 func TestSaveExecution_TaskNotExist(t *testing.T) {
 	s := newTestScheduleStorage(t)
-	rec := &ExecutionRecord{
+	rec := &schedule.ExecutionRecord{
 		TaskID:     "task-nope",
-		ExecTime:   time.Now(),
+		StartedAt:  time.Now(),
 		Status:     "completed",
 		DurationMs: 100,
 	}
@@ -256,52 +264,5 @@ func TestSaveExecution_TaskNotExist(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "任务 task-nope 不存在") {
 		t.Errorf("expected error to contain '任务 task-nope 不存在', got: %v", err)
-	}
-}
-
-// TestMoveTask_DstAlreadyExists 验证目标目录已存在(且非空)时,MoveTask 返回错误
-// 而非静默覆盖。底层 os.Rename 对非空目录返回 ENOTEMPTY/EEXIST,Storage 透传该错误,
-// 上层依赖此契约避免数据丢失。
-func TestMoveTask_DstAlreadyExists(t *testing.T) {
-	s := newTestScheduleStorage(t)
-	// 先准备 active/task-x
-	taskA := &Task{
-		ID:        "task-x",
-		Name:      "源任务",
-		Schedule:  "0 * * * *",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	if err := s.SaveTask(taskA); err != nil {
-		t.Fatalf("SaveTask A: %v", err)
-	}
-	// 先 Move 到 disabled
-	if err := s.MoveTask("task-x", "active", "disabled"); err != nil {
-		t.Fatalf("MoveTask 1: %v", err)
-	}
-	// 再 SaveTask 把同 ID 写到 active(产生 dst 残留情形:active/task-x 又出现了)
-	taskB := &Task{
-		ID:        "task-x",
-		Name:      "重新创建的同名任务",
-		Schedule:  "0 * * * *",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	if err := s.SaveTask(taskB); err != nil {
-		t.Fatalf("SaveTask B: %v", err)
-	}
-	// disabled 中仍有 task-x,active 中也有 task-x;再次 Move disabled → active 应当失败:
-	// os.Rename 不允许将目录重命名到一个已存在的非空目录。
-	err := s.MoveTask("task-x", "disabled", "active")
-	if err == nil {
-		t.Fatal("expected MoveTask to fail when dst dir already exists and is non-empty")
-	}
-	// 失败后两侧都应保留(原子性):disabled/task-x 应仍存在;active/task-x 仍是 taskB。
-	loaded, err := s.LoadTask("task-x")
-	if err != nil {
-		t.Fatalf("LoadTask: %v", err)
-	}
-	if loaded.Name != "重新创建的同名任务" {
-		t.Errorf("active side should be untouched, name=%q", loaded.Name)
 	}
 }

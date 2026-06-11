@@ -17,11 +17,11 @@ func GenerateSessionID() string {
 }
 
 // GenerateChatID 生成对话ID
-// 格式: chat_{YYYYMMDDHHMMSSmmm}
+// 格式: {YYYYMMDDHHMMSSmmm}
 func GenerateChatID() string {
 	now := time.Now()
 	ts := now.Format("20060102150405") + fmt.Sprintf("%03d", now.Nanosecond()/1000000)
-	return fmt.Sprintf("chat_%s", ts)
+	return ts
 }
 
 // GenerateStepID 生成步骤ID

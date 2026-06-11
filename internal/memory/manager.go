@@ -1,160 +1,104 @@
 package memory
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo"
 )
 
 // Manager Memory 接口的实现
 type Manager struct {
-	memoryDir     string
 	retentionDays int
 	log           *logger.Logger
-	storage       storage.Storage
+	repo          repo.MemoryRepo
 }
 
 // NewManager 创建 Memory Manager。
-// store 用于附件读写，必须非 nil（启动时通过 storage.New(cfg.Storage) 创建）。
-//
-// 不在此处预创建 memoryDir：所有目录由 storage.Write 在第一次写入时按需建立
-// （local 实现内部 MkdirAll，minio 模式下目录是隐式前缀）。这样在 minio 模式
-// 下不会在进程 cwd 下意外创建一个名为 memoryDir 的本地目录。
-func NewManager(memoryDir string, retentionDays int, log *logger.Logger, store storage.Storage) *Manager {
-	if store == nil {
-		panic("memory: NewManager: storage must not be nil")
+// memRepo 用于会话/聊天记录的数据库读写，必须非 nil。
+func NewManager(retentionDays int, log *logger.Logger, memRepo repo.MemoryRepo) *Manager {
+	if memRepo == nil {
+		panic("memory: NewManager: memRepo must not be nil")
 	}
 
 	return &Manager{
-		memoryDir:     memoryDir,
 		retentionDays: retentionDays,
 		log:           log,
-		storage:       store,
+		repo:          memRepo,
 	}
 }
 
-// GetMemoryDir 返回记忆目录路径
+// GetMemoryDir 保留兼容签名，返回空字符串（数据库模式下无文件目录）
 func (m *Manager) GetMemoryDir() string {
-	return m.memoryDir
+	return ""
 }
 
-// sessionDir 返回会话目录路径
-func (m *Manager) sessionDir(sessionID string) string {
-	return filepath.Join(m.memoryDir, sessionID)
-}
-
-// historyPath 返回 history.json 路径
-func (m *Manager) historyPath(sessionID string) string {
-	return filepath.Join(m.sessionDir(sessionID), "history.json")
-}
-
-// chatsDir 返回 chats 目录路径
-func (m *Manager) chatsDir(sessionID string) string {
-	return filepath.Join(m.sessionDir(sessionID), "chats")
-}
-
-// chatPath 返回单次对话记录路径
-func (m *Manager) chatPath(sessionID, chatID string) string {
-	return filepath.Join(m.chatsDir(sessionID), chatID+".json")
-}
-
-// CreateSession 创建新会话。
-// 仅写入初始 history.json，所有上层目录(sessionDir / chats)
-// 由 storage.Write 按需建立——chats 目录将在首次 SaveChatRecord 时创建。
+// CreateSession 创建新会话
 func (m *Manager) CreateSession(sessionID string) error {
-	history := &History{
+	now := time.Now()
+	return m.repo.CreateSession(context.Background(), &repo.Session{
 		SessionID: sessionID,
-		CreatedAt: time.Now(),
-		Messages:  []Message{},
-	}
-	return m.saveHistory(sessionID, history)
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 }
 
 // ExistsSession 检查会话是否存在
 func (m *Manager) ExistsSession(sessionID string) bool {
-	_, err := m.storage.Stat(context.Background(), m.historyPath(sessionID))
-	return err == nil
+	exists, err := m.repo.ExistsSession(context.Background(), sessionID)
+	if err != nil {
+		return false
+	}
+	return exists
 }
 
 // GetSessionInfo 获取会话信息
 func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
-	history, err := m.GetHistory(sessionID)
+	s, err := m.repo.GetSession(context.Background(), sessionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("会话不存在: %s", sessionID)
 	}
 
-	// 获取最后活跃时间
+	// 获取最后活跃时间（UpdatedAt 即最后一次 SaveChat 的时间）
 	lastActiveAt := ""
-	if len(history.Messages) > 0 {
-		lastActiveAt = history.Messages[len(history.Messages)-1].Timestamp.Format("2006-01-02T15:04:05Z")
+	if !s.UpdatedAt.IsZero() && s.Round > 0 {
+		lastActiveAt = s.UpdatedAt.Format("2006-01-02T15:04:05Z")
 	}
 
 	return &SessionInfo{
 		SessionID:    sessionID,
-		CreatedAt:    history.CreatedAt,
-		RoundCount:   len(history.Messages),
+		CreatedAt:    s.CreatedAt,
+		RoundCount:   s.Round,
 		LastActiveAt: lastActiveAt,
-		Path:         m.sessionDir(sessionID),
+		Path:         "",
 	}, nil
 }
 
-// listSessionIDs 返回 memoryDir 下所有有效 session ID(目录 + 含 history.json)。
-// memoryDir 不存在时返回空切片(用于首次启动 / 已被全部清理)。
-func (m *Manager) listSessionIDs(ctx context.Context) ([]string, error) {
-	entries, err := m.storage.List(ctx, m.memoryDir)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("读取记忆目录失败: %w", err)
-	}
-	var ids []string
-	for _, entry := range entries {
-		if !entry.IsDir {
-			continue
-		}
-		sessionID := filepath.Base(entry.Path)
-		if m.ExistsSession(sessionID) {
-			ids = append(ids, sessionID)
-		}
-	}
-	return ids, nil
-}
-
-// ListSessions 查询会话列表
+// ListSessions 查询会话列表，支持分页
 func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
-	ids, err := m.listSessionIDs(context.Background())
+	sessions, err := m.repo.ListSessions(context.Background())
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("查询会话列表失败: %w", err)
 	}
 
-	var sessions []SessionInfo
-	for _, sessionID := range ids {
-		info, err := m.GetSessionInfo(sessionID)
-		if err != nil {
-			m.log.Info("获取会话信息失败: " + sessionID + ", error: " + err.Error())
-			continue
+	var infos []SessionInfo
+	for _, s := range sessions {
+		lastActiveAt := ""
+		if !s.UpdatedAt.IsZero() && s.Round > 0 {
+			lastActiveAt = s.UpdatedAt.Format("2006-01-02T15:04:05Z")
 		}
-		sessions = append(sessions, *info)
+		infos = append(infos, SessionInfo{
+			SessionID:    s.SessionID,
+			CreatedAt:    s.CreatedAt,
+			RoundCount:   s.Round,
+			LastActiveAt: lastActiveAt,
+			Path:         "",
+		})
 	}
 
-	// 按创建时间倒序排列
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
-	})
-
-	total := len(sessions)
-
-	// 应用分页
+	total := len(infos)
 	if offset >= total {
 		return []SessionInfo{}, total, nil
 	}
@@ -162,69 +106,59 @@ func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
 	if end > total {
 		end = total
 	}
-
-	return sessions[offset:end], total, nil
+	return infos[offset:end], total, nil
 }
 
-// saveHistory 保存 history.json。
-// 原子写入由 storage.Write 内部保证(local 走 tmp+rename, minio 由 PutObject 协议保证)。
-func (m *Manager) saveHistory(sessionID string, history *History) error {
-	data, err := json.MarshalIndent(history, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化 history 失败: %w", err)
-	}
-	return m.storage.Write(
-		context.Background(),
-		m.historyPath(sessionID),
-		bytes.NewReader(data),
-		int64(len(data)),
-		"application/json",
-	)
-}
-
-// GetHistory 获取会话历史
+// GetHistory 获取会话历史（从 DB 重建 History 结构）
 func (m *Manager) GetHistory(sessionID string) (*History, error) {
-	rc, err := m.storage.Read(context.Background(), m.historyPath(sessionID))
+	s, err := m.repo.GetSession(context.Background(), sessionID)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return nil, fmt.Errorf("会话不存在: %s", sessionID)
+		return nil, fmt.Errorf("会话不存在: %s", sessionID)
+	}
+
+	chats, err := m.repo.LoadHistory(context.Background(), sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("读取对话历史失败: %w", err)
+	}
+
+	messages := make([]Message, 0, len(chats))
+	for _, c := range chats {
+		msg := Message{
+			Round:       c.Round,
+			ChatID:      c.ChatID,
+			Timestamp:   c.EndedAt,
+			Instruction: c.Instruction,
+			Result:      c.Result,
+			Status:      c.Status,
+			Duration:    c.Duration,
+			StepsCount:  len(c.Steps),
+			AgentName:   c.AgentName,
+			Error:       c.Error,
 		}
-		return nil, fmt.Errorf("读取 history 失败: %w", err)
-	}
-	defer rc.Close()
-
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, fmt.Errorf("读取 history 内容失败: %w", err)
+		messages = append(messages, msg)
 	}
 
-	var history History
-	if err := json.Unmarshal(data, &history); err != nil {
-		return nil, fmt.Errorf("解析 history 失败: %w", err)
-	}
-
-	return &history, nil
+	return &History{
+		SessionID: sessionID,
+		CreatedAt: s.CreatedAt,
+		Messages:  messages,
+	}, nil
 }
 
-// AppendMessage 追加对话消息
+// AppendMessage 在 DB 模式下为空操作：轮次信息已由 SaveChatRecord/SaveChat 自动维护。
+// 保留签名保持与调用方（executor.go）兼容。
 func (m *Manager) AppendMessage(sessionID string, message *Message) error {
-	history, err := m.GetHistory(sessionID)
-	if err != nil {
-		return err
-	}
-
-	history.Messages = append(history.Messages, *message)
-
-	return m.saveHistory(sessionID, history)
+	// SaveChat 已将 round 自增并更新 updated_at，无需额外操作
+	return nil
 }
 
 // GetRoundCount 获取对话轮数
 func (m *Manager) GetRoundCount(sessionID string) int {
-	history, err := m.GetHistory(sessionID)
+	s, err := m.repo.GetSession(context.Background(), sessionID)
 	if err != nil {
 		return 0
 	}
-	return len(history.Messages)
+	return s.Round
 }
 
 // GetContextMessages 返回用于 LLM 上下文构建的历史消息（截断后）
@@ -242,110 +176,56 @@ func (m *Manager) GetContextMessages(sessionID string, windowSize int) ([]Messag
 	return history.Messages[len(history.Messages)-windowSize:], nil
 }
 
-// SaveChatRecord 保存详细对话记录。
-// 原子写入由 storage.Write 内部保证;chats 目录在首次写入时由 Write 自动建立。
+// SaveChatRecord 保存详细对话记录到数据库
 func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
-	data, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化 chat record 失败: %w", err)
+	// 确保 SessionID 字段已设置
+	if record.SessionID == "" {
+		record.SessionID = sessionID
 	}
-	return m.storage.Write(
-		context.Background(),
-		m.chatPath(sessionID, record.ChatID),
-		bytes.NewReader(data),
-		int64(len(data)),
-		"application/json",
-	)
+	return m.repo.SaveChat(context.Background(), record)
 }
 
 // GetChatRecord 获取单次对话详情
 func (m *Manager) GetChatRecord(sessionID string, chatID string) (*ChatRecord, error) {
-	rc, err := m.storage.Read(context.Background(), m.chatPath(sessionID, chatID))
+	rec, err := m.repo.GetChat(context.Background(), chatID)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return nil, fmt.Errorf("对话记录不存在: %s", chatID)
-		}
-		return nil, fmt.Errorf("读取 chat record 失败: %w", err)
+		return nil, fmt.Errorf("对话记录不存在: %s", chatID)
 	}
-	defer rc.Close()
-
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, fmt.Errorf("读取 chat record 内容失败: %w", err)
-	}
-
-	var record ChatRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("解析 chat record 失败: %w", err)
-	}
-
-	return &record, nil
+	return rec, nil
 }
 
 // GetLatestChatRecord 获取最近一次对话记录
 func (m *Manager) GetLatestChatRecord(sessionID string) (*ChatRecord, error) {
-	history, err := m.GetHistory(sessionID)
+	chats, err := m.repo.LoadHistory(context.Background(), sessionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("读取对话历史失败: %w", err)
 	}
-
-	if len(history.Messages) == 0 {
+	if len(chats) == 0 {
 		return nil, nil
 	}
-
-	latest := history.Messages[len(history.Messages)-1]
-	return m.GetChatRecord(sessionID, latest.ChatID)
+	return chats[len(chats)-1], nil
 }
 
 // GetSessionMdContent 返回会话规则提示内容。
-//
-// 历史上该方法读取每个 session 目录下的 SESSION.md 物理文件,现在改为直接
-// 返回 //go:embed 嵌入的 defaultSessionRules 常量——所有会话共享同一份规则,
-// 不再做会话级定制。sessionID 参数仅作签名兼容保留,不参与逻辑。
-//
-// 返回 err 永远为 nil。签名保持 (string, error) 是为了让接口 Memory 与所有
-// 现有调用方(executor.go 等)无需调整。
+// sessionID 参数仅作签名兼容保留，不参与逻辑。
+// 返回 err 永远为 nil。
 func (m *Manager) GetSessionMdContent(sessionID string) (string, error) {
 	_ = sessionID
 	return defaultSessionRules, nil
 }
 
-// Cleanup 清理过期会话。
-//
-// 一次性删除整个 sessionDir(含 attachments / history.json / chats / 旧版残留
-// SESSION.md)——所有内容都在 sessionDir 子树内,storage.DeleteDir 递归处理。
-// 任何 session 删除失败时跳过该 session(deleted 计数不增加),下次 Cleanup
-// 会自动重试,避免出现"元数据已删但附件残留"或反向的不一致状态。
+// DeleteSession 删除会话及其所有对话记录
+func (m *Manager) DeleteSession(sessionID string) error {
+	return m.repo.DeleteSession(context.Background(), sessionID)
+}
+
+// Cleanup 清理过期会话
 func (m *Manager) Cleanup(ctx context.Context) (int, error) {
-	ids, err := m.listSessionIDs(ctx)
-	if err != nil {
-		return 0, err
-	}
-
 	cutoff := time.Now().AddDate(0, 0, -m.retentionDays)
-	deleted := 0
-
-	for _, sessionID := range ids {
-		sessionDir := m.sessionDir(sessionID)
-		info, err := m.storage.Stat(ctx, sessionDir)
-		if err != nil {
-			m.log.Info("跳过会话（无法获取目录信息）: " + sessionID + ", error: " + err.Error())
-			continue
-		}
-
-		if info.ModTime.Before(cutoff) {
-			// 一次性删整个 sessionDir。任何失败时跳过,下次重试,
-			// 保证"元数据 + 附件"始终同步。
-			if err := m.storage.DeleteDir(ctx, sessionDir); err != nil {
-				m.log.Error("清理会话失败: " + sessionID + ", error: " + err.Error())
-				continue
-			}
-			deleted++
-			roundCount := m.GetRoundCount(sessionID)
-			m.log.Info("清理会话: " + sessionID + ", 最后活跃: " + info.ModTime.Format("2006-01-02") + ", 轮数: " + fmt.Sprintf("%d", roundCount))
-		}
+	deleted, err := m.repo.DeleteExpiredSessions(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("清理过期会话失败: %w", err)
 	}
-
 	m.log.Info(fmt.Sprintf("清理完成, 删除 %d 个会话", deleted))
 	return deleted, nil
 }

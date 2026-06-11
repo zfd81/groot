@@ -11,25 +11,24 @@ import (
 // EnvFileName 是基础设施环境配置文件的固定文件名（与 config.yaml 同目录）。
 const EnvFileName = "env.yaml"
 
-// envFile 描述 ~/.groot/env.yaml 的顶层结构。当前仅承载 storage.minio
-// 一节；未来如有更多基础设施凭据（如 redis、kafka），按相同方式扩展。
+// envFile 描述 ~/.groot/env.yaml 的顶层结构。当前承载 database 节；
+// 未来如有更多基础设施凭据（如 redis、kafka），按相同方式扩展。
 type envFile struct {
-	Minio *MinioConfig `yaml:"minio"`
+	Database *DatabaseConfig `yaml:"database"`
 }
 
-// loadEnvFile 读取 homeDir 下的 env.yaml 并把其中的 minio 节注入 cfg。
+// loadEnvFile 读取 homeDir 下的 env.yaml 并把其中的 database 节注入 cfg。
 //
-// 行为约定（对应设计 1.6 / 1.7 节）：
-//   - 入口必先把 cfg.Storage.Minio 置 nil，确保 config.yaml 里残留的
-//     storage.minio 节不再生效（解耦基础设施凭据与业务配置）
-//   - env.yaml 不存在 → 保持 nil（local 模式）
-//   - env.yaml 存在但 minio 节缺失/为空 → 保持 nil（local 模式）
-//   - env.yaml 存在且 minio 节有效 → 赋值给 cfg.Storage.Minio
+// 行为约定：
+//   - 入口必先把 cfg.Database 置 nil
+//   - env.yaml 不存在 → 保持 nil
+//   - env.yaml 存在但 database 节缺失/为空 → 保持 nil
+//   - env.yaml 存在且 database 节有效 → 赋值给 cfg.Database
 //
-// 环境变量展开（如 ${MINIO_ACCESS_KEY}）由调用方后续的 expandConfigEnvVars
+// 环境变量展开（如 ${DB_DSN}）由调用方后续的 expandConfigEnvVars
 // 统一处理，本函数只负责"按 yaml 原样注入"。
 func loadEnvFile(cfg *Config, homeDir string) error {
-	cfg.Storage.Minio = nil
+	cfg.Database = nil
 
 	envPath := filepath.Join(homeDir, EnvFileName)
 	data, err := os.ReadFile(envPath)
@@ -45,10 +44,6 @@ func loadEnvFile(cfg *Config, homeDir string) error {
 		return fmt.Errorf("failed to parse env file: %w", err)
 	}
 
-	if ef.Minio == nil {
-		return nil
-	}
-
-	cfg.Storage.Minio = ef.Minio
+	cfg.Database = ef.Database
 	return nil
 }

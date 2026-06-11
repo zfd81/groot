@@ -3,6 +3,8 @@ package cluster
 import (
 	"sort"
 	"time"
+
+	"github.com/zfd81/groot/internal/repo"
 )
 
 const (
@@ -10,30 +12,22 @@ const (
 	RoleFollower = "follower"
 )
 
-// MemberInfo represents a cluster member's metadata from its registration file.
-type MemberInfo struct {
-	ID    string
-	Mtime time.Time
-}
-
-// DetermineRole determines whether this instance should be leader or follower.
-// It filters out stale members (mtime older than timeout), sorts the survivors
-// by ID, and returns "leader" if selfID is the smallest or there are no survivors.
-func DetermineRole(selfID string, members []MemberInfo, timeout time.Duration) string {
+// DetermineRole decides whether selfID should be leader.
+// members: all known members from MemberRepo.ListAll().
+// timeout: heartbeat timeout for alive filtering.
+func DetermineRole(selfID string, members []*repo.Member, timeout time.Duration) string {
 	now := time.Now()
-	var alive []MemberInfo
+	var alive []*repo.Member
 	for _, m := range members {
-		if now.Sub(m.Mtime) < timeout {
+		if now.Sub(m.HeartbeatAt) < timeout {
 			alive = append(alive, m)
 		}
 	}
 	if len(alive) == 0 {
 		return RoleLeader
 	}
-	sort.Slice(alive, func(i, j int) bool {
-		return alive[i].ID < alive[j].ID
-	})
-	if selfID == alive[0].ID {
+	sort.Slice(alive, func(i, j int) bool { return alive[i].RegID < alive[j].RegID })
+	if alive[0].RegID == selfID {
 		return RoleLeader
 	}
 	return RoleFollower

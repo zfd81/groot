@@ -108,55 +108,43 @@ subagent:
 	}
 }
 
-// TestExpandConfigEnvVars_StorageMinio 验证加载阶段会展开 storage.minio 的
-// AccessKey/SecretKey 中的 ${ENV_VAR}。
-func TestExpandConfigEnvVars_StorageMinio(t *testing.T) {
-	t.Setenv("MINIO_AK_TEST", "expanded-ak")
-	t.Setenv("MINIO_SK_TEST", "expanded-sk")
+// TestExpandConfigEnvVars_DatabaseDSN 验证加载阶段会展开 database.dsn 中的 ${ENV_VAR}。
+func TestExpandConfigEnvVars_DatabaseDSN(t *testing.T) {
+	t.Setenv("DB_DSN_TEST", "mysql://user:pass@localhost/groot")
 	cfg := &Config{
-		Storage: StorageConfig{
-			Minio: &MinioConfig{
-				AccessKey: "${MINIO_AK_TEST}",
-				SecretKey: "${MINIO_SK_TEST}",
-			},
+		Database: &DatabaseConfig{
+			Driver: "mysql",
+			DSN:    "${DB_DSN_TEST}",
 		},
 	}
 	expandConfigEnvVars(cfg)
-	if cfg.Storage.Minio.AccessKey != "expanded-ak" {
-		t.Errorf("AccessKey = %q, want %q", cfg.Storage.Minio.AccessKey, "expanded-ak")
-	}
-	if cfg.Storage.Minio.SecretKey != "expanded-sk" {
-		t.Errorf("SecretKey = %q, want %q", cfg.Storage.Minio.SecretKey, "expanded-sk")
+	if cfg.Database.DSN != "mysql://user:pass@localhost/groot" {
+		t.Errorf("DSN = %q, want %q", cfg.Database.DSN, "mysql://user:pass@localhost/groot")
 	}
 }
 
-// TestExpandConfigEnvVars_StorageNilMinio 验证 storage.minio 为 nil 时
+// TestExpandConfigEnvVars_NilDatabase 验证 database 为 nil 时
 // expandConfigEnvVars 不会 panic。
-func TestExpandConfigEnvVars_StorageNilMinio(t *testing.T) {
-	cfg := &Config{} // Storage.Minio == nil
+func TestExpandConfigEnvVars_NilDatabase(t *testing.T) {
+	cfg := &Config{} // Database == nil
 	// 不应 panic
 	expandConfigEnvVars(cfg)
-	if cfg.Storage.Minio != nil {
-		t.Error("Storage.Minio should remain nil")
+	if cfg.Database != nil {
+		t.Error("Database should remain nil")
 	}
 }
 
-// TestExpandConfigEnvVars_StorageMinioEmptyEnv 验证 ${ENV_VAR} 引用未设置的
-// 环境变量时，展开结果为空字符串（与 LLM APIKey 的处理一致）。
-func TestExpandConfigEnvVars_StorageMinioEmptyEnv(t *testing.T) {
+// TestExpandConfigEnvVars_DatabaseEmptyEnv 验证 ${ENV_VAR} 引用未设置的
+// 环境变量时，展开结果为空字符串。
+func TestExpandConfigEnvVars_DatabaseEmptyEnv(t *testing.T) {
 	cfg := &Config{
-		Storage: StorageConfig{
-			Minio: &MinioConfig{
-				AccessKey: "${MINIO_AK_DEFINITELY_NOT_SET_XYZ}",
-				SecretKey: "${MINIO_SK_DEFINITELY_NOT_SET_XYZ}",
-			},
+		Database: &DatabaseConfig{
+			Driver: "postgres",
+			DSN:    "${DB_DSN_DEFINITELY_NOT_SET_XYZ}",
 		},
 	}
 	expandConfigEnvVars(cfg)
-	if cfg.Storage.Minio.AccessKey != "" {
-		t.Errorf("AccessKey = %q, want empty string", cfg.Storage.Minio.AccessKey)
-	}
-	if cfg.Storage.Minio.SecretKey != "" {
-		t.Errorf("SecretKey = %q, want empty string", cfg.Storage.Minio.SecretKey)
+	if cfg.Database.DSN != "" {
+		t.Errorf("DSN = %q, want empty string", cfg.Database.DSN)
 	}
 }

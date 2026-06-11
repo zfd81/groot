@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	istorage "github.com/zfd81/groot/internal/storage"
+	"github.com/zfd81/groot/internal/repo"
 )
 
-// SyncManager 管理本地 HOME 与 MinIO 之间的集群共享配置同步。
-// local 模式下不可用;minio 模式由 NewSyncManager 构造可用实例。
+// SyncManager 管理本地 HOME 与数据库之间的集群共享配置同步。
+// local 模式下不可用;MySQL/PostgreSQL 模式由 NewSyncManager 构造可用实例。
 type SyncManager interface {
 	Push(paths []string) error
 	Pull(paths []string) error
@@ -28,8 +28,8 @@ type SyncManager interface {
 	CleanTmpResidue(paths []string) error
 }
 
-// ErrSyncDisabled 表示当前未启用 minio 模式,sync 命令不可用。
-var ErrSyncDisabled = errors.New("sync: minio 模式未启用 — 请在 env.yaml 中配置 minio 节")
+// ErrSyncDisabled 表示当前未启用数据库模式,sync 命令不可用。
+var ErrSyncDisabled = errors.New("sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 env.yaml 中配置 database 节")
 
 // disabledSyncManager 是 local 模式下的空实现,所有方法返回 ErrSyncDisabled。
 type disabledSyncManager struct{}
@@ -41,21 +41,19 @@ func (d *disabledSyncManager) Diff(_ []string) (DiffResult, error) {
 }
 func (d *disabledSyncManager) CleanTmpResidue(_ []string) error { return ErrSyncDisabled }
 
-// localSyncManager 是可用的 SyncManager 实现:本地侧走 os.*,远端侧走 Storage 接口。
+// localSyncManager 是可用的 SyncManager 实现:本地侧走 os.*,远端侧走 ResourceRepo 接口。
 type localSyncManager struct {
-	homeDir    string // 本地 HOME 绝对路径
-	remoteBase string // 远端 object-key 前缀(minio)或绝对路径(local 测试)
-	store      istorage.Storage
+	homeDir string // 本地 HOME 绝对路径
+	repo    repo.ResourceRepo
 }
 
 // NewSyncManager 创建 SyncManager。
-// store 为 nil 时返回 disabledSyncManager(local 模式)。
-// remoteBase 为空字符串在 minio 模式下表示 bucket 根,是合法值。
-func NewSyncManager(homeDir, remoteBase string, store istorage.Storage) SyncManager {
-	if store == nil {
+// r 为 nil 时返回 disabledSyncManager(local 模式)。
+func NewSyncManager(homeDir string, r repo.ResourceRepo) SyncManager {
+	if r == nil {
 		return &disabledSyncManager{}
 	}
-	return &localSyncManager{homeDir: homeDir, remoteBase: remoteBase, store: store}
+	return &localSyncManager{homeDir: homeDir, repo: r}
 }
 
 // resolveSyncPaths 校验用户输入并返回交给 ComputeDiff 的相对路径列表。
@@ -82,7 +80,7 @@ func (m *localSyncManager) Diff(paths []string) (DiffResult, error) {
 	if err != nil {
 		return DiffResult{}, err
 	}
-	return ComputeDiff(m.store, m.homeDir, m.remoteBase, resolved)
+	return ComputeDiff(m.repo, m.homeDir, resolved)
 }
 
 // Push 把本地 paths 镜像推送到远端:本地新增/修改 → 写远端;远端多余 → 删远端。
@@ -97,7 +95,7 @@ func (m *localSyncManager) Push(paths []string) error {
 	if err != nil {
 		return err
 	}
-	diff, err := ComputeDiff(m.store, m.homeDir, m.remoteBase, resolved)
+	diff, err := ComputeDiff(m.repo, m.homeDir, resolved)
 	if err != nil {
 		return err
 	}
@@ -116,8 +114,7 @@ func (m *localSyncManager) Push(paths []string) error {
 	}
 	// 远端多余文件 → 删除(镜像)
 	for _, rel := range diff.Removed {
-		remotePath := joinPath(m.remoteBase, rel)
-		if err := m.store.Delete(ctx, remotePath); err != nil && !errors.Is(err, istorage.ErrNotFound) {
+		if err := m.repo.Delete(ctx, rel); err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return fmt.Errorf("sync push delete %s: %w", rel, err)
 		}
 	}
@@ -126,8 +123,15 @@ func (m *localSyncManager) Push(paths []string) error {
 
 func (m *localSyncManager) pushOne(ctx context.Context, rel string) error {
 	localPath := filepath.Join(m.homeDir, filepath.FromSlash(rel))
-	remotePath := joinPath(m.remoteBase, rel)
-	if err := pushFile(ctx, m.store, localPath, remotePath); err != nil {
+	content, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("sync push read %s: %w", rel, err)
+	}
+	if err := m.repo.Put(ctx, &repo.Resource{
+		Path:    rel,
+		Content: content,
+		Size:    int64(len(content)),
+	}); err != nil {
 		return fmt.Errorf("sync push %s: %w", rel, err)
 	}
 	return nil
@@ -155,7 +159,7 @@ func (m *localSyncManager) Pull(paths []string) error {
 		return fmt.Errorf("sync pull cleanup tmp: %w", err)
 	}
 
-	diff, err := ComputeDiff(m.store, m.homeDir, m.remoteBase, resolved)
+	diff, err := ComputeDiff(m.repo, m.homeDir, resolved)
 	if err != nil {
 		return err
 	}
@@ -184,77 +188,23 @@ func (m *localSyncManager) Pull(paths []string) error {
 }
 
 func (m *localSyncManager) pullOne(ctx context.Context, rel string) error {
-	remotePath := joinPath(m.remoteBase, rel)
+	res, err := m.repo.Get(ctx, rel)
+	if err != nil {
+		return fmt.Errorf("sync pull get %s: %w", rel, err)
+	}
 	localPath := filepath.Join(m.homeDir, filepath.FromSlash(rel))
-	if err := pullFile(ctx, m.store, remotePath, localPath); err != nil {
-		return fmt.Errorf("sync pull %s: %w", rel, err)
+	if err := writeAtomic(localPath, res.Content); err != nil {
+		return fmt.Errorf("sync pull write %s: %w", rel, err)
 	}
 	return nil
 }
 
-// --- 文件级 push/pull 操作 ---
-
-// pushFile 把本地文件写到远端(通过 Storage 接口原子写),
-// 写完后立即 Stat 远端拿到 LastModified,把本地文件 mtime 锚定到该时间。
-//
-// 锚定语义见 spec §1.8.3:本地 mtime 与远端 LastModified 是不同含义的时间锚点
-// (本地是内容修改时间,远端是 object 上传时间,push/pull 完成时刻必然不同),
-// sync 完成后必须把双侧时间对齐到同一锚点(取远端 LastModified),
-// 否则下一次 diff 会把刚刚 sync 过的文件错误判为 Modified。
-func pushFile(ctx context.Context, store istorage.Storage, localPath, remotePath string) error {
-	f, err := os.Open(localPath)
-	if err != nil {
+// writeAtomic 使用 tmp+rename 原子写文件内容到 dst。
+func writeAtomic(dst string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return err
-	}
-	if err := store.Write(ctx, remotePath, f, info.Size(), ""); err != nil {
-		f.Close()
-		return err
-	}
-	f.Close()
-
-	// 锚定本地 mtime 到远端 LastModified
-	ri, err := store.Stat(ctx, remotePath)
-	if err != nil {
-		return fmt.Errorf("stat remote after push: %w", err)
-	}
-	if err := os.Chtimes(localPath, ri.ModTime, ri.ModTime); err != nil {
-		return fmt.Errorf("chtimes after push: %w", err)
-	}
-	return nil
-}
-
-// pullFile 把远端文件写到本地,使用 tmp+rename 保证原子写;
-// rename 完成后立即把本地 mtime 锚定到远端 LastModified
-// (锚定语义同 pushFile)。
-func pullFile(ctx context.Context, store istorage.Storage, remotePath, localPath string) error {
-	// 入口先拿远端元数据,后面用作 mtime 锚点
-	ri, err := store.Stat(ctx, remotePath)
-	if err != nil {
-		return err
-	}
-
-	rc, err := store.Read(ctx, remotePath)
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
-
-	// 读取全部内容
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return err
-	}
-
-	// 原子写:tmp → sync → rename
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return err
-	}
-	tmp := localPath + ".tmp"
+	tmp := dst + ".tmp"
 	_ = os.Remove(tmp) // 清理孤儿 tmp
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
@@ -274,15 +224,7 @@ func pullFile(ctx context.Context, store istorage.Storage, remotePath, localPath
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, localPath); err != nil {
-		return err
-	}
-
-	// 锚定本地 mtime 到远端 LastModified
-	if err := os.Chtimes(localPath, ri.ModTime, ri.ModTime); err != nil {
-		return fmt.Errorf("chtimes after pull: %w", err)
-	}
-	return nil
+	return os.Rename(tmp, dst)
 }
 
 // CleanTmpResidue 删除 paths 范围内所有 *.tmp 残留(上次 pull 中途崩溃留下)。

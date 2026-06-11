@@ -64,7 +64,9 @@ func RunInit(homeDir string) error {
 	}
 
 	// 创建子目录
-	subDirs := []string{"skills", "mcp", "subagents", "memory", "logs", "cluster/members"}
+	// memory / schedules / cluster 等运行时数据已迁入数据库（SQLite/MySQL/PG），
+	// 不再创建对应目录。仅保留资源类目录（skills/mcp/subagents）和日志目录。
+	subDirs := []string{"skills", "mcp", "subagents", "logs"}
 	for _, dir := range subDirs {
 		if err := createDir(filepath.Join(homeDir, dir), "目录 "+dir, false); err != nil {
 			return err
@@ -209,8 +211,8 @@ func printNextSteps(homeDir string) {
 	fmt.Printf("     vim %s/config.yaml\n", shortPath)
 	fmt.Println("  2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）")
 	fmt.Println("     export OPENAI_API_KEY=\"your-api-key\"")
-	fmt.Println("  3. （可选）启用 MinIO 对象存储：编辑环境配置文件")
-	fmt.Printf("     vim %s/env.yaml   # 默认全注释 → 本地磁盘存储\n", shortPath)
+	fmt.Println("  3. （可选）启用数据库后端：编辑环境配置文件")
+	fmt.Printf("     vim %s/env.yaml   # 默认全注释 → SQLite 本地模式\n", shortPath)
 	fmt.Println("  4. 启动服务")
 	fmt.Println("     groot")
 }
