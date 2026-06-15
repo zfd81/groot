@@ -6,7 +6,8 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// Migrate creates all tables if they don't exist. Idempotent.
+// Migrate creates all tables if they don't exist, then runs cleanup steps for
+// historical schema (e.g. dropping deprecated indices). Idempotent.
 func Migrate(db *sqlx.DB, dialect Dialect) error {
 	stmts := ddlStatements(dialect)
 	for _, stmt := range stmts {
@@ -14,7 +15,71 @@ func Migrate(db *sqlx.DB, dialect Dialect) error {
 			return fmt.Errorf("db migrate: %w", err)
 		}
 	}
+	if err := dropLegacyIndices(db, dialect); err != nil {
+		return fmt.Errorf("db migrate cleanup: %w", err)
+	}
 	return nil
+}
+
+// dropLegacyIndices removes indices that earlier versions created but the
+// current schema no longer wants. Each step probes the catalog first so it
+// works on every supported dialect/version (no reliance on `DROP INDEX
+// IF EXISTS` syntax variants).
+func dropLegacyIndices(db *sqlx.DB, dialect Dialect) error {
+	// uk_session_round on memory_chats: 早期版本以 UNIQUE (session_id, round)
+	// 强约束建表；新方案下子 Agent 沿用父 round 会与主 Agent 同 round 冲突，
+	// 所以这个唯一约束必须降级为非唯一索引（已在 DDL 中以 idx_mc_session_round 补回）。
+	return dropIndexIfExists(db, dialect, "memory_chats", "uk_session_round")
+}
+
+// dropIndexIfExists drops an index by name only if the catalog reports it.
+// Returns nil whether or not the index existed; surfaces only real DROP errors.
+func dropIndexIfExists(db *sqlx.DB, dialect Dialect, table, indexName string) error {
+	exists, err := indexExists(db, dialect, table, indexName)
+	if err != nil {
+		return fmt.Errorf("probe index %s: %w", indexName, err)
+	}
+	if !exists {
+		return nil
+	}
+	var stmt string
+	switch dialect {
+	case DialectMySQL:
+		// MySQL 5.7 / 8.0.0–8.0.28 不识别 IF EXISTS；探测过后直接 DROP 即可。
+		stmt = fmt.Sprintf("ALTER TABLE %s DROP INDEX %s", table, indexName)
+	case DialectPostgres:
+		stmt = fmt.Sprintf("DROP INDEX %s", indexName)
+	default: // SQLite
+		stmt = fmt.Sprintf("DROP INDEX %s", indexName)
+	}
+	if _, err := db.Exec(stmt); err != nil {
+		return fmt.Errorf("drop index %s on %s: %w", indexName, table, err)
+	}
+	return nil
+}
+
+// indexExists queries the dialect-specific catalog for an index by name.
+func indexExists(db *sqlx.DB, dialect Dialect, table, indexName string) (bool, error) {
+	var q string
+	var args []interface{}
+	switch dialect {
+	case DialectMySQL:
+		q = `SELECT COUNT(*) FROM information_schema.statistics
+		     WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`
+		args = []interface{}{table, indexName}
+	case DialectPostgres:
+		q = `SELECT COUNT(*) FROM pg_indexes
+		     WHERE schemaname = current_schema() AND tablename = $1 AND indexname = $2`
+		args = []interface{}{table, indexName}
+	default: // SQLite
+		q = `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`
+		args = []interface{}{indexName}
+	}
+	var n int
+	if err := db.Get(&n, q, args...); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func ddlStatements(d Dialect) []string {
@@ -97,7 +162,7 @@ func sqliteDDL() []string {
 			started_at        INTEGER NOT NULL,
 			finished_at       INTEGER
 		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_session_round ON memory_chats(session_id, round)`,
+		`CREATE INDEX IF NOT EXISTS idx_mc_session_round ON memory_chats(session_id, round)`,
 		`CREATE INDEX IF NOT EXISTS idx_mc_session_started ON memory_chats(session_id, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mc_started_at ON memory_chats(started_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_mc_status ON memory_chats(status)`,
@@ -181,7 +246,7 @@ func mysqlDDL() []string {
 			duration_ms       BIGINT       NOT NULL DEFAULT 0,
 			started_at        BIGINT       NOT NULL,
 			finished_at       BIGINT,
-			UNIQUE KEY uk_session_round (session_id, round),
+			KEY idx_session_round (session_id, round),
 			KEY idx_session_started (session_id, started_at DESC),
 			KEY idx_started_at (started_at),
 			KEY idx_status (status)
@@ -267,7 +332,7 @@ func postgresDDL() []string {
 			started_at        BIGINT       NOT NULL,
 			finished_at       BIGINT
 		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_session_round ON memory_chats(session_id, round)`,
+		`CREATE INDEX IF NOT EXISTS idx_mc_session_round ON memory_chats(session_id, round)`,
 		`CREATE INDEX IF NOT EXISTS idx_mc_session_started ON memory_chats(session_id, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mc_started_at ON memory_chats(started_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_mc_status ON memory_chats(status)`,

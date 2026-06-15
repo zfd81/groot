@@ -96,9 +96,21 @@ func (e *Engine) Run(
 	cb *ProgressCallback,
 	agentMdContent string,
 ) (*RunResult, error) {
-	// 0. 把父 modelName 放进 ctx —— call_agent 工具运行时通过它把同一个 model
+	// 0. 解析实际生效的 model 名（modelName 为空时回退到 LLMConfig.DefaultModel），
+	// 并把它放进 ctx —— call_agent 工具运行时通过它把同一个 model
 	// 透传给子 Agent，保证编排模式下子 Agent 跟随主 Agent 当前选定的 model。
-	ctx = WithParentModel(ctx, modelName)
+	resolvedModel := modelName
+	if resolvedModel == "" {
+		resolvedModel = e.llmConfig.DefaultModel
+	}
+	ctx = WithParentModel(ctx, resolvedModel)
+
+	// 主 Agent 自身的 model 名记入累加器，Run 收尾时取出写入 RunResult.Model。
+	if e.tokenAccumulators != nil {
+		if mainID := mainChatIDFromContext(ctx); mainID != "" {
+			e.tokenAccumulators.SetModel(mainID, resolvedModel)
+		}
+	}
 
 	// 1. Create ChatModel with per-call timeout
 	stepTimeout := time.Duration(e.reactConfig.StepTimeout) * time.Second
@@ -263,7 +275,7 @@ eventLoop:
 
 			// Handle Tool role (tool result from MCP execution)
 			if msgOutput.Role == schema.Tool {
-				e.processToolEvent(sseAgentName, event, cb, &steps)
+				e.processToolEvent(ctx, eventAgentName, sseAgentName, event, cb, &steps)
 				continue
 			}
 
@@ -277,7 +289,12 @@ eventLoop:
 						if err != nil {
 							break
 						}
+						// msg == nil 时可能仍携带 usage-only chunk（OpenAI streaming 把
+						// token 用量放在最后一个 content=nil 的 chunk 里）。先处理 usage
+						// 再决定是否 continue。
 						if msg == nil {
+							// usage-only chunk 不会到这里（schema.Message 本身 nil），
+							// ResponseMeta 挂在 msg 上，msg==nil 时无需处理，直接跳过。
 							continue
 						}
 
@@ -303,22 +320,31 @@ eventLoop:
 								cb.WriteToolCalls(sseAgentName, toolCalls)
 							}
 							for _, tc := range msg.ToolCalls {
-								steps = append(steps, StepRecord{
+								step := StepRecord{
 									StepID:       tc.ID,
 									Type:         "tool",
 									Name:         tc.Function.Name,
 									Status:       StatusRunning,
 									NestingLevel: 0,
-								})
+								}
+								// 主 Agent 自身的 step 走 RunResult.Steps（Executor 直接读）；
+								// 子 Agent 的 step 通过 tokenAccumulators 累积，由 CallAgentTool 收尾时 PopAndDelete。
+								if eventAgentName == "" || eventAgentName == e.agentName {
+									steps = append(steps, step)
+								}
+								e.appendStep(ctx, eventAgentName, step)
 							}
 						}
 
 						// Send finish_reason
-						if msg.ResponseMeta != nil && msg.ResponseMeta.FinishReason != "" {
-							if cb.WriteFinish != nil {
-								cb.WriteFinish(sseAgentName, msg.ResponseMeta.FinishReason)
+						if msg.ResponseMeta != nil {
+							if msg.ResponseMeta.FinishReason != "" {
+								if cb.WriteFinish != nil {
+									cb.WriteFinish(sseAgentName, msg.ResponseMeta.FinishReason)
+								}
 							}
-							e.accumulateUsageIfChild(ctx, eventAgentName, msg.ResponseMeta)
+							// token 用量：对每个携带 Usage 的 chunk 都累加（不限于 finish 那一个）
+							e.accumulateUsage(ctx, eventAgentName, msg.ResponseMeta)
 						}
 					}
 					stream.Close()
@@ -346,21 +372,26 @@ eventLoop:
 							cb.WriteToolCalls(sseAgentName, toolCalls)
 						}
 						for _, tc := range msg.ToolCalls {
-							steps = append(steps, StepRecord{
+							step := StepRecord{
 								StepID:       tc.ID,
 								Type:         "tool",
 								Name:         tc.Function.Name,
 								Status:       StatusRunning,
 								NestingLevel: 0,
-							})
+							}
+							if eventAgentName == "" || eventAgentName == e.agentName {
+								steps = append(steps, step)
+							}
+							e.appendStep(ctx, eventAgentName, step)
 						}
 					}
 
-					if msg.ResponseMeta != nil && msg.ResponseMeta.FinishReason != "" {
-						if cb.WriteFinish != nil {
+					// 非流式响应：一次性处理 finish_reason + token 用量
+					if msg.ResponseMeta != nil {
+						if msg.ResponseMeta.FinishReason != "" && cb.WriteFinish != nil {
 							cb.WriteFinish(sseAgentName, msg.ResponseMeta.FinishReason)
 						}
-						e.accumulateUsageIfChild(ctx, eventAgentName, msg.ResponseMeta)
+						e.accumulateUsage(ctx, eventAgentName, msg.ResponseMeta)
 					}
 				}
 			}
@@ -372,7 +403,13 @@ eventLoop:
 		if cb.WriteDone != nil {
 			cb.WriteDone()
 		}
-		return &RunResult{Content: "", Steps: steps, Cancelled: true}, nil
+		return &RunResult{
+			Content:   "",
+			Steps:     steps,
+			Cancelled: true,
+			Model:     resolvedModel,
+			Tokens:    e.popMainAggregateTokens(ctx),
+		}, nil
 	}
 
 	// Send [DONE] for normal completion
@@ -384,12 +421,32 @@ eventLoop:
 		finalResult = "任务执行完成，但未获得明确结果"
 	}
 
-	return &RunResult{Content: finalResult, Steps: steps}, nil
+	return &RunResult{
+		Content: finalResult,
+		Steps:   steps,
+		Model:   resolvedModel,
+		Tokens:  e.popMainAggregateTokens(ctx),
+	}, nil
+}
+
+// popMainAggregateTokens 取出并清理主 Agent 在累加器中的 token 用量。
+// Steps 不通过累加器返回（主 Agent 的 steps 已经在 Run 闭包里直接维护并返回）；
+// Model 也不通过这里返回（resolvedModel 已经直接写入 RunResult.Model）。
+func (e *Engine) popMainAggregateTokens(ctx context.Context) TokenUsage {
+	if e.tokenAccumulators == nil {
+		return TokenUsage{}
+	}
+	mainID := mainChatIDFromContext(ctx)
+	if mainID == "" {
+		return TokenUsage{}
+	}
+	return e.tokenAccumulators.PopAndDelete(mainID).Tokens
 }
 
 // processToolEvent processes Tool role events.
-// eventAgentName 已由调用方完成「主 Agent 折叠为空串」处理，可直接透传给 SSE。
-func (e *Engine) processToolEvent(eventAgentName string, event *adk.AgentEvent, cb *ProgressCallback, steps *[]StepRecord) {
+// sseAgentName 是已折叠的 SSE 字段（主 Agent → ""），eventAgentName 是事件原始 Agent 名，
+// 后者用于把 step 完成状态归属到正确的累加器。
+func (e *Engine) processToolEvent(ctx context.Context, eventAgentName, sseAgentName string, event *adk.AgentEvent, cb *ProgressCallback, steps *[]StepRecord) {
 	msgOutput := event.Output.MessageOutput
 
 	var toolCallID string
@@ -408,17 +465,22 @@ func (e *Engine) processToolEvent(eventAgentName string, event *adk.AgentEvent, 
 
 	// Send tool_result event
 	if cb.WriteToolResult != nil {
-		if err := cb.WriteToolResult(eventAgentName, toolCallID, toolName, output, false); err != nil {
+		if err := cb.WriteToolResult(sseAgentName, toolCallID, toolName, output, false); err != nil {
 			e.log.Error("SSE write tool_result failed: " + err.Error())
 		}
 	}
 
-	// Update step status to completed
-	for i := range *steps {
-		if (*steps)[i].StepID == toolCallID {
-			(*steps)[i].Status = StatusCompleted
+	// Update step status to completed:
+	// - 主 Agent 自身的 step 在 RunResult.Steps 上原地翻状态
+	// - 子 Agent 的 step 在累加器里翻状态（call_agent 收尾时取出）
+	if eventAgentName == "" || eventAgentName == e.agentName {
+		for i := range *steps {
+			if (*steps)[i].StepID == toolCallID {
+				(*steps)[i].Status = StatusCompleted
+			}
 		}
 	}
+	e.completeStep(ctx, eventAgentName, toolCallID)
 }
 
 // convertToolCalls converts eino ToolCalls to SSE ToolCalls format,
@@ -500,7 +562,10 @@ func (e *Engine) buildMessageList(instruction string, historyMessages []memory.M
 			msgs = append(msgs, schema.UserMessage(hMsg.Instruction))
 		}
 		if hMsg.Result != "" {
-			msgs = append(msgs, schema.AssistantMessage(hMsg.Result, nil))
+			// strip <think>...</think> 标签：部分模型（如 MiniMax）把推理过程内嵌在 Content 里，
+			// 传入上下文会大幅增加 prompt token，且可能干扰模型行为。
+			// 数据库中原始内容保持不变，只在构建 LLM 上下文时做 strip。
+			msgs = append(msgs, schema.AssistantMessage(stripThinkingTags(hMsg.Result), nil))
 		}
 	}
 
@@ -619,29 +684,83 @@ func toPtr(s string) *string {
 // childChatIDKey 是 ctx 中存放子 Agent chatID 的 key 类型（unexported 防外部冲突）。
 type childChatIDKey struct{}
 
-// WithChildChatID 把子 Agent 的 chatID 注入 ctx；调用方一般是 CallAgentTool（Task 11）。
+// WithChildChatID 把子 Agent 的 chatID 注入 ctx；调用方一般是 CallAgentTool。
 func WithChildChatID(ctx context.Context, chatID string) context.Context {
 	return context.WithValue(ctx, childChatIDKey{}, chatID)
 }
 
-// accumulateUsageIfChild 当事件来自子 Agent 且携带 Usage 时累加。
-// - eventAgentName 是事件源 Agent 名（adk.AgentEvent.AgentName）
-// - 主 Agent 自己的事件不累加（避免误把外层 token 当成子 Agent 输入）
-func (e *Engine) accumulateUsageIfChild(ctx context.Context, eventAgentName string, meta *schema.ResponseMeta) {
+// childChatIDFromContext 取出子 Agent chatID；不存在返回空字符串。
+func childChatIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(childChatIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// mainChatIDKey 在 ctx 中携带主 Agent 的 chatID。Engine 在 Run 入口注入；
+// 事件循环用它把主 Agent 的 token / step 累积到 TokenAccumulators 里。
+type mainChatIDKey struct{}
+
+// WithMainChatID 由 Executor 调用，在 Run 之前注入主 Agent 的 chatID。
+func WithMainChatID(ctx context.Context, chatID string) context.Context {
+	return context.WithValue(ctx, mainChatIDKey{}, chatID)
+}
+
+// mainChatIDFromContext 取出主 Agent chatID；不存在返回空字符串。
+func mainChatIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(mainChatIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// resolveChatIDForAgent 在事件循环中按事件源选定累加 chatID：
+//   - 事件源是主 Agent（eventAgentName == e.agentName 或为空）→ ctx 中的 mainChatID
+//   - 事件源是子 Agent → ctx 中的 childChatID（由 CallAgentTool 注入）
+//
+// 返回空字符串表示该事件不应累加（缺失 ctx 注入或 accumulators 未初始化）。
+func (e *Engine) resolveChatIDForAgent(ctx context.Context, eventAgentName string) string {
+	if e.tokenAccumulators == nil {
+		return ""
+	}
+	if eventAgentName == "" || eventAgentName == e.agentName {
+		return mainChatIDFromContext(ctx)
+	}
+	return childChatIDFromContext(ctx)
+}
+
+// accumulateUsage 把一次 LLM 响应的 token 用量按事件源 Agent 归属到累加器。
+// nil meta / nil usage / 缺失 chatID / 缺失 accumulators 时静默 no-op。
+func (e *Engine) accumulateUsage(ctx context.Context, eventAgentName string, meta *schema.ResponseMeta) {
 	if meta == nil || meta.Usage == nil {
 		return
 	}
-	if eventAgentName == "" || eventAgentName == e.agentName {
+	chatID := e.resolveChatIDForAgent(ctx, eventAgentName)
+	if chatID == "" {
 		return
 	}
-	if e.tokenAccumulators == nil {
+	e.tokenAccumulators.Add(chatID, meta.Usage.PromptTokens, meta.Usage.CompletionTokens)
+}
+
+// appendStep 把 LLM 触发的 tool call 作为一条 running step 加入对应 Agent 的累加器。
+func (e *Engine) appendStep(ctx context.Context, eventAgentName string, step StepRecord) {
+	chatID := e.resolveChatIDForAgent(ctx, eventAgentName)
+	if chatID == "" {
 		return
 	}
-	childChatID, ok := ctx.Value(childChatIDKey{}).(string)
-	if !ok || childChatID == "" {
+	e.tokenAccumulators.AppendStep(chatID, step)
+}
+
+// completeStep 把 tool 返回结果对应的 step（按 stepID 匹配）状态翻为 completed。
+func (e *Engine) completeStep(ctx context.Context, eventAgentName, stepID string) {
+	if stepID == "" {
 		return
 	}
-	e.tokenAccumulators.Add(childChatID, meta.Usage.PromptTokens, meta.Usage.CompletionTokens)
+	chatID := e.resolveChatIDForAgent(ctx, eventAgentName)
+	if chatID == "" {
+		return
+	}
+	e.tokenAccumulators.CompleteStep(chatID, stepID)
 }
 
 // truncate truncates a string to max length
@@ -650,6 +769,17 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// thinkTagRegex 匹配 <think>...</think> 块（含跨行内容）。
+// 部分模型（如 MiniMax）把推理过程内嵌在 Content 里而非独立 ReasoningContent 字段，
+// 历史上下文传入 LLM 前需要 strip 掉，避免浪费 prompt token 或干扰模型行为。
+var thinkTagRegex = regexp.MustCompile(`(?s)<think>.*?</think>`)
+
+// stripThinkingTags 去除字符串中所有 <think>...</think> 标签及其内容，
+// 并清理多余的首尾空白。
+func stripThinkingTags(s string) string {
+	return strings.TrimSpace(thinkTagRegex.ReplaceAllString(s, ""))
 }
 
 var toolCallIDRegex = regexp.MustCompile(`tool call (\S+)`)
@@ -729,4 +859,9 @@ type RunResult struct {
 	Content   string
 	Steps     []StepRecord
 	Cancelled bool
+	// Model 反映本次执行实际选定的 model 名（即 NewChatModel 所用的 modelName）。
+	// 如果创建 ChatModel 失败则为空字符串。
+	Model string
+	// Tokens 主 Agent 自身的 token 用量（不含子 Agent；子 Agent 的 token 由 CallAgentTool 单独从累加器取出）。
+	Tokens TokenUsage
 }

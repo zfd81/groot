@@ -253,9 +253,12 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		TokenAccumulators:  e.tokenAccumulators,
 	})
 
-	// Create context derived from parent (SSE disconnect will cancel parentCtx)
+	// Create context derived from parent (SSE disconnect will cancel parentCtx).
+	// 把主 Agent 的 chatID 注入 ctx，引擎事件循环用它把主 Agent 自身的
+	// token / step 累积到 tokenAccumulators，Run 收尾时回写 RunResult.Tokens。
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+	ctx = WithMainChatID(ctx, task.ID)
 
 	// Run engine with simplified progress callback
 	result, err := engine.Run(
@@ -353,20 +356,37 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		}
 
 		// 构建 ChatRecord
+		var (
+			recModel       string
+			recPrompt      int
+			recCompletion  int
+			recTotal       int
+		)
+		if result != nil {
+			recModel = result.Model
+			recPrompt = result.Tokens.Prompt
+			recCompletion = result.Tokens.Completion
+			recTotal = result.Tokens.Total
+		}
 		record := &memory.ChatRecord{
-			ChatID:      task.ID,
-			SessionID:   sessionID,
-			Round:       task.Round,
-			Timestamp:   endTime,
-			StartedAt:   startTime,
-			EndedAt:     endTime,
-			Instruction: task.Instruction,
-			Duration:    int(duration.Seconds()),
-			Status:      chatStatus,
-			Result:      chatResult,
-			Steps:       chatSteps,
-			Error:       chatError,
-			AgentName:   task.AgentName,
+			ChatID:           task.ID,
+			SessionID:        sessionID,
+			Round:            task.Round,
+			Timestamp:        endTime,
+			StartedAt:        startTime,
+			EndedAt:          endTime,
+			Instruction:      task.Instruction,
+			Duration:         int(duration.Seconds()),
+			DurationMs:       duration.Milliseconds(),
+			Status:           chatStatus,
+			Result:           chatResult,
+			Steps:            chatSteps,
+			Error:            chatError,
+			AgentName:        task.AgentName,
+			Model:            recModel,
+			PromptTokens:     recPrompt,
+			CompletionTokens: recCompletion,
+			TotalTokens:      recTotal,
 		}
 
 		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {

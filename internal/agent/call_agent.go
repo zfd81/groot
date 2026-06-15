@@ -138,10 +138,16 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// 现场按运行时父 model 构造子 Agent Tool —— 让子 Agent 跟随主 Agent 当前 model。
 	// 详细优先级见 SubAgentEntry.BuildAgentTool 注释。
 	parentModel := ParentModelFromContext(ctx)
-	subTool, buildErr := entry.BuildAgentTool(execCtx, parentModel)
+	subTool, resolvedModel, buildErr := entry.BuildAgentTool(execCtx, parentModel)
 	if buildErr != nil {
 		return "", fmt.Errorf("build subagent tool: %w", buildErr)
 	}
+
+	// 把本次实际选用的 model 名提前写入累加器，结束时随 token / steps 一起 PopAndDelete。
+	if t.tokenAccumulators != nil && resolvedModel != "" {
+		t.tokenAccumulators.SetModel(childChatID, resolvedModel)
+	}
+
 	result, runErr := subTool.InvokableRun(execCtx, string(params), opts...)
 	endTime := time.Now()
 
@@ -149,28 +155,29 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		result = truncateWithWarning(result, t.maxResultLen)
 	}
 
-	// Token 累加器无条件 pop：与持久化解耦——即便 t.memory == nil，
+	// 累加器无条件 pop：与持久化解耦——即便 t.memory == nil，
 	// 也要释放本次调用占用的累加项，避免长期运行时 map 缓慢膨胀。
-	var tokens TokenUsage
+	var aggregate ChatAggregate
 	if t.tokenAccumulators != nil {
-		tokens = t.tokenAccumulators.PopAndDelete(childChatID)
+		aggregate = t.tokenAccumulators.PopAndDelete(childChatID)
 	}
 
 	// 写 ChatRecord（错误吞掉，不影响主 Agent 返回）
 	if t.memory != nil {
-		t.saveChildChatRecord(childChatID, input, result, runErr, startTime, endTime, tokens)
+		t.saveChildChatRecord(childChatID, input, result, runErr, startTime, endTime, aggregate)
 	}
 	return result, runErr
 }
 
 // saveChildChatRecord 把子 Agent 一次执行落盘为 ChatRecord。错误仅记录日志。
-func (t *CallAgentTool) saveChildChatRecord(childChatID string, input CallAgentArgument, result string, runErr error, startTime, endTime time.Time, tokens TokenUsage) {
+func (t *CallAgentTool) saveChildChatRecord(childChatID string, input CallAgentArgument, result string, runErr error, startTime, endTime time.Time, aggregate ChatAggregate) {
 	status := "completed"
 	var memErr *memory.Error
 	if runErr != nil {
 		status = "failed"
 		memErr = &memory.Error{Code: "execution_error", Message: runErr.Error()}
 	}
+	durationMs := endTime.Sub(startTime).Milliseconds()
 	record := &memory.ChatRecord{
 		ChatID:           childChatID,
 		SessionID:        t.sessionID,
@@ -182,10 +189,13 @@ func (t *CallAgentTool) saveChildChatRecord(childChatID string, input CallAgentA
 		Result:           result,
 		Status:           status,
 		Duration:         int(endTime.Sub(startTime).Seconds()),
+		DurationMs:       durationMs,
 		AgentName:        input.AgentName,
-		PromptTokens:     tokens.Prompt,
-		CompletionTokens: tokens.Completion,
-		TotalTokens:      tokens.Total,
+		Model:            aggregate.Model,
+		Steps:            convertSteps(aggregate.Steps),
+		PromptTokens:     aggregate.Tokens.Prompt,
+		CompletionTokens: aggregate.Tokens.Completion,
+		TotalTokens:      aggregate.Tokens.Total,
 		Error:            memErr,
 	}
 	if err := t.memory.SaveChatRecord(t.sessionID, record); err != nil && t.log != nil {

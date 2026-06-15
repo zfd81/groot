@@ -100,6 +100,110 @@ func TestSaveChatIncreasesRound(t *testing.T) {
 	}
 }
 
+func TestSaveChat_SubAgentDoesNotAdvanceRound(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	r.CreateSession(ctx, &repo.Session{SessionID: "s-sub", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	// 主 Agent 第 1 轮
+	if err := r.SaveChat(ctx, &memory.ChatRecord{
+		ChatID:    "20260610143022100",
+		SessionID: "s-sub",
+		Status:    "completed",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("main SaveChat: %v", err)
+	}
+	// 子 Agent，挂在父轮次 1 上
+	if err := r.SaveChat(ctx, &memory.ChatRecord{
+		ChatID:    "20260610143022100_143022500_aaaa_db-agent",
+		SessionID: "s-sub",
+		Status:    "completed",
+		StartedAt: time.Now(),
+		AgentName: "db-agent",
+		Round:     1,
+	}); err != nil {
+		t.Fatalf("child SaveChat: %v", err)
+	}
+	// 主 Agent 第 2 轮
+	if err := r.SaveChat(ctx, &memory.ChatRecord{
+		ChatID:    "20260610143023000",
+		SessionID: "s-sub",
+		Status:    "completed",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("main SaveChat 2: %v", err)
+	}
+
+	sess, err := r.GetSession(ctx, "s-sub")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.Round != 2 {
+		t.Errorf("expected session round=2 (sub-agent should not advance), got %d", sess.Round)
+	}
+	// 子 Agent 行 round 应回写父轮次（1）
+	got, err := r.GetChat(ctx, "20260610143022100_143022500_aaaa_db-agent")
+	if err != nil {
+		t.Fatalf("GetChat sub: %v", err)
+	}
+	if got.Round != 1 {
+		t.Errorf("expected child round=1, got %d", got.Round)
+	}
+}
+
+func TestSaveChat_ModelRoundTrip(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	r.CreateSession(ctx, &repo.Session{SessionID: "s-mod", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	rec := &memory.ChatRecord{
+		ChatID:    "20260610143022200",
+		SessionID: "s-mod",
+		Status:    "completed",
+		Model:     "gpt-4-turbo",
+		StartedAt: time.Now(),
+	}
+	if err := r.SaveChat(ctx, rec); err != nil {
+		t.Fatalf("SaveChat: %v", err)
+	}
+	got, err := r.GetChat(ctx, "20260610143022200")
+	if err != nil {
+		t.Fatalf("GetChat: %v", err)
+	}
+	if got.Model != "gpt-4-turbo" {
+		t.Errorf("model round-trip mismatch: %q", got.Model)
+	}
+}
+
+func TestSaveChat_TokensRoundTrip(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	r.CreateSession(ctx, &repo.Session{SessionID: "s-tok", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	rec := &memory.ChatRecord{
+		ChatID:           "20260610143022300",
+		SessionID:        "s-tok",
+		Status:           "completed",
+		StartedAt:        time.Now(),
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		TotalTokens:      1500,
+		DurationMs:       2345,
+	}
+	if err := r.SaveChat(ctx, rec); err != nil {
+		t.Fatalf("SaveChat: %v", err)
+	}
+	got, err := r.GetChat(ctx, "20260610143022300")
+	if err != nil {
+		t.Fatalf("GetChat: %v", err)
+	}
+	if got.PromptTokens != 1000 || got.CompletionTokens != 500 || got.TotalTokens != 1500 {
+		t.Errorf("token round-trip: prompt=%d completion=%d total=%d", got.PromptTokens, got.CompletionTokens, got.TotalTokens)
+	}
+	if got.DurationMs != 2345 {
+		t.Errorf("DurationMs round-trip: %d", got.DurationMs)
+	}
+}
+
 func TestSaveChat_SessionNotFound(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()

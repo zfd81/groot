@@ -36,6 +36,7 @@ type ChatRecord struct {
 	Caller           string  `json:"caller"`
 	Steps            []Step  `json:"steps"`
 	AgentName        string  `json:"agent_name,omitempty"`
+	Model            string  `json:"model,omitempty"`
 	PromptTokens     int     `json:"prompt_tokens,omitempty"`
 	CompletionTokens int     `json:"completion_tokens,omitempty"`
 	TotalTokens      int     `json:"total_tokens,omitempty"`

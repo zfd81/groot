@@ -359,13 +359,9 @@ func buildSubAgentEntry(
 //  2. parentModelName   — 父任务运行时 model（编排模式默认）
 //  3. e.LLMCfg.DefaultModel — 配置默认值兜底
 //
-// 返回 InvokableTool 供 call_agent.InvokableRun 直接调用。
-func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, extraTools ...tool.BaseTool) (tool.InvokableTool, error) {
-	// 单测注入路径：跳过真实 LLM 构造
-	if e.testTool != nil {
-		return e.testTool, nil
-	}
-
+// 返回 (InvokableTool, resolvedModel, error)。resolvedModel 反映本次调用实际选用的
+// model 名（即传给 NewChatModel 的字符串），调用方可写入 ChatRecord.Model。
+func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, extraTools ...tool.BaseTool) (tool.InvokableTool, string, error) {
 	modelName := e.AgentMdModel
 	if modelName == "" {
 		modelName = parentModelName
@@ -374,9 +370,14 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 		modelName = e.LLMCfg.DefaultModel
 	}
 
+	// 单测注入路径：跳过真实 LLM 构造，但仍返回算出的 modelName 以便测试断言。
+	if e.testTool != nil {
+		return e.testTool, modelName, nil
+	}
+
 	chatModel, err := llm.NewChatModel(ctx, e.LLMCfg, modelName, e.StepTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("chat model: %w", err)
+		return nil, modelName, fmt.Errorf("chat model: %w", err)
 	}
 
 	// 子 Agent 工具集 = MCP 工具 + 调用方透传的额外工具（可空）。
@@ -402,13 +403,13 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 	}
 	cmAgent, err := adk.NewChatModelAgent(ctx, agentCfg)
 	if err != nil {
-		return nil, fmt.Errorf("chat model agent: %w", err)
+		return nil, modelName, fmt.Errorf("chat model agent: %w", err)
 	}
 
 	agentTool := adk.NewAgentTool(ctx, cmAgent)
 	invokableTool, ok := agentTool.(tool.InvokableTool)
 	if !ok {
-		return nil, fmt.Errorf("agent tool does not implement InvokableTool")
+		return nil, modelName, fmt.Errorf("agent tool does not implement InvokableTool")
 	}
-	return invokableTool, nil
+	return invokableTool, modelName, nil
 }

@@ -55,6 +55,7 @@ func rowToChatRecord(row chatRow) *repo.ChatRecord {
 		Instruction:      row.Instruction,
 		Result:           row.Result,
 		Status:           row.Status,
+		Model:            row.Model,
 		PromptTokens:     row.PromptTokens,
 		CompletionTokens: row.CompletionTokens,
 		TotalTokens:      row.TotalTokens,
@@ -182,16 +183,34 @@ func (r *memoryRepo) SaveChat(ctx context.Context, rec *repo.ChatRecord) error {
 	}
 	defer tx.Rollback()
 
+	// 子 Agent 记录（agent_name 非空）使用 rec.Round（父轮次），不推进 session.round。
+	// 主 Agent 记录使用 session.round + 1，并在事务内 CAS 推进 session.round。
+	isChild := rec.AgentName != ""
+
+	var roundToInsert int
 	var curRound int
-	q1 := r.db.Rebind(`SELECT round FROM memory_sessions WHERE session_id=?`)
-	err = tx.QueryRowContext(ctx, q1, rec.SessionID).Scan(&curRound)
-	if errors.Is(err, sql.ErrNoRows) {
-		return repo.ErrNotFound
+	if isChild {
+		// 校验 session 存在但不读 round
+		var exists int
+		q0 := r.db.Rebind(`SELECT COUNT(*) FROM memory_sessions WHERE session_id=?`)
+		if err = tx.QueryRowContext(ctx, q0, rec.SessionID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			return repo.ErrNotFound
+		}
+		roundToInsert = rec.Round
+	} else {
+		q1 := r.db.Rebind(`SELECT round FROM memory_sessions WHERE session_id=?`)
+		err = tx.QueryRowContext(ctx, q1, rec.SessionID).Scan(&curRound)
+		if errors.Is(err, sql.ErrNoRows) {
+			return repo.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		roundToInsert = curRound + 1
 	}
-	if err != nil {
-		return err
-	}
-	nextRound := curRound + 1
 
 	q2 := r.db.Rebind(`INSERT INTO memory_chats
 		   (chat_id, session_id, round, agent_name, caller, prompt, instruction, result, steps,
@@ -199,9 +218,9 @@ func (r *memoryRepo) SaveChat(ctx context.Context, rec *repo.ChatRecord) error {
 		    duration_ms, started_at, finished_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err = tx.ExecContext(ctx, q2,
-		rec.ChatID, rec.SessionID, nextRound, rec.AgentName, rec.Caller, rec.Prompt,
+		rec.ChatID, rec.SessionID, roundToInsert, rec.AgentName, rec.Caller, rec.Prompt,
 		rec.Instruction, rec.Result, stepsStr,
-		rec.Status, errJSON, "",
+		rec.Status, errJSON, rec.Model,
 		rec.PromptTokens, rec.CompletionTokens, rec.TotalTokens,
 		rec.DurationMs, rec.StartedAt.UnixMilli(), finishedAtMs,
 	)
@@ -209,16 +228,23 @@ func (r *memoryRepo) SaveChat(ctx context.Context, rec *repo.ChatRecord) error {
 		return repo.ErrConflict
 	}
 
-	q3 := r.db.Rebind(`UPDATE memory_sessions SET round=?, updated_at=? WHERE session_id=? AND round=?`)
-	res, err := tx.ExecContext(ctx, q3,
-		nextRound, time.Now().UnixMilli(), rec.SessionID, curRound,
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return repo.ErrConflict
+	if !isChild {
+		q3 := r.db.Rebind(`UPDATE memory_sessions SET round=?, updated_at=? WHERE session_id=? AND round=?`)
+		res, err := tx.ExecContext(ctx, q3,
+			roundToInsert, time.Now().UnixMilli(), rec.SessionID, curRound,
+		)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return repo.ErrConflict
+		}
+	} else {
+		q3 := r.db.Rebind(`UPDATE memory_sessions SET updated_at=? WHERE session_id=?`)
+		if _, err = tx.ExecContext(ctx, q3, time.Now().UnixMilli(), rec.SessionID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
