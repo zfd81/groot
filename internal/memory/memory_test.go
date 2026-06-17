@@ -139,16 +139,34 @@ func TestNewManager_PanicsOnNilRepo(t *testing.T) {
 func TestManager_CreateSession(t *testing.T) {
 	mgr := newTestManager(t)
 
-	sessionID := "test_session_001"
-	err := mgr.CreateSession(sessionID)
-	if err != nil {
-		t.Fatalf("CreateSession() 失败: %v", err)
-	}
+	t.Run("空 userID", func(t *testing.T) {
+		sessionID := "test_session_001"
+		if err := mgr.CreateSession(sessionID, ""); err != nil {
+			t.Fatalf("CreateSession() 失败: %v", err)
+		}
+		if !mgr.ExistsSession(sessionID) {
+			t.Error("CreateSession() 后 ExistsSession() 应返回 true")
+		}
+	})
 
-	// 验证会话存在
-	if !mgr.ExistsSession(sessionID) {
-		t.Error("CreateSession() 后 ExistsSession() 应返回 true")
-	}
+	t.Run("带 userID", func(t *testing.T) {
+		sessionID := "test_session_002"
+		userID := "user-abc"
+		if err := mgr.CreateSession(sessionID, userID); err != nil {
+			t.Fatalf("CreateSession() with userID 失败: %v", err)
+		}
+		if !mgr.ExistsSession(sessionID) {
+			t.Error("CreateSession() 后 ExistsSession() 应返回 true")
+		}
+		// 验证 user_id 已写入
+		s, err := mgr.repo.GetSession(context.Background(), sessionID)
+		if err != nil {
+			t.Fatalf("GetSession() 失败: %v", err)
+		}
+		if s.UserID != userID {
+			t.Errorf("UserID 期望 %q，实际 %q", userID, s.UserID)
+		}
+	})
 }
 
 // TestManager_GetSessionMdContent_ReturnsConstant 验证 GetSessionMdContent
@@ -184,7 +202,7 @@ func TestManager_ExistsSession(t *testing.T) {
 	}
 
 	// 创建后应存在
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 	if !mgr.ExistsSession(sessionID) {
 		t.Error("ExistsSession() 应返回 true 已创建会话")
 	}
@@ -194,7 +212,7 @@ func TestManager_GetHistory(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_003"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	history, err := mgr.GetHistory(sessionID)
 	if err != nil {
@@ -223,7 +241,7 @@ func TestManager_AppendMessage(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_004"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	// AppendMessage 在 DB 模式下是空操作，不影响 GetHistory 结果
 	// (轮次数据由 SaveChatRecord 维护)
@@ -246,7 +264,7 @@ func TestManager_GetRoundCount(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_005"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	// 初始应为 0
 	if mgr.GetRoundCount(sessionID) != 0 {
@@ -275,7 +293,7 @@ func TestManager_SaveChatRecord(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_006"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	record := &ChatRecord{
 		ChatID:      "20260611100000001",
@@ -308,7 +326,7 @@ func TestManager_GetChatRecord(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_007"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	record := &ChatRecord{
 		ChatID:      "20260611100000002",
@@ -333,7 +351,7 @@ func TestManager_GetChatRecord(t *testing.T) {
 func TestManager_GetChatRecord_NotExist(t *testing.T) {
 	mgr := newTestManager(t)
 
-	if err := mgr.CreateSession("test-session"); err != nil {
+	if err := mgr.CreateSession("test-session", ""); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	_, err := mgr.GetChatRecord("test-session", "nonexistent-chat-id")
@@ -351,7 +369,7 @@ func TestManager_ListSessions(t *testing.T) {
 	// 创建多个会话
 	for i := 1; i <= 5; i++ {
 		sessionID := GenerateSessionID()
-		mgr.CreateSession(sessionID)
+		mgr.CreateSession(sessionID, "")
 		time.Sleep(1 * time.Millisecond) // 确保时间不同
 	}
 
@@ -375,7 +393,7 @@ func TestManager_ListSessions_Pagination(t *testing.T) {
 	// 创建 10 个会话
 	for i := 1; i <= 10; i++ {
 		sessionID := GenerateSessionID()
-		mgr.CreateSession(sessionID)
+		mgr.CreateSession(sessionID, "")
 		time.Sleep(1 * time.Millisecond)
 	}
 
@@ -415,7 +433,7 @@ func TestManager_Cleanup(t *testing.T) {
 
 	// 创建旧会话（由 DeleteExpiredSessions 按 updated_at 淘汰）
 	sessionID := "test_session_old"
-	shortMgr.CreateSession(sessionID)
+	shortMgr.CreateSession(sessionID, "")
 
 	// 使 updated_at 显得是 2 天前：直接插入一条旧 updated_at 的 session
 	// 通过先删除再重建（利用 DB 直接操作）
@@ -429,7 +447,7 @@ func TestManager_Cleanup(t *testing.T) {
 
 	// 创建新会话（不会被清理）
 	newSessionID := "test_session_new"
-	shortMgr.CreateSession(newSessionID)
+	shortMgr.CreateSession(newSessionID, "")
 
 	// 执行清理
 	deleted, err := shortMgr.Cleanup(context.Background())
@@ -456,7 +474,7 @@ func TestManager_GetContextMessages(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_context"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	// 保存 5 条成功的 chat record（只有 completed + agent_name="" 才进 LoadHistory）
 	for i := 1; i <= 5; i++ {
@@ -531,7 +549,7 @@ func TestManager_GetLatestChatRecord(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_latest"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	// 无记录时应返回 nil, nil
 	rec, err := mgr.GetLatestChatRecord(sessionID)
@@ -569,7 +587,7 @@ func TestManager_DeleteSession(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_delete"
-	mgr.CreateSession(sessionID)
+	mgr.CreateSession(sessionID, "")
 
 	// 保存一条记录
 	mgr.SaveChatRecord(sessionID, &ChatRecord{

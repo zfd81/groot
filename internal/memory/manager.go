@@ -35,11 +35,12 @@ func (m *Manager) GetMemoryDir() string {
 	return ""
 }
 
-// CreateSession 创建新会话
-func (m *Manager) CreateSession(sessionID string) error {
+// CreateSession 创建新会话，userID 可为空字符串
+func (m *Manager) CreateSession(sessionID string, userID string) error {
 	now := time.Now()
 	return m.repo.CreateSession(context.Background(), &repo.Session{
 		SessionID: sessionID,
+		UserID:    userID,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})

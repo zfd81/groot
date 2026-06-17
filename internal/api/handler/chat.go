@@ -96,7 +96,10 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 2.7. 提取 X-Agent-Name header（Solo 模式入口）
+	// 2.7. 提取 X-User-ID header
+	userID := string(rc.GetHeader("X-User-ID"))
+
+	// 2.8. 提取 X-Agent-Name header（Solo 模式入口）
 	// 不传或传 "groot" → 编排模式（task.AgentName 为空）
 	// 传非主 Agent 名 → 校验注册表，未注册则 400
 	requestedAgent := string(rc.GetHeader("X-Agent-Name"))
@@ -197,7 +200,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 9. 注册成功后，再创建 session（如果是新会话）
 	if isNew {
-		if err := h.memory.CreateSession(sessionID); err != nil {
+		if err := h.memory.CreateSession(sessionID, userID); err != nil {
 			rc.JSON(500, utils.H{"status": "error", "message": "创建会话失败"})
 			return
 		}

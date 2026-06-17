@@ -5,7 +5,7 @@ import "context"
 // Memory 接口定义
 type Memory interface {
 	// Session 管理
-	CreateSession(sessionID string) error
+	CreateSession(sessionID, userID string) error
 	ExistsSession(sessionID string) bool
 	GetSessionInfo(sessionID string) (*SessionInfo, error)
 	ListSessions(limit, offset int) ([]SessionInfo, int, error)
