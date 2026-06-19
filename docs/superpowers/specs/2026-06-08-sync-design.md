@@ -1,24 +1,17 @@
 # sync 模块设计文档
 
-> ⚠️ **本文档已归档**：sync 模块已迁移到 `repo.ResourceRepo` + 数据库 `shared_resources` 表实现，原"基于 MinIO 对象存储 + size+mtime 容差"的方案已退役。
->
-> **后续设计**：见同目录 [`../2026-06-08-sync-design.md`](../2026-06-08-sync-design.md)（已重写为数据库后端版本）。
->
-> 本文档仅作历史参考保留。
-
----
-
-**日期**：2026-06-08
+**日期**：2026-06-08（初版）/ 2026-06-10（迁移到数据库后端后重写）
+**状态**：实现稿
 
 ## 一、功能设计
 
 ### 1.1 功能概述
 
-sync 模块负责本地 HOME 目录（`~/.groot/`）与 MinIO 远端之间的"集群共享配置"双向镜像同步，并通过 `groot push` / `groot pull` / `groot diff` 三个子命令暴露给用户。
+sync 模块负责本地 HOME 目录（`~/.groot/`）与数据库 `shared_resources` 表之间的"集群共享配置"双向镜像同步，并通过 `groot push` / `groot pull` / `groot diff` 三个子命令暴露给用户。
 
-它的存在是为了在多实例集群部署下，让所有节点共享同一份"配置/技能/子 Agent/MCP/GROOT.md"等可同步资源，本地编辑后通过 push 推到 MinIO，新节点或落后节点通过 pull 把远端最新版镜像到本地。
+它的存在是为了在多实例集群部署下（MySQL / PostgreSQL 模式），让所有节点共享同一份"配置 / 技能 / 子 Agent / MCP / GROOT.md"等可同步资源——本地编辑后通过 push 推到数据库，新节点或落后节点通过 pull 把远端最新版镜像到本地。
 
-仅在 MinIO 存储模式下可用；local 模式下三个命令统一返回 `ErrSyncDisabled`。
+仅在 MySQL / PostgreSQL 模式下可用；SQLite 模式下三个命令统一返回 `ErrSyncDisabled`。
 
 ### 1.2 同步资源白名单
 
@@ -34,10 +27,9 @@ sync 模块负责本地 HOME 目录（`~/.groot/`）与 MinIO 远端之间的"�
 
 明确排除（黑名单语义）：
 
-- `env.yaml` —— 含 MinIO 凭据，按节点本地维护
-- `memory/` —— 会话历史、附件，按节点隔离
-- `schedules/` —— 定时任务，按节点维护
-- `cluster/` —— 集群成员注册，按节点动态生成
+- `env.yaml` — 含数据库凭据，按节点本地维护
+- `groot.db` — SQLite 数据库文件，不参与同步
+- `logs/` — 日志，按节点隔离
 - 任何根目录之外的路径
 
 ### 1.3 路径校验规则（`ValidateSyncPath`）
@@ -68,20 +60,20 @@ type SyncManager interface {
 #### 1.4.1 构造与可用性判定
 
 ```go
-func NewSyncManager(homeDir, remoteBase string, store istorage.Storage) SyncManager
+func NewSyncManager(homeDir string, r repo.ResourceRepo) SyncManager
 ```
 
-仅以 `store == nil` 作为禁用判据：
+仅以 `r == nil` 作为禁用判据：
 
-- `store == nil` → 返回 `disabledSyncManager`，所有方法返回 `ErrSyncDisabled`
-- `store != nil` → 返回可用的 `localSyncManager`
+- `r == nil` → 返回 `disabledSyncManager`，所有方法返回 `ErrSyncDisabled`
+- `r != nil` → 返回可用的 `localSyncManager`
 
-`remoteBase` 为空字符串在 minio 模式下表示 bucket 根，是合法值。
+[`repofactory.NewRepos`](../../../internal/repo/repofactory) 在 SQLite dialect 下把 `Resource` 字段绑定到 [`resourcelocal.New(homeDir)`](../../../internal/repo/resourcelocal/resource.go)（落本地文件系统的实现），在 MySQL/PostgreSQL dialect 下绑定到 [`resourcedb.New(...)`](../../../internal/repo/resourcedb/resource.go)。两种情况下 `r` 都是非 nil 的，因此 `disabledSyncManager` 实际不会被构造出来——SQLite 模式下 sync 命令也会执行流程，只是它做的是 local-vs-local 镜像。
 
 #### 1.4.2 ErrSyncDisabled
 
 ```go
-var ErrSyncDisabled = errors.New("sync: minio 模式未启用 — 请在 env.yaml 中配置 minio 节")
+var ErrSyncDisabled = errors.New("sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 env.yaml 中配置 database 节")
 ```
 
 #### 1.4.3 paths 参数
@@ -95,7 +87,7 @@ var ErrSyncDisabled = errors.New("sync: minio 模式未启用 — 请在 env.yam
 ```go
 type DiffResult struct {
     Added    []string // 本地有，远端没有
-    Modified []string // 双侧都有但内容/时间不同
+    Modified []string // 双侧都有但 size 或 content_hash 不同
     Removed  []string // 远端有，本地没有
     Same     []string // 一致
 }
@@ -107,37 +99,37 @@ type DiffResult struct {
 
 ### 1.6 Diff 算法（`ComputeDiff`）
 
-输入：`store, localBase, remoteBase, paths`
+输入：`r repo.ResourceRepo, localBase string, paths []string`
 输出：`DiffResult`
 
 对每个 path：
 
 1. **本地侧 walk**（`walkLocalFiles`）
-   - `os.Stat(absPath)`：不存在则返回空切片（不报错）
+   - `os.Stat(absPath)`：不存在则返回空 map（不报错）
    - 文件：直接收录，但 `*.tmp` 文件**全链路过滤**（diff/push/pull 一律不视作可同步对象，因为它们是 sync 自身原子写中转的临时产物）
-   - 目录：`filepath.Walk` 递归收录所有非目录、非 `*.tmp` 的文件
+   - 目录：`filepath.WalkDir` 递归收录所有非目录、非 `*.tmp` 的文件
+   - 对每个本地文件读取内容并计算 SHA-1（`crypto/sha1`），同时记录 size
 
-2. **远端侧 walk**（`walkRemoteFiles`）
-   - `store.Stat(remotePath)`：`ErrNotFound` 返回空切片（不报错），其他错误透传
-   - `IsDir == false`：直接收录
-   - `IsDir == true`：调用 `listRemoteRecursive` 通过 `store.List` 递归列出所有文件
+2. **远端侧 list**
+   - `repo.List(ctx, rel)` 拿到 `[]*ResourceEntry`，每条含 `Path` / `Size` / `ContentHash` / `UpdatedAt`
+   - `ErrNotFound` 视为空切片
 
 3. **集合比较**
    - 双侧文件按相对路径建 map，相对路径统一用 `/` 分隔（`filepath.ToSlash`）
    - 仅本地存在 → `Added`
    - 仅远端存在 → `Removed`
-   - 双侧都存在：用 `differsFromRemote` 判等
-     - `local.Size() != remote.size` → `Modified`
-     - `|local.ModTime() - remote.ModTime| > 1s` → `Modified`
+   - 双侧都存在：
+     - `localInfo.size != remote.Size` → `Modified`
+     - `localInfo.hash != remote.ContentHash` → `Modified`
      - 否则 → `Same`
 
-4. **mtime 容差**：`mtimeTolerance = time.Second`，覆盖 MinIO LastModified 的秒级精度与本地 fs 精度的天然偏差。
+**判等维度：size + content_hash（SHA-1 hex 40 字符）**。mtime 仅作为远端资源的"新旧"参考字段保留显示，不参与判等。
 
-### 1.7 路径拼接约定
+### 1.7 path 约定
 
-- **远端路径**：`joinPath(remoteBase, rel)`，统一用 `/` 分隔（minio object-key 语义）。`remoteBase == ""` 时直接返回 `rel`
+- **远端 path**：相对 `~/.groot/` 的路径，如 `skills/weather/SKILL.md`、`subagents/qa/skills/lint/run.sh`、`GROOT.md`、`config.yaml`。直接作为 `shared_resources.path` 主键值，**大小写敏感**（MySQL 通过 `utf8mb4_bin` 保证；PG 默认敏感）
 - **本地路径**：`filepath.Join(localBase, filepath.FromSlash(rel))`，按 OS 分隔符
-- **相对路径键**：`relPath(base, path)`，从绝对路径剥掉 `base + "/"` 前缀，永远用 `/` 分隔
+- **相对路径键**：`filepath.Rel(localBase, path)` 后 `filepath.ToSlash`，永远用 `/` 分隔
 
 ### 1.8 push 流程
 
@@ -147,26 +139,24 @@ type DiffResult struct {
 2. `ComputeDiff` 计算差异
 3. 推送 `Added`：`pushOne` 写远端
 4. 推送 `Modified`：`pushOne` 写远端
-5. 删除 `Removed`：`store.Delete(remotePath)`，`ErrNotFound` 视为成功（幂等）
+5. 删除 `Removed`：`repo.Delete(ctx, path)`，`ErrNotFound` 视为成功（幂等）
 
-#### 1.8.1 pushOne / pushFile 流程
+#### 1.8.1 pushOne 流程
 
+```go
+func (m *localSyncManager) pushOne(ctx context.Context, rel string) error {
+    localPath := filepath.Join(m.homeDir, filepath.FromSlash(rel))
+    content, err := os.ReadFile(localPath)
+    if err != nil { return ... }
+    return m.repo.Put(ctx, &repo.Resource{
+        Path:    rel,
+        Content: content,
+        Size:    int64(len(content)),
+    })
+}
 ```
-open localPath
-  → store.Write(ctx, remotePath, f, size, "")    // Storage 接口保证原子写
-  → close f
-  → store.Stat(remotePath) 取 LastModified
-  → os.Chtimes(localPath, mtime, mtime)          // 锚定本地 mtime
-```
 
-#### 1.8.2 mtime 锚定（重要）
-
-push/pull 完成后必须把本地 mtime 锚定到远端 LastModified，否则下一次 diff 会把刚 sync 过的文件错误判为 `Modified`：
-
-- 本地 mtime 是"内容修改时间"
-- 远端 LastModified 是"object 上传完成时间"
-- 两者必然不同（push 时本地写在前、远端写在后；pull 时远端写在前、本地写在后）
-- 同步语义要求"完成后双侧逻辑等价" → 取远端 LastModified 作为统一锚点
+`pushOne` 只填 `Path` / `Content` / `Size` 三个字段，`ContentHash` / `ContentType` / `UpdatedAt` 由调用 `repo.Put` 时透传零值（[sync.go:124](../../../internal/sync/sync.go) → [resourcedb/resource.go:31](../../../internal/repo/resourcedb/resource.go)）。`SHA1Hex` helper 在 `resourcedb` 包中以 `SHA1Hex(content)` 暴露，但当前 push 链路未调用。
 
 ### 1.9 pull 流程
 
@@ -176,35 +166,41 @@ push/pull 完成后必须把本地 mtime 锚定到远端 LastModified，否则�
 2. **`cleanTmpFiles`**（best-effort）：递归删除 `paths` 范围下所有 `*.tmp` 残留。失败时记录但不阻塞 pull
 3. `ComputeDiff` 计算差异
 4. **Phase A — 写入**（任何中断都保证本地至少有一份完整内容）：
-   - `Removed`（远端有/本地没有）→ `pullOne` 写本地
+   - `Removed`（远端有 / 本地没有）→ `pullOne` 写本地
    - `Modified`（双侧不同）→ `pullOne` 覆盖本地
 5. **Phase B — 删除**（必须严格在 Phase A 全部成功后）：
-   - `Added`（本地有/远端没有）→ `os.Remove(localPath)`，`os.IsNotExist` 视为成功
+   - `Added`（本地有 / 远端没有）→ `os.Remove(localPath)`，`os.IsNotExist` 视为成功
 
 Phase A → B 顺序保证："先删后写"中途崩溃的空窗不会出现。
 
-#### 1.9.1 pullOne / pullFile 流程
+#### 1.9.1 pullOne 流程
+
+```go
+res, _ := m.repo.Get(ctx, rel)
+localPath := filepath.Join(m.homeDir, filepath.FromSlash(rel))
+writeAtomic(localPath, res.Content)   // tmp+rename
+```
+
+`writeAtomic` 实现：
 
 ```
-store.Stat(remotePath) → ri (LastModified 锚点)
-store.Read(remotePath) → rc
-io.ReadAll(rc) → data
 os.MkdirAll(dir(localPath), 0755)
 tmp := localPath + ".tmp"
 os.Remove(tmp)                          // 清理孤儿 tmp
 open(tmp, O_WRONLY|O_CREATE|O_TRUNC, 0644)
 write(data) → sync() → close()          // 失败任意一步删 tmp 后返回
 os.Rename(tmp, localPath)
-os.Chtimes(localPath, ri.ModTime, ri.ModTime)  // 锚定到远端 LastModified
 ```
 
 写失败时清理 tmp 文件；rename 失败时保留 tmp 等待下次 pull 清理（CleanTmpResidue / cleanTmpFiles）。
+
+`writeAtomic` 完成后不修改本地 mtime——diff 比对维度为 size+SHA-1，本地 mtime 不参与判等。
 
 #### 1.9.2 *.tmp 全链路语义
 
 | 阶段 | 行为 |
 |---|---|
-| pull 启动前 | `CleanTmpResidue` 删除 `paths` 范围所有 `*.tmp` |
+| pull 启动前 | `cleanTmpFiles` 删除 `paths` 范围所有 `*.tmp` |
 | diff 扫描 | `walkLocalFiles` 跳过 `*.tmp`（不计入 `Added/Modified`） |
 | push | 同上，`*.tmp` 永远不会被推到远端 |
 | pull 写入 | tmp 仅作为单文件 rename 中转，rename 后立即消失 |
@@ -268,11 +264,9 @@ Differences (HOME ↔ MinIO):
 判定算法：变更路径满足以下条件之一即为"需重启"：
 
 - `path == "config.yaml"`
-- `path` 以 `config.yaml/`、`mcp/`、`subagents/` 中任一前缀开始（即 `needsRestartPaths = ["config.yaml", "mcp/", "subagents/"]`）
+- `path` 以 `mcp/` 或 `subagents/` 前缀开始
 
 push 与 diff 不输出重启提示。
-
-> **已知限制**：当前判定按 `subagents/` 整目录前缀匹配，会把 `subagents/<name>/skills/<skill>/...` 这类应当热加载的资源也标记为"需重启"，存在假阳性。后续应细化判定算法，对 `subagents/<name>/skills/` 子级豁免。
 
 ### 1.11 ConfirmContinue 交互
 
@@ -286,13 +280,15 @@ push 与 diff 不输出重启提示。
 
 #### 1.12.1 通用前置流程
 
-三个命令的 RunXxx 入口都按相同顺序：
+三个命令的入口（`cmd/groot/main.go::openSyncRepo`）按相同顺序：
 
-1. `homeDir := GetDefaultHome()`
+1. `homeDir := cmd.GetDefaultHome()`
 2. `cfg := config.Load(homeDir)`
-3. **`cfg.Storage.Minio == nil` → 报错并退出**：`groot <cmd> 仅在 minio 模式下可用\n请在 ~/.groot/env.yaml 中配置 minio 节`
-4. `store := storage.New(cfg.Storage)`
-5. `mgr := sync.NewSyncManager(homeDir, "", store)`（`remoteBase = ""` 表示 bucket 根）
+3. `db.Open(cfg.Database, homeDir)` 初始化数据库连接（SQLite / MySQL / PostgreSQL 任意一种均可）
+4. `repofactory.NewRepos(sqlxDB, dialect, homeDir)` 构造 `ResourceRepo`：SQLite dialect 下绑定到 `resourcelocal`，MySQL/PG dialect 下绑定到 `resourcedb`
+5. `mgr := sync.NewSyncManager(homeDir, repos.Resource)`
+
+SQLite 模式下 `repos.Resource` 仍是非 nil 的 `resourcelocal` 实例，sync 命令会执行 local-vs-local 镜像；MySQL/PG 模式下走 `resourcedb` 实现，与 `shared_resources` 表交互。
 
 #### 1.12.2 `groot push [path...] [-y]`
 
@@ -309,14 +305,14 @@ push 与 diff 不输出重启提示。
 5. `mgr.Push(paths)` 执行
 6. 输出 `Push complete.`
 
-注：push 链路当前会扫描两次差异（确认前一次 + `Push` 内部 `ComputeDiff` 一次）。确认期间发生的 mtime/内容漂移以执行时点的扫描为准。
+push 链路扫描两次差异（确认前 `Diff` 一次 + `Push` 内部 `ComputeDiff` 一次），确认期间发生的内容漂移以执行时点的扫描为准。
 
 #### 1.12.3 `groot pull [path...] [-y]`
 
 参数与 push 相同。
 
 执行：
-1. `mgr.CleanTmpResidue(paths)`（best-effort，错误吞掉）—— 必须在 Diff 之前，否则 `*.tmp` 不在白名单走查范围（其实会被过滤），但更主要是防止 pull 期间 walk 命中残留时被识别为本地多余文件
+1. `mgr.CleanTmpResidue(paths)`（best-effort，错误吞掉）
 2. `mgr.Diff(paths)` 扫描
 3. `FormatDiff(diff, "pull")` 输出（含重启提示）
 4. `IsEmpty()` 直接返回
@@ -340,12 +336,11 @@ push 与 diff 不输出重启提示。
 
 | 错误 | 来源 | 处理 |
 |---|---|---|
-| `ErrSyncDisabled` | local 模式下调用任意方法 | cmd 层在调用前先看 `cfg.Storage.Minio == nil` 直接拦截，给更友好的提示 |
+| `ErrSyncDisabled` | `r == nil` 时调用 `disabledSyncManager` 任意方法 | 透传到 main.go 由用户看到 |
 | `sync: empty path` / `path traversal` / `not in whitelist` | `ValidateSyncPath` | 直接返回给用户，提示路径非法 |
 | `sync: path %q is inside a skill directory` | 同上 | 提示用户改用整个 skill 目录 |
-| `sync push %s: ...` / `sync pull %s: ...` | pushOne/pullOne 包装 | 透传底层 `store.Write/Read/Delete` 错误 |
-| `stat remote after push: ...` / `chtimes after push: ...` | mtime 锚定阶段 | 失败即整体失败（同步语义被破坏） |
-| `ErrNotFound`（push 删远端、pull 删本地） | 幂等场景 | 视为成功，不返回错误 |
+| `sync push %s: ...` / `sync pull %s: ...` | pushOne/pullOne 包装 | 透传底层 `repo.Put/Get/Delete` 错误 |
+| `repo.ErrNotFound`（push 删远端、pull 删本地） | 幂等场景 | 视为成功，不返回错误 |
 
 ### 1.14 安全约束
 
@@ -353,14 +348,14 @@ push 与 diff 不输出重启提示。
 - 白名单：只接受 `SyncableResourceRoots` 范围内的路径
 - skill 目录原子性：拒绝直接操作 `skills/<skill>/<file>` 与 `subagents/<name>/skills/<skill>/<file>`
 - 权限：sync 操作不修改文件 mode，pull 写入新文件统一为 `0644`，新建目录 `0755`
-- 凭据隔离：MinIO 凭据从 env.yaml 加载，sync 模块不直接读 env
+- 凭据隔离：数据库凭据从 env.yaml 加载，sync 模块不直接读 env
 
 ### 1.15 文件结构
 
 ```
 internal/sync/
-├── sync.go         SyncManager 接口、disabledSyncManager、localSyncManager、push/pull/file 操作
-├── diff.go         DiffResult、ComputeDiff、walk*Files、joinPath/relPath
+├── sync.go         SyncManager 接口、disabledSyncManager、localSyncManager、push/pull 流程
+├── diff.go         DiffResult、ComputeDiff、walkLocalFiles
 ├── render.go       RenderDiff、FormatDiff、重启提示判定
 ├── resource.go     SyncableResourceRoots、ValidateSyncPath、isDirectSkillFile
 ├── resolver.go     ResolveLocalPaths（辅助函数，当前 cmd 链路未直接使用）
@@ -374,9 +369,7 @@ internal/cmd/
 
 #### 1.15.1 resolver.go 的当前定位
 
-`ResolveLocalPaths` 提供"类别目录展开为子项列表"的能力（`skills` → `skills/weather`、`skills/translator`...），但 `Push/Pull/Diff` 链路实际调用的是 `resolveSyncPaths`（仅校验，不展开），递归交给 `ComputeDiff` 的 walker。
-
-**当前展开策略统一交由双侧 walker（`walkLocalFiles` + `walkRemoteFiles`）处理**，`ResolveLocalPaths` 仅作为可选辅助函数保留，不参与主流程。
+`ResolveLocalPaths` 提供"类别目录展开为子项列表"的能力（`skills` → `skills/weather`、`skills/translator`...），是一个独立的辅助函数。`Push/Pull/Diff` 链路调用的是 `resolveSyncPaths`（仅校验，不展开），递归展开交给 `ComputeDiff` 内部的 walker（`walkLocalFiles` + `ResourceRepo.List`）处理。`ResolveLocalPaths` 不参与主 sync 流程，仅自带单元测试覆盖。
 
 ### 1.16 可观测性
 
@@ -388,28 +381,44 @@ internal/cmd/
 
 ### 2.1 与上一版差异
 
-本文档为 sync 模块首次独立成 spec。在此之前，sync 行为分散在：
+历史版本基于 MinIO 对象存储 + size+mtime 容差实现，文档详见 [`archive/2026-06-08-sync-design.md`](archive/2026-06-08-sync-design.md)。本版相对上一版的差异：
 
-- `docs/superpowers/specs/2026-06-01-storage-abstraction-and-minio-mode-design.md` §1.8（"集群共享配置同步"）—— 从存储抽象视角带过
-- `docs/superpowers/plans/2026-06-08-sync-push-pull-diff.md` —— 实施计划，非设计
+#### 持久化抽象
 
-本次新增独立 spec 后，§1.8 的内容由本文档接管。后续 sync 模块的设计变更应以本文档为单一来源。
+- **新增**：sync 模块走 `repo.ResourceRepo` 接口（`Put` / `Get` / `Stat` / `List` / `Delete`）
+- **退役**：`storage.Storage` 接口在 sync 模块内的全部使用；`internal/storage/` 整包退役
+- **新增**：`internal/repo/resourcedb/` 实现 `ResourceRepo`（数据库后端），`internal/repo/resourcelocal/` 实现本地文件系统占位
 
-相对 storage spec §1.8 的内容补全：
+#### 数据载体
 
-- **新增**：完整的 SyncManager 接口（含 `CleanTmpResidue`）
-- **新增**：路径遍历 / skill 原子性等安全约束（§1.14）
-- **新增**：`*.tmp` 全链路过滤语义（§1.9.2）
-- **新增**：mtime 锚定到远端 LastModified 的双侧规则（§1.8.2）
-- **新增**：push / pull / diff 三种 render 输出 schema（§1.10）
-- **新增**：重启提示仅 pull 输出，push 与 diff 沉默（§1.10.5）
-- **新增**：CLI `-y/--yes` 跳过确认（§1.12.2 / §1.12.3）
-- **新增**：disabledSyncManager 与 `ErrSyncDisabled`（§1.4.1 / §1.4.2）
-- **新增**：resolver.go 的当前定位说明（§1.15.1）
-- **新增**：差异 mtime 容差 = 1s（§1.6）
-- **新增**：Phase A → Phase B 顺序保证（§1.9）
+- **调整**：远端从 MinIO bucket 内的对象迁移到 `shared_resources` 表中以 `path` 为主键的行
+- **调整**：远端内容存储从 MinIO 对象字节流迁移到 `shared_resources.content`（MySQL `LONGBLOB` / PG `BYTEA`）；任意字节流（含可执行二进制）原样存储
+- **新增**：`shared_resources.content_hash` 列存 SHA-1 hex（40 字符）
+- **新增**：`shared_resources.size` / `updated_at` 列冗余存放，避免反复 `LENGTH(content)`
 
-已知限制：
+#### Diff 比对
 
-- §1.10.5 重启提示对 `subagents/<name>/skills/` 子级有假阳性（待细化）
-- §1.12.2 push 链路两次扫描差异（执行时点为准）
+- **调整**：判等维度从"size + mtime ± 1s 容差"改为"size + SHA-1 hex"
+- **退役**：`mtimeTolerance = time.Second` 常量及相关比较逻辑
+- **退役**：push/pull 完成后 `os.Chtimes(localPath, mtime, mtime)` 锚定本地 mtime 的步骤——hash 比对天然免疫时钟漂移
+
+#### 配置入口
+
+- **退役**：`env.yaml` 中的 `minio` 节
+- **新增**：`env.yaml` 中的 `database` 节决定后端
+- **调整**：`ErrSyncDisabled` 错误信息更新为 `"sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 env.yaml 中配置 database 节"`
+
+#### 命令措辞
+
+- 当前 `RenderDiff` 的输出措辞仍沿用 `HOME → MinIO` / `MinIO → HOME` / `HOME ↔ MinIO`，与底层后端从 MinIO 迁移到数据库的事实存在偏差，但不影响功能正确性
+- diff 中性分组的 header 仍写为 `Modified (size or mtime differs)`；实际比对维度是 size + content_hash，header 文案与判等维度存在偏差
+
+#### 保留不变
+
+- SyncManager 接口的 `Push` / `Pull` / `Diff` / `CleanTmpResidue` 方法签名
+- 白名单根 `SyncableResourceRoots`、路径遍历防护、skill 目录原子性约束
+- `*.tmp` 全链路过滤语义
+- push / pull / diff 三种渲染输出 schema
+- 重启提示仅 pull 输出
+- CLI `-y/--yes` 跳过确认
+- Phase A → Phase B 顺序保证

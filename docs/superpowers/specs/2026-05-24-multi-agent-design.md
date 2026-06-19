@@ -50,42 +50,39 @@
 ├── GROOT.md                        # 全局系统提示词
 ├── skills/                         # 全局 Skills（主 Agent 用）
 ├── mcp/                            # 全局 MCP 配置（主 Agent 用）
-├── subagents/                      # ★ 新增：子 Agent 定义目录
+├── subagents/                      # 子 Agent 定义目录
 │   ├── db-agent/
 │   │   ├── agent.md               # 定义文件（frontmatter + 正文）
 │   │   ├── skills/                # 专属 Skills（可空）
 │   │   └── mcp/                   # 专属 MCP 配置（可空）
 │   ├── weather-agent/
 │   └── code-agent/
-├── memory/                         # 会话存储
-│   └── {session_id}/
-│       ├── history.json
-│       ├── attachments/
-│       └── chats/
-│           ├── chat_20260524103000523.json                          # 主 Agent
-│           └── chat_20260524103000523_103001523_a3f8_db-agent.json  # 子 Agent
-├── logs/
-└── cluster/
+├── logs/                           # 本地日志
+├── groot.db                        # SQLite 模式下的本地数据库
+└── env.yaml                        # 节点本地数据库连接凭据（可选）
 ```
 
-### 2.2 chat 文件命名
+会话 / 对话记录已迁移到数据库（详见 [Memory 模块设计](2026-05-11-memory-design.md)）；当前 chat ID 同时承担"主/子 Agent 关联"的语义，落库时进入 `memory_chats.chat_id` / `agent_name` 列。
 
-| 角色 | 格式 |
-|------|------|
-| 主 Agent | `chat_{YYYYMMDDHHMMSSmmm}.json` |
-| 子 Agent | `chat_{主ts}_{HHMMSSmmm}_{random4}_{agentName}.json` |
+### 2.2 chat ID 命名
 
-> 子时间戳 `HHMMSSmmm` 不含年月日（父 chatID 中已有完整日期）。**`random4` 是 4 位随机后缀，避免同一毫秒内并发调用同一个子 Agent 产生重名**（毫秒粒度 + `MaxConcurrency=5` 默认值下完全可能）。文件名直接体现调用时序和父子关系（前缀匹配），无需额外 `parent_chat_id` 字段。
+| 角色 | 格式 | 落库 |
+|------|------|------|
+| 主 Agent | `{YYYYMMDDHHMMSSmmm}`（17 位纯数字） | `memory_chats.chat_id`，`agent_name=''` |
+| 子 Agent | `{主chatID}_{HHMMSSmmm}_{random4}_{agentName}` | 与主 Agent 同表（`memory_chats`）存储，`agent_name` 非空区分；沿用父 chat 的 `round`（[`call_agent.go`](../../../internal/agent/call_agent.go) 中由 `t.parentRound` 直接写入），不推进 `memory_sessions.round`（详见 [Memory 模块设计 §1.4](2026-05-11-memory-design.md#14-子-agent-记录策略)） |
+
+> 子时间戳 `HHMMSSmmm` 不含年月日（父 chatID 中已有完整日期）。**`random4` 是 4 位 base36 后缀**，由 [`memory.GenerateChildChatID`](../../../internal/memory/idgen.go) 采用「同毫秒内严格自增 + 跨毫秒重抽随机起点」生成，避免同毫秒并发调用同一子 Agent 时产生重名。chatID 直接体现调用时序和父子关系（前缀匹配），无需额外 `parent_chat_id` 字段。
 
 ### 2.3 主 Agent 名常量
 
-主 Agent 名集中定义于 `internal/agent/consts.go`：
+主 Agent 名集中定义于 [`internal/agent/consts.go`](../../../internal/agent/consts.go)：
 
 ```go
 package agent
 
-// 主 Agent 名。需与 ChatModelAgent 的 Name 字段保持一致。
-// 启动期扫描 subagents/ 时，若发现同名目录，跳过并报错日志（保留主名独占）。
+// MainAgentName 是主 Agent 的名字。
+// 启动期扫描 subagents/ 时若发现同名目录会跳过并报错（保留主名独占）。
+// 事件循环按 event.AgentName == MainAgentName 区分主/子 Agent 事件。
 const MainAgentName = "groot"
 ```
 
@@ -112,12 +109,12 @@ Groot 集群所有实例共享同一份 `GROOT_HOME`/`subagents/`，因此不存
 |------|-----------|---------------------|----------------------|
 | 系统提示词 | `agent.md` + `defaultSessionRules` + Request.prompt | GROOT.md + `defaultSessionRules` + Request.prompt | 仅 `agent.md` |
 | MCP 工具 | 仅 `subagents/{name}/mcp/` | 全局 `mcp/` | 仅 `subagents/{name}/mcp/` |
-| 内置工具 | `call_agent`（无，Solo 不挂） | `call_agent` / schedule 8 件套 | 无内置工具 |
+| 内置工具 | 无（Solo 不挂 `call_agent`，也不挂 schedule 8 件套） | `call_agent` + schedule 8 件套（注册到全局 `mcpManager`） | 无内置工具 |
 | Skills | 仅 `subagents/{name}/skills/` | 全局 `skills/` | 仅 `subagents/{name}/skills/` |
-| 模型 | `X-Model-Name` → `agent.md.model` → `llm.default_model` | `X-Model-Name` → `llm.default_model` | `agent.md.model` → 父任务运行时 model → `llm.default_model` |
+| 模型 | `agent.md.model` → `X-Model-Name` → `llm.default_model` | `X-Model-Name` → `llm.default_model` | `agent.md.model` → 父任务运行时 model → `llm.default_model` |
 | 会话规则 | `defaultSessionRules` 嵌入常量 | 同上 | 不注入 |
 | HistoryMessages | 完整 session 历史 | 完整 session 历史 | 空切片（无状态） |
-| ChatRecord | 写入 `chats/`，chatID 不含父前缀，`AgentName` = 子 Agent 名 | 写入 `chats/`，`AgentName` 为空 | 写入同一 `chats/`，chatID 含父前缀，`AgentName` = 子 Agent 名 |
+| ChatRecord | 写入 `memory_chats` 表，`chat_id` 即主 chatID（不含父前缀），`agent_name` = 子 Agent 名 | 写入 `memory_chats` 表，`agent_name=''` | 写入 `memory_chats` 表，`chat_id` 含父前缀，`agent_name` = 子 Agent 名 |
 | Request.prompt | 拼入系统指令 | 拼入系统指令 | 不透传 |
 
 > **call_agent 返回值可见性**：子 Agent 的执行过程（thinking、内部 tool_calls 等）通过 SSE 透传给客户端，但对主 Agent 的 LLM 而言，`call_agent` 就是一个普通工具——入参是 `agent_name` + `task`，返回值是最终文本结果。子 Agent 内部的工具调用细节对主 Agent 不可见。
@@ -210,16 +207,16 @@ description: 数据库查询 Agent，支持 MySQL 和 PostgreSQL 的 SELECT 查�
 
 ### 4.3 执行机制
 
-主 Agent 调用 `call_agent(agent_name="db-agent", task="查昨天的订单量")` 时：
+主 Agent 调用 `call_agent(agent_name="db-agent", task="查昨天的订单量")` 时（[`call_agent.go`](../../../internal/agent/call_agent.go)）：
 
-1. **查找子 Agent**：从 `SubAgentRegistry` 按 `agent_name` 查 `SubAgentEntry`（v3.8 架构：entry 持有装配材料，不预构建 `Tool`）
-2. **运行时组装**：`entry.BuildAgentTool(execCtx, parentModelName)` 现场组装 `ChatModel` + `ChatModelAgent` + `AgentTool`（详见 [4.7 节](#47-实现方案)）
-3. **委托执行**：调用 `agentTool.InvokableRun(ctx, argumentsInJSON, opts...)`，eino 自动处理事件透传、错误传播、中断传播
-4. **生成子 chatID**：见 [2.2 节](#22-chat-文件命名)
+1. **查找子 Agent**：从 `SubAgentRegistry` 按 `agent_name` 查 `SubAgentEntry`（entry 持有装配材料，运行时再组装 `Tool`）
+2. **运行时组装**：`entry.BuildAgentTool(execCtx, parentModelName, extraTools...)` 现场组装 `ChatModel` + `ChatModelAgent` + `AgentTool`，并返回 `(InvokableTool, resolvedModel, error)`，详见 [4.7 节](#47-实现方案)
+3. **委托执行**：调用 `subTool.InvokableRun(execCtx, argumentsInJSON, opts...)`，eino 自动处理事件透传、错误传播、中断传播
+4. **生成子 chatID**：见 [2.2 节](#22-chat-id-命名)
 5. **结果返回主 Agent**：子 Agent 最终结果作为工具返回值
 6. **事件透传**：通过 eino 的 `AsyncGenerator` + `EmitInternalEvents` 机制，子 Agent 的 thinking、tool_calls 等自动转发到父 Runner 的 SSE 流
 
-> **⚠️ 关键开关**：主 Agent 的 `ChatModelAgentConfig.ToolsConfig.EmitInternalEvents` 必须设置为 `true`（默认 false），否则子 Agent 事件不会冒泡到父 Runner。本项目当前 [engine.go:97-101](internal/agent/engine.go) 未启用此开关，落地时必须打开。
+> **关键开关**：主 Agent 路径下 [`Executor.Execute`](../../../internal/agent/executor.go) 把 `EmitInternalEvents=true` 通过 `EngineConfig` 传给 `Engine`，Engine 再写入 `ChatModelAgentConfig.ToolsConfig.EmitInternalEvents`；Solo 模式与子 Agent 内部均保持 `false`，由父 Agent 透出。
 
 ### 4.4 调用限制
 
@@ -238,7 +235,7 @@ description: 数据库查询 Agent，支持 MySQL 和 PostgreSQL 的 SELECT 查�
 
 - **取消粒度**：`call_agent` 在 eino 中是同步工具 `(string, error)`，执行期间无外部信号注入点。父 ctx 取消时子 Agent 终止，但**无法在保留主 Agent 的情况下单独取消一个子 Agent**——这是 eino 同步工具模型的固有限制
 - **无状态调用**：编排模式下子 Agent 的每次 `call_agent` 调用都是全新的、无状态的。`HistoryMessages` 传入空切片，前一次调用结果不会自动带入下一次。需要上下文传递时，主 Agent 应在 `task` 参数中显式写明
-- **附件访问**：编排模式下子 Agent 仅拿到 `task` 字符串。需要读取附件时，主 Agent 应在 `task` 参数中显式写明附件路径或内容（与 eino DeepAgent `task_tool` 行为一致）。**子 Agent ChatRecord 不写入 `Attachments` 字段**（附件归属主 chat）
+- **附件访问**：编排模式下子 Agent 仅拿到 `task` 字符串。需要读取附件时，主 Agent 应在 `task` 参数中显式写明附件路径或内容（与 eino DeepAgent `task_tool` 行为一致）。子 Agent ChatRecord 不携带任何附件元数据（`ChatRecord` 结构体本身没有附件字段）
 
 > **应对策略**：建议主 Agent 的 GROOT.md 中引导「逐个调用子 Agent，确认前一个返回足够信息后再决定是否调下一个」，避免盲目并行导致资源浪费。`groot init` 时会在默认 GROOT.md 中追加此引导段。
 
@@ -253,32 +250,28 @@ description: 数据库查询 Agent，支持 MySQL 和 PostgreSQL 的 SELECT 查�
 | LLM 调用超时 | context deadline exceeded | 简化 task 后重试，或拆分任务 |
 | 子 Agent 返回空结果 | 正常完成但无文本输出 | 检查 task 描述是否清晰 |
 | 达到最大迭代 | 子 Agent 内部达到 max_iterations | 任务太复杂，简化后重试 |
-| ChatRecord 写入失败 | 文件系统错误等 | **吞错并记录日志**，不影响子 Agent 成功结果返回给主 Agent |
+| ChatRecord 写入失败 | 数据库写入异常等 | **吞错并记录日志**，不影响子 Agent 成功结果返回给主 Agent |
 
 > 子 Agent 错误事件通过 SSE 携带 `agent_name` 字段标记来源（详见 [4.8 节](#48-sse-事件格式)）。
 
 ### 4.6 日志与审计
 
-- **ChatRecord**：子 Agent 执行结束后写入完整 ChatRecord（含 `agent_name`、`error`、累加的 Token 字段），存储在同一 `chats/` 目录下。通过 chatID 前缀关联父子关系
+- **ChatRecord**：子 Agent 执行结束后写入完整 ChatRecord（含 `agent_name`、`error`、累加的 Token 字段），存储在 `memory_chats` 表。通过 chatID 前缀关联父子关系
 - **不包含详细 Steps**：子 Agent 的 `InvokableRun` 返回 `(string, error)`，不暴露内部 ReAct 循环的 steps。执行细节已通过 SSE 实时展示，如需审计从 SSE 日志中回溯
 - **不在主 ChatRecord 重复存储子 Agent 的 steps**：主 Agent 的 ChatRecord 只记录「调用了 call_agent」这个 tool call
 - **SSE 透传**：子 Agent 的 thinking、tool_calls、tool_result 实时通过 SSE 推送给客户端，事件中携带 `agent_name` 字段区分来源
 
 ### 4.7 实现方案
 
-设计原则：**执行层 100% 复用 eino，业务层自己写**。本质上是 DeepAgent `task_tool.go` 的「文件系统数据源」版本——DeepAgent 通过代码注册子 Agent，我们通过 `subagents/` 目录发现。
+设计原则：**执行层 100% 复用 eino，业务层自己写**。本质上是 DeepAgent `task_tool.go` 的「文件系统数据源」版本——DeepAgent 通过代码注册子 Agent，本项目通过 `subagents/` 目录发现。
 
-#### 4.7.1 v3.8 架构变更：运行时构建子 Agent ChatModel
+#### 4.7.1 运行时构建子 Agent
 
-**v3.8 之前**：启动期一次性构建子 Agent 的 `ChatModel` + `ChatModelAgent` + `AgentTool`，存入 `SubAgentEntry.Tool`，运行时直接调用。
-
-**v3.8 起**：`SubAgentEntry` 不再持有 `Tool` 字段，改为持有"装配材料"。每次 `call_agent` 调用时由 `SubAgentEntry.BuildAgentTool` 现场组装 `ChatModel` + `ChatModelAgent` + `AgentTool`。
-
-**变更原因**：启动期构建的 `ChatModel` 在运行时无法跟随父 Agent 当前 model 切换。主 Agent 切到新 model（如 `X-Model-Name: gpt-5`）时，子 Agent 仍连旧的（启动期默认）端点，不符合"编排模式下子 Agent 跟随父 Agent 选定 model"的预期。
+`SubAgentEntry` 持有「装配材料」（agent.md 内容、MCPManager、SkillBackend、SkillMW、配置）；每次 `call_agent` 调用时由 `SubAgentEntry.BuildAgentTool` 现场组装 `ChatModel` + `ChatModelAgent` + `AgentTool`。这种设计让子 Agent 在编排模式下自动跟随父 Agent 当前选定的 model：父任务运行时 model 通过 ctx 透传到 `BuildAgentTool`，无需重启服务即可切换。
 
 #### 4.7.2 数据结构
 
-**`SubAgentEntry`**（启动期一次性构建，运行时只读；不再含 `Tool` 字段）：
+**`SubAgentEntry`**（启动期一次性构建，运行时只读，[`subagent_registry.go`](../../../internal/agent/subagent_registry.go)）：
 
 ```go
 type SubAgentEntry struct {
@@ -289,12 +282,15 @@ type SubAgentEntry struct {
     SkillBK     einoskill.Backend            // 供 /agents、/skills API 查询
 
     // 构建子 ChatModelAgent 所需的纯配置；BuildAgentTool 每次现场用这些拼装。
-    AgentMdModel  string                     // agent.md 中显式声明的 model；空字符串表示跟随父 Agent
-    MaxIterations int                        // 已应用默认值（>=1）
-    RetryConfig   *adk.ModelRetryConfig      // 可空
+    AgentMdModel  string                       // agent.md 中显式声明的 model；空字符串表示跟随父 Agent
+    MaxIterations int                          // 已应用默认值（>=1）
+    RetryConfig   *adk.ModelRetryConfig        // 可空
     SkillMW       adk.ChatModelAgentMiddleware // 已构建的 skill middleware；可空
-    StepTimeout   time.Duration              // 单步 LLM 调用超时
-    LLMCfg        config.LLMConfig           // ChatModel 实例化材料
+    StepTimeout   time.Duration                // 单步 LLM 调用超时
+    LLMCfg        config.LLMConfig             // ChatModel 实例化材料
+
+    // testTool 仅供 _test.go 注入预制 InvokableTool 跳过 BuildAgentTool 的真实 LLM dial。
+    testTool tool.InvokableTool
 }
 ```
 
@@ -316,9 +312,9 @@ func (r *SubAgentRegistry) Names() []string
 func (r *SubAgentRegistry) Close() error    // shutdown 时关闭所有 MCP（先 detach 再串行 Close）
 ```
 
-`Close()` 并发安全策略：在锁内 detach（拿到 entries snapshot 并把字段重置为新空 map），释放锁后才串行调用 `MCPManager.Close()`。这样 shutdown 期间的 `Get` / `Names` / `BuildDescription` 立即看到"空注册表"，消除 use-after-close 风险。
+`Close()` 并发安全策略：在锁内 detach（拿到 entries snapshot 并把字段重置为新空 map），释放锁后才串行调用 `MCPManager.Close()`。这样 shutdown 期间的 `Get` / `Names` / `BuildDescription` 立即看到「空注册表」，消除 use-after-close 风险。
 
-**`RuntimeState` 扩展**（已有结构补充 `SubAgents` 字段）：
+**`RuntimeState` 扩展**（[`runtime_state.go`](../../../internal/agent/runtime_state.go)）：
 
 ```go
 type ChatProgress struct {
@@ -334,13 +330,15 @@ type SubAgentProgress struct {
 }
 ```
 
+`AddSubAgent` / `RemoveSubAgent` 在 `chat.mu` 内 copy+append，保证 `SnapshotProgress` 拿到的旧 slice 与新写入完全脱钩。
+
 #### 4.7.3 启动期构建（`BuildSubAgentRegistry`）
 
 `BuildSubAgentRegistry(ctx, dir, reactCfg, subCfg, llmCfg, log)` 流程：
 
 1. **`scanSubAgentDirs(dir)`**：文件系统遍历 + agent.md 解析。跳过规则（任一命中即跳过该目录并记 ERROR 日志）：
    1. 与主 Agent 同名（`MainAgentName="groot"`）
-   2. 不是目录（含"指向目录的符号链接被解析失败"——用 `os.Stat` 而非 `entry.IsDir()`，让 `ln -s` 共享子 Agent 模板生效）
+   2. 不是目录（含「指向目录的符号链接被解析失败」——用 `os.Stat` 而非 `entry.IsDir()`，让 `ln -s` 共享子 Agent 模板生效）
    3. 缺失 `agent.md` 文件
    4. `parseAgentMd` 失败（缺 description 等）
 
@@ -349,7 +347,6 @@ type SubAgentProgress struct {
    - **MCP Manager**：`mcp.NewManager(log).LoadAll(filepath.Join(p.dir, "mcp"))`，目录不存在视为合法
    - **Skill Backend**：`os.MkdirAll(skillsDir, 0755)` 兜底建目录 → `local.NewBackend` → `filesystem.NewSymlinkBackend` 包装 → `einoskill.NewBackendFromFilesystem` → `einoskill.NewMiddleware`
    - **装配材料**：填入 `MaxIterations`（默认 20）、`RetryConfig`（仅 `reactCfg.ErrorRetry > 0` 时构造）、`StepTimeout`、`LLMCfg`
-   - **不构造 ChatModel / ChatModelAgent / AgentTool**（v3.8 变更点）
 3. 任意子 Agent 构建失败 → 记 ERROR + `mcpMgr.Close()` 防资源泄漏 → 跳过该项继续
 
 **设计原则**：所有错误（含 dir 不存在、单个子 Agent 构建失败）在内部消化，总是返回非 nil 的 `*SubAgentRegistry`（即使 entries 为空），供 `main.go` 注册到 `Executor`。因此不返回 error——避免调用方写出永远为死代码的 `if err != nil`。
@@ -360,8 +357,11 @@ type SubAgentProgress struct {
 func (e *SubAgentEntry) BuildAgentTool(
     ctx context.Context,
     parentModelName string,
-) (tool.InvokableTool, error)
+    extraTools ...tool.BaseTool,
+) (tool.InvokableTool, string, error)
 ```
+
+**返回值三元组**：`(InvokableTool, resolvedModel, error)`。`resolvedModel` 反映本次调用实际选用的 model 名（即传给 `NewChatModel` 的字符串），调用方据此写入 `ChatRecord.Model` 与 `tokenAccumulators.SetModel`。
 
 **model 选择优先级**：
 
@@ -369,12 +369,12 @@ func (e *SubAgentEntry) BuildAgentTool(
 2. `parentModelName` —— 父任务运行时 model（编排模式默认行为）
 3. `e.LLMCfg.DefaultModel` —— 配置默认值兜底
 
-`parentModelName` 由 `CallAgentTool` 透传：在 `InvokableRun` 中通过 `ParentModelFromContext(ctx)` 读取主 Engine 当前 modelName 并作为参数。
+`parentModelName` 由 `CallAgentTool` 透传：`InvokableRun` 通过 `ParentModelFromContext(ctx)` 读取 `Engine.Run` 注入的 modelName 并作为参数。
 
 **装配步骤**：
 
 1. `llm.NewChatModel(ctx, e.LLMCfg, modelName, e.StepTimeout)`
-2. `tools = e.MCPManager.GetTools()`
+2. `tools = append([]tool.BaseTool{}, extraTools...); tools = append(tools, e.MCPManager.GetTools()...)` —— 调用方可透传额外工具，子 Agent 工具集 = 调用方额外工具 + 子 Agent MCP 工具
 3. `adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{...})`
    - `Handlers = []adk.ChatModelAgentMiddleware{e.SkillMW}`（可空时不注入）
    - `ModelRetryConfig = e.RetryConfig`（可空时不注入）
@@ -383,18 +383,18 @@ func (e *SubAgentEntry) BuildAgentTool(
 
 #### 4.7.5 InvokableRun 委托链路
 
-`CallAgentTool` 是请求级实例：`Executor.Execute()` 在创建主 Agent Engine 时新建并注入。
+`CallAgentTool` 是请求级实例：`Executor.Execute()` 在创建主 Agent Engine 时新建并注入。核心步骤（[`call_agent.go`](../../../internal/agent/call_agent.go)）：
 
 ```go
 func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
     // 1. 解析 + 校验
-    input := &callAgentArgument{}
-    json.Unmarshal([]byte(argumentsInJSON), input)
+    var input CallAgentArgument
+    json.Unmarshal([]byte(argumentsInJSON), &input)
     entry, ok := t.registry.Get(input.AgentName)
     if !ok {
         return "", fmt.Errorf("未知的子 Agent: %s", input.AgentName)
     }
-    if len(input.Task) > t.maxTaskLen {
+    if t.maxTaskLen > 0 && len(input.Task) > t.maxTaskLen {
         return "", fmt.Errorf("task 长度超过 %d 字符上限", t.maxTaskLen)
     }
 
@@ -411,82 +411,70 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
     execCtx = context.WithValue(execCtx, childChatIDKey{}, childChatID)
 
     // 5. 进度上报
-    t.runtimeState.AddSubAgent(t.sessionID, input.AgentName)
-    defer t.runtimeState.RemoveSubAgent(t.sessionID, input.AgentName)
+    if t.runtimeState != nil {
+        t.runtimeState.AddSubAgent(t.sessionID, input.AgentName)
+        defer t.runtimeState.RemoveSubAgent(t.sessionID, input.AgentName)
+    }
 
-    // 6. v3.8: 运行时构建 AgentTool
+    // 6. 现场构建 AgentTool（按运行时父 model）
     parentModel := ParentModelFromContext(ctx)
-    agentTool, err := entry.BuildAgentTool(execCtx, parentModel)
-    if err != nil { return "", err }
+    subTool, resolvedModel, buildErr := entry.BuildAgentTool(execCtx, parentModel)
+    if buildErr != nil { return "", buildErr }
 
-    // 7. 委托 eino
-    params, _ := sonic.MarshalString(map[string]string{"request": input.Task})
-    result, runErr := agentTool.InvokableRun(execCtx, params, opts...)
+    // 7. 把 resolvedModel 提前写入累加器，结束时随 token / steps 一起 PopAndDelete
+    if t.tokenAccumulators != nil && resolvedModel != "" {
+        t.tokenAccumulators.SetModel(childChatID, resolvedModel)
+    }
 
-    // 8. 截断（开头警告）
-    if len(result) > t.maxResultLen { result = truncateResult(result, t.maxResultLen) }
+    // 8. 委托 eino
+    params, _ := json.Marshal(map[string]string{"request": input.Task})
+    result, runErr := subTool.InvokableRun(execCtx, string(params), opts...)
 
-    // 9. 写子 ChatRecord（吞错）
-    tokens := t.tokenAccumulators.PopAndDelete(childChatID)
-    saveErr := t.memory.SaveChatRecord(t.sessionID, &memory.ChatRecord{
-        SessionID:        t.sessionID,
-        ChatID:           childChatID,
-        AgentName:        input.AgentName,
-        Instruction:      input.Task,
-        Result:           result,
-        Status:           statusFromErr(runErr),
-        Error:            errToMemoryError(runErr),
-        PromptTokens:     tokens.Prompt,
-        CompletionTokens: tokens.Completion,
-        TotalTokens:      tokens.Total,
-        // 不写 Attachments（附件归属主 chat）
-    })
-    if saveErr != nil { log.Error("save subagent chat record failed: %v", saveErr) }
+    // 9. 截断（开头警告）
+    if t.maxResultLen > 0 && len(result) > t.maxResultLen {
+        result = truncateWithWarning(result, t.maxResultLen)
+    }
 
+    // 10. 累加器 PopAndDelete（与持久化解耦：即便 t.memory == nil 也释放本次累加项）
+    var aggregate ChatAggregate
+    if t.tokenAccumulators != nil {
+        aggregate = t.tokenAccumulators.PopAndDelete(childChatID)
+    }
+
+    // 11. 写子 ChatRecord（含 Model / Steps / Token；吞错不影响主 Agent 返回）
+    if t.memory != nil {
+        t.saveChildChatRecord(childChatID, input, result, runErr, startTime, endTime, aggregate)
+    }
     return result, runErr
 }
 ```
 
-**`CallAgentTool` 字段**：
+**`CallAgentTool` 字段**（请求级实例，Executor 注入）：
 
 | 字段 | 类型/来源 | 说明 |
 |------|----------|------|
 | `registry` | `*SubAgentRegistry` 全局单例 | 启动期构建 |
 | `parentChatID` | 主 Agent 的 chatID（请求级） | 用于生成子 chatID 前缀 |
 | `sessionID` | 当前会话 ID（请求级） | 用于 ChatRecord、RuntimeState |
+| `parentRound` | 主 Agent 的 round（请求级） | 直接写入子 ChatRecord 的 `Round` 字段，子 Agent 沿用父轮次不推进 |
 | `runtimeState` | `*RuntimeState` 全局单例 | 更新子 Agent Progress |
 | `memory` | `*memory.Manager` 全局单例 | 写子 Agent ChatRecord |
-| `tokenAccumulators` | `*TokenAccumulators` 全局单例 | 按 `childChatID` 聚合子 Agent token |
+| `tokenAccumulators` | `*TokenAccumulators` 全局单例 | 按 `childChatID` 聚合子 Agent 的 token / steps / model |
 | `execTimeout` | `config.SubAgent.ExecTimeout`（默认 5 min） | 排队不计入；`Acquire` 返回后才计时 |
 | `maxTaskLen` | `config.SubAgent.MaxTaskLength`（默认 16000） | 超过直接拒绝 |
 | `maxResultLen` | `config.SubAgent.MaxResultLength`（默认 8000） | 超过截断 + 开头警告 |
+| `log` | `*logger.Logger` | 持久化失败时记录日志 |
 
 #### 4.7.6 主 Engine 改造
 
-`Engine` 新增 `agentName string` 字段（由 Executor 传入：主 Agent 为 `MainAgentName`，Solo 子 Agent 为 `task.AgentName`）。
+`Engine` 持有 `agentName string` 字段（由 Executor 传入：主 Agent 为 `MainAgentName`，Solo 子 Agent 为 `task.AgentName`），事件循环按 `event.AgentName` 分流主/子事件：
 
-事件循环识别子 Agent 事件的逻辑：
+- **SSE agent_name 注入**：主 Agent 自身事件折叠为空串保持向后兼容；子 Agent 事件携带原始名
+- **Token / Step 归属**：通过 `ctx` 中的 `mainChatID` / `childChatID`（由 `CallAgentTool` 注入），按 `event.AgentName` 决定累加到哪个 chatID 名下（[`engine.go`](../../../internal/agent/engine.go) `resolveChatIDForAgent`）
+- **主 Agent 的 step 同时维护两份**：一份写入闭包内 `steps` 切片（最终回填 `RunResult.Steps`），一份写入 `tokenAccumulators`（保持与子 Agent 处理对称）
+- **父 model 注入 ctx**：`Engine.Run` 入口调用 `WithParentModel(ctx, resolvedModel)`，让 `CallAgentTool.InvokableRun` 能通过 `ParentModelFromContext` 读取
 
-```go
-for event := range eventCh {
-    agentName := ""
-    if event.AgentName != "" && event.AgentName != e.agentName {
-        agentName = event.AgentName  // 来自子 Agent
-    }
-
-    // 累加子 Agent 的 Token：当事件来自子 Agent 且是 assistant 消息时
-    if agentName != "" && msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
-        if childChatID, ok := getChildChatIDFromCtx(ctx); ok {
-            tokenAccumulators.Add(childChatID, msg.ResponseMeta.Usage)
-        }
-    }
-
-    // SSE 输出：agentName 非空时注入 agent_name 字段
-    cb.WriteThinking(agentName, content)
-}
-```
-
-**`ProgressCallback` 调整**（每个 Write* 函数新增首参 `agentName string`）：
+**`ProgressCallback` 函数签名**（每个 Write* 函数首参 `agentName string`，[`engine.go`](../../../internal/agent/engine.go)）：
 
 ```go
 type ProgressCallback struct {
@@ -504,43 +492,19 @@ SSEWriter 收到非空 `agentName` 时在事件 JSON 中注入 `"agent_name": "d
 
 #### 4.7.7 工具集可见性
 
-`Executor.Execute()` 按主 / Solo 模式分发：
+`Executor.Execute()` 按主 / Solo 模式分发（[`executor.go`](../../../internal/agent/executor.go)）：
 
-```go
-if task.AgentName != "" && task.AgentName != MainAgentName {
-    // Solo 模式：不挂 call_agent；EmitInternalEvents 保持 false
-    // 用 entry.SkillMW（若可用）替换 middlewares
-} else if e.subAgentRegistry != nil {
-    // 编排模式主 Agent：append callAgent 工具；EmitInternalEvents = true
-    extraTools = append(extraTools, NewCallAgentTool(...))
-}
-
-engine := NewEngine(EngineConfig{
-    AgentName:          agentName,
-    ExtraTools:         extraTools,
-    EmitInternalEvents: emitInternal,
-    ...
-})
-```
-
-- 主 Agent（编排模式）：`extraTools = [call_agent]`，`EmitInternalEvents=true`
-- Solo 模式子 Agent：`extraTools = []`，`EmitInternalEvents=false`
-- 编排模式子 Agent（通过 `call_agent` 调度）：`extraTools = []`（仅含 `entry.MCPManager` 工具）
+- **主 Agent（编排模式）**：`extraTools = [call_agent]`，`EmitInternalEvents=true`，使用全局 `mcpManager`（含 schedule 8 件套）+ 全局 skill middleware
+- **Solo 模式子 Agent**：`extraTools = []`，`EmitInternalEvents=false`，把全局 `mcpManager` 替换为 `entry.MCPManager`，并按 `entry.SkillBK` 现场创建一份新的 skill middleware 替换全局 middleware
+- **编排模式下被调用的子 Agent**（`call_agent` 路径触发）：`extraTools = []`（仅含 `entry.MCPManager` 工具），由 `BuildAgentTool` 现场构建 `ChatModelAgent`，`Handlers = [entry.SkillMW]`
 
 #### 4.7.8 MCP Manager 生命周期
 
-`SubAgentRegistry.Close()` 遍历所有子 Agent 的 `mcp.Manager.Close()`，在 `main.go` 的 shutdown hook 中调用：
-
-```go
-globalMCPManager.Close()       // 先关全局
-subAgentRegistry.Close()        // 再关子 Agent
-```
-
-单个失败不影响其他（记录错误日志后继续）。
+`SubAgentRegistry.Close()` 遍历所有子 Agent 的 `MCPManager.Close()`，在 `main.go` 的 shutdown hook 中调用，先关全局 MCP Manager 再调 `subAgentRegistry.Close()`。单个失败不影响其他（记录错误日志后继续）。
 
 #### 4.7.9 测试注入路径
 
-`SubAgentEntry.testTool` / `SetToolForTest`：仅供 `_test.go` 注入预制 `InvokableTool` 跳过 `BuildAgentTool` 的真实 LLM dial。`BuildAgentTool` 在 `e.testTool != nil` 时直接返回它。
+`SubAgentEntry.testTool` / `SetToolForTest`：仅供 `_test.go` 注入预制 `InvokableTool` 跳过 `BuildAgentTool` 的真实 LLM dial。`BuildAgentTool` 在 `e.testTool != nil` 时直接返回它（同时返回算出的 `resolvedModel`）。
 
 `SubAgentRegistry.NewRegistryForTest` / `SetEntryForTest`：跳过启动期扫描，直接注入预构建 entry。
 
@@ -581,7 +545,14 @@ data: {"agent_name":"db-agent","tool_calls":[{"index":0,"id":"call_001","functio
 
 ### 5.2 Skill Middleware
 
-每个子 Agent 拥有独立的 Skill Backend + Middleware，**启动期一次性创建**：`einoskill.NewBackendFromFilesystem` 后产出 `entry.SkillBK`，再用 `einoskill.NewMiddleware` 包出 `entry.SkillMW`。`entry.SkillMW` 在 `BuildAgentTool` 中作为 `Handlers` 注入子 `ChatModelAgent`；`entry.SkillBK` 留作 `/agents`、`/skills` API 查询。
+每个子 Agent 启动期一次性创建：`einoskill.NewBackendFromFilesystem` 后产出 `entry.SkillBK`，再用 `einoskill.NewMiddleware` 包出 `entry.SkillMW`。
+
+| 路径 | Skill 注入方式 |
+|------|---------------|
+| 编排模式 - 子 Agent（call_agent 触发） | `BuildAgentTool` 把 `entry.SkillMW` 直接放入 `ChatModelAgentConfig.Handlers` |
+| Solo 模式子 Agent | `Executor.Execute` 现场 `einoskill.NewMiddleware(parentCtx, &einoskill.Config{Backend: entry.SkillBK})` 创建一份新 middleware 替换全局 middleware；中间件构建失败降级为「无 skill」继续执行并记 ERROR 日志 |
+
+`entry.SkillBK` 还供 `/agents`、`/skills` API 查询。
 
 > Skill Backend 使用 `filesystem.NewSymlinkBackend` 包装 `local.NewBackend`，让 `subagents/{name}/skills/` 下的符号链接也能正确解析。
 
@@ -597,7 +568,7 @@ data: {"agent_name":"db-agent","tool_calls":[{"index":0,"id":"call_001","functio
 
 **Skills 热加载机制**：所有 skills（主 Agent 与子 Agent 共用）通过 eino Backend 在每次执行期按需读取 `SKILL.md` 与脚本内容，无内存缓存层——本地文件系统直接修改即生效。Groot 不再维护 `internal/watcher` 文件系统监听器。
 
-> 如果通过 `groot pull` 从 MinIO 拉取 skills（minio 模式），同样依赖 eino Backend 的按需读取——pull 写完本地文件后下次 LLM 触发 skill 时自动读到新版本。详见 [sync 模块设计](2026-06-08-sync-design.md) §1.10.5。
+> 如果通过 `groot pull` 从数据库 `shared_resources` 表拉取 skills（MySQL/PG 模式），同样依赖 eino Backend 的按需读取——pull 写完本地文件后下次 LLM 触发 skill 时自动读到新版本。详见 [sync 模块设计](2026-06-08-sync-design.md) §1.10.5。
 
 ---
 
@@ -642,7 +613,7 @@ HistoryMessages = 空
 
 - `defaultSessionRules` 通过 `//go:embed session_rules.md` 嵌入二进制，由 `memory.Manager.GetSessionMdContent(sessionID)` 直接返回常量（实现忽略 sessionID 参数）。所有会话共享同一份规则。规则正文要点见 [Memory 模块设计](2026-05-11-memory-design.md) §1.10
 - Solo 模式：Executor 从 `SubAgentRegistry.Get(name).Instruction` 读取 agent.md 正文，传给 `Engine.Run(..., agentMdContent)`。Engine 拼接 `agentMd + defaultSessionRules + Request.prompt`，`agentMd` 为空时退化到主 Agent 路径（拼 GROOT.md）
-- 编排模式子 Agent：`agent.md` 经 v3.8 架构在 `BuildAgentTool` 现场注入 `ChatModelAgent.Instruction`，通过 eino 调度链路自然生效，主 Engine 无需感知
+- 编排模式子 Agent：`agent.md` 在 `BuildAgentTool` 现场注入 `ChatModelAgent.Instruction`，通过 eino 调度链路自然生效，主 Engine 无需感知
 
 ### 6.3 `/agents` 接口（新增）
 
@@ -688,31 +659,41 @@ GET /agents
 |------|------|
 | `GET /skills` | 全局 Skills 列表 |
 | `GET /skills` + `X-Agent-Name: db-agent` | db-agent 的 Skills 列表 |
-| `GET /tools` | 全局 MCP 工具列表（按 MCP 分组） |
-| `GET /tools` + `X-Agent-Name: db-agent` | db-agent 的 MCP 工具列表 |
+| `GET /tools` | 全局 MCP 工具列表（按 MCP 分组）；编排模式下额外合成 `_builtin` 组暴露 `call_agent` |
+| `GET /tools` + `X-Agent-Name: db-agent` | db-agent 的 MCP 工具列表（不挂 `call_agent`） |
 
-响应格式不变。实现要点：handler 解析 `X-Agent-Name` header，从 `SubAgentRegistry.Get(name).SkillBK` / `.MCPManager` 取对应实例。
+实现要点：handler 解析 `X-Agent-Name` header，从 `SubAgentRegistry.Get(name).SkillBK` / `.MCPManager` 取对应实例；主 Agent 路径下 `ToolsHandler` 把 `call_agent` 作为合成 group 暴露（与 `Executor.Execute` 在主 Agent 路径上挂载 `call_agent` 的逻辑一致）。
 
 ### 6.5 `/chat/status/:sid` 接口（变更）
 
-当主 Agent 正在执行 `call_agent`（子 Agent 运行中），`progress.sub_agents` 反映子 Agent 状态：
+当主 Agent 正在执行 `call_agent`（子 Agent 运行中），`chat.progress.sub_agents` 反映子 Agent 状态。响应整体形态由 [`StatusHandler.Serve`](../../../internal/api/handler/status.go) 输出：
 
 ```json
 {
+  "status": "success",
   "session_id": "sess_001",
-  "status": "running",
-  "current_step": "正在等待 2 个子 Agent 返回结果...",
-  "progress": {
-    "sub_agents": [
-      {"name": "db-agent", "status": "running"},
-      {"name": "weather-agent", "status": "running"}
-    ]
+  "chat": {
+    "chat_id": "20260524103015123",
+    "status": "running",
+    "started_at": "2026-05-24T10:30:15Z",
+    "elapsed_time": "12s",
+    "round": 3,
+    "progress": {
+      "current_step": 0,
+      "steps_completed": 0,
+      "percentage": 0,
+      "sub_agents": [
+        {"name": "db-agent", "status": "running"},
+        {"name": "weather-agent", "status": "running"}
+      ]
+    }
   }
 }
 ```
 
-- 主 Agent 自身执行时 `sub_agents` 为空数组
-- **集群说明**：`/chat/status` 只展示**当前实例**上的运行态。LB 将请求路由到非执行实例时，`sub_agents` 字段为空（与现有"主 Agent 活跃状态也是每实例本地内存"的限制一致）。客户端如需跨实例查询，应通过执行实例的直连地址，或使用 chatID 查询离线 ChatRecord
+- 主 Agent 自身执行时 `sub_agents` 字段省略（`omitempty`）
+- `progress` 通过 `RuntimeState.SnapshotProgress` 取深拷贝后序列化，避免与 `AddSubAgent` / `RemoveSubAgent` 并发竞争
+- **集群说明**：`/chat/status` 只展示**当前实例**上的运行态。LB 将请求路由到非执行实例时，`sub_agents` 字段为空（与现有「主 Agent 活跃状态也是每实例本地内存」的限制一致）。客户端如需跨实例查询，应通过执行实例的直连地址，或使用 chatID 查询离线 ChatRecord
 
 ### 6.6 HTTP 错误处理
 
@@ -742,7 +723,7 @@ curl -X POST http://localhost:8080/chat \
   -d '{"instruction": "查询昨天的订单总金额", "prompt": ""}'
 ```
 
-> **Solo 模式 Session 隔离警告**：API 调用者在同一个 `X-Session-ID` 下混用主 Agent 与不同子 Agent 时，`history.json` 会混入不同 Agent 的对话历史，LLM 可能产生困惑。建议为不同 Agent 使用独立的 Session ID。TUI 不受影响（`/agent <name>` 自动生成新 Session ID）。
+> **Solo 模式 Session 隔离警告**：API 调用者在同一个 `X-Session-ID` 下混用主 Agent 与不同子 Agent 时，`memory_chats` 表中会混入不同 Agent 的对话历史（即使 `LoadHistory` 已按 `agent_name=''` 过滤），LLM 可能产生困惑。建议为不同 Agent 使用独立的 Session ID。TUI 不受影响（`/agent <name>` 自动生成新 Session ID）。
 
 ---
 
@@ -763,7 +744,7 @@ curl -X POST http://localhost:8080/chat \
 ```go
 type Client struct {
     // ... 现有字段 ...
-    agentName string  // 新增，默认 MainAgentName
+    agentName string  // 空字符串 == 主 Agent，请求时不发 X-Agent-Name；非空且非 MainAgentName 时才发
 }
 ```
 
@@ -771,9 +752,9 @@ type Client struct {
 
 ## 八、Memory 变更
 
-### 8.1 目录结构不变
+### 8.1 chatID 命名
 
-文件命名见 [2.2 节](#22-chat-文件命名)。
+chatID 命名规则与父子关联机制详见 [2.2 节](#22-chat-id-命名)，所有 ChatRecord 统一落入 `memory_chats` 表。
 
 ### 8.2 ChatRecord 新增字段
 
@@ -781,27 +762,40 @@ type Client struct {
 type ChatRecord struct {
     // ... 现有字段不变 ...
     AgentName        string `json:"agent_name,omitempty"`         // 使用的 Agent 名
+    Model            string `json:"model,omitempty"`              // 实际使用的模型名
     PromptTokens     int    `json:"prompt_tokens,omitempty"`      // LLM 输入 token 累加
     CompletionTokens int    `json:"completion_tokens,omitempty"`  // LLM 输出 token 累加
     TotalTokens      int    `json:"total_tokens,omitempty"`       // LLM token 总数累加
 }
 ```
 
-**Token 累加机制**（仅用于事后审计，无运行时查询接口）：
+**Token / Step / Model 累加机制**：
 
-所有 Agent 走单一统一路径——主 `Engine.Run()` 事件循环按 `event.AgentName` 路由到累加器：
+所有 Agent 走单一统一路径——主 `Engine.Run()` 事件循环按 `event.AgentName` 路由到 `TokenAccumulators`（[`token_accumulators.go`](../../../internal/agent/token_accumulators.go)）。`TokenAccumulators` 按 `chatID` 聚合 `ChatAggregate{Tokens, Steps, Model}`。
 
 | 来源 | 处理 |
 |------|------|
-| 主 Agent 自身的 LLM 响应 | `event.AgentName == "" \|\| event.AgentName == MainAgentName` → 累加到主 Agent ChatRecord 的 Token 字段 |
-| Solo 模式子 Agent | 复用同一个 `Engine`，事件循环同样累加，写入该子 Agent 的 ChatRecord |
-| 编排模式子 Agent | `event.AgentName != MainAgentName` → 按 `childChatID`（从 ctx 中取）累加到 `tokenAccumulators` 全局 map；`CallAgentTool.InvokableRun` 委托返回后取出累加值写入子 Agent ChatRecord，并清理累加器条目 |
+| 主 Agent 自身的 LLM 响应 | `event.AgentName == "" \|\| event.AgentName == e.agentName` → 累加到 `mainChatID` 名下（`Executor.Execute` 注入 ctx）；`Engine.Run` 收尾时 `popMainAggregateTokens` 取出 `Tokens` 写入 `RunResult.Tokens`（`Model` 直接写入 `RunResult.Model`，`Steps` 单独维护一份返回 `RunResult.Steps`） |
+| Solo 模式子 Agent | 复用同一个 `Engine`，`agentName == e.agentName` 走主 Agent 同一路径，累加到 `mainChatID` |
+| 编排模式子 Agent | `event.AgentName != e.agentName` → 累加到 `childChatID`（`CallAgentTool.InvokableRun` 注入 ctx）；`InvokableRun` 收尾时 `PopAndDelete(childChatID)` 取出 `ChatAggregate`，写入子 ChatRecord 的 `Model` / `Steps` / `Token` 字段，并清理累加器条目 |
 
 > **累加而非单次取值**：子 Agent 多轮 ReAct（先查表结构再查数据）必须把每轮 `ResponseMeta.Usage` 累加，否则 token 数只是最后一次的值。
 >
-> **没有计数 middleware**：4.7 节启动期构建 `ChatModelAgent` 不挂任何 Token middleware；Token 在主 Engine 事件循环中单次累加。
+> **没有计数 middleware**：[4.7 节](#47-实现方案) 启动期构建 `ChatModelAgent` 不挂任何 Token middleware；Token 在主 Engine 事件循环中单次累加。
 
-Token 累加值直接通过 `TokenAccumulators` 持久化到 ChatRecord，不写入 `RunResult`（`RunResult` 只含 `Content`、`Steps`、`Cancelled` 三个字段）。
+`RunResult` 结构（[`engine.go`](../../../internal/agent/engine.go)）：
+
+```go
+type RunResult struct {
+    Content   string
+    Steps     []StepRecord
+    Cancelled bool
+    Model     string      // 本次执行实际选定的 model 名
+    Tokens    TokenUsage  // 主 Agent 自身的 token 用量（不含子 Agent）
+}
+```
+
+`Executor.Execute` 收尾时把 `result.Model` / `result.Tokens` 写入主 ChatRecord 的对应字段。
 
 **Token 汇总**：审计端通过 chatID 前缀匹配关联父子 Agent，离线查询各 ChatRecord 后自行求和。**不提供** `/chat/{chatID}/tokens` 等运行时聚合接口。
 
@@ -863,7 +857,7 @@ Executor.Execute()
   │    ├── 更新 RuntimeState.AddSubAgent → defer RemoveSubAgent
   │    ├── entry.BuildAgentTool(execCtx, parentModelName)
   │    │     ▼
-  │    │   v3.8 现场组装:
+  │    │   现场组装:
   │    │     ├── llm.NewChatModel（按 model 优先级 AgentMdModel → parentModelName → DefaultModel）
   │    │     ├── tools = 子 Agent MCP 工具
   │    │     └── adk.NewChatModelAgent + adk.NewAgentTool
@@ -882,8 +876,8 @@ Executor.Execute()
   │
   ▼
 结果保存
-  ├── 主 Agent ChatRecord → chats/chat_{ts}.json
-  └── 子 Agent ChatRecord → chats/chat_{ts}_{HHMMSSmmm}_{random4}_{agentName}.json
+  ├── 主 Agent ChatRecord → memory_chats 行（chat_id = {YYYYMMDDHHMMSSmmm}, agent_name = ''）
+  └── 子 Agent ChatRecord → memory_chats 行（chat_id 形如 {主chatID}_{HHMMSSmmm}_{random4}_{agentName}, agent_name 非空, round 沿用父轮次）
 ```
 
 ---
@@ -903,10 +897,10 @@ Executor.Execute()
 
 | 模块 | 变更内容 |
 |------|---------|
-| `agent.SubAgentRegistry` | 新增。启动期扫描 `subagents/` 装配每个 `SubAgentEntry`（含 MCP / SkillBK / SkillMW / 装配材料）；不预构建 ChatModel/AgentTool（v3.8 变更） |
-| `agent.SubAgentEntry.BuildAgentTool` | 新增。运行时按 `parentModelName` 与 `extraTools` 现场组装 `ChatModel` + `ChatModelAgent` + `AgentTool` |
-| `agent.CallAgentTool` | 新增。请求级实例，由 Executor 在主 Agent 路径注入 Engine；通过 `ParentModelFromContext(ctx)` 读取父 model 并透传给 `BuildAgentTool` |
-| `agent.consts.MainAgentName` | 新增。`"groot"`，统一替换历史的 `"GrootAgent"` |
+| `agent.SubAgentRegistry` | 新增。启动期扫描 `subagents/` 装配每个 `SubAgentEntry`（含 MCP / SkillBK / SkillMW / 装配材料）；运行时不预构建 ChatModel/AgentTool |
+| `agent.SubAgentEntry.BuildAgentTool` | 新增。运行时按 `parentModelName` 与 `extraTools` 现场组装 `ChatModel` + `ChatModelAgent` + `AgentTool`，返回 `(InvokableTool, resolvedModel, error)` |
+| `agent.CallAgentTool` | 新增。请求级实例，由 Executor 在主 Agent 路径注入 Engine；通过 `ParentModelFromContext(ctx)` 读取父 model 并透传给 `BuildAgentTool`；持有 `parentRound` 写入子 ChatRecord |
+| `agent.consts.MainAgentName` | 新增。`"groot"` |
 | `agent.Engine` | 新增 `agentName` 字段；`buildSystemInstruction` 支持 agent.md 替换 GROOT.md；事件循环按 `event.AgentName` 分流（SSE agent_name 注入、Token 累加）；主 Agent 路径打开 `ToolsConfig.EmitInternalEvents` |
 | `agent.ProgressCallback` | 每个 Write* 函数新增首参 `agentName string` |
 | `agent.RuntimeState` | `ChatProgress.SubAgents` 字段；`AddSubAgent` / `RemoveSubAgent` 方法 |
@@ -916,7 +910,7 @@ Executor.Execute()
 | `api/handler/skills.go` / `tools.go` | 解析 `X-Agent-Name`，从 SubAgentRegistry 取对应 Backend / MCPManager |
 | `api/handler/agents.go` | 新增 `/agents` |
 | `skills` 热加载 | **不再维护 `internal/watcher`**——所有 skills（主 + 子）通过 eino Backend 按需读取 |
-| `memory.ChatRecord` | 新增 `AgentName`、`PromptTokens`、`CompletionTokens`、`TotalTokens` |
+| `memory.ChatRecord` | 新增 `AgentName`、`Model`、`PromptTokens`、`CompletionTokens`、`TotalTokens` |
 | `memory.idgen` | 新增 `GenerateChildChatID(parent, agentName)`，含 random4 后缀 |
 | `cmd/init.go` | 创建 `subagents/` 目录；默认 GROOT.md 末尾追加 `call_agent` 调度引导段 |
 | `config.yaml` | 新增 `subagent.max_concurrency`、`subagent.exec_timeout`、`subagent.max_task_length`、`subagent.max_result_length` |

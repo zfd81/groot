@@ -1,7 +1,15 @@
 # 存储抽象与 MinIO 存储模式设计
 
+> ⚠️ **本文档已归档**：MinIO 模式与 `internal/storage` 整包均已退役。
+>
+> **后续设计**：多主机多实例的远端持久化由 [`2026-06-10-database-backend-design.md`](../2026-06-10-database-backend-design.md) 定义的 MySQL / PostgreSQL 后端 + `shared_resources` 表替代。集群共享资源的同步命令 (`groot push/pull/diff`) 已重写为基于 `ResourceRepo` 与 SHA-1 hash 比对，详见 [`../2026-06-08-sync-design.md`](../2026-06-08-sync-design.md)。
+>
+> 本文档仅作历史参考保留。
+
+---
+
 **日期**：2026-06-06
-**状态**：草案
+**状态**：已归档（被数据库后端设计取代）
 **作者**：zfd81 + Claude
 
 ---

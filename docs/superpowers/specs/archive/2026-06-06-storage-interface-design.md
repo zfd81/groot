@@ -1,7 +1,15 @@
 # 存储抽象层设计文档
 
+> ⚠️ **本文档已归档**：`internal/storage` 整包（`Storage` 接口、`Local` / `Minio` 实现）已退役，不再存在于代码中。
+>
+> **后续设计**：运行时数据 + 集群共享资源的持久化由 [`2026-06-10-database-backend-design.md`](../2026-06-10-database-backend-design.md) 定义的 Repository 接口（`MemberRepo` / `ScheduleRepo` / `MemoryRepo` / `ResourceRepo`）取代，落地形态切换为 SQLite / MySQL / PostgreSQL 数据库。
+>
+> 本文档仅作历史参考保留。
+
+---
+
 **日期**：2026-06-06
-**状态**：实现稿
+**状态**：已归档（被数据库后端设计取代）
 **作者**：zfd81 + Kiro
 
 ---

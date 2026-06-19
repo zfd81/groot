@@ -1,5 +1,13 @@
 # Memory 模块设计
 
+> ⚠️ **本文档已归档**：memory 模块已迁移到 `repo.MemoryRepo` + 数据库 `memory_sessions` / `memory_chats` 表实现，原"基于 storage.Storage 接口 + history.json + chats/{chat_id}.json 文件"的方案已退役。
+>
+> **后续设计**：见同目录 [`../2026-05-11-memory-design.md`](../2026-05-11-memory-design.md)（已重写为数据库后端版本）。
+>
+> 本文档仅作历史参考保留。
+
+---
+
 ## 一、功能设计
 
 ### 1.1 概述

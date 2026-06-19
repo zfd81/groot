@@ -1,7 +1,6 @@
 # 数据库后端设计
 
 **日期**：2026-06-10
-**状态**：草案（数据模型已定稿，接口定义待补）
 **作者**：zfd81 + Claude
 
 ---
@@ -34,6 +33,7 @@
     - [1.10.2 ScheduleRepo](#1102-schedulerepo)
     - [1.10.3 MemoryRepo](#1103-memoryrepo)
     - [1.10.4 ResourceRepo](#1104-resourcerepo)
+  - [1.11 已知限制](#111-已知限制)
 - [二、迭代说明](#二迭代说明)
   - [2.1 与上一版差异](#21-与上一版差异)
 
@@ -238,10 +238,10 @@ database:
 
 #### 1.5.5 启动检查
 
-服务启动时对数据库连接执行 fail-fast 校验：
+服务启动时对数据库连接执行 fail-fast 校验（参见 [`internal/db/db.go`](../../../internal/db/db.go)）：
 
 1. `db.Ping()` 验证连通性
-2. 执行 schema 迁移（幂等，已存在的表不重建）
+2. 执行 schema 迁移（参见 [`internal/db/migrate.go`](../../../internal/db/migrate.go)，幂等，已存在的表不重建；同时清理历史遗留索引如 `memory_chats.uk_session_round`）
 3. 任一失败立即退出，输出明确错误信息
 
 ### 1.6 业务 ID 格式规范
@@ -269,22 +269,30 @@ database:
 
 ```
 internal/repo/
-├── member.go       + memberdb/      # MemberRepo（SQLite / MySQL / PG 共用一套 SQL）
-├── schedule.go     + scheduledb/    # ScheduleRepo
-├── memory.go       + memorydb/      # MemoryRepo
-└── resource.go     + resourcelocal/ + resourcedb/    # ResourceRepo
+├── errors.go                       # 通用 ErrNotFound / ErrConflict 哨兵错误
+├── member.go       + memberdb/     # MemberRepo（SQLite / MySQL / PG 共用一套 SQL）
+├── memory.go       + memorydb/     # MemoryRepo（含 ChatRecord / Step / Error 类型）
+├── resource.go     + resourcelocal/ + resourcedb/   # ResourceRepo
+├── schedule.go                     # 仅 TaskStatus 常量
+└── repofactory/                    # 工厂：按 dialect 一次性构造 4 个 Repo
+
+internal/schedule/
+└── repo.go                         # ScheduleRepo 接口 + schedule.ErrNotFound / schedule.ErrConflict
 ```
 
+代码位置：[`internal/repo/`](../../../internal/repo/)、[`internal/schedule/repo.go`](../../../internal/schedule/repo.go)。
+
+`ScheduleRepo` 接口定义在 [`internal/schedule/repo.go`](../../../internal/schedule/repo.go) 而非 `internal/repo/schedule.go`，原因是其入参/出参 (`*schedule.Task` / `*schedule.ExecutionRecord`) 直接用 `internal/schedule/types.go` 定义的领域类型，放在 `schedule` 包内可避免 `repo → schedule → repo` 反向依赖。`internal/repo/schedule.go` 只承载 `TaskStatus` 三个常量供其他模块引用。
+
+`MemoryRepo` 的 `ChatRecord` / `Step` / `Error` 三个数据类型定义在 [`internal/repo/memory.go`](../../../internal/repo/memory.go) 内（`internal/memory/types.go` 通过 `type ChatRecord = repo.ChatRecord` 提供别名），让 `memorydb` 实现层和 `memory` 业务层共用同一份结构体而无导入循环。
+
 `ResourceRepo` 有两套实现：
-- `resourcelocal`：直接调用 `os.*` 透传本地文件系统。SQLite 模式下 `groot push/pull/diff` 命令统一返回 `ErrSyncDisabled`，因此 `resourcelocal` 无实际业务调用路径，其存在仅为满足工厂模式接口一致性，使 `internal/sync/` 无需做 nil 判断
-- `resourcedb`：读写 `shared_resources` 表——MySQL/PG 模式下的远端权威副本
+- [`resourcelocal`](../../../internal/repo/resourcelocal/)：直接调用 `os.*` 透传本地文件系统。SQLite 模式下 `groot push/pull/diff` 命令统一返回 `ErrSyncDisabled`，因此 `resourcelocal` 无实际业务调用路径，其存在仅为满足工厂模式接口一致性，使 `internal/sync/` 无需做 nil 判断
+- [`resourcedb`](../../../internal/repo/resourcedb/)：读写 `shared_resources` 表——MySQL/PG 模式下的远端权威副本
 
-其余三个 Repo（member / schedule / memory）只有一套 `db` 实现，三种 driver（sqlite / mysql / postgres）共用相同 SQL，差异由方言层吸收。
+其余三个 Repo（[`memberdb`](../../../internal/repo/memberdb/) / [`scheduledb`](../../../internal/repo/scheduledb/) / [`memorydb`](../../../internal/repo/memorydb/)）只有一套 `db` 实现，三种 driver（sqlite / mysql / postgres）共用相同 SQL，差异由方言层（[`internal/db/dialect.go`](../../../internal/db/dialect.go)）吸收。
 
-`internal/storage/` 包及其 `Local` / `Minio` 实现的去留：
-- `Local` 实现移除——`resourcelocal` 直接调用 `os.*` 系列函数，不再依赖 `Storage` 中间层
-- `Minio` 实现移除
-- `internal/storage/` 整包退役
+工厂 [`repofactory`](../../../internal/repo/repofactory/factory.go) 根据传入的 dialect 一次性构造四个 Repo：SQLite 时 `Resource` 走 `resourcelocal`，MySQL/PG 时走 `resourcedb`。
 
 ### 1.8 模块分工
 
@@ -351,7 +359,7 @@ CREATE TABLE cluster_members (
 **字段语义**：
 
 - `reg_id`：注册编号，沿用现有 `GenerateRegID()` 生成的 17 位毫秒时间戳格式。**主键。**
-- `role`：当前角色，`'leader'` 或 `'follower'`。该列是缓存——"我是不是 leader" 的权威判定以 `MemberRepo.TryAcquireLeader` 返回值为准
+- `role`：当前角色，`'leader'` 或 `'follower'`。由 `MemberRepo.UpdateRole` 显式更新，与心跳写入分开
 - `host` / `port` / `pid`：实例的 HTTP 监听地址与进程号，仅用于运维查看，不参与选举
 - `heartbeat_at`：替代现有方案的"文件 mtime"，由实例每 3 秒自更新一次。Leader 判活以 `heartbeat_at > now - 7s` 为准
 - `created_at`：注册时刻
@@ -360,11 +368,12 @@ CREATE TABLE cluster_members (
 
 | 操作 | 触发时机 | SQL 形态 |
 |---|---|---|
-| INSERT | `register()`：首次启动 / 自检发现自己丢失 | `INSERT INTO cluster_members ...` |
-| UPDATE heartbeat_at | 每 3 秒心跳 | `UPDATE cluster_members SET heartbeat_at=?, role=? WHERE reg_id=?` |
+| INSERT / UPSERT | `Register()`：首次启动 / 自检发现自己丢失 | `INSERT INTO cluster_members ... ON DUPLICATE KEY UPDATE`（MySQL）/ `ON CONFLICT(reg_id) DO UPDATE`（PG/SQLite） |
+| UPDATE heartbeat_at | 每 3 秒心跳 | `UPDATE cluster_members SET heartbeat_at=? WHERE reg_id=?` |
+| UPDATE role | leader 升级 / follower 降级 | `UPDATE cluster_members SET role=? WHERE reg_id=?` |
 | DELETE 单行 | `Leave()` 优雅退出 | `DELETE FROM cluster_members WHERE reg_id=?` |
 | DELETE 批量 | leader 心跳清理超时成员 | `DELETE FROM cluster_members WHERE heartbeat_at < ?` |
-| SELECT | `ListMembers()` 列出所有成员 | `SELECT * FROM cluster_members` |
+| SELECT | `ListAll()` 列出所有成员 | `SELECT * FROM cluster_members` |
 
 **索引策略**：
 
@@ -440,7 +449,7 @@ CREATE TABLE schedule_executions (
     task_id         VARCHAR(64)  NOT NULL,              -- 关联 schedule_tasks.task_id（无 FK）
     started_at      BIGINT       NOT NULL,              -- 对应 ExecutionRecord.ExecTime（字段重命名为 StartedAt）
     finished_at     BIGINT       NULL,                  -- 对应 ExecutionRecord.FinishedAt（新增字段），未完成时为 NULL
-    status          VARCHAR(16)  NOT NULL,              -- 'running' | 'success' | 'failed' | 'timeout'
+    status          VARCHAR(16)  NOT NULL,              -- 'running' | 'completed' | 'failed' | 'cancelled'
     detail          LONGTEXT     NOT NULL,              -- 完整执行记录 JSON
 
     UNIQUE KEY uk_execution_id (execution_id),
@@ -451,20 +460,15 @@ CREATE TABLE schedule_executions (
 
 **字段语义**：
 
-- `execution_id`：执行记录业务 ID，全局唯一。对应 `ExecutionRecord.ExecutionID`——**需在 Go struct 新增此字段**，生成方式与 `task_id` 相同
+- `execution_id`：执行记录业务 ID，全局唯一。对应 `ExecutionRecord.ExecutionID`
 - `task_id`：指向 `schedule_tasks.task_id`（业务 ID）而非 `schedule_tasks.id`——避免任务被 archive/删除后执行历史成孤立外键引用
-- `started_at`：执行开始时间戳（ms）。对应现有 `ExecutionRecord.ExecTime`——**Go struct 侧字段重命名为 `StartedAt time.Time`**
-- `finished_at`：执行结束时间戳（ms）。**需在 Go struct 新增 `FinishedAt *time.Time`**，执行中为 `nil`，完成时回填
+- `started_at`：执行开始时间戳（ms），对应 `ExecutionRecord.StartedAt`
+- `finished_at`：执行结束时间戳（ms），对应 `ExecutionRecord.FinishedAt`，执行中为 `nil`，完成时回填
 - `detail`：执行的完整 JSON 记录，含步骤、token 计数、错误等所有信息
+- `status` 与 chat 状态枚举一致：`'running' | 'completed' | 'failed' | 'cancelled'`
 - 表是 append-only：`SaveExecution` 写入初始行（`status='running'`，`finished_at=NULL`），`CompleteExecution` 回填结果
 
-**`ExecutionRecord` 结构变化**（相对现有 `internal/schedule/types.go`）：
-
-| 变化 | 说明 |
-|---|---|
-| **新增** `ExecutionID string` | 执行记录业务 ID，对应 `execution_id` 列 |
-| **`ExecTime time.Time` → `StartedAt time.Time`** | 字段重命名，语义不变 |
-| **新增** `FinishedAt *time.Time` | 执行结束时间，对应 `finished_at` 列，执行中为 `nil` |
+**`ExecutionRecord` 的字段构成**：见 `internal/schedule/types.go`，关键字段为 `ExecutionID` / `TaskID` / `StartedAt time.Time` / `FinishedAt *time.Time` / `Status string` / `DurationMs int64` / `StepCount int` / `Error string` / `Notifications []NotificationResult`。
 
 **索引策略**：
 
@@ -479,8 +483,8 @@ CREATE TABLE schedule_executions (
 ```sql
 CREATE TABLE memory_sessions (
     session_id      VARCHAR(64)  NOT NULL PRIMARY KEY,
-    user_id         VARCHAR(64)  NOT NULL DEFAULT '',   -- 预留，未启用
-    prompt          LONGTEXT     NOT NULL DEFAULT '',   -- session 级系统提示词 / 历史压缩摘要（预留）
+    user_id         VARCHAR(64)  NOT NULL DEFAULT '',   -- 创建会话时由 /chat 接口传入，可为空
+    prompt          LONGTEXT     NOT NULL,              -- session 级系统提示词 / 历史压缩摘要（预留）
     round           INT          NOT NULL DEFAULT 0,    -- 当前对话总轮数
     created_at      BIGINT       NOT NULL,
     updated_at      BIGINT       NOT NULL,              -- 每次新增 chat 时刷新
@@ -493,7 +497,7 @@ CREATE TABLE memory_sessions (
 **字段语义**：
 
 - `session_id`：业务 ID，主键
-- `user_id`：预留字段，将来用于会话与用户关联。**已建索引**为将来"列出某用户的所有 session"做准备
+- `user_id`：会话所属用户标识，由 `/chat` 接口在创建会话时传入，可为空字符串。配套 `idx_user_id` 索引支持"列出某用户的所有 session"
 - `prompt`：预留字段，将来存放：
   - session 级系统提示词（类似 GROOT.md，但作用域为单个 session）
   - 长会话的历史压缩摘要（当 round 很大时无法把全部历史塞 LLM）
@@ -509,7 +513,7 @@ CREATE TABLE memory_sessions (
 LoadHistory(session_id):
     SELECT instruction, result, round
     FROM memory_chats
-    WHERE session_id = ? AND status = 'success'
+    WHERE session_id = ? AND status = 'completed' AND agent_name = ''
     ORDER BY round ASC
     → 应用层组装为 [{role: user, content: instruction}, {role: assistant, content: result}, ...]
 ```
@@ -517,7 +521,7 @@ LoadHistory(session_id):
 **索引策略**：
 
 - PK：`session_id`
-- `idx_user_id`：预留索引，未启用前不影响写入性能（user_id 默认空字符串）
+- `idx_user_id`：支持按用户检索 session
 - `idx_updated_at`：cleanup 扫描
 
 #### 1.9.7 memory_chats
@@ -531,12 +535,12 @@ CREATE TABLE memory_chats (
     round              INT          NOT NULL,             -- 第几轮（在该 session 内），子 Agent 记录不占轮次
     agent_name         VARCHAR(64)  NOT NULL DEFAULT '',  -- 主 Agent 为空字符串，子 Agent 填 agent name
     caller             VARCHAR(64)  NOT NULL DEFAULT '',  -- 调用来源标识
-    prompt             LONGTEXT     NOT NULL DEFAULT '',  -- /chat 调用时携带的系统提示词
+    prompt             LONGTEXT     NOT NULL,             -- /chat 调用时携带的系统提示词
     instruction        LONGTEXT     NOT NULL,             -- 用户输入指令（含附件元数据 JSON）
-    result             LONGTEXT     NOT NULL DEFAULT '',  -- 大模型最终回复文本
-    steps              LONGTEXT     NOT NULL DEFAULT '',  -- 执行步骤数组 JSON（ReAct 思考链 / 工具调用 / 子 Agent 执行记录）
-    status             VARCHAR(16)  NOT NULL,             -- 'running' | 'success' | 'failed' | 'timeout'
-    error              TEXT         NOT NULL DEFAULT '',  -- 失败原因 JSON（{"code":"...","message":"..."}），成功时为空字符串
+    result             LONGTEXT     NOT NULL,             -- 大模型最终回复文本
+    steps              LONGTEXT     NOT NULL,             -- 执行步骤数组 JSON（ReAct 思考链 / 工具调用 / 子 Agent 执行记录）
+    status             VARCHAR(16)  NOT NULL,             -- 'running' | 'completed' | 'failed' | 'cancelled'
+    error              TEXT         NOT NULL,             -- 失败原因 JSON（{"code":"...","message":"..."}），成功时为空字符串
     model              VARCHAR(64)  NOT NULL DEFAULT '',  -- 使用的模型 ID
     prompt_tokens      INT          NOT NULL DEFAULT 0,
     completion_tokens  INT          NOT NULL DEFAULT 0,
@@ -545,7 +549,7 @@ CREATE TABLE memory_chats (
     started_at         BIGINT       NOT NULL,
     finished_at        BIGINT       NULL,                 -- running 时为 NULL
 
-    UNIQUE KEY uk_session_round (session_id, round),
+    KEY idx_session_round (session_id, round),
     KEY idx_session_started (session_id, started_at DESC),
     KEY idx_started_at (started_at),
     KEY idx_status (status)
@@ -554,68 +558,89 @@ CREATE TABLE memory_chats (
 
 **字段语义**：
 
-- `chat_id`：业务 ID，17 位毫秒时间戳，主键
-- `round`：本 chat 在所属 session 内的轮次（1-based）。**仅主 Agent 对话占轮次**；子 Agent 记录不写入本表（见下）
-- `agent_name`：主 Agent 记录填空字符串 `''`；若将来扩展为独立记录子 Agent，则填对应 agent name。当前阶段仅主 Agent 写入此表
+- `chat_id`：业务 ID，主键。主 Agent 17 位毫秒时间戳；子 Agent 形如 `{父chatID}_{HHMMSSmmm}_{random4}_{agentName}`
+- `round`：本 chat 在所属 session 内的轮次（1-based）。**仅主 Agent 对话推进轮次**；子 Agent 记录沿用其父 chat 的 round（不递增 session.round）
+- `agent_name`：主 Agent 记录填空字符串 `''`；子 Agent 记录填对应 agent name
 - `caller`：调用来源标识，对应现有 `ChatRecord.Caller` 字段
 - `prompt`：本次调用携带的系统提示词（API `/chat` 入参显式传入时使用）
 - `instruction`：用户输入指令的完整内容，附件元数据以 JSON 形式嵌入
 - `result`：大模型最终回复文本。失败时为空字符串
-- `steps`：ReAct 模式下的步骤数组 JSON（thought / action / observation 序列、工具调用、**子 Agent 执行摘要**等）。子 Agent 的完整执行细节嵌在对应 step 的 JSON 里，不单独插入 `memory_chats` 表
+- `steps`：ReAct 模式下的步骤数组 JSON（thought / action / observation 序列、工具调用等）
 - `status`：执行状态四态
-- `error`：失败原因，存储完整 JSON `{"code":"...","message":"..."}`，与现有 `ChatRecord.Error` 结构保持一致。`status='success'` 时为空字符串
+- `error`：失败原因，存储完整 JSON `{"code":"...","message":"..."}`，与现有 `ChatRecord.Error` 结构保持一致。`status='completed'` 时为空字符串
 - `model`：使用的模型 ID（如 `gpt-4o`、`claude-opus-4-7`），便于按模型统计
 - `prompt_tokens` / `completion_tokens` / `total_tokens`：三个 token 计数全存。OpenAI 等 API 偶尔返回的 total 与 prompt+completion 不严格相等（推理 token），全存避免重算误差
 - `duration_ms`：执行耗时
 - `started_at` / `finished_at`：开始 / 结束时间戳。running 时 `finished_at = NULL`
 
-**子 Agent 记录的处理方式（方案 A）**：
+**子 Agent 记录的处理方式**：
 
-子 Agent 的对话执行记录**不单独插入 `memory_chats` 表**，而是嵌入父 chat 的 `steps` JSON 中。这样：
+子 Agent 的对话执行记录**与主 Agent 同表（`memory_chats`）持久化**，通过 `agent_name` 区分：
 
-- `round` 计数不被子 Agent 消耗，不会跳变
-- `uk_session_round` 唯一约束不会因并发子 Agent 写冲突
+- 主 Agent 记录：`agent_name = ''`，`round = session.round + 1`，写入时事务推进 `memory_sessions.round`
+- 子 Agent 记录：`agent_name = '<sub agent name>'`，`round = 父 chat 的 round`（沿用），**不推进 `memory_sessions.round`**
+
+这样：
+
+- session 的 round 序列是「主 Agent 视角」的轮次，子 Agent 不消耗 round
 - `LoadHistory` 过滤 `agent_name = ''` 后得到的全是主 Agent 轮次，上下文顺序清晰
-- 子 Agent 执行细节通过 `steps` JSON 可追溯，不损失可观测性
+- 子 Agent 仍以独立行存在，token / steps / model 等字段不丢失，可观测性完整
+- 同一父 chat 下若并发触发多个子 Agent，它们行的 `round` 都等于父轮次，靠 `chat_id` 区分
 
 **约束与索引**：
 
-- PK：`chat_id`
-- `uk_session_round (session_id, round)`：**强制约束**——同一 session 不可能有两条同 round 记录。配合应用层的事务（见下）防并发写时同 round 重复
+- PK：`chat_id`（主 Agent 与子 Agent 的 chatID 形态不冲突，详见上文字段语义）
+- `idx_session_round (session_id, round)`：按主 Agent 轮次回放/检索父子记录
 - `idx_session_started`：列出会话历史
 - `idx_started_at`：全局 TTL 清理（按时间清掉 N 天前的记录）
 - `idx_status`：查"卡住的 running" / "失败的"
 
-**写入新 chat 的事务约定**（仅主 Agent 调用）：
+> 历史曾设计过 `uk_session_round (session_id, round)` 唯一约束，但子 Agent 沿用父轮次会与主 Agent 同 round 冲突，所以**仅作非唯一索引**保留，主 Agent 同 round 唯一性靠下文事务里的乐观锁保证。
+
+**写入新 chat 的事务约定**：
+
+主 Agent 路径（`agent_name=''`）：
 
 ```
 BEGIN
-  next_round := SELECT round + 1 FROM memory_sessions WHERE session_id = :sid
+  cur_round  := SELECT round FROM memory_sessions WHERE session_id = :sid
+  next_round := cur_round + 1
   INSERT INTO memory_chats (chat_id, session_id, round, agent_name, ...) VALUES (..., next_round, '', ...)
-    → INSERT 冲突（uk_session_round）→ ROLLBACK → return ErrConflict
   rows := UPDATE memory_sessions
              SET round = next_round, updated_at = :now
-           WHERE session_id = :sid AND round = next_round - 1   -- 乐观锁
+           WHERE session_id = :sid AND round = cur_round   -- 乐观锁
   if rows == 0 → ROLLBACK → return ErrConflict   -- 另一事务已推进 round，本次写作废
 COMMIT
 ```
 
-两个 `ErrConflict` 触发点：
-- `INSERT` 冲突：`uk_session_round` 约束命中，说明同 round 已有记录
-- `UPDATE 0 行`：SELECT 和 UPDATE 之间另一事务已提交新 chat 推进了 round，`WHERE round = next_round - 1` 不再匹配。**必须 rollback**，否则 `memory_sessions.round` 不更新，导致后续写入永远拿到同一个 `next_round`
+子 Agent 路径（`agent_name != ''`）：
+
+```
+BEGIN
+  exists := SELECT COUNT(*) FROM memory_sessions WHERE session_id = :sid
+  if exists == 0 → ROLLBACK → return ErrNotFound
+  INSERT INTO memory_chats (chat_id, session_id, round, agent_name, ...) VALUES (..., :parent_round, :agent_name, ...)
+  UPDATE memory_sessions SET updated_at = :now WHERE session_id = :sid   -- 仅刷新 mtime，不动 round
+COMMIT
+```
+
+`ErrConflict` 触发点（仅主 Agent 路径）：
+- `UPDATE 0 行`：SELECT 和 UPDATE 之间另一事务已提交新 chat 推进了 round，`WHERE round = cur_round` 不再匹配。**必须 rollback**，否则 `memory_sessions.round` 不更新，导致后续写入永远拿到同一个 `next_round`
 
 调用方收到 `ErrConflict` 后重新 `GetSession` 获取最新 round，再次尝试。
 
 **LoadHistory 查询约定**：
 
 ```sql
-SELECT instruction, result, round, prompt
+SELECT chat_id, session_id, round, prompt, instruction, result, steps, status,
+       error, agent_name, caller, model, prompt_tokens, completion_tokens,
+       total_tokens, duration_ms, started_at, finished_at
 FROM memory_chats
-WHERE session_id = ? AND status = 'success' AND agent_name = ''
+WHERE session_id = ? AND status = 'completed' AND agent_name = ''
 ORDER BY round ASC
 ```
 
-`agent_name = ''` 过滤确保只取主 Agent 的对话轮次，不混入任何子 Agent 记录（当前阶段 agent_name 始终为 `''`，该过滤为未来扩展兜底）。
+`agent_name = ''` 过滤确保只取主 Agent 的对话轮次，不混入任何子 Agent 记录。
 
 #### 1.9.8 shared_resources
 
@@ -709,7 +734,7 @@ mtime 不再参与判等，仅作为"新旧"参考显示给用户。因此 **pul
 | `schedules/{status}/{id}/task.json` | `schedule_tasks` 行 | ✅ |
 | MoveTask 重命名目录 | `UPDATE schedule_tasks SET status=?` | ✅ 原子性提升（不再依赖 minio 两阶段补偿） |
 | `memory/{sid}/history.json` | 不存——从 `memory_chats` 实时聚合 | ⚠️ 取消"历史摘要落盘"概念，未来由 `memory_sessions.prompt` 承接长会话压缩摘要 |
-| `memory/{sid}/chats/chat_{ts}.json` | `memory_chats` 行（结构化拆字段） | ✅（结构化粒度更细） |
+| `memory/{sid}/chats/{ts}.json` | `memory_chats` 行（结构化拆字段） | ✅（结构化粒度更细） |
 | MinIO `LastModified` | `shared_resources.updated_at` | ✅ 精度提升为毫秒 |
 | MinIO 对象 path | `shared_resources.path` | ✅ 大小写敏感性靠 `utf8mb4_bin` 保证 |
 
@@ -720,12 +745,14 @@ mtime 不再参与判等，仅作为"新旧"参考显示给用户。因此 **pul
 接口设计原则：
 - 方法签名直接表达业务意图，不暴露 SQL 细节
 - 第一个参数统一为 `context.Context`，支持超时与取消
-- 错误统一返回 `error`，"不存在"场景返回 `repo.ErrNotFound`（调用方用 `errors.Is` 判断）
+- 错误统一返回 `error`，"不存在"场景返回 `repo.ErrNotFound`（调用方用 `errors.Is` 判断）。`ScheduleRepo` 因接口位于 `internal/schedule/` 包，独立定义 `schedule.ErrNotFound` / `schedule.ErrConflict` 与 `repo.ErrNotFound` / `repo.ErrConflict` 语义对齐
 - 不在接口层暴露事务对象——跨表事务由实现层内部管理，接口方法保证原子性
 
 ```go
 // ErrNotFound 表示查询目标不存在，调用方用 errors.Is(err, repo.ErrNotFound) 判断。
 var ErrNotFound = errors.New("repo: not found")
+// ErrConflict 表示乐观锁冲突，调用方需重新加载后重试。
+var ErrConflict = errors.New("repo: version conflict")
 ```
 
 #### 1.10.1 MemberRepo
@@ -839,8 +866,9 @@ type ScheduleRepo interface {
     ListExecutions(ctx context.Context, taskID string, limit int) ([]*schedule.ExecutionRecord, error)
 }
 
-// ErrConflict 乐观锁冲突，调用方需重新加载后重试。
-var ErrConflict = errors.New("repo: version conflict")
+// schedule 包内独立定义错误哨兵，与 repo.* 语义对齐：
+var ErrNotFound = errors.New("schedule: not found")
+var ErrConflict = errors.New("schedule: version conflict")
 ```
 
 **事务边界**：
@@ -853,12 +881,28 @@ var ErrConflict = errors.New("repo: version conflict")
 
 `History` 类型不再落盘，由 `LoadHistory` 从 `memory_chats` 实时聚合返回。
 
-**`ChatRecord` 结构变化**（相对现有 `internal/memory/types.go`）：
+**`ChatRecord` 字段构成**（见 `internal/repo/memory.go`，`internal/memory/types.go` 通过 `type ChatRecord = repo.ChatRecord` 暴露给 memory 包）：
 
-| 变化 | 说明 |
-|---|---|
-| **新增** `Prompt string` 字段 | 对应 `memory_chats.prompt` 列，存储本次调用携带的系统提示词 |
-| **`Duration int`（秒）→ `DurationMs int`（毫秒）** | DB 层存储毫秒精度。写入时无需转换（直接存 `DurationMs`）；读出时 `ChatRecord.Duration = DurationMs / 1000` 向后兼容（API 层继续返回秒级）。新代码统一使用 `DurationMs`，`Duration` 标记为 deprecated，保留用于兼容旧 API 响应 |
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `ChatID` / `SessionID` / `Round` | string / string / int | 主键、所属 session、本 chat 在 session 内的轮次 |
+| `Prompt` | string | 本次调用携带的系统提示词，对应 `memory_chats.prompt` 列 |
+| `Instruction` / `Result` | string / string | 用户指令与最终回复 |
+| `Steps` | `[]Step` | ReAct 步骤数组，落库前序列化为 JSON |
+| `Status` | string | `'running' \| 'completed' \| 'failed' \| 'cancelled'` |
+| `Error` | `*Error` | 失败原因（含 `Code` / `Message`），成功时为 nil；落库前序列化为 JSON |
+| `Caller` / `AgentName` | string / string | 调用来源 / 子 Agent 名（主 Agent 为空字符串） |
+| `Duration` (deprecated) | int | 单位秒，从 `DurationMs` 整除 1000 得到，仅供旧 API 响应字段 `duration` 兼容 |
+| `DurationMs` | int64 | 单位毫秒，DB 真实存储字段 |
+| `PromptTokens` / `CompletionTokens` / `TotalTokens` | int / int / int | LLM token 计数 |
+| `StartedAt` / `EndedAt` | time.Time / time.Time | 开始时刻；运行中 `EndedAt` 为零值，对应 DB `finished_at = NULL` |
+| `Timestamp` | time.Time | 兼容字段，等于 `EndedAt`（部分 API 仍按"timestamp"读取） |
+
+**与文件实现差异**（相对历史的 `chats/{chat_id}.json` 落盘方案）：
+
+- 单 JSON detail 拆为结构化字段，便于 SQL 查询/索引
+- 新增 `Prompt` / `AgentName` / `Caller` / `*Tokens` 列
+- `Duration` 与 `DurationMs` 双字段并存：DB 层只存毫秒，读出时由实现层填充 `Duration` 兼容旧响应
 
 ```go
 // Session 会话元数据（对应 memory_sessions 表）
@@ -886,16 +930,19 @@ type MemoryRepo interface {
     // 返回完整 Session struct 供 API 层渲染列表（保留 session_id / round / created_at / updated_at 等字段）。
     ListSessions(ctx context.Context) ([]*Session, error)
 
-    // SaveChat 写入一条对话记录，同时将 session.round +1、session.updated_at 刷新。
-    // 在事务内原子完成：INSERT memory_chats + UPDATE memory_sessions。
-    // uk_session_round 唯一约束兜底，round 重复时返回 ErrConflict。
+    // SaveChat 写入一条对话记录。事务内原子完成：
+    //   - 主 Agent 记录（rec.AgentName == ""）：INSERT memory_chats + 乐观锁 UPDATE memory_sessions
+    //     （round=session.round+1、updated_at 刷新）；CAS 失败返回 ErrConflict
+    //   - 子 Agent 记录（rec.AgentName != ""）：INSERT memory_chats（round 用调用方传入的父 round）
+    //     + UPDATE memory_sessions 仅刷新 updated_at；不动 round
+    // session 不存在返回 ErrNotFound。
     SaveChat(ctx context.Context, rec *memory.ChatRecord) error
 
     // GetChat 查询单条对话记录。不存在返回 ErrNotFound。
     GetChat(ctx context.Context, chatID string) (*memory.ChatRecord, error)
 
     // LoadHistory 从 memory_chats 实时聚合对话历史（替代原 history.json）。
-    // 返回该 session 下 status='success' AND agent_name='' 的所有主 Agent chat，按 round 升序排列。
+    // 返回该 session 下 status='completed' AND agent_name='' 的所有主 Agent chat，按 round 升序排列。
     // agent_name='' 过滤确保子 Agent 记录不混入 LLM 上下文。
     // 调用方按需截取最近 N 轮（由 config.memory.history_window 控制）。
     LoadHistory(ctx context.Context, sessionID string) ([]*memory.ChatRecord, error)
@@ -913,7 +960,7 @@ type MemoryRepo interface {
 **`LoadHistory` 与 `history_window` 的协作**：
 
 ```
-LoadHistory 返回全量 success chat（按 round 升序）
+LoadHistory 返回全量 completed chat（按 round 升序）
 → 调用方（agent engine）按 config.memory.history_window 截取最近 N 轮
 → -1 表示不限制（全量）
 → 截取后的 []ChatRecord 组装为 LLM messages 输入
@@ -972,7 +1019,7 @@ type ResourceRepo interface {
 | `Put` | UPSERT `shared_resources` 表 | `os.WriteFile`（原子写：tmp + rename） |
 | `Get` | `SELECT * WHERE path=?` | `os.ReadFile` |
 | `Stat` | `SELECT path,size,content_hash,updated_at WHERE path=?` | `os.Stat` + 计算 SHA-1 |
-| `List` | `SELECT path,size,content_hash,updated_at WHERE path LIKE ?` | `filepath.Walk` |
+| `List` | `SELECT path,size,content_hash,updated_at WHERE path LIKE ?` | `filepath.WalkDir` |
 | `Delete` | `DELETE WHERE path=?` | `os.Remove` |
 
 `resourcelocal` 的 `Stat` 计算 SHA-1 会读取文件内容——仅在 diff 比对时调用，文件数量有限，可接受。
@@ -991,6 +1038,26 @@ type ResourceRepo interface {
 
 diff 比对规则从"size + mtime ± 1s 容差"改为"size + SHA-1"，由 sync 模块的 `ComputeDiff` 函数负责，不在 ResourceRepo 层做。
 
+### 1.11 已知限制
+
+**自动化测试覆盖范围**
+
+repo 层（`internal/repo/memorydb`、`memberdb`、`scheduledb`、`resourcedb`）的单元测试统一通过 [`internal/db/db.Open`](../../../internal/db/db.go) 构造的 **SQLite 内存库** 跑用例，目的是用一套通用的方言抽象覆盖三种后端的业务行为。
+
+但以下方言差异 **没有** 在 CI 里跑真实 MySQL / PostgreSQL：
+
+- DDL 兼容性：`LONGTEXT` / `LONGBLOB` / `BIGINT` / `VARCHAR(N)` 等类型在不同数据库上的实际行为
+- 占位符重写：`?` ↔ `$1`（dialect.Rebind）在长 SQL 上的正确性
+- UPSERT 语义：MySQL 的 `INSERT ... ON DUPLICATE KEY UPDATE` 与 PG 的 `ON CONFLICT (col) DO UPDATE` 是否在所有调用点行为一致
+- 事务隔离级别：MySQL 默认 `REPEATABLE READ` 与 PG 默认 `READ COMMITTED` 下乐观锁 CAS 的可见性差异
+
+**部署前建议**：
+
+1. 用目标数据库（MySQL 8.x 或 PostgreSQL 14+）启动一个测试实例
+2. 运行 `tests/python/` 下的系统测试（端到端跑 chat / schedule / sync 全套流程）
+3. 至少覆盖：多主机并发写 chat、schedule_tasks 多节点抢占、shared_resources 大对象读写
+
+如果在系统测试中发现方言差异，优先在 `internal/db/dialect.go` 的对应实现里修复，而不是在业务层 repo 中加分支。
 
 
 ---
@@ -1024,8 +1091,9 @@ diff 比对规则从"size + mtime ± 1s 容差"改为"size + SHA-1"，由 sync �
 - **结构变化**（相对原文件实现）：
   - `schedule_tasks.cron_expr` → `schedule_expr`：列名改为与代码 `Task.Schedule` 字段语义一致，支持 cron / ISO8601 / Go duration 三种格式
   - `memory_sessions` 不再持有 `history` 字段，对话历史从 `memory_chats` 实时聚合；新增 `prompt`（预留）/ `round` / `user_id`（预留）
-  - `memory_chats` 由单 JSON detail 拆为结构化字段；新增 `agent_name`（主 Agent 为 `''`，防子 Agent 记录混入历史）/ `caller`；`error` 字段存完整 JSON `{"code":"...","message":"..."}`
-  - `ChatRecord` 新增 `Prompt string` 字段；`Duration int`（秒）扩展为 `DurationMs int`（毫秒），`Duration` 保留为 deprecated 向后兼容
+  - `memory_chats` 由单 JSON detail 拆为结构化字段；新增 `agent_name`（主 Agent 为 `''`，子 Agent 为对应 agent name）/ `caller`；`error` 字段存完整 JSON `{"code":"...","message":"..."}`
+  - `memory_chats` 不再保留 `uk_session_round` 唯一约束，改为非唯一索引 `idx_session_round`：子 Agent 沿用父 chat 的 round，会与主 Agent 同 round 共存；主 Agent 同 round 唯一性靠事务里的乐观锁保证
+  - `ChatRecord` 新增 `Prompt`、`Model`、`PromptTokens` / `CompletionTokens` / `TotalTokens` 字段全链路填值；`Duration int`（秒）扩展为 `DurationMs int64`（毫秒），`Duration` 保留为 deprecated 向后兼容
   - `cluster_members` 用 `reg_id` 直接做主键，去掉代理键 `id`
   - `shared_resources.content` 改为 `LONGBLOB / BYTEA`，支持任意字节流
   - `shared_resources` 新增 `content_hash`（SHA-1 hex），diff 比对从 size+mtime 改为 size+hash

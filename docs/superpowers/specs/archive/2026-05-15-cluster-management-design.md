@@ -1,5 +1,13 @@
 # Groot 单机多实例集群管理设计
 
+> ⚠️ **本文档已归档**：cluster 模块已迁移到 `repo.MemberRepo` + 数据库 `cluster_members` 表实现，原"基于 storage.Storage 接口 + 文件 mtime 心跳"的方案已退役。
+>
+> **后续设计**：见同目录 [`../2026-05-15-cluster-management-design.md`](../2026-05-15-cluster-management-design.md)（已重写为数据库后端版本）。
+>
+> 本文档仅作历史参考保留。
+
+---
+
 ## 一、功能设计
 
 ### 1.1 概述

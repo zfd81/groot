@@ -38,11 +38,14 @@ Agent 工具列表示例（MCP 工具）：
 ```
 internal/mcp/
   ├── config.go             # MCP 配置结构体定义
-  └── manager.go            # MCP 运行时管理（连接、工具发现、注册、关闭等）
+  ├── manager.go            # MCP 运行时管理（连接、工具发现、注册、关闭等）
+  └── manager_test.go       # Manager 单元测试
 internal/cmd/
   ├── mcp.go                # CLI 命令实现
   └── mcp_test.go           # CLI 单元测试
 ```
+
+代码位置：[`internal/mcp/`](../../../internal/mcp/)、[`internal/cmd/mcp.go`](../../../internal/cmd/mcp.go)。
 
 ### 数据目录
 
@@ -57,11 +60,13 @@ MCP 目录固定为 `{GROOT_HOME}/mcp`，不可配置。
 
 ## Manager 内部结构
 
+定义见 [`internal/mcp/manager.go`](../../../internal/mcp/manager.go)：
+
 ```go
 type Manager struct {
     mcps         map[string]*MCPConfig       // MCP 配置（name → config）
     clients      map[string]client.MCPClient // mcp-go 客户端（name → client）
-    einoTools    map[string]tool.BaseTool    // eino 工具（供 Agent 调用）
+    einoTools    map[string]tool.BaseTool    // eino 工具（来自 MCP Server）
     builtinTools map[string]tool.BaseTool    // 内置工具（如 schedule）
     toolInfos    map[string]*ToolInfo        // 工具元数据（供 API 查询）
     errors       map[string]string           // MCP 发现错误（供 /health 展示）
@@ -76,12 +81,20 @@ type Manager struct {
 |------|------|
 | `LoadAll(dir)` | 启动时扫描目录，加载所有 `.json` 配置 |
 | `Load(path)` | 加载单个配置文件（解析、连接、发现、注册） |
-| `Register(config, tools, error)` | 注册 MCP 的工具元数据，记录发现错误 |
+| `Register(config, tools, error)` | 注册 MCP 的工具元数据，记录或清除发现错误 |
+| `Unregister(name)` | 注销指定 MCP，移除其全部工具并关闭客户端 |
 | `RegisterBuiltinTools(tools)` | 注册内置工具（如 schedule 工具），以 `"schedule"` 为 MCP 名 |
+| `UnregisterBuiltinTools()` | 移除全部内置工具及其元数据 |
+| `Get(name)` | 按名获取 MCP 配置 |
+| `GetTool(name)` | 按名获取工具元数据 |
+| `GetError(name)` | 获取指定 MCP 的发现错误 |
 | `GetTools()` | 获取所有 eino 工具 + 内置工具，供 Agent Engine 调用 |
+| `List()` | 获取所有已注册 MCP 配置 |
 | `ListTools()` | 获取所有工具元数据，供 `/tools` API 使用 |
-| `ListWithToolCount()` | 获取所有 MCP 及其工具计数，供 `/health` API 使用 |
-| `Close()` | 优雅关闭所有 MCP 客户端连接 |
+| `ListWithToolCount()` | 获取所有 MCP 及其工具计数与错误信息，供 `/health` API 使用 |
+| `Count()` | 已注册 MCP 数量 |
+| `ToolCount()` | 已注册工具数量 |
+| `Close()` | 关闭所有 MCP 客户端连接 |
 
 ## 配置文件格式
 
@@ -135,18 +148,20 @@ type Manager struct {
 
 ### 字段说明
 
+配置结构体定义见 [`internal/mcp/config.go`](../../../internal/mcp/config.go)：
+
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | string | 是 | MCP Server 名称（全局唯一） |
-| `type` | string | 是 | 连接类型：`stdio`、`sse`、`streamable_http` |
-| `description` | string | 是 | MCP Server 描述 |
-| `isActive` | bool | 是 | 是否激活，false 时跳过加载 |
+| `name` | string | 是 | MCP Server 名称（全局唯一），缺失时 `Load()` 返回错误并跳过 |
+| `type` | string | 是 | 连接类型：`stdio`、`sse`、`streamable_http`，未识别类型在创建客户端时报错 |
+| `description` | string | 否 | MCP Server 描述，用于 CLI 列表与 `/health` 展示 |
+| `isActive` | bool | 否 | 是否激活，false 时跳过加载（不进行连接和工具发现） |
 | `command` | string | stdio 必填 | 启动命令（仅 stdio 类型） |
-| `args` | array | 否 | 命令参数（仅 stdio 类型），支持环境变量 `${VAR}` |
-| `env` | object | 否 | 环境变量（仅 stdio 类型），支持 `${VAR}` 引用 |
-| `baseUrl` | string | sse/http 必填 | 服务地址（sse / streamable_http 类型） |
+| `args` | array | 否 | 命令参数（仅 stdio 类型），支持环境变量 `${VAR}` 与 `~` 展开 |
+| `env` | object | 否 | 环境变量（仅 stdio 类型），支持 `${VAR}` 引用，最终与 `os.Environ()` 合并后传给子进程 |
+| `baseUrl` | string | sse / streamable_http 必填 | 服务地址 |
 | `headers` | object | 否 | 自定义请求头，支持 `${VAR}` 引用 |
-| `tools` | array | 否 | 按名过滤工具列表，每项含 `name`（必填）。不填则自动发现全部工具 |
+| `tools` | array | 否 | 按名过滤工具列表，每项含 `name`（必填）。不填则自动发现 Server 报告的全部工具 |
 
 ## 连接类型
 
@@ -349,5 +364,13 @@ type mcpItem struct {
 
 ## 测试
 
-- `internal/cmd/mcp_test.go` — CLI 命令测试（参数解析、list 表格输出、异常标记、汇总行、空目录提示等）
-- `internal/mcp/` 运行时逻辑暂未覆盖，待后续补充
+- [`internal/mcp/manager_test.go`](../../../internal/mcp/manager_test.go) — Manager 单元测试，覆盖：
+  - `Register` / `RegisterWithError` / `RegisterBuiltinTools` / `Unregister` / `RegisterOverwrite`
+  - `ListTools` / `ListWithToolCount` / `List_Empty` / `GetTools_Empty` / `GetTools_Type`
+  - `ConfigParsing`（含 `WithoutTools`、`Inactive`、`StreamableHTTP`、`MissingName` 等场景）
+  - `LoadAll_DirectoryNotExists` / `LoadAll_EmptyDirectory` / `LoadAll_IgnoresNonJSON` / `LoadAll_InvalidJSON`
+  - `Load_MissingNameField` / `Load_InactiveConfig` / `Load_NonexistentFile`
+  - 工具函数：`BuildEnv`、`ExpandArgs`、`ExpandHeaders`
+  - 类型与结构：`MCPTypeConstants`、`ToolDefinition`、`ToolInfo`、`MCPInfoStruct`、`ConfigToolsFieldRoundTrip`
+  - 边界：`NewManager_NilLogger`、`Close`
+- [`internal/cmd/mcp_test.go`](../../../internal/cmd/mcp_test.go) — CLI 命令测试（参数解析、list 表格输出、异常标记、汇总行、空目录提示、整体集成等）
