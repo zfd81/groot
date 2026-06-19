@@ -66,37 +66,96 @@ func TestGenerateEnvTemplate_DefaultIsLocal(t *testing.T) {
 	}
 }
 
-// TestGenerateEnvTemplate_UncommentedYieldsDatabase 模拟用户取消注释后，
-// 模板能被正确解析为 DatabaseConfig。
-func TestGenerateEnvTemplate_UncommentedYieldsDatabase(t *testing.T) {
+// TestGenerateEnvTemplate_NoSQLiteExample 验证 SQLite 不出现在模板的
+// driver 示例中：SQLite 是默认零配置模式，模板里不需要 sqlite driver
+// 占位（避免误导用户以为需要写 sqlite 才启用本地模式）。
+func TestGenerateEnvTemplate_NoSQLiteExample(t *testing.T) {
 	tpl := GenerateEnvTemplate()
-	// 取消 database 节的注释前缀
-	enablePrefixes := []string{
-		"#database:",
-		"#  driver:",
-		"#  dsn:",
+	if strings.Contains(tpl, "driver: sqlite") {
+		t.Error("env.yaml 模板不应包含 'driver: sqlite' 示例：SQLite 是零配置模式，无需在模板中声明")
 	}
+}
+
+// uncommentDatabaseBlock 把模板中以 marker 开头紧跟的连续 "#database:" /
+// "#  ..." 行去掉行首 #，返回取消注释后的文本，方便测试逐个示例块。
+func uncommentDatabaseBlock(tpl, marker string) string {
 	lines := strings.Split(tpl, "\n")
-	for i, line := range lines {
-		for _, p := range enablePrefixes {
-			if strings.HasPrefix(line, p) {
-				lines[i] = line[1:]
-				break
+	var out []string
+	uncommenting := false
+	hit := false
+	for _, line := range lines {
+		if !uncommenting {
+			if strings.Contains(line, marker) {
+				hit = true
+				uncommenting = true
+				out = append(out, line)
+				continue
 			}
+			out = append(out, line)
+			continue
 		}
+		// 已进入示例块：去掉以 # 开头的 database/缩进字段行
+		if strings.HasPrefix(line, "#database:") || strings.HasPrefix(line, "#  ") {
+			out = append(out, line[1:])
+			continue
+		}
+		// 遇到第一行不属于该块的内容 → 结束
+		uncommenting = false
+		out = append(out, line)
 	}
-	uncommented := strings.Join(lines, "\n")
+	if !hit {
+		return ""
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestGenerateEnvTemplate_MySQLExampleParses 验证 MySQL 示例块取消
+// 注释后能被解析为 driver=mysql 的合法 DatabaseConfig。
+func TestGenerateEnvTemplate_MySQLExampleParses(t *testing.T) {
+	tpl := GenerateEnvTemplate()
+	uncommented := uncommentDatabaseBlock(tpl, "MySQL")
+	if uncommented == "" {
+		t.Fatal("模板中找不到 MySQL 示例块的标记")
+	}
 
 	var ef envFile
 	if err := yaml.Unmarshal([]byte(uncommented), &ef); err != nil {
-		// If template doesn't have database section commented out yet, skip gracefully
-		t.Logf("env template without database section: %v", err)
-		t.Skip("env template does not contain commented database section")
-		return
+		t.Fatalf("MySQL 示例块取消注释后应为合法 YAML: %v", err)
 	}
-	// If database section was uncommented, it should parse
 	if ef.Database == nil {
-		// Template may not have database comments yet — acceptable
-		t.Log("database section not found in template (acceptable if template not yet updated)")
+		t.Fatal("MySQL 示例块取消注释后 database 节应被解析")
+	}
+	if ef.Database.Driver != "mysql" {
+		t.Errorf("Driver = %q, want mysql", ef.Database.Driver)
+	}
+	if !strings.Contains(ef.Database.DSN, "@tcp(") {
+		t.Errorf("MySQL DSN 应包含 @tcp() 段，实际 = %q", ef.Database.DSN)
+	}
+	if ef.Database.MaxOpenConns != 20 {
+		t.Errorf("MaxOpenConns = %d, want 20", ef.Database.MaxOpenConns)
+	}
+}
+
+// TestGenerateEnvTemplate_PostgresExampleParses 验证 PostgreSQL 示例块
+// 取消注释后能被解析为 driver=postgres 的合法 DatabaseConfig。
+func TestGenerateEnvTemplate_PostgresExampleParses(t *testing.T) {
+	tpl := GenerateEnvTemplate()
+	uncommented := uncommentDatabaseBlock(tpl, "PostgreSQL")
+	if uncommented == "" {
+		t.Fatal("模板中找不到 PostgreSQL 示例块的标记")
+	}
+
+	var ef envFile
+	if err := yaml.Unmarshal([]byte(uncommented), &ef); err != nil {
+		t.Fatalf("PostgreSQL 示例块取消注释后应为合法 YAML: %v", err)
+	}
+	if ef.Database == nil {
+		t.Fatal("PostgreSQL 示例块取消注释后 database 节应被解析")
+	}
+	if ef.Database.Driver != "postgres" {
+		t.Errorf("Driver = %q, want postgres", ef.Database.Driver)
+	}
+	if !strings.Contains(ef.Database.DSN, "host=") || !strings.Contains(ef.Database.DSN, "dbname=") {
+		t.Errorf("PostgreSQL DSN 应包含 host=/dbname= 段，实际 = %q", ef.Database.DSN)
 	}
 }

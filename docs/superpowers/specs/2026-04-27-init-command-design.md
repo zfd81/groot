@@ -92,29 +92,37 @@ GROOT.md 创建成功
 
 #### 1.4.2 `env.yaml`
 
-由 [`config.GenerateEnvTemplate`](../../../internal/config/env_template.go) 生成，文件名常量 `config.EnvFileName`。模板内容**全注释**，等价于本地零配置模式：
+由 [`config.GenerateEnvTemplate`](../../../internal/config/env_template.go) 生成，文件名常量 `config.EnvFileName`。模板内容**全注释**，等价于本地零配置模式（SQLite）。模板为 MySQL 与 PostgreSQL 各提供一个**完整示例块**，DSN 格式按驱动写好，用户二选一取消整块注释并填入真实凭据即可启用：
 
 ```yaml
 # Groot 基础设施环境配置
 # 存放数据库等外部服务的连接凭据，与业务配置 (config.yaml) 解耦。
 #
-# 默认情况下整个文件为注释（cfg.Database == nil）。
-# 如需启用数据库后端，取消下方 database 块的注释并填入连接信息：
-#   - 删除整个文件 → cfg.Database 为 nil
-#   - 删除 database 节（或保持注释）→ cfg.Database 为 nil
-#   - 完整填写 database 节 → 启用数据库
+# 默认情况下整个文件为注释（cfg.Database == nil），等价于 SQLite 本地模式
+# （数据库文件 ~/.groot/groot.db），无需任何配置。
+#
+# 启用 MySQL / PostgreSQL：二选一，取消对应示例块的注释并填入真实连接
+# 信息。DSN 中的密码等敏感信息建议通过 ${ENV_VAR} 环境变量引用。
+# 注意：同一时间只能启用一个 database 块，否则 yaml 解析会冲突。
 
+# ─── 示例 1：MySQL ───
 #database:
-#  driver: sqlite                       # "sqlite" | "mysql" | "postgres"
-#  dsn: ${DB_DSN}                       # 连接字符串（建议使用环境变量）
-#  max_open_conns: 20                   # 最大打开连接数
-#  max_idle_conns: 5                    # 最大空闲连接数
-#  conn_max_lifetime: 30m               # 连接最大生命周期
+#  driver: mysql
+#  dsn: "user:${GROOT_DB_PASSWORD}@tcp(host:3306)/groot?charset=utf8mb4&parseTime=True&loc=UTC"
+#  max_open_conns: 20                   # 最大打开连接数（默认 20）
+#  max_idle_conns: 5                    # 最大空闲连接数（默认 5）
+#  conn_max_lifetime: 30m               # 连接最大生命周期（默认 30m）
+
+# ─── 示例 2：PostgreSQL ───
+#database:
+#  driver: postgres
+#  dsn: "host=host port=5432 user=groot password=${GROOT_DB_PASSWORD} dbname=groot sslmode=disable TimeZone=UTC"
+#  max_open_conns: 20
+#  max_idle_conns: 5
+#  conn_max_lifetime: 30m
 ```
 
-模板使用"先缩进后 `#`"格式（如 `#  driver:`），用户删掉行首 `#` 后 yaml 缩进自动正确。env.yaml 加载机制与字段语义详见 [数据库后端设计](2026-06-10-database-backend-design.md) §1.5。
-
-不配置 `database` 节使用 SQLite 单机模式（数据库文件 `~/.groot/groot.db`）；配置 `driver=mysql/postgres` 进入远端数据库多主机模式。
+模板使用"先缩进后 `#`"格式（如 `#  driver:`），用户删掉每一行首的 `#` 后 yaml 缩进自动正确。SQLite 不需要在 env.yaml 中配置——文件全注释、删除 `database` 节、删除整个文件这三种情况都自动落到 SQLite 模式。env.yaml 加载机制与字段语义详见 [数据库后端设计](2026-06-10-database-backend-design.md) §1.5。
 
 #### 1.4.3 `GROOT.md`
 
@@ -173,3 +181,4 @@ groot
 - **移除** `memory/`、`schedules/`、`cluster/members/` 等运行时数据目录的创建：相关数据已迁入数据库（SQLite/MySQL/PostgreSQL）
 - **移除** 配置模板中的 `storage` 节：MinIO 等基础设施凭据集中放在 `env.yaml`
 - **调整** 启动期 LLM 校验，增强为细分错误：models 为空、base_url/api_key 为空、环境变量未设置、参数超出范围等，错误信息中给出具体修复操作
+- **调整** `env.yaml` 模板：原先只给一个通用 `database` 块（`driver: sqlite` + 通用 `${DB_DSN}` 占位），改为 MySQL 与 PostgreSQL 两个完整示例块，DSN 按驱动写好，用户二选一取消注释；SQLite 不再出现在模板中（默认零配置即 SQLite）
