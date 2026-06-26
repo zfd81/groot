@@ -174,7 +174,19 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		isNew = false
 		round = h.memory.GetRoundCount(sessionID) + 1
 		var err error
-		historyMessages, err = h.memory.GetContextMessages(sessionID, h.config.Memory.HistoryWindow)
+
+		// 获取当前请求使用的模型配置
+		modelConfig := h.config.LLM.GetModelByName(modelName)
+		if modelConfig == nil {
+			modelConfig = h.config.LLM.GetDefaultModel()
+		}
+
+		// 使用新方法，传入 token 预算
+		historyMessages, err = h.memory.GetContextMessagesWithTokenLimit(
+			sessionID,
+			h.config.Memory.HistoryWindow,
+			modelConfig.MaxContextTokens,
+		)
 		if err != nil {
 			rc.JSON(500, utils.H{"status": "error", "message": "获取上下文失败"})
 			return
