@@ -562,3 +562,119 @@ func TestManager_DeleteSession(t *testing.T) {
 		t.Error("DeleteSession() 后 GetHistory() 应返回错误")
 	}
 }
+
+func TestManager_GetContextMessagesWithTokenLimit_OnlyTokenLimit(t *testing.T) {
+	mgr := newTestManager(t)
+	sessionID := "test-session-token-limit"
+
+	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+
+	// 添加 3 轮消息
+	// 轮1: "AAAA" + "AAAA" = 1 + 1 = 2 tokens (每个4字符/4=1 token)
+	mgr.SaveChatRecord(sessionID, &ChatRecord{
+		ChatID:      "20260626100000001",
+		SessionID:   sessionID,
+		Instruction: "AAAA",
+		Result:      "AAAA",
+		Status:      "completed",
+		StartedAt:   time.Now(),
+	})
+	// 轮2: "BBBBBBBB" + "BBBBBBBB" = 2 + 2 = 4 tokens (每个8字符/4=2 tokens)
+	mgr.SaveChatRecord(sessionID, &ChatRecord{
+		ChatID:      "20260626100000002",
+		SessionID:   sessionID,
+		Instruction: "BBBBBBBB",
+		Result:      "BBBBBBBB",
+		Status:      "completed",
+		StartedAt:   time.Now(),
+	})
+	// 轮3: "CCCCCCCCCCCCCCCC" + "CCCCCCCCCCCCCCCC" = 4 + 4 = 8 tokens (每个16字符/4=4 tokens)
+	mgr.SaveChatRecord(sessionID, &ChatRecord{
+		ChatID:      "20260626100000003",
+		SessionID:   sessionID,
+		Instruction: "CCCCCCCCCCCCCCCC",
+		Result:      "CCCCCCCCCCCCCCCC",
+		Status:      "completed",
+		StartedAt:   time.Now(),
+	})
+
+	// 限制 13 tokens：应该返回轮2和轮3（4+8=12 tokens < 13）
+	msgs, err := mgr.GetContextMessagesWithTokenLimit(sessionID, -1, 13)
+	if err != nil {
+		t.Fatalf("GetContextMessagesWithTokenLimit() 失败: %v", err)
+	}
+
+	if len(msgs) != 2 {
+		t.Errorf("期望返回 2 条消息（轮2+轮3），实际 %d 条", len(msgs))
+	}
+	if len(msgs) > 0 && msgs[0].Round != 2 {
+		t.Errorf("第一条消息应该是轮2，实际 %d", msgs[0].Round)
+	}
+}
+
+func TestManager_GetContextMessagesWithTokenLimit_BothLimits(t *testing.T) {
+	mgr := newTestManager(t)
+	sessionID := "test-session-both-limits"
+
+	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+
+	// 添加 5 轮消息，每轮 "AAAA" + "AAAA" = 1 + 1 = 2 tokens
+	for i := 1; i <= 5; i++ {
+		mgr.SaveChatRecord(sessionID, &ChatRecord{
+			ChatID:      fmt.Sprintf("2026062610000000%d", i),
+			SessionID:   sessionID,
+			Instruction: "AAAA", // 4字符/4=1 token
+			Result:      "AAAA", // 4字符/4=1 token，合计 2 tokens/轮
+			Status:      "completed",
+			StartedAt:   time.Now(),
+		})
+	}
+
+	// windowSize=3 先截到最近 3 轮（轮3、4、5，共 6 tokens）
+	// maxContextTokens=4 再截到 4 tokens（轮4、5，共 4 tokens）
+	msgs, err := mgr.GetContextMessagesWithTokenLimit(sessionID, 3, 4)
+	if err != nil {
+		t.Fatalf("GetContextMessagesWithTokenLimit() 失败: %v", err)
+	}
+
+	if len(msgs) != 2 {
+		t.Errorf("期望返回 2 条消息（轮4+轮5），实际 %d 条", len(msgs))
+	}
+	if len(msgs) > 0 && msgs[0].Round != 4 {
+		t.Errorf("第一条消息应该是轮4，实际 %d", msgs[0].Round)
+	}
+}
+
+func TestManager_GetContextMessagesWithTokenLimit_MinGuarantee(t *testing.T) {
+	mgr := newTestManager(t)
+	sessionID := "test-session-min-guarantee"
+
+	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+
+	// 添加 1 轮，内容很长（超过预算）
+	longText := string(make([]byte, 100)) // 100 字符 = 25 tokens
+	mgr.SaveChatRecord(sessionID, &ChatRecord{
+		ChatID:      "20260626100000001",
+		SessionID:   sessionID,
+		Instruction: longText,
+		Result:      longText,
+		Status:      "completed",
+		StartedAt:   time.Now(),
+	})
+
+	// 预算只有 10 tokens，但应该至少返回最近一轮
+	msgs, err := mgr.GetContextMessagesWithTokenLimit(sessionID, -1, 10)
+	if err != nil {
+		t.Fatalf("GetContextMessagesWithTokenLimit() 失败: %v", err)
+	}
+
+	if len(msgs) != 1 {
+		t.Errorf("即使超预算，应至少返回最近一轮，实际 %d 条", len(msgs))
+	}
+}

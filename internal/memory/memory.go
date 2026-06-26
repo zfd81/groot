@@ -13,6 +13,7 @@ type Memory interface {
 	GetHistory(sessionID string) (*History, error)
 	GetRoundCount(sessionID string) int
 	GetContextMessages(sessionID string, windowSize int) ([]Message, error)
+	GetContextMessagesWithTokenLimit(sessionID string, windowSize int, maxContextTokens int) ([]Message, error)
 
 	// Chat 记录管理
 	SaveChatRecord(sessionID string, record *ChatRecord) error

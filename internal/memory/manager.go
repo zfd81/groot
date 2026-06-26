@@ -175,6 +175,64 @@ func (m *Manager) GetContextMessages(sessionID string, windowSize int) ([]Messag
 	return history.Messages[len(history.Messages)-windowSize:], nil
 }
 
+// GetContextMessagesWithTokenLimit 返回用于 LLM 上下文构建的历史消息（两层截断）
+// 第一层：按 windowSize 截轮数（<= 0 表示不限制轮数）
+// 第二层：按 maxContextTokens 截 token（<= 0 表示不限制 token）
+func (m *Manager) GetContextMessagesWithTokenLimit(sessionID string, windowSize int, maxContextTokens int) ([]Message, error) {
+	// 1. 获取完整历史
+	history, err := m.GetHistory(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	messages := history.Messages
+
+	// 2. 第一层截断：按轮数
+	if windowSize > 0 && len(messages) > windowSize {
+		messages = messages[len(messages)-windowSize:]
+	}
+
+	// 3. 第二层截断：按 token
+	if maxContextTokens <= 0 {
+		// 不限制 token，直接返回
+		return messages, nil
+	}
+
+	// 按轮分组（从最新往旧遍历）
+	estimator := &DefaultTokenEstimator{}
+	var result []Message
+	accumulated := 0
+
+	// 从最新一轮往前累加
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		// 估算这条消息的 token
+		instructionTokens := estimator.Estimate(msg.Instruction)
+		resultTokens := estimator.Estimate(msg.Result)
+		msgTokens := instructionTokens + resultTokens
+
+		// 判断加入这条消息后是否超预算
+		if accumulated+msgTokens > maxContextTokens {
+			// 如果已经有消息，就停止；如果还没有消息，至少保留这一轮
+			if len(result) > 0 {
+				break
+			}
+			// len(result) == 0，这是第一条消息，即使超预算也要保留（最小保障）
+		}
+
+		// 加入结果（尾插，更高效）
+		result = append(result, msg)
+		accumulated += msgTokens
+	}
+
+	// 反转 result 以恢复时间正序
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+
+	return result, nil
+}
+
 // SaveChatRecord 保存详细对话记录到数据库
 func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
 	// 确保 SessionID 字段已设置
