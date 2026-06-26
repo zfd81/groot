@@ -371,7 +371,7 @@ func startServer(homeDir string, port int) {
 	log.Info("数据库初始化完成", zap.Int("dialect", int(dbDialect)))
 
 	// Initialize memory manager
-	memMgr := memory.NewManager(cfg.Memory.RetentionDays, log, repos.Memory)
+	memMgr := memory.NewManager(log, repos.Memory)
 	log.Info("Memory 初始化完成")
 
 	// Initialize runtime state
@@ -429,10 +429,6 @@ func startServer(homeDir string, port int) {
 			return
 		}
 
-		// Register cleanup task
-		cleanupHour, cleanupMinute := schedule.ParseCleanupTime(cfg.Memory.CleanupSchedule)
-		sched.AddDaily(cleanupHour, cleanupMinute, gocron.NewTask(memory.NewCleanupTask(memMgr, log)), "system-cleanup", "cleanup")
-
 		// Register sync task
 		syncInterval, _ := time.ParseDuration(cfg.Schedule.SyncInterval)
 		if syncInterval <= 0 {
@@ -451,8 +447,6 @@ func startServer(homeDir string, port int) {
 		sched.Start()
 		log.Info("统一调度器已启动 (Leader)",
 			zap.Int("max_concurrent", maxConcurrent),
-			zap.Int("cleanup_hour", cleanupHour),
-			zap.Int("cleanup_minute", cleanupMinute),
 		)
 	}
 

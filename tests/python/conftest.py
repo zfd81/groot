@@ -252,9 +252,7 @@ def server():
             }
         },
         "memory": {
-            "directory": "memory",
-            "retention_days": 1,
-            "cleanup_schedule": "02:00"
+            "directory": "memory"
         },
         "schedule": {
             "enabled": True,

@@ -73,12 +73,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.Memory.Directory == "" {
 		cfg.Memory.Directory = "memory"
 	}
-	if cfg.Memory.RetentionDays == 0 {
-		cfg.Memory.RetentionDays = 7
-	}
-	if cfg.Memory.CleanupSchedule == "" {
-		cfg.Memory.CleanupSchedule = "02:00"
-	}
 
 	// Schedule defaults
 	if cfg.Schedule.MaxConcurrentTasks == 0 {

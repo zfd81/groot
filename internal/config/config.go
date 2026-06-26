@@ -57,10 +57,8 @@ type ModelConfig struct {
 
 // MemoryConfig 记忆模块配置
 type MemoryConfig struct {
-	Directory       string `yaml:"directory"`        // 记忆目录
-	RetentionDays   int    `yaml:"retention_days"`   // 保留天数
-	CleanupSchedule string `yaml:"cleanup_schedule"` // 清理时间 HH:MM
-	HistoryWindow   int    `yaml:"history_window"`   // LLM 上下文窗口（轮次），-1 不限制
+	Directory     string `yaml:"directory"`      // 记忆目录
+	HistoryWindow int    `yaml:"history_window"` // LLM 上下文窗口（轮次），-1 不限制
 }
 
 // ScheduleConfig 定时任务调度配置

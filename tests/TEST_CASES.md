@@ -163,7 +163,6 @@
 | TestHistoryJSONFormat | test_memory.py | 历史 JSON 格式 |
 | TestChatRecordFormat | test_memory.py | 聊天记录格式 |
 | TestMemoryDirectoryStructure | test_memory.py | 记忆目录结构 |
-| TestMemoryCleanup | test_memory.py | 记忆清理 |
 | TestMemoryRoundTracking | test_memory.py | 轮次追踪 |
 | TestMemoryStatusTracking | test_memory.py | 状态追踪 |
 
@@ -282,7 +281,6 @@
 | TestSkillsDependencies | test_supplementary.py | 技能依赖 |
 | TestPromptValidation | test_supplementary.py | Prompt 验证 |
 | TestHealthDetailedChecks | test_supplementary.py | 健康检查详细 |
-| TestMemoryCleanup | test_supplementary.py | 记忆清理补充 |
 | TestGracefulShutdown | test_supplementary.py | 优雅关闭 |
 | TestConfigHotUpdateBoundaries | test_supplementary.py | 配置热更新边界 |
 | TestLLMMultiModelConfig | test_supplementary.py | LLM 多模型配置 |

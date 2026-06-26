@@ -70,5 +70,4 @@ type MemoryRepo interface {
 	GetChat(ctx context.Context, chatID string) (*ChatRecord, error)
 	LoadHistory(ctx context.Context, sessionID string) ([]*ChatRecord, error)
 	DeleteSession(ctx context.Context, sessionID string) error
-	DeleteExpiredSessions(ctx context.Context, expiredBefore time.Time) (int, error)
 }

@@ -1,6 +1,6 @@
 # Memory 模块设计
 
-**日期**：2026-05-11（初版）/ 2026-06-10（迁移到数据库后端后重写）
+**日期**：2026-05-11（初版）/ 2026-06-10（迁移到数据库后端后重写）/ 2026-06-26（移除定时清理）
 **状态**：实现稿
 **作者**：zfd81 + Claude
 
@@ -65,7 +65,7 @@ Session（会话）
 | `session_id` | 主键，业务 ID |
 | `user_id` / `prompt` | 预留，未启用 |
 | `round` | 当前对话总轮数；`SaveChat` 在事务内 +1 |
-| `updated_at` | 每次新增 chat 时刷新；cleanup 用此字段判超期 |
+| `updated_at` | 每次新增 chat 时刷新；反映会话最后活跃时间 |
 
 #### 1.3.2 memory_chats
 
@@ -127,9 +127,6 @@ type Memory interface {
     // 会话规则
     GetSessionMdContent(sessionID string) (string, error)
 
-    // 清理
-    Cleanup(ctx context.Context) (int, error)
-
     // 兼容签名（DB 模式下永远返回空字符串）
     GetMemoryDir() string
 }
@@ -138,7 +135,7 @@ type Memory interface {
 `Manager` 是 `Memory` 的唯一实现，构造签名：
 
 ```go
-func NewManager(retentionDays int, log *logger.Logger, memRepo repo.MemoryRepo) *Manager
+func NewManager(log *logger.Logger, memRepo repo.MemoryRepo) *Manager
 ```
 
 **强约束**：`memRepo == nil` 时 `panic("memory: NewManager: memRepo must not be nil")`。Manager 必须持有 `MemoryRepo` 引用，启动期通过 `repofactory.NewRepos` 构造的进程级单例注入。
@@ -217,58 +214,28 @@ internal/memory/
 
 所有会话共享同一份规则；不写入任何物理文件。
 
-### 1.10 Cleanup 流程
-
-`Cleanup(ctx) (int, error)` 清理过期会话：
-
-1. `cutoff := time.Now().AddDate(0, 0, -retentionDays)`
-2. `MemoryRepo.DeleteExpiredSessions(ctx, cutoff)`：内部按 session 一次事务删除（`memory_chats` + `memory_sessions`），逐个事务避免大事务锁表过久
-3. 返回被删除的 session 数量
-
-#### 1.10.1 时间判断使用 updated_at
-
-`memory_sessions.updated_at` 在每次 `SaveChat` 事务内被刷新，反映最后活跃时间——会话可能创建很早但持续活跃，用 `created_at` 会误删仍在使用的会话。
-
-#### 1.10.2 删除粒度
-
-整个 session（含元数据 + 全部 chat）通过事务原子删除。`MemoryRepo.DeleteSession(sessionID)` 内部：
-
-```
-BEGIN
-  DELETE FROM memory_chats    WHERE session_id = ?
-  DELETE FROM memory_sessions WHERE session_id = ?
-COMMIT
-```
-
-### 1.11 配置
+### 1.10 配置
 
 ```yaml
 memory:
-  retention_days: 7               # 会话保留天数
-  cleanup_schedule: "02:00"       # 清理时间（HH:MM）
   history_window: 20              # LLM 上下文窗口（轮次数），-1 不限制
 ```
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `retention_days` | int | `7` | 会话保留天数 |
-| `cleanup_schedule` | string | `02:00` | 每日清理时间（gocron 解析） |
 | `history_window` | int | `20` | LLM 上下文最大轮次数；-1 不限制 |
-
-清理通过 gocron 统一调度引擎执行（详见 [定时任务调度系统设计](2026-05-11-schedule-design.md)），`memory.NewCleanupTask` 提供 `func()` 实现。
 
 > `MemoryConfig.Directory` 字段仍保留在结构体中作为兼容字段，业务代码不再读取——DB 模式下不存在"memory 目录"概念。
 
-### 1.12 错误处理
+### 1.11 错误处理
 
 | 场景 | 处理 |
 |---|---|
 | 会话不存在（`MemoryRepo.GetSession` 返 `repo.ErrNotFound`） | `GetSessionInfo` / `GetHistory` 返回 `"会话不存在: {sessionID}"` |
 | 对话记录不存在（`MemoryRepo.GetChat` 返 `repo.ErrNotFound`） | `GetChatRecord` 返回 `"对话记录不存在: {chatID}"` |
 | `SaveChat` 主 Agent 路径乐观锁失败（`UPDATE memory_sessions SET round=... WHERE round=cur_round` 0 行） | 返 `repo.ErrConflict`；调用方需重新 `GetSession` 获取最新 round 重试 |
-| `Cleanup` 中某 session 删除失败 | 该 session 跳过、`deleted` 不增加，下次 Cleanup 自动重试 |
 
-### 1.13 实现约束
+### 1.12 实现约束
 
 **类型归属**
 
@@ -304,7 +271,7 @@ ChatRecord 与 Message 的 status 映射逻辑只在 executor 中出现一次，
 - 启动期通过 `repofactory.NewRepos` 构造进程级单例后注入
 - 运行期不切换后端
 
-### 1.14 实现文件
+### 1.13 实现文件
 
 | 文件 | 说明 |
 |---|---|
@@ -314,27 +281,21 @@ ChatRecord 与 Message 的 status 映射逻辑只在 executor 中出现一次，
 | `internal/memory/memory.go` | `Memory` 接口定义 |
 | `internal/memory/manager.go` | `Manager` 实现（持有 `MemoryRepo`） |
 | `internal/memory/idgen.go` | ID 生成器（4 种 ID） |
-| `internal/memory/cleanup.go` | 清理 Job 实现（返回 gocron 兼容的 `func()`） |
 | `internal/memory/session_rules.go` | `//go:embed` 加载 session_rules.md |
 | `internal/memory/session_rules.md` | 会话规则正文 |
 | `internal/config/config.go` | `MemoryConfig` 配置项 |
 
-### 1.15 启动与停止
+### 1.14 启动与停止
 
 **启动**：
 
 1. `db.Open(cfg.Database, homeDir)` 初始化数据库连接
 2. `repofactory.NewRepos(sqlxDB, dialect, homeDir)` 构造 `MemoryRepo`
-3. `memory.NewManager(cfg.Memory.RetentionDays, log, repos.Memory)`
-4. Leader 实例向 gocron 注册清理 Job
+3. `memory.NewManager(log, repos.Memory)`
 
-**停止**：
+**停止**：上层关闭 `*sqlx.DB`。Memory 模块自身无后台任务需要停止。
 
-1. gocron 调度器停止（仅 Leader 实例）
-2. 等待当前清理任务完成
-3. 上层关闭 `*sqlx.DB`
-
-### 1.16 设计决策记录
+### 1.15 设计决策记录
 
 | 决策 | 结论 | 原因 |
 |---|---|---|
@@ -343,8 +304,7 @@ ChatRecord 与 Message 的 status 映射逻辑只在 executor 中出现一次，
 | ChatRecord 字段拆列 vs 单 JSON | 关键字段（status / round / agent_name / *_tokens / duration_ms）拆列，剩余 JSON | 索引/查询走列；扩展信息保留 JSON 不破坏 schema |
 | 子 Agent 记录 | 与主 Agent 同表存储，`agent_name != ''` 区分；沿用父 round，不推进 session.round | token / steps / model / duration 完整可观测；session 的 round 仍是主 Agent 视角，`LoadHistory` 过滤 `agent_name=''` 即可只取主 Agent 轮次 |
 | 会话规则存储 | `go:embed` 常量 | 所有会话共享同一份规则，无需会话级定制 |
-| Cleanup 删除粒度 | 单事务删 session + 全部 chat | 避免"元数据/对话"不一致状态 |
-| 时间判断 | `memory_sessions.updated_at` | 反映最后活跃时间 |
+| 会话生命周期 | 不做定时清理，会话长期保留在数据库中 | 数据库后端可承载长期数据；用户/运维可按需通过 SQL 或 `DeleteSession` 接口显式删除 |
 | history.json 是否截断存储 | 不存 history.json，DB 全量保留 | API 需要返回完整历史；LLM 上下文按 round 截断 |
 | LLM 上下文如何控制 | 读取时按轮次截断 | 简单有效，无需 token 计数 |
 | 是否做摘要压缩 | 不做（`memory_sessions.prompt` 列预留以后用） | 先上纯截断；session 级长会话压缩摘要将来由 prompt 列承接 |
@@ -355,11 +315,11 @@ ChatRecord 与 Message 的 status 映射逻辑只在 executor 中出现一次，
 
 ### 2.1 与上一版差异
 
-历史版本基于 `storage.Storage` 接口 + `history.json` + `chats/{chat_id}.json` 文件实现，文档详见 [`archive/2026-05-11-memory-design.md`](archive/2026-05-11-memory-design.md)。本版相对上一版的差异：
+历史版本基于 `storage.Storage` 接口 + `history.json` + `chats/{chat_id}.json` 文件实现，文档详见 [`archive/2026-05-11-memory-design.md`](archive/2026-05-11-memory-design.md)。
 
 #### 持久化抽象
 
-- **新增**：`repo.MemoryRepo` 接口（`CreateSession` / `GetSession` / `ExistsSession` / `ListSessions` / `SaveChat` / `GetChat` / `LoadHistory` / `DeleteSession` / `DeleteExpiredSessions`）
+- **新增**：`repo.MemoryRepo` 接口（`CreateSession` / `GetSession` / `ExistsSession` / `ListSessions` / `SaveChat` / `GetChat` / `LoadHistory` / `DeleteSession`）
 - **退役**：`storage.Storage` 接口在 memory 模块内的全部使用；`Manager` 不再持有 `storage.Storage` 字段
 - **新增**：`internal/repo/memorydb/` 实现 `MemoryRepo`
 
@@ -378,15 +338,23 @@ ChatRecord 与 Message 的 status 映射逻辑只在 executor 中出现一次，
 
 #### 接口签名
 
-- **调整**：`NewManager(memoryDir, retentionDays, log, store)` → `NewManager(retentionDays, log, memRepo)`
-- **保留**：`Memory` 接口的全部方法签名向后兼容；`AppendMessage` 在 DB 模式下退化为 no-op（`SaveChat` 已自动维护 round）；`GetMemoryDir()` 返回空字符串
+- **调整**：`NewManager(memoryDir, retentionDays, log, store)` → `NewManager(log, memRepo)`
+- **调整**：`Memory` 接口移除 `Cleanup(ctx) (int, error)` 方法
+- **保留**：`Memory` 接口其余方法签名向后兼容；`AppendMessage` 在 DB 模式下退化为 no-op（`SaveChat` 已自动维护 round）；`GetMemoryDir()` 返回空字符串
 
 #### 配置入口
 
-- **退役**：`memory.directory` 配置项（DB 模式下无 memoryDir 概念）
-- **退役**：`env.yaml` 中的 `minio` 节
+- **移除**：`memory.retention_days`、`memory.cleanup_schedule` 配置项
+- **移除**：`memory.directory` 配置项（DB 模式下无 memoryDir 概念）
+- **移除**：`env.yaml` 中的 `minio` 节
 - **新增**：`env.yaml` 中的 `database` 节决定后端
-- **保留**：`memory.retention_days` / `memory.cleanup_schedule` / `memory.history_window` 不变
+- **保留**：`memory.history_window` 不变
+
+#### 定时清理
+
+- **移除**：`internal/memory/cleanup.go` 整文件、`Manager.Cleanup` 方法、`MemoryRepo.DeleteExpiredSessions` 接口及其 `memorydb` 实现
+- **移除**：`gocron` 注册的每日 memory 清理 Job
+- **保留**：`MemoryRepo.DeleteSession` 显式删除单个会话能力不变（API 层的 delete session 仍走该接口）
 
 #### 附件接口
 

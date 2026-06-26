@@ -489,53 +489,6 @@ class TestHealthDetailedChecks:
         assert data["version"]
 
 
-class TestMemoryCleanup:
-    """Memory 清理逻辑测试"""
-
-    def test_cleanup_retention_days(self, server):
-        """TC-MEM-CLN-001: 会话保留天数配置"""
-        # 验证清理配置存在
-        # 具体行为需要长时间运行验证
-        response = requests.get(f"{BASE_URL}/health")
-        assert response.status_code == 200
-
-    def test_cleanup_old_sessions(self, server, api_headers):
-        """TC-MEM-CLN-002: 清理过期会话"""
-        # 创建一个会话
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json={"instruction": "test"},
-            stream=True
-        )
-
-        SSEClient(response)
-
-        # 清理逻辑在后台执行（每天 cleanup_schedule 时间）
-        # 此测试验证清理配置存在，不直接触发清理
-
-    def test_cleanup_preserves_active_sessions(self, server, api_headers):
-        """TC-MEM-CLN-003: 清理保留活跃会话"""
-        # 启动一个活跃对话
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json={"instruction": "长任务"},
-            stream=True
-        )
-
-        session_id = response.headers.get("X-Session-ID")
-
-        # 活跃会话不应被清理
-        # 验证会话存在
-        status = requests.get(
-            f"{BASE_URL}/chat/status/{session_id}",
-            headers=api_headers
-        )
-
-        assert status.json()["chat"] is not None
-
-
 class TestGracefulShutdown:
     """优雅关闭测试"""
 

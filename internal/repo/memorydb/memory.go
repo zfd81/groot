@@ -293,18 +293,3 @@ func (r *memoryRepo) DeleteSession(ctx context.Context, sessionID string) error 
 	}
 	return tx.Commit()
 }
-
-func (r *memoryRepo) DeleteExpiredSessions(ctx context.Context, expiredBefore time.Time) (int, error) {
-	var sessionIDs []string
-	q := r.db.Rebind(`SELECT session_id FROM memory_sessions WHERE updated_at < ?`)
-	if err := r.db.SelectContext(ctx, &sessionIDs, q, expiredBefore.UnixMilli()); err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, sid := range sessionIDs {
-		if err := r.DeleteSession(ctx, sid); err == nil {
-			count++
-		}
-	}
-	return count, nil
-}

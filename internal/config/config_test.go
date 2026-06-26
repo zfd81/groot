@@ -54,9 +54,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Memory.Directory != "memory" {
 		t.Errorf("Memory.Directory 默认值错误: got %s, want memory", cfg.Memory.Directory)
 	}
-	if cfg.Memory.RetentionDays != 7 {
-		t.Errorf("Memory.RetentionDays 默认值错误: got %d, want 7", cfg.Memory.RetentionDays)
-	}
 
 	// 验证 React 默认值
 	if cfg.React.MaxIterations != 20 {

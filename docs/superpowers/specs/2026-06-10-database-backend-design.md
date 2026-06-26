@@ -1,6 +1,6 @@
 # 数据库后端设计
 
-**日期**：2026-06-10
+**日期**：2026-06-10 / 2026-06-26（移除 memory 定时清理相关字段与接口）
 **作者**：zfd81 + Claude
 
 ---
@@ -136,7 +136,7 @@ GROOT_HOME/
 **特点**：
 - **直接读写数据库**，不在本地缓存，任意节点写入立即对其他节点可见
 - 变更频率高（心跳 3 秒/次、每次对话写入）
-- 生命周期由业务逻辑控制（定期清理、任务归档等）
+- 生命周期由业务逻辑控制（任务归档、会话显式删除等）
 
 **内容**：
 
@@ -302,7 +302,7 @@ internal/schedule/
 | `internal/db/` | 数据库连接管理、方言适配（sqlite/mysql/postgres）、schema 迁移 | DSN、driver 类型 |
 | `internal/cluster/` | 调用 MemberRepo 完成注册 / 心跳 / 选举 / 故障转移 | MemberRepo |
 | `internal/schedule/` | 调用 ScheduleRepo 完成任务 CRUD / 状态流转 / 执行历史落库 | ScheduleRepo |
-| `internal/memory/` | 调用 MemoryRepo 完成会话/对话读写、清理 | MemoryRepo |
+| `internal/memory/` | 调用 MemoryRepo 完成会话/对话读写 | MemoryRepo |
 | `internal/sync/` | 调用 ResourceRepo 实现 push/pull/diff | ResourceRepo |
 | `cmd/groot/main.go` | 启动期根据 `env.yaml` 选择 driver，构造 DB 连接 + Repository 单例并注入各业务模块 | env.yaml |
 
@@ -324,7 +324,7 @@ internal/schedule/
 | **二进制内容统一 LONGBLOB / BYTEA** | `shared_resources.content` 必须支持任意字节流（md / py / sh / jar / 可执行二进制）：MySQL 用 `LONGBLOB`，PG 用 `BYTEA` |
 | **不用 DB 外键** | 跨表关系（如 `schedule_executions.task_id` → `schedule_tasks.task_id`）由应用层维护。理由：删除任务/会话时清理多表数据，应用层用事务更可控；FK 在迁移、分库分表场景下都很碍事 |
 | **不用 DB 触发器、存储过程、视图** | 一切逻辑在应用层。DB 只做存储和检索 |
-| **默认硬删除** | memory cleanup、schedule archive 等都是真实的 DELETE/UPDATE。不引入 `deleted_at` 软删字段 |
+| **默认硬删除** | memory 显式删除会话、schedule archive 等都是真实的 DELETE/UPDATE。不引入 `deleted_at` 软删字段 |
 | **乐观锁字段** | 有并发更新风险的表加乐观锁防冲突。`schedule_tasks` 加 `version BIGINT NOT NULL DEFAULT 0` 列，UPDATE 时 `WHERE id=? AND version=?` 并 `version=version+1`；`memory_sessions` 以 `round` 字段替代 version 充当乐观锁（round 天然单调递增，INSERT chat 时 `WHERE session_id=? AND round=?` 保证同 session 同轮号不重复）。其他表不启用乐观锁 |
 | **索引保守设计** | 只为已知查询路径建索引，不预先为可能用到的字段加索引。后续按慢查询补 |
 | **大小写敏感的字符串主键** | `shared_resources.path` 在 MySQL 必须显式 `COLLATE utf8mb4_bin`，避免 `Skills/x.md` 与 `skills/x.md` 被识别为同一行；PG 默认敏感无需特殊处理 |
@@ -503,7 +503,7 @@ CREATE TABLE memory_sessions (
   - 长会话的历史压缩摘要（当 round 很大时无法把全部历史塞 LLM）
   当前阶段不写入，留作未来扩展
 - `round`：当前对话总轮数。每写一条新 chat 时事务内 +1
-- `updated_at`：每次新增 chat 时刷新，cleanup 用此字段判超期
+- `updated_at`：每次新增 chat 时刷新，反映会话最后活跃时间
 
 **对话历史的获取**：
 
@@ -522,7 +522,7 @@ LoadHistory(session_id):
 
 - PK：`session_id`
 - `idx_user_id`：支持按用户检索 session
-- `idx_updated_at`：cleanup 扫描
+- `idx_updated_at`：按最近活跃时间排序 / 范围查询
 
 #### 1.9.7 memory_chats
 
@@ -592,7 +592,7 @@ CREATE TABLE memory_chats (
 - PK：`chat_id`（主 Agent 与子 Agent 的 chatID 形态不冲突，详见上文字段语义）
 - `idx_session_round (session_id, round)`：按主 Agent 轮次回放/检索父子记录
 - `idx_session_started`：列出会话历史
-- `idx_started_at`：全局 TTL 清理（按时间清掉 N 天前的记录）
+- `idx_started_at`：全局按时间范围扫描（管理用途，如运维 SQL 手动清理历史记录）
 - `idx_status`：查"卡住的 running" / "失败的"
 
 > 历史曾设计过 `uk_session_round (session_id, round)` 唯一约束，但子 Agent 沿用父轮次会与主 Agent 同 round 冲突，所以**仅作非唯一索引**保留，主 Agent 同 round 唯一性靠下文事务里的乐观锁保证。
@@ -705,7 +705,6 @@ mtime 不再参与判等，仅作为"新旧"参考显示给用户。因此 **pul
 | 任务执行完成 | `schedule_executions` + `schedule_tasks` | **是**（写 execution + 更新 task.last_run_at 必须原子） |
 | 写一条新 chat | `memory_chats` + `memory_sessions` | **是**（INSERT chat + UPDATE session.round 必须原子，靠乐观锁） |
 | 删除会话 | `memory_chats` + `memory_sessions` | **是**（先删 chats 后删 session，原子） |
-| Cleanup 过期会话（批量） | `memory_chats` + `memory_sessions` | **按 session 一个一个事务删**，避免单大事务锁表过久 |
 | Push 一批资源 | `shared_resources` | 否（一行一行 UPSERT，sync 本身幂等） |
 
 #### 1.9.10 数据规模与索引策略
@@ -719,9 +718,7 @@ mtime 不再参与判等，仅作为"新旧"参考显示给用户。因此 **pul
 | `memory_chats` | 万~百万 | ~50 KB | **~50 GB** | 4 |
 | `shared_resources` | 百~千 | ~10 KB（含 LONGBLOB） | < 50 MB | 2 |
 
-`memory_chats` 是唯一的"重表"，但单库数十 GB 远在 MySQL/PG 单库胜任范围内。运维侧需要：
-- 定期清理 N 天前的 chat（TTL，默认值由配置决定，初版可定 90 天）
-- `idx_started_at` 支持高效的范围 DELETE
+`memory_chats` 是唯一的"重表"，但单库数十 GB 远在 MySQL/PG 单库胜任范围内。如需手工运维清理（例如按时间删除 N 天前的 chat），`idx_started_at` 索引支持高效的范围 DELETE。系统本身不内置定时清理任务。
 
 不预先做分库分表。
 
@@ -950,10 +947,6 @@ type MemoryRepo interface {
     // DeleteSession 删除会话及其所有对话记录（事务内原子完成）。
     // 不存在视为成功（幂等）。
     DeleteSession(ctx context.Context, sessionID string) error
-
-    // DeleteExpiredSessions 删除 updated_at < expiredBefore 的所有会话及其 chat。
-    // 按 session 逐个事务删除，避免大事务锁表。返回被删除的 session 数量。
-    DeleteExpiredSessions(ctx context.Context, expiredBefore time.Time) (int, error)
 }
 ```
 
@@ -1117,6 +1110,11 @@ repo 层（`internal/repo/memorydb`、`memberdb`、`scheduledb`、`resourcedb`�
 - **新增**：`env.yaml` 中 `database` 节启用数据库模式
 - **退役**：`env.yaml` 中 `minio` 节
 - **保留**：local 模式无需任何额外配置
+
+#### memory 定时清理
+
+- **移除**：`MemoryRepo.DeleteExpiredSessions` 接口及其 `memorydb` 实现
+- **说明**：会话不再做内置定时清理，长期保留在数据库中；运维侧如需按时间清理可直接对 `memory_chats` / `memory_sessions` 跑 SQL，配套 `idx_started_at` / `idx_updated_at` 索引
 
 
 

@@ -1,7 +1,5 @@
 package memory
 
-import "context"
-
 // Memory 接口定义
 type Memory interface {
 	// Session 管理
@@ -23,9 +21,6 @@ type Memory interface {
 
 	// 会话文件目录提示
 	GetSessionMdContent(sessionID string) (string, error)
-
-	// 清理
-	Cleanup(ctx context.Context) (int, error)
 
 	// 获取记忆目录路径
 	GetMemoryDir() string

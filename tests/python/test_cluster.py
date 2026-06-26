@@ -48,7 +48,7 @@ def _create_cluster_config(home: str, port: int) -> None:
         },
         "skills": {"hot_reload": {"enabled": False}},
         "security": {"auth": {"enabled": False}},
-        "memory": {"directory": "memory", "retention_days": 1, "cleanup_schedule": "03:00"},
+        "memory": {"directory": "memory"},
         "schedule": {"enabled": False, "max_concurrent_tasks": 10, "sync_interval": "30s"},
         "message": {
             "queue_size": 10, "workers": 1,

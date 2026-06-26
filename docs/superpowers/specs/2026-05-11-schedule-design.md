@@ -1,6 +1,6 @@
 # 定时任务调度系统设计
 
-**日期**：2026-05-11（初版）/ 2026-06-10（迁移到数据库后端后重写）
+**日期**：2026-05-11（初版）/ 2026-06-10（迁移到数据库后端后重写）/ 2026-06-26（移除 memory 清理调度）
 **状态**：实现稿
 **作者**：zfd81 + Claude
 
@@ -15,7 +15,7 @@
 ### 1.2 核心原则
 
 - **创建走对话**：任务只能由 Agent 通过内置工具创建，CLI 和 API 不提供创建入口
-- **统一调度引擎**：使用 gocron 统一管理所有系统定时（含 memory 清理、active 任务重注册）
+- **统一调度引擎**：使用 gocron 统一管理所有定时任务（用户任务 + active 任务重注册兜底）
 - **数据库持久化**：所有任务定义和执行历史走 `schedule.ScheduleRepo` 接口，落到 `schedule_tasks` / `schedule_executions` 两张表（详见 [数据库后端设计 §1.9.1 / §1.9.2](2026-06-10-database-backend-design.md)）
 - **三种状态**：`active` / `disabled` / `archive`，存放于 `schedule_tasks.status` 列
 - **消息层解耦**：执行结果推入消息层，由消息层统一路由分发，不经过 LLM
@@ -34,14 +34,12 @@ internal/
 │   ├── engine.go           # Engine — 启动时 ListActiveTasks 并注册到 gocron
 │   ├── manager.go          # Manager — 任务生命周期管理（CRUD、启停、归档、Rerun）
 │   ├── runner.go           # Runner — 任务执行器，调用 agent.Executor + 消息层
-│   ├── sync.go             # 定期重注册 active 任务到 gocron（兜底）+ ParseCleanupTime
+│   ├── sync.go             # 定期重注册 active 任务到 gocron（兜底）
 │   ├── tools.go            # 8 个内置工具，Agent 侧
 │   ├── idgen.go            # generateExecutionID — 基于随机字节生成 execution_id
 │   └── storage_test.go
 │
-├── repo/scheduledb/        # ScheduleRepo 数据库实现（SQLite / MySQL / PostgreSQL）
-│
-└── memory/cleanup.go       # NewCleanupTask — 返回 func()，由 main.go 通过 gocron.NewTask 包装注册到调度器
+└── repo/scheduledb/        # ScheduleRepo 数据库实现（SQLite / MySQL / PostgreSQL）
 ```
 
 ### 1.4 数据持久化
@@ -146,7 +144,7 @@ type ExecutionRecord struct {
 
 整个 Groot Leader 实例只有一个 `gocron.Scheduler`：
 
-- **系统 Job**：内存清理（`memory.NewCleanupTask`）、active 任务定期重注册（`schedule.NewSyncTask`）
+- **系统 Job**：active 任务定期重注册（`schedule.NewSyncTask`）
 - **用户 Job**：每个 active 任务注册为一个 Job，通过 Tag `["user-task", taskID]` 标记便于管理
 
 #### 1.6.3 动态管理
@@ -162,7 +160,7 @@ type ExecutionRecord struct {
 
 `cmd/groot/main.go` 把两个回调注入 `cluster` 模块：
 
-- `startLeaderTasks`：当前实例升为 Leader 时触发。创建 `scheduler.Scheduler`、构造 `Engine`、`Engine.Start()` 加载 active 任务、注册系统 Job（`memory.NewCleanupTask` + `schedule.NewSyncTask`），随后按 `cfg.Schedule.Enabled` 决定是否构造 `Manager` 并把 8 个调度工具注册到 `mcpMgr`，最后 `sched.Start()`。
+- `startLeaderTasks`：当前实例升为 Leader 时触发。创建 `scheduler.Scheduler`、构造 `Engine`、`Engine.Start()` 加载 active 任务、注册系统 Job（`schedule.NewSyncTask`），随后按 `cfg.Schedule.Enabled` 决定是否构造 `Manager` 并把 8 个调度工具注册到 `mcpMgr`，最后 `sched.Start()`。
 - `stopLeaderTasks`：当前实例降为 follower 时触发。`sched.Stop()` 关闭整个调度器（gocron 内部 `Shutdown`），并 `mcpMgr.UnregisterBuiltinTools()` 注销调度工具。
 
 Follower 实例不持有 gocron 实例，也不会被注册任何 user-task / system Job。但 `Storage` 与 `Runner` 在所有节点上预先实例化（用于 API 层的只读访问，例如 list/inspect/history）。
@@ -239,7 +237,7 @@ func NewStorage(r ScheduleRepo, log *logger.Logger) *Storage
 | 创建方式 | 用户通过 `/chat` 发起 | Runner 自动创建 |
 | caller 字段 | `user` | `schedule` |
 | 生命周期 | 用户手动管理 | 跟随任务执行，完成后写入数据库 |
-| 清理策略 | 受 `memory.retention_days` 控制 | 同上 |
+| 清理策略 | 不做定时清理，长期保留在数据库中 | 同上 |
 
 ### 1.9 Manager：任务生命周期
 
@@ -305,8 +303,6 @@ type Engine struct {
 
 > 当前实现仅做"重注册兜底"，不做差集计算。任务的增删走 Manager 链路本身保持一致性；sync 兜底意外路径，例如 follower 提升为 leader 时需要把所有 active 任务一次性注册到本节点的 gocron 实例。
 
-`ParseCleanupTime(schedule)` 工具函数：解析 `HH:MM` 格式返回 `(hour, minute)`，非法默认 `(2, 0)`。
-
 ### 1.12 内置工具
 
 8 个内置工具，由 `NewScheduleTools(mgr)` 构造为 `map[string]tool.BaseTool` 注册到 Agent：
@@ -366,7 +362,7 @@ groot schedule archive <task-id>        # 归档任务（→ archive）
 
 ```yaml
 schedule:
-  enabled: false                        # 是否允许在对话中创建定时任务（默认关闭，不影响系统级清理/同步任务）
+  enabled: false                        # 是否允许在对话中创建定时任务（默认关闭，不影响 active 任务的同步兜底）
   max_concurrent_tasks: 3               # 最大并发执行数
   sync_interval: 30s                    # 定期重注册间隔
 ```
@@ -422,3 +418,8 @@ schedule:
 #### 一次性任务归档
 
 - **保留**：仅在 `status == "completed"` 时归档；失败的一次性任务保留在 `active`，等待用户手动处理
+
+#### 系统 Job
+
+- **移除**：`gocron` 中的 memory 清理 Job（`memory.NewCleanupTask`）及配套的 `ParseCleanupTime` 工具函数
+- **保留**：active 任务定期重注册兜底 Job（`schedule.NewSyncTask`）

@@ -27,10 +27,8 @@ func DefaultConfig() *Config {
 			},
 		},
 		Memory: MemoryConfig{
-			Directory:       "memory",
-			RetentionDays:   7,
-			CleanupSchedule: "02:00",
-			HistoryWindow:   20,
+			Directory:     "memory",
+			HistoryWindow: 20,
 		},
 		Schedule: ScheduleConfig{
 			Enabled:            false,

@@ -390,12 +390,10 @@ attachment:
 # 记忆模块配置
 memory:
   directory: memory                # 记忆目录（相对路径或绝对路径）
-  retention_days: 7                # 会话保留天数
-  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
 
 # 定时任务调度配置
 schedule:
-  enabled: false                   # 是否允许在对话中创建定时任务（默认关闭，不影响系统清理任务）
+  enabled: false                   # 是否允许在对话中创建定时任务（默认关闭）
   max_concurrent_tasks: 10         # 最大并发执行任务数
   sync_interval: 30s               # 定期同步间隔（对比 active/ 目录与调度器状态，修复不一致）
 
@@ -513,8 +511,6 @@ logging:
 | 字段 | 必需 | 说明 |
 |------|------|------|
 | `directory` | 否 | 记忆目录，相对路径拼接工作目录，绝对路径直接使用，默认 `memory` |
-| `retention_days` | 否 | 会话保留天数，超过后自动清理，默认 `7`。清理依据目录最后修改时间（非创建时间） |
-| `cleanup_schedule` | 否 | 清理任务执行时间（HH:MM），默认 `02:00`，由统一调度器按天执行 |
 
 #### Schedule 配置
 
@@ -2362,10 +2358,10 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q7: 会话数据如何清理
 
-**说明：** 会话数据会自动清理。
+**说明：** 会话数据长期保留在数据库中，不做内置定时清理。
 
-- 每天在 `cleanup_schedule` 时间执行清理
-- 清理超过 `retention_days` 天的会话（依据目录最后修改时间）
+- 通过 API 或客户端调用 `DELETE` 接口显式删除指定会话
+- 运维侧如需按时间批量清理，可直接对数据库执行 SQL（`memory_chats` 配有 `idx_started_at` 索引，`memory_sessions` 配有 `idx_updated_at` 索引）
 
 ---
 

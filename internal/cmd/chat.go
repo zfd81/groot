@@ -140,7 +140,7 @@ func startEmbedServer(cfg *config.Config, homeDir string) (*api.Server, error) {
 	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 
 	// Memory manager
-	memMgr := memory.NewManager(cfg.Memory.RetentionDays, log, repos.Memory)
+	memMgr := memory.NewManager(log, repos.Memory)
 
 	// Runtime state
 	runtimeState := agent.NewRuntimeState()

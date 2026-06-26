@@ -291,32 +291,6 @@ class TestMemoryDirectoryStructure:
             assert "test.csv" in files
 
 
-class TestMemoryCleanup:
-    """Memory 清理功能测试"""
-
-    @pytest.mark.skip(reason="清理功能需要长时间等待")
-    def test_cleanup_expired_sessions(self, server, api_headers):
-        """TC-MEM-009: 过期会话清理"""
-        # 创建会话
-        payload = {"instruction": "测试对话"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
-
-        # 验证会话存在
-        session_path = f"{TEST_HOME}/memory/{session_id}"
-
-        # 清理功能需要等待配置的时间（默认 02:00）
-        # 此测试需要手动执行或调整清理时间
-
-
 class TestMemoryRoundTracking:
     """轮次追踪测试"""
 

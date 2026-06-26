@@ -85,8 +85,6 @@ def abs_path_server():
         # skills/mcp/api 目录固定，不配置
         "memory": {
             "directory": ABS_PATH_MEMORY_DIR,  # 绝对路径
-            "retention_days": 1,
-            "cleanup_schedule": "02:00"
         },
         "logging": {
             "level": "debug",

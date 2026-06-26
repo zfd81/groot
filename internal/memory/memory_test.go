@@ -25,7 +25,7 @@ func newTestManager(t *testing.T) *Manager {
 	}
 	t.Cleanup(func() { sqlxDB.Close() })
 	memRepo := memorydb.New(sqlxDB, dialect)
-	return NewManager(7, initTestLogger(), memRepo)
+	return NewManager(initTestLogger(), memRepo)
 }
 
 func TestGenerateSessionID(t *testing.T) {
@@ -133,7 +133,7 @@ func TestNewManager_PanicsOnNilRepo(t *testing.T) {
 			t.Fatal("expected panic on nil memRepo")
 		}
 	}()
-	_ = NewManager(7, log, nil)
+	_ = NewManager(log, nil)
 }
 
 func TestManager_CreateSession(t *testing.T) {
@@ -418,55 +418,6 @@ func TestManager_ListSessions_Pagination(t *testing.T) {
 	sessions3, _, _ := mgr.ListSessions(3, 100)
 	if len(sessions3) != 0 {
 		t.Errorf("ListSessions(offset=100) 应返回空, got %d", len(sessions3))
-	}
-}
-
-func TestManager_Cleanup(t *testing.T) {
-	// retentionDays=1，需创建一个独立的管理器
-	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer sqlxDB.Close()
-	memRepo := memorydb.New(sqlxDB, dialect)
-	shortMgr := NewManager(1, initTestLogger(), memRepo)
-
-	// 创建旧会话（由 DeleteExpiredSessions 按 updated_at 淘汰）
-	sessionID := "test_session_old"
-	shortMgr.CreateSession(sessionID, "")
-
-	// 使 updated_at 显得是 2 天前：直接插入一条旧 updated_at 的 session
-	// 通过先删除再重建（利用 DB 直接操作）
-	// 因为无法直接修改 updated_at，改为在 shortMgr 内部用 repo 调用
-	// 最简方案：DeleteSession 然后手动操作是不现实的，
-	// 所以改为创建一个 updated_at 为 2 天前的会话，通过底层 DB insert
-	sqlxDB.ExecContext(context.Background(),
-		`UPDATE memory_sessions SET updated_at=? WHERE session_id=?`,
-		time.Now().AddDate(0, 0, -2).UnixMilli(), sessionID,
-	)
-
-	// 创建新会话（不会被清理）
-	newSessionID := "test_session_new"
-	shortMgr.CreateSession(newSessionID, "")
-
-	// 执行清理
-	deleted, err := shortMgr.Cleanup(context.Background())
-	if err != nil {
-		t.Fatalf("Cleanup() 失败: %v", err)
-	}
-
-	if deleted != 1 {
-		t.Errorf("Cleanup() 应删除 1 个会话, got %d", deleted)
-	}
-
-	// 验证旧会话已删除
-	if shortMgr.ExistsSession(sessionID) {
-		t.Error("Cleanup() 应删除过期会话")
-	}
-
-	// 验证新会话保留
-	if !shortMgr.ExistsSession(newSessionID) {
-		t.Error("Cleanup() 不应删除未过期会话")
 	}
 }
 

@@ -44,27 +44,3 @@ func SyncTask(engine *Engine, storage *Storage, log *logger.Logger) func() {
 func NewSyncTask(engine *Engine, storage *Storage, log *logger.Logger) func() {
 	return SyncTask(engine, storage, log)
 }
-
-// ParseCleanupTime parses HH:MM format and returns hour, minute
-func ParseCleanupTime(schedule string) (int, int) {
-	hour, minute := 2, 0 // default 02:00
-	if len(schedule) == 5 && schedule[2] == ':' {
-		h := 0
-		m := 0
-		for i, c := range schedule {
-			if i == 0 {
-				h = h*10 + int(c-'0')
-			} else if i == 1 {
-				h = h*10 + int(c-'0')
-			} else if i == 3 {
-				m = m*10 + int(c-'0')
-			} else if i == 4 {
-				m = m*10 + int(c-'0')
-			}
-		}
-		if h >= 0 && h < 24 && m >= 0 && m < 60 {
-			return h, m
-		}
-	}
-	return hour, minute
-}

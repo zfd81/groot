@@ -124,7 +124,7 @@ def _write_config(home: str, port: int) -> None:
                 },
             }
         },
-        "memory": {"directory": "memory", "retention_days": 1, "cleanup_schedule": "02:00"},
+        "memory": {"directory": "memory"},
         "schedule": {"enabled": False, "max_concurrent_tasks": 1, "sync_interval": "30s"},
         "message": {
             "queue_size": 10,

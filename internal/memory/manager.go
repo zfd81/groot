@@ -11,22 +11,20 @@ import (
 
 // Manager Memory 接口的实现
 type Manager struct {
-	retentionDays int
-	log           *logger.Logger
-	repo          repo.MemoryRepo
+	log  *logger.Logger
+	repo repo.MemoryRepo
 }
 
 // NewManager 创建 Memory Manager。
 // memRepo 用于会话/聊天记录的数据库读写，必须非 nil。
-func NewManager(retentionDays int, log *logger.Logger, memRepo repo.MemoryRepo) *Manager {
+func NewManager(log *logger.Logger, memRepo repo.MemoryRepo) *Manager {
 	if memRepo == nil {
 		panic("memory: NewManager: memRepo must not be nil")
 	}
 
 	return &Manager{
-		retentionDays: retentionDays,
-		log:           log,
-		repo:          memRepo,
+		log:  log,
+		repo: memRepo,
 	}
 }
 
@@ -218,15 +216,4 @@ func (m *Manager) GetSessionMdContent(sessionID string) (string, error) {
 // DeleteSession 删除会话及其所有对话记录
 func (m *Manager) DeleteSession(sessionID string) error {
 	return m.repo.DeleteSession(context.Background(), sessionID)
-}
-
-// Cleanup 清理过期会话
-func (m *Manager) Cleanup(ctx context.Context) (int, error) {
-	cutoff := time.Now().AddDate(0, 0, -m.retentionDays)
-	deleted, err := m.repo.DeleteExpiredSessions(ctx, cutoff)
-	if err != nil {
-		return 0, fmt.Errorf("清理过期会话失败: %w", err)
-	}
-	m.log.Info(fmt.Sprintf("清理完成, 删除 %d 个会话", deleted))
-	return deleted, nil
 }

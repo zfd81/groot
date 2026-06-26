@@ -323,38 +323,6 @@ func TestDeleteSession(t *testing.T) {
 	}
 }
 
-func TestDeleteExpiredSessions(t *testing.T) {
-	r := newMemRepo(t)
-	ctx := context.Background()
-
-	old := &repo.Session{
-		SessionID: "old-sess",
-		CreatedAt: time.Now().Add(-48 * time.Hour),
-		UpdatedAt: time.Now().Add(-48 * time.Hour),
-	}
-	r.CreateSession(ctx, old)
-
-	// recent session should not be deleted
-	r.CreateSession(ctx, &repo.Session{
-		SessionID: "new-sess",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	})
-
-	n, err := r.DeleteExpiredSessions(ctx, time.Now().Add(-24*time.Hour))
-	if err != nil {
-		t.Fatalf("DeleteExpiredSessions: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("expected 1 deleted, got %d", n)
-	}
-
-	exists, _ := r.ExistsSession(ctx, "new-sess")
-	if !exists {
-		t.Error("new session should still exist")
-	}
-}
-
 func TestSaveChat_WithErrorAndSteps(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
