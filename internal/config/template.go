@@ -18,6 +18,7 @@ llm:
       api_key: ${OPENAI_API_KEY}             # API 密钥（建议使用环境变量）
       model: gpt-4o                          # 模型名称
       max_completion_tokens: 4096            # 最大输出 Token 数
+      max_context_tokens: 0                  # 输入上下文 Token 预算（0 表示不限制）
       temperature: 0.7                       # 温度参数（0.0~2.0）
       top_p: 1.0                             # 核采样系数（0.0~1.0）
       frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）

@@ -37,6 +37,9 @@ func TestDefaultConfig(t *testing.T) {
 	if defaultModel.MaxCompletionTokens != 4096 {
 		t.Errorf("ModelConfig.MaxCompletionTokens 默认值错误: got %d, want 4096", defaultModel.MaxCompletionTokens)
 	}
+	if defaultModel.MaxContextTokens != 0 {
+		t.Errorf("ModelConfig.MaxContextTokens 默认值错误: got %d, want 0", defaultModel.MaxContextTokens)
+	}
 	if defaultModel.Temperature != 0.7 {
 		t.Errorf("ModelConfig.Temperature 默认值错误: got %f, want 0.7", defaultModel.Temperature)
 	}

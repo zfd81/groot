@@ -46,6 +46,7 @@ type ModelConfig struct {
 	APIKey              string   `yaml:"api_key"`
 	Model               string   `yaml:"model"`
 	MaxCompletionTokens int      `yaml:"max_completion_tokens"`
+	MaxContextTokens    int      `yaml:"max_context_tokens"` // 输入上下文 token 预算（0 表示不限制）
 	Temperature         float64  `yaml:"temperature"`
 	TopP                float64  `yaml:"top_p"`
 	FrequencyPenalty    float64  `yaml:"frequency_penalty"`

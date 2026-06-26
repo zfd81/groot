@@ -19,6 +19,7 @@ func DefaultConfig() *Config {
 					APIKey:               "${OPENAI_API_KEY}",
 					Model:                "gpt-4o",
 					MaxCompletionTokens:  4096,
+					MaxContextTokens:     0, // 0 表示不限制
 					Temperature:          0.7,
 					TopP:                 1.0,
 					FrequencyPenalty:     0.0,
