@@ -358,6 +358,7 @@ llm:
       api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
       model: gpt-4o                          # 实际调用时的模型名称
       max_completion_tokens: 4096            # 最大输出 Token 数
+      max_context_tokens: 0                  # 输入上下文 Token 预算（0 表示不限制）
       temperature: 0.7                       # 输出随机性（0.0~2.0）
       top_p: 1.0                             # 核采样系数（0.0~1.0）
       frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
@@ -477,6 +478,7 @@ logging:
 | `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
 | `models.{name}.model` | **是** | 实际调用时的模型名称 |
 | `models.{name}.max_completion_tokens` | 否 | 最大输出 Token 数，默认 `4096` |
+| `models.{name}.max_context_tokens` | 否 | 输入上下文 Token 预算，超出时自动截断最早的历史轮次，`0` 表示不限制，默认 `0` |
 | `models.{name}.temperature` | 否 | 输出随机性（0.0~2.0），默认 `0.7` |
 | `models.{name}.top_p` | 否 | 核采样系数（0.0~1.0），默认 `1.0` |
 | `models.{name}.frequency_penalty` | 否 | 频率惩罚（-2.0~2.0），默认 `0.0` |
