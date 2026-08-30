@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { ElMessage, type UploadRequestOptions } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import type { UploadRequestOptions } from 'element-plus'
+import { Plus, Close, Document } from '@element-plus/icons-vue'
 import { useMetaStore } from '../../stores/meta'
 import { storeToRefs } from 'pinia'
 import type { ChatAttachment } from '../../api/sse'
@@ -24,7 +24,16 @@ const MAIN_AGENT = 'groot'
 const text = ref('')
 const selectedModel = ref('')
 const selectedAgent = ref(MAIN_AGENT)
-const attachments = ref<ChatAttachment[]>([])
+// 附件本地条目：att 为发送给后端的数据，preview 仅图片有值（完整 data URL，用于缩略图）。
+interface AttachmentItem {
+  att: ChatAttachment
+  preview: string
+}
+const attachments = ref<AttachmentItem[]>([])
+
+function removeAttachment(index: number) {
+  attachments.value.splice(index, 1)
+}
 
 // 模型必须始终有选中项：元数据加载后，若尚未选择则回落到默认模型，
 // 默认模型缺失时取列表首项，确保选择框不为空。
@@ -71,15 +80,20 @@ const modelWidth = computed(() => selectWidth(selectedModel.value || defaultMode
 function handleSend() {
   const val = text.value.trim()
   if (!val) return
-  emit('send', val, selectedModel.value || defaultModel.value, selectedAgent.value, [
-    ...attachments.value,
-  ])
+  emit(
+    'send',
+    val,
+    selectedModel.value || defaultModel.value,
+    selectedAgent.value,
+    attachments.value.map((a) => a.att)
+  )
   text.value = ''
   attachments.value = []
 }
 
 // 读取上传文件为 base64，加入附件数组。el-upload 的 http-request 钩子接管默认上传。
 // 钩子要求返回 Promise，这里在读取完成后 resolve，避免 el-upload 走默认 XHR 上传。
+// 图片保留完整 data URL 作为缩略图预览；添加结果直接以预览区展示，不再弹消息提示。
 function onUpload(options: UploadRequestOptions): Promise<void> {
   const file = options.file
   return new Promise<void>((resolve) => {
@@ -93,11 +107,13 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
       const base64 = result.includes(',') ? result.split(',')[1] : result
       const isImage = file.type.startsWith('image/')
       attachments.value.push({
-        type: isImage ? 'image' : 'file',
-        name: file.name,
-        content: base64,
+        att: {
+          type: isImage ? 'image' : 'file',
+          name: file.name,
+          content: base64,
+        },
+        preview: isImage ? result : '',
       })
-      ElMessage.success(t('chat.attachmentAdded', { name: file.name }))
       resolve()
     }
     reader.onerror = () => resolve()
@@ -109,6 +125,29 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
 <template>
   <div class="chat-input">
     <div class="composer">
+      <!-- 附件预览区：有附件时撑高输入框，悬浮条目显示删除按钮 -->
+      <div v-if="attachments.length" class="attachment-row">
+        <div
+          v-for="(a, i) in attachments"
+          :key="i"
+          class="attachment-item"
+          :title="a.att.name"
+        >
+          <img v-if="a.att.type === 'image'" :src="a.preview" class="attachment-thumb" />
+          <div v-else class="attachment-file">
+            <el-icon :size="20"><Document /></el-icon>
+            <span class="attachment-name">{{ a.att.name }}</span>
+          </div>
+          <button
+            type="button"
+            class="attachment-remove"
+            :title="t('chat.removeAttachment')"
+            @click="removeAttachment(i)"
+          >
+            <el-icon :size="12"><Close /></el-icon>
+          </button>
+        </div>
+      </div>
       <el-input
         v-model="text"
         type="textarea"
@@ -125,14 +164,9 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
             :show-file-list="false"
             :http-request="onUpload"
           >
-            <el-badge
-              :value="attachments.length"
-              :hidden="attachments.length === 0"
-            >
-              <el-button circle text :title="t('chat.addAttachment')">
-                <el-icon :size="18"><Plus /></el-icon>
-              </el-button>
-            </el-badge>
+            <el-button circle text :title="t('chat.addAttachment')">
+              <el-icon :size="18"><Plus /></el-icon>
+            </el-button>
           </el-upload>
           <el-select
             v-model="selectedAgent"
@@ -198,6 +232,64 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
 }
 .composer:focus-within {
   border-color: var(--el-color-primary);
+}
+/* 附件预览区：横向排列可换行，位于文本框上方 */
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 4px 8px;
+}
+.attachment-item {
+  position: relative;
+  border-radius: 10px;
+}
+.attachment-thumb {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+}
+/* 非图片附件：图标 + 文件名 */
+.attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 56px;
+  max-width: 180px;
+  padding: 0 12px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 10px;
+  font-size: 0.82em;
+}
+.attachment-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 删除按钮：右上角小圆钮，仅悬浮条目时可见 */
+.attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.attachment-item:hover .attachment-remove {
+  opacity: 1;
 }
 /* 让文本框融入外层容器：去掉 Element Plus textarea 的边框与聚焦阴影，
    透明背景避免“框中框” */

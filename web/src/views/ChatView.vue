@@ -89,6 +89,7 @@ onMounted(async () => {
       <SessionSidebar
         :sessions="sessions"
         :current-id="sessionId"
+        :sending-id="sending ? sessionId : ''"
         :can-load-more="canLoadMore"
         :loading="loadingSessions"
         :collapsed="collapsed"

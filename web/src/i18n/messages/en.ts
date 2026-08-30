@@ -19,7 +19,7 @@ export default {
   chat: {
     inputPlaceholder: 'Type a message. Enter to send, Shift+Enter for newline',
     addAttachment: 'Add attachment',
-    attachmentAdded: 'Attachment added: {name}',
+    removeAttachment: 'Remove attachment',
     stop: 'Stop',
     send: 'Send',
     stopped: '_[Generation stopped]_',

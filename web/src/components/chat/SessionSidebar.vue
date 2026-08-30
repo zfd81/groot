@@ -10,6 +10,8 @@ const props = defineProps<{
   canLoadMore: boolean
   loading: boolean
   collapsed: boolean
+  /** 正在执行对话的会话 ID（无执行中对话时为空串），标题前显示执行动画 */
+  sendingId: string
 }>()
 const emit = defineEmits<{
   select: [sid: string]
@@ -123,7 +125,15 @@ function title(s: SessionSummary): string {
         :class="{ active: s.session_id === props.currentId }"
         @click="emit('select', s.session_id)"
       >
-        <div class="session-title">{{ title(s) }}</div>
+        <div class="session-title">
+          <el-icon
+            v-if="s.session_id === props.sendingId"
+            class="is-loading session-spinner"
+          >
+            <Loading />
+          </el-icon>
+          <span class="session-title-text">{{ title(s) }}</span>
+        </div>
         <div class="session-meta">
           {{ relTime(s.last_active_at || s.created_at) }} · {{ t('sidebar.rounds', { n: s.round_count }) }}
         </div>
@@ -268,11 +278,22 @@ function title(s: SessionSummary): string {
   color: var(--el-color-primary);
 }
 .session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.9em;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
+}
+.session-title-text {
+  overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 执行中动画：标题前的旋转图标 */
+.session-spinner {
+  flex-shrink: 0;
+  color: var(--el-color-primary);
 }
 .session-meta {
   font-size: 0.75em;

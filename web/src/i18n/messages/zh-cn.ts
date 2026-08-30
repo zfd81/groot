@@ -19,7 +19,7 @@ export default {
   chat: {
     inputPlaceholder: '输入消息，Enter 发送，Shift+Enter 换行',
     addAttachment: '添加附件',
-    attachmentAdded: '已添加附件：{name}',
+    removeAttachment: '删除附件',
     stop: '停止',
     send: '发送',
     stopped: '_[已停止生成]_',
