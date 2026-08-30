@@ -65,3 +65,12 @@ tests/abs_path_test/
 *.key
 
 .trae/  # Trae 配置目录
+
+# Web 前端
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+web/*.tsbuildinfo
+# unplugin 自动生成的类型声明文件
+web/auto-imports.d.ts
+web/components.d.ts

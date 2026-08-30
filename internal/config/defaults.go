@@ -15,15 +15,15 @@ func DefaultConfig() *Config {
 			DefaultModel: "gpt-4o",
 			Models: map[string]ModelConfig{
 				"gpt-4o": {
-					BaseURL:              "https://api.openai.com/v1",
-					APIKey:               "${OPENAI_API_KEY}",
-					Model:                "gpt-4o",
-					MaxCompletionTokens:  4096,
-					MaxContextTokens:     0, // 0 表示不限制
-					Temperature:          0.7,
-					TopP:                 1.0,
-					FrequencyPenalty:     0.0,
-					PresencePenalty:      0.0,
+					BaseURL:             "https://api.openai.com/v1",
+					APIKey:              "${OPENAI_API_KEY}",
+					Model:               "gpt-4o",
+					MaxCompletionTokens: 4096,
+					MaxContextTokens:    0, // 0 表示不限制
+					Temperature:         0.7,
+					TopP:                1.0,
+					FrequencyPenalty:    0.0,
+					PresencePenalty:     0.0,
 				},
 			},
 		},
@@ -81,6 +81,13 @@ func DefaultConfig() *Config {
 						{Name: "default", Key: "${GROOT_API_KEY}", Permissions: []string{"all"}},
 					},
 				},
+			},
+			Web: WebConfig{
+				Enabled:    false,
+				Username:   "admin",
+				Password:   "",
+				SessionTTL: "24h",
+				Secure:     false,
 			},
 		},
 		Logging: LoggingConfig{

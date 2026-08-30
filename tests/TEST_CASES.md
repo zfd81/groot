@@ -69,6 +69,61 @@
 
 ---
 
+### 1.3 Web 界面测试
+
+**配置解析** (`internal/config/webconfig_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestWebConfigDefaults | `security.web` 默认值：enabled=false、username=admin、session_ttl=24h |
+| TestWebConfigParse | YAML 解析 `security.web` 全部字段 |
+| TestWebConfigTemplate | 配置模板含 `security.web` 段与注释说明 |
+
+**登录会话存储** (`internal/api/websession/store_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestStore_CreateAndValidate | 创建令牌后校验通过 |
+| TestStore_Expired | 超过 TTL 的令牌校验失败 |
+| TestStore_Delete | 删除令牌后校验失败 |
+| TestStore_InvalidToken | 未知令牌校验失败 |
+| TestStore_LoginLock | 同 IP 连续 5 次失败后锁定 |
+| TestStore_LockWindowSlide | 失败记录超出 10 分钟窗口后不再计入 |
+| TestStore_ResetOnSuccess | 登录成功清空该 IP 失败计数 |
+
+**登录端点** (`internal/api/handler/webauth_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestWebAuth_LoginSuccess | 密码正确返回 200 并下发 HttpOnly Cookie |
+| TestWebAuth_LoginWrongPassword | 密码错误返回 401 |
+| TestWebAuth_LoginEmptyConfiguredPassword | 配置密码为空时拒绝登录 |
+| TestWebAuth_LoginRateLimited | 连续失败达阈值返回 429 |
+| TestWebAuth_Me | `/web/me` 三态：未开启 / 已登录 / 未登录 |
+| TestWebAuth_Logout | 登出后令牌失效 |
+| TestWebAuth_NilStore | Web 认证关闭（store 为 nil）时三个端点均返回 200 且不 panic |
+
+**认证中间件双凭证** (`internal/api/middleware/auth_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestAuth_CookiePass | 有效 Cookie 通过认证 |
+| TestAuth_InvalidCookieFallback | 无效 Cookie 回退到 API Key 校验 |
+| TestAuth_APIKeyStillWorks | 原有 X-API-Key 认证不回归 |
+| TestAuth_Anonymous | 认证关闭时匿名访问通过 |
+
+**静态托管** (`internal/api/webui_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestWebUI_ServeIndex | `/ui/` 返回 index.html |
+| TestWebUI_ServeAsset | 资源文件返回正确 Content-Type |
+| TestWebUI_HistoryFallback | 前端路由路径回退到 index（SPA history 模式） |
+| TestWebUI_NotBuilt | 前端未构建时返回提示页 |
+| TestWebUI_NoPathTraversal | 路径穿越载荷（`..`、`%2f` 编码、前缀混淆）均不泄漏文件 |
+
+---
+
 ## 二、系统测试（Python）
 
 位于 `tests/python/` 目录，使用 pytest 框架。
@@ -427,9 +482,41 @@ curl -X POST http://localhost:8080/chat \
 | `groot init` 全新目录 | 写入 `GROOT.md`，含「子 Agent 调度」段（`call_agent` / 按需调用 / 逐个调用 / 明确传参 / 附件引用 关键词） |
 | `groot init` 已有 `GROOT.md` | 跳过不覆盖用户内容 |
 
+### 2.22 Web 界面测试
+
+| 用例编号 | 测试文件 | 测试内容 |
+|---------|---------|---------|
+| TC-WEB-001 | test_web_auth.py | `/web/me` 返回 authenticated 与 auth_required 字段 |
+| TC-WEB-002 | test_web_auth.py | `/ui/` 返回 HTML 页面（构建后为 SPA，未构建为提示页） |
+| TC-WEB-003 | test_web_auth.py | `/ui/` 下前端路由路径回退到 index |
+| TC-WEB-004 | test_web_auth.py | 路径穿越请求不泄漏二进制外文件 |
+| TC-WEB-005 | test_web_auth.py | 错误密码返回 401（触发限速时 429） |
+| TC-WEB-006 | test_web_auth.py | 正确登录下发 Cookie，可访问受保护端点，登出后令牌失效 |
+| TC-WEB-007 | test_web_auth.py | 无凭证访问受保护端点返回 401 |
+
+登录类用例需 `security.web.enabled: true`，并设置环境变量 `GROOT_WEB_USER` / `GROOT_WEB_PASS`；未开启时自动跳过。
+
 ---
 
-## 三、运行测试
+## 三、手工验证（Web 界面）
+
+浏览器打开 `http://localhost:8080/ui/`，逐项确认：
+
+| 验证项 | 预期表现 |
+|-------|---------|
+| 聊天流式输出 | 回答逐字流式渲染，思考过程折叠可展开 |
+| 停止生成 | 点击停止按钮后立即中断，已输出内容保留 |
+| 附件上传 | 选择文件后随指令发送，模型能读取内容 |
+| 历史会话 | 侧栏列出历史会话，点击可载入完整消息流，支持翻页加载 |
+| 新建会话 | 清空当前消息流，URL 回到 `/ui/` |
+| 主题切换 | 浅色 / 深色 / 跟随系统三种模式生效并持久化（刷新后保持） |
+| 设置弹窗 | 五个分类均可打开：通用（主题）、模型、Skills、MCP 工具（按服务分组）、子 Agents |
+| 仪表盘 | 服务状态、运行时长、LLM 连通、版本、会话总数、Skills 数、MCP 工具数、MCP 服务列表均有数据 |
+| 登录流程 | 开启 `security.web` 后未登录跳转登录页，登录成功进入聊天页，登出回到登录页 |
+
+---
+
+## 四、运行测试
 
 ### Go 单元测试
 
@@ -450,20 +537,20 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 ---
 
-## 四、统计汇总
+## 五、统计汇总
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Go 单元测试 | 35 个函数 | 6 |
-| Python 系统测试 | 121 个测试 | 26 |
+| Go 单元测试 | 60 个函数 | 11 |
+| Python 系统测试 | 128 个测试 | 27 |
 
-**总计**: 约 156+ 个测试点覆盖核心功能。
+**总计**: 约 188+ 个测试点覆盖核心功能。
 
 ---
 
-## 五、已知问题与修复记录
+## 六、已知问题与修复记录
 
-### 5.1 MCP 初始化阻塞等待 roots/list 问题
+### 6.1 MCP 初始化阻塞等待 roots/list 问题
 
 **发现日期**: 2026-04-24
 
@@ -566,7 +653,7 @@ return nil
 
 ---
 
-### 5.2 MCP Discovery Context 导致进程退出问题
+### 6.2 MCP Discovery Context 导致进程退出问题
 
 **发现日期**: 2026-04-24
 

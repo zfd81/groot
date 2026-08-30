@@ -1,0 +1,147 @@
+// 后端 API 响应类型定义，字段名对齐 groot 服务实际返回。
+
+export interface SessionSummary {
+  session_id: string
+  created_at: string
+  round_count: number
+  last_active_at: string
+  path: string
+}
+
+export interface SessionHistoryResp {
+  status: string
+  total: number
+  limit: number
+  offset: number
+  sessions: SessionSummary[]
+}
+
+export interface HistoryMessage {
+  round: number
+  chat_id: string
+  timestamp: string
+  instruction: string
+  result: string
+  status: string
+  duration: number
+  steps_count: number
+  agent_name: string
+  error: { code: string; message: string } | null
+}
+
+export interface SessionDetailResp {
+  status: string
+  session_id: string
+  session: Record<string, unknown>
+  history: {
+    session_id: string
+    created_at: string
+    messages: HistoryMessage[]
+  }
+}
+
+export interface ChatStep {
+  step_id: string
+  type: string
+  name: string
+  start_time: string
+  end_time: string
+  status: string
+  nesting_level: number
+  error: string
+}
+
+export interface ChatRecord {
+  chat_id: string
+  session_id: string
+  round: number
+  prompt: string
+  timestamp: string
+  started_at: string
+  ended_at: string
+  instruction: string
+  result: string
+  status: string
+  duration: string
+  duration_ms: number
+  caller: string
+  steps: ChatStep[]
+  agent_name: string
+  model: string
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  error: { code: string; message: string } | null
+}
+
+export interface ModelInfo {
+  name: string
+  model: string
+  base_url: string
+}
+
+export interface ModelsResp {
+  models: ModelInfo[]
+  default: string
+  total: number
+}
+
+export interface HealthResp {
+  status: string
+  version: string
+  uptime: string
+  checks: {
+    llm: { status: string; info: { model: string; error: string } }
+    mcp_servers: {
+      status: string
+      info: Array<{
+        name: string
+        type: string
+        description: string
+        isActive: boolean
+        tools_count: number
+        error: string
+      }>
+    }
+    skills: { status: string; info: { count: number } }
+    memory: Record<string, unknown>
+  }
+}
+
+export interface MeResp {
+  authenticated: boolean
+  auth_required: boolean
+}
+
+export interface SkillInfo {
+  name: string
+  description: string
+}
+
+export interface SkillsResp {
+  skills: SkillInfo[]
+  total: number
+}
+
+export interface ToolInfo {
+  name: string
+  description: string
+}
+
+export interface ToolsGroup {
+  tools: ToolInfo[]
+  total: number
+}
+
+// /tools 返回 { groupName: {tools, total} }
+export type ToolsResp = Record<string, ToolsGroup>
+
+export interface AgentInfo {
+  name: string
+  description: string
+  skills: SkillInfo[]
+}
+
+export interface AgentsResp {
+  agents: AgentInfo[]
+}

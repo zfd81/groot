@@ -116,16 +116,17 @@ type AttachmentConfig struct {
 type SecurityConfig struct {
 	Auth      AuthConfig      `yaml:"auth"`
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
+	Web       WebConfig       `yaml:"web"`
 }
 
 // RateLimitConfig holds rate limiting settings
 type RateLimitConfig struct {
-	Enabled           bool    `yaml:"enabled"`
-	GlobalQPS         float64 `yaml:"global_qps"`
-	GlobalConcurrency int     `yaml:"global_concurrency"`
-	DefaultQPS        float64 `yaml:"default_qps"`
-	DefaultConcurrency int    `yaml:"default_concurrency"`
-	CleanupInterval   string  `yaml:"cleanup_interval"`
+	Enabled            bool    `yaml:"enabled"`
+	GlobalQPS          float64 `yaml:"global_qps"`
+	GlobalConcurrency  int     `yaml:"global_concurrency"`
+	DefaultQPS         float64 `yaml:"default_qps"`
+	DefaultConcurrency int     `yaml:"default_concurrency"`
+	CleanupInterval    string  `yaml:"cleanup_interval"`
 }
 
 // AuthConfig holds authentication settings
@@ -146,6 +147,15 @@ type KeyInfo struct {
 	Name        string   `yaml:"name"`
 	Key         string   `yaml:"key"`
 	Permissions []string `yaml:"permissions"`
+}
+
+// WebConfig holds Web UI login settings
+type WebConfig struct {
+	Enabled    bool   `yaml:"enabled"`     // 是否启用 Web 登录认证
+	Username   string `yaml:"username"`    // 登录用户名
+	Password   string `yaml:"password"`    // 登录密码（支持 ${ENV_VAR} 引用）
+	SessionTTL string `yaml:"session_ttl"` // 登录会话有效期，如 24h
+	Secure     bool   `yaml:"secure"`      // 会话 Cookie 是否置 Secure（经 https 部署时设为 true）
 }
 
 // LoggingConfig holds logging settings

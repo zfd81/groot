@@ -1,11 +1,20 @@
-.PHONY: build build-all build-darwin build-linux build-windows run test clean
+.PHONY: build build-go build-all build-darwin build-linux build-windows web run test clean
 
-# 默认编译（当前平台）
-build:
+# 默认编译（当前平台，先构建前端再嵌入）
+build: web
 	go build -o bin/groot ./cmd/groot
 
+# 仅编译后端（复用 web/dist 中已有的前端产物，无需 Node）
+build-go:
+	go build -o bin/groot ./cmd/groot
+
+# 构建 Web 前端（产物输出到 web/dist，由 go:embed 嵌入二进制）
+# 用 npm ci 保证可复现，不改动 package-lock.json
+web:
+	cd web && npm ci && npm run build
+
 # 编译所有平台
-build-all: build-darwin build-linux build-windows
+build-all: web build-darwin build-linux build-windows
 	@echo "编译完成：darwin-arm64, linux-amd64, windows-amd64"
 
 # macOS ARM64

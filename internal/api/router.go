@@ -21,9 +21,18 @@ func RegisterRoutes(h *server.Hertz,
 	toolsH *handler.ToolsHandler,
 	modelsH *handler.ModelsHandler,
 	scheduleH *handler.ScheduleHandler,
+	webAuthH *handler.WebAuthHandler,
 ) {
 	// Health check (no auth required)
 	h.GET("/health", healthH.Serve)
+
+	// Web UI 登录端点（自身即认证入口，不经 API 认证中间件）
+	h.POST("/web/login", webAuthH.Login)
+	h.POST("/web/logout", webAuthH.Logout)
+	h.GET("/web/me", webAuthH.Me)
+
+	// Web UI 静态资源托管（/ui/*）
+	RegisterWebUI(h)
 
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")
@@ -32,8 +41,8 @@ func RegisterRoutes(h *server.Hertz,
 	// Chat endpoints - 多轮对话
 	apiGroup.POST("/chat", chatH.Serve)
 	apiGroup.GET("/chat/status/:sid", statusH.Serve)
-	apiGroup.GET("/chat/:sid", detailH.GetLatest)       // 获取最近一次对话详情
-	apiGroup.GET("/chat/:sid/:cid", detailH.Serve)      // 获取指定对话详情
+	apiGroup.GET("/chat/:sid", detailH.GetLatest)  // 获取最近一次对话详情
+	apiGroup.GET("/chat/:sid/:cid", detailH.Serve) // 获取指定对话详情
 
 	// Session endpoints - 会话管理
 	apiGroup.GET("/sess/:sid", sessionH.GetSession)

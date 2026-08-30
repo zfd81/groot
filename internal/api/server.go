@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
@@ -12,11 +13,12 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
+	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/schedule"
 )
@@ -57,8 +59,34 @@ func NewServer(
 	// Create attachment handler (temp directory is fixed at {attachmentTempBase}/temp)
 	attHandler := attachment.NewHandler(cfg.Attachment)
 
+	// Web 登录会话存储：仅当 Web 认证启用时创建，作为 Cookie 凭证来源。
+	// 未启用时为 nil，auth 中间件退化为纯 API Key 判定。
+	var webStore *websession.Store
+	if cfg.Security.Web.Enabled {
+		ttl, err := time.ParseDuration(cfg.Security.Web.SessionTTL)
+		if err != nil || ttl <= 0 {
+			log.Info("Web 会话有效期配置无效，回退为 24h",
+				zap.String("session_ttl", cfg.Security.Web.SessionTTL))
+			ttl = 24 * time.Hour
+		}
+		webStore = websession.NewStore(ttl)
+	}
+
+	// API 认证开启但 Web 认证关闭时，浏览器请求无凭证会被拦截，Web 界面不可用。
+	if cfg.Security.Auth.Enabled && !cfg.Security.Web.Enabled {
+		log.Info("API 认证已开启但 Web 登录认证未开启，浏览器将无法访问 Web 界面；" +
+			"如需使用 Web 界面，请在 config.yaml 中设置 security.web.enabled: true")
+	}
+
+	// Web 登录开启但 API 认证关闭时：Web 界面弹登录页，但直接访问 REST API 仍匿名放行，
+	// 登录仅保护 /ui 入口而非后端，容易造成"服务已受保护"的误判。
+	if cfg.Security.Web.Enabled && !cfg.Security.Auth.Enabled {
+		log.Warn("Web 登录认证已开启但 API 认证未开启：绕过 Web 界面直接调用 REST API 仍可匿名访问；" +
+			"如需保护后端接口，请同时设置 security.auth.enabled: true")
+	}
+
 	// Create middleware
-	authMW := middleware.NewAuthMiddleware(cfg.Security)
+	authMW := middleware.NewAuthMiddleware(cfg.Security, webStore)
 
 	// Create rate limiter (best-effort, errors use default config)
 	rateLimiter, err := ratelimit.New(cfg.Security.RateLimit)
@@ -80,11 +108,12 @@ func NewServer(
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
 	modelsH := handler.NewModelsHandler(&cfg)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
+	webAuthH := handler.NewWebAuthHandler(cfg.Security.Web, webStore, log)
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH)
 
 	return &Server{
 		hertz:  h,

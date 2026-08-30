@@ -7,17 +7,20 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/config"
 )
 
-// AuthMiddleware provides API Key authentication
+// AuthMiddleware provides API Key / Web Cookie authentication
 type AuthMiddleware struct {
-	config config.SecurityConfig
+	config   config.SecurityConfig
+	webStore *websession.Store
 }
 
-// NewAuthMiddleware creates a new auth middleware
-func NewAuthMiddleware(cfg config.SecurityConfig) *AuthMiddleware {
-	return &AuthMiddleware{config: cfg}
+// NewAuthMiddleware creates a new auth middleware.
+// webStore 为 Web 登录会话存储；传 nil 表示不启用 Cookie 凭证。
+func NewAuthMiddleware(cfg config.SecurityConfig, webStore *websession.Store) *AuthMiddleware {
+	return &AuthMiddleware{config: cfg, webStore: webStore}
 }
 
 // Serve returns a Hertz middleware handler
@@ -27,6 +30,15 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			rc.Set("caller", "anonymous")
 			rc.Next(ctx)
 			return
+		}
+
+		// Web 会话 Cookie 凭证：有效则等同 all 权限放行
+		if m.webStore != nil {
+			if token := string(rc.Cookie(websession.CookieName)); token != "" && m.webStore.Validate(token) {
+				rc.Set("caller", "web")
+				rc.Next(ctx)
+				return
+			}
 		}
 
 		// Get API Key from header

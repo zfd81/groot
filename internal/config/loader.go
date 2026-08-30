@@ -167,6 +167,9 @@ func expandConfigEnvVars(cfg *Config) {
 		cfg.Security.Auth.APIKey.Keys[i] = keyInfo
 	}
 
+	// Expand Web login password
+	cfg.Security.Web.Password = ExpandEnv(cfg.Security.Web.Password)
+
 	// Expand database DSN
 	if cfg.Database != nil {
 		cfg.Database.DSN = ExpandEnv(cfg.Database.DSN)

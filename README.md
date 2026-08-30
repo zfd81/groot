@@ -36,6 +36,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **Skills 嵌套** | 复杂任务自动拆解，子任务递归执行 |
 | **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
 | **速率限制** | 支持按 API Key 的 QPS 和并发数限制，防止滥用 |
+| **Web 界面** | 内置图形化界面，浏览器访问 `/ui` 即可聊天、查看会话与服务状态，无需额外部署 |
 
 ### 1.3 会话与对话
 
@@ -134,12 +135,16 @@ cd groot
 go build -o bin/groot ./cmd/groot
 
 # 或使用 Makefile
-make build            # 编译当前平台
-make build-all        # 编译所有平台（macOS/Linux/Windows）
+make build            # 编译当前平台（含 Web 界面）
+make build-all        # 编译所有平台（macOS/Linux/Windows，含 Web 界面）
 
 # 运行
 ./bin/groot
 ```
+
+> **关于 Web 界面：** `make build` 与 `make build-all` 会先构建前端再编译二进制，需要 Node.js 18+。
+> 若只想编译后端，直接执行 `go build -o bin/groot ./cmd/groot`，此时访问 `/ui/` 会显示未构建提示页，
+> 其余 API 功能不受影响。也可单独执行 `make web` 只构建前端。
 
 **Makefile 编译命令：**
 
@@ -323,6 +328,31 @@ curl -X POST http://localhost:8080/chat \
   -d '{"instruction": "你好，请介绍一下你自己"}'
 ```
 
+### 3.5 打开 Web 界面
+
+服务启动后，浏览器访问：
+
+```
+http://localhost:8080/ui/
+```
+
+即可使用图形化界面聊天、查看历史会话与服务状态。界面内容随二进制一起分发，无需单独部署前端。
+
+如需登录保护，在 `~/.groot/config.yaml` 中开启：
+
+```yaml
+security:
+  web:
+    enabled: true
+    username: admin
+    password: ${GROOT_WEB_PASS}   # 建议使用环境变量
+    session_ttl: 24h
+    secure: false                 # 经 https 部署时设为 true
+```
+
+> 注意：若已开启 API Key 认证（`security.auth.enabled: true`），必须同时开启
+> `security.web`，否则浏览器请求会被 API 认证拦截，Web 界面不可用。
+
 > 更多安装方式见 [二、安装部署](#二安装部署)，完整配置说明见 [四、配置详解](#四配置详解)，API 详细说明见 [八、REST API](#八rest-api)。
 
 ---
@@ -439,6 +469,12 @@ security:
         - name: default            # Key 名称（唯一标识）
           key: ${GROOT_API_KEY}    # Key 值（支持环境变量引用）
           permissions: all         # 权限范围：all 或 [chat, status, ...]
+  web:
+    enabled: false                 # 是否开启 Web 界面登录认证（默认关闭）
+    username: admin                # 登录用户名
+    password: ${GROOT_WEB_PASS}    # 登录密码（支持环境变量引用）
+    session_ttl: 24h               # 登录会话有效期
+    secure: false                  # 会话 Cookie 是否置 Secure（经 https 部署时设为 true）
 
 # 日志配置
 logging:
@@ -566,10 +602,22 @@ logging:
 | `rate_limit.default_qps` | 否 | 每 API Key 默认 QPS，默认 `10` |
 | `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
 | `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
+| `web.enabled` | 否 | 是否开启 Web 界面登录认证，默认 `false` |
+| `web.username` | 否 | 登录用户名，默认 `admin` |
+| `web.password` | 否 | 登录密码，支持 `${VAR_NAME}` 引用；为空时拒绝所有登录 |
+| `web.session_ttl` | 否 | 登录会话有效期，默认 `24h`；配置非法时回退为 `24h` |
+| `web.secure` | 否 | 会话 Cookie 是否置 `Secure`，默认 `false`；经 https 反向代理部署时设为 `true` |
 
 > **速率限制说明：**
 > - **匿名降级**：认证开启时按 API Key 名称限流；认证关闭（`auth.enabled: false`）时按客户端 IP 限流
 > - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
+
+> **Web 登录说明：**
+> - 登录成功后下发 HttpOnly Cookie（`groot_web_session`），会话令牌保存在服务端内存中，进程重启后需重新登录
+> - 受保护端点同时接受 Cookie 与 `X-API-Key` 两种凭证，程序化调用不受影响
+> - Web 会话通过后即赋予 `all` 等效权限，不参与 API Key 的按端点细粒度权限校验（登录用户即管理员）
+> - 登录失败限速以真实 TCP 对端地址为来源键（不采信 `X-Forwarded-For`）；同一来源在 10 分钟滑动窗口内失败达 5 次后暂时拒绝登录，返回 `429`；另设全局兜底，窗口内所有来源合计失败过多时一律锁定
+> - `web.enabled: false` 时 Web 界面匿名可用；若此时 `auth.enabled: true`，浏览器请求会被 API 认证拦截，启动日志会给出提示
 
 #### Logging 配置
 
@@ -907,7 +955,7 @@ curl -X POST http://localhost:8080/chat \
 子 Agent 在调用 LLM 时，按以下优先级决定使用哪个 model：
 
 1. **`agent.md` 的 `model` 字段**（最高优先级）：显式钉死特定模型，无视运行期切换
-2. **主 Agent 当前 model**（编排模式默认）：编排模式下子 Agent 跟随主 Agent 实际选用的 model；TUI 里 `/model <name>` 切换主 Agent 后，再触发的子 Agent 调用就用新 model
+2. **主 Agent 当前 model**（编排模式默认）：编排模式下子 Agent 跟随主 Agent 实际选用的 model；Web 界面切换主 Agent 的 model 后，再触发的子 Agent 调用就用新 model
 3. **`llm.default_model`**（兜底）：以上两者都缺时使用配置文件默认模型
 
 Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当前 model"取请求体 `model` 字段或 `default_model`，逻辑相同。
@@ -917,28 +965,21 @@ Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当�
 | 场景 | 子 Agent 实际使用的 model |
 |------|--------------------------|
 | `agent.md` 写了 `model: kimi-k2.5`，主 Agent 用 `gpt-4o` 编排 | `kimi-k2.5`（钉死） |
-| `agent.md` 不写 `model`，主 Agent TUI 里 `/model gpt-4o` | `gpt-4o`（跟随） |
+| `agent.md` 不写 `model`，主 Agent 在 Web 界面选用 `gpt-4o` | `gpt-4o`（跟随） |
 | `agent.md` 不写 `model`，请求未指定 model | `llm.default_model` 配置值 |
 
-#### 5.3.4 TUI 切换
+#### 5.3.4 Web 界面切换
 
-`groot chat` 中：
+Web 界面输入框左下角的 Agent 下拉可切换当前会话使用的 Agent：
 
-| 命令 | 说明 |
+| 选项 | 说明 |
 |------|------|
-| `/agent` | 列出所有可用 Agent（含主 Agent groot），高亮当前选中 |
-| `/agent <name>` | 切换到指定 Agent，自动新建会话 |
-| `/agent groot` | 切回主 Agent |
+| `groot` | 主 Agent（默认，编排模式），列表首位并标注「默认」 |
+| 其他 Agent 名 | 切换到指定子 Agent（Solo 模式，直连该子 Agent） |
 
-切换 Agent 会清空当前会话；状态栏「Agent: <name>」实时反映当前选中。
+选中 `groot` 等价于不传 `X-Agent-Name`（走主 Agent 编排）。
 
-**编排模式下的可视化：** 主 Agent 通过 `call_agent` 调度子 Agent 时，TUI 会单独渲染为：
-
-```
-🤖 调用子 Agent: db-agent
-```
-
-而不是普通工具的 `🔧 调用工具: call_agent`，便于一眼区分主 Agent 自身的工具调用和子 Agent 的派发。
+**编排模式下的可视化：** 主 Agent 通过 `call_agent` 调度子 Agent 时，Web 界面会将其单独渲染为「调用 Agent」步骤，而不是普通工具调用，便于一眼区分主 Agent 自身的工具调用和子 Agent 的派发。
 
 #### 5.3.5 API 关联
 
@@ -1039,15 +1080,14 @@ curl -X POST http://localhost:8080/chat \
   -d '{"instruction":"今天北京天气怎么样？"}'
 ```
 
-**6. TUI 中切换**
+**6. Web 界面中切换**
 
-```
-groot chat
+打开 Web 界面（`http://localhost:8080/ui/`），在输入框左下角的 Agent 下拉中选择目标 Agent：
 
-> /agent              # 列出，选中 weather
-> /agent weather      # 直接切到 weather（自动新建会话）
-> /agent groot        # 切回主 Agent
-```
+- `groot`（默认）：主 Agent 编排模式
+- `weather`：直连 weather 子 Agent（Solo 模式）
+
+切换后当前会话即使用所选 Agent。
 
 详见 [设计文档](docs/superpowers/specs/2026-05-24-multi-agent-design.md)。
 
@@ -1069,7 +1109,6 @@ Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 | `groot skills uninstall <name>` | 卸载 Skill |
 | `groot mcp list` | 列出所有已配置的 MCP Servers |
 | `groot schedule list` | 列出所有定时任务 |
-| `groot chat` | 启动 Chat TUI（终端交互界面） |
 | `groot tail` | 实时日志查看 |
 
 **全局选项：**
@@ -1278,188 +1317,6 @@ groot tail -k "api_request" # 过滤包含关键词的日志
 
 退出方式：按 `Ctrl+C`。
 
-## 七、Chat TUI（groot chat）
-
-启动终端交互界面（Terminal User Interface），在终端中直接与大模型对话。
-
-```bash
-groot chat                   # 启动 Chat TUI
-```
-
-**启动流程：**
-
-1. 从 `~/.groot/config.yaml` 加载配置
-2. 检测配置端口上是否已有 Groot 服务运行
-3. 如未检测到运行中服务 → 自动在进程内启动嵌入式 Groot 服务
-4. 如检测到已有服务 → 直接连接，共享该服务的会话数据
-5. 启动全屏终端界面，进入交互对话模式
-
-**界面布局：**
-
-TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次为：
-
-```
-   ██████╗ ██████╗  ██████╗  ██████╗ ████████╗
-  ██╔════╝ ██╔══██╗██╔═══██╗██╔═══██╗╚══██╔══╝
-  ██║  ███╗██████╔╝██║   ██║██║   ██║   ██║         ← 欢迎画面（首次启动）
-  ██║   ██║██╔══██╗██║   ██║██║   ██║   ██║
-  ╚██████╔╝██║  ██║╚██████╔╝╚██████╔╝   ██║
-   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝
-
-         Groot AI Agent · v1.0.0
-    ─────────────────────────────
-    输入你的问题开始对话
-    输入 /help 查看系统命令
-
-  > 用户消息                                      ← 消息区（viewport，无边框，占主要区域）
-
-  助手回答内容（Markdown 渲染）...
-
-  🤔 Thinking...                                  ← 思考过程（灰色斜体）
-  ⚡ 调用技能: get-weather                         ← 技能/工具调用标签
-  🔧 调用工具: file_read
-
-  ┌─ 补全弹窗（条件显示，叠加在 viewport 底部）──┐
-  │  /exit      退出聊天                            │  ← 圆角边框浮层
-  │  /model     切换模型                            │
-  └─────────────────────────────────────────────────┘
-
-  ╔════════════════════════════════════════════════╗
-  ║  > 用户输入内容...                              ║  ← 输入区（绿色双线边框）
-  ╚════════════════════════════════════════════════╝
-  模型: gpt-4o      会话: sess-abc123      对话: 第 3 轮   ← 状态栏（底部一行）
-```
-
-**界面说明：**
-
-| 区域 | 说明 |
-|------|------|
-| 消息区 (viewport) | 无边框，占主要区域。显示用户消息、助手回答（Markdown 渲染）、思考过程、技能/工具调用状态 |
-| 补全弹窗 | 输入 `/` 时自动弹出，叠加在 viewport 底部（viewport 自动裁剪让位），圆角边框 |
-| 输入区 | 绿色双线边框多行文本输入，支持 Shift+Enter / Alt+Enter 插入换行 |
-| 状态栏 | 底部一行，无边框。左：当前模型名，中：会话 ID，右：对话轮次 |
-
-**消息类型展示：**
-
-| 类型 | 图标 | 说明 |
-|------|------|------|
-| 用户消息 | `>` | 白色加粗文字，深灰色背景（`#2c313a`） |
-| 助手回答 | — | Markdown 渲染，支持代码块、表格、列表等 |
-| 思考过程 | 🤔 | 灰色斜体，展示模型推理过程 |
-| 技能调用 | ⚡ | 紫色显示技能名称 |
-| 工具调用 | 🔧 | 黄色显示工具名和参数摘要 |
-| 工具错误 | ❌ | 红色显示工具名和错误详情 |
-| 错误信息 | ❌ | 红色显示错误详情 |
-
-**系统命令：**
-
-在输入框中输入以下命令进行操作：
-
-| 命令 | 参数 | 功能 |
-|------|------|------|
-| `/help` | 无 | 显示所有命令帮助（渲染到消息区） |
-| `/model` | `[名称]` | 切换模型。无参数弹出模型列表选择；带参数直接切换，模型名无效则弹出列表 |
-| `/clear` | 无 | 清空屏幕对话，生成新会话 ID，开始全新对话 |
-| `/skills` | 无 | 弹出 skill 选择列表，选中后可继续输入指令 |
-| `/mcp` | 无 | 按 MCP 服务器分组列出所有可用工具，树状结构展示 |
-| `/export` | 无 | 导出当前会话完整对话历史为 Markdown（保存到 `~/.groot/exports/`） |
-| `/exit` | 无 | 退出 Chat TUI |
-
-**快捷键：**
-
-| 按键 | 上下文 | 行为 |
-|------|--------|------|
-| `Enter` | 输入框 | 发送消息 |
-| `Shift+Enter` / `Alt+Enter` | 输入框 | 插入换行 |
-| `Tab` | 补全弹窗可见 | 接受补全建议，关闭弹窗 |
-| `↑` / `↓` | 补全弹窗可见 | 上下选择补全项 |
-| `↑` / `↓` | 补全弹窗不可见 | 输入框内光标上下移动（textarea 处理） |
-| `PgUp` / `PgDn` | 任意时刻 | 向上/向下半页滚动消息区 |
-| `ESC` | 补全弹窗可见 | 关闭补全弹窗 |
-| `ESC` | AI 回答中 | 断开 SSE 连接，取消当前回答 |
-| `ESC` | 正常状态 | 清空输入框 |
-| `Ctrl+C` | 任意时刻 | 退出 Chat TUI |
-| 鼠标滚轮 | 任意时刻 | 逐行滚动（依赖终端将滚轮转为 Up/Down 键） |
-
-**交互细节：**
-
-- **加载状态**：发送消息后，收到首个响应前，消息区显示绿色 spinner 动画 + "正在思考..." 文字
-- **流式输出**：助手回答和思考过程实时流式追加，自动跟随底部滚动；用户手动上滚后暂停跟随
-- **文本选择**：不启用鼠标捕获，终端原生鼠标选择和复制正常工作
-- **工具参数显示**：工具调用参数以 `├─ key = value` 树状格式逐行展示，非原始 JSON；超长值自动截断
-- **工具结果**：工具执行结果不在消息区展示，由 LLM 最终回答体现
-- **取消机制**：ESC 断开 SSE 连接停止生成
-
-**Skills 快捷调用：**
-
-输入 `/` 后跟 Skill 名称即可快速调用。例如：
-
-```
-/get-weather 北京今天天气如何
-```
-
-这会自动将指令转换为：`请使用 get-weather skill 来处理以下指令：北京今天天气如何`
-
-**附件引用（@path）：**
-
-在输入框中通过 `@` 符号引用本地文件或目录，TUI 会自动读取内容并作为附件发送给大模型。
-
-```
-@/home/user/document.pdf              # 引用文件
-@/home/user/images/                   # 引用目录（目录下所有文件）
-了解 @./config.yaml 的内容            # 相对路径
-对比 @/data/a.csv 和 @/data/b.csv    # 多文件引用
-```
-
-**使用方式：**
-
-| 方式 | 说明 |
-|------|------|
-| 手动输入 `@` | 输入 `@` 后跟路径，TUI 自动弹出路径补全，`Tab` 或 `Enter` 选 |
-| 拖拽文件到终端 | 将文件从文件管理器拖入终端，路径自动添加 `@` 前缀标识 |
-
-**支持的路径格式：**
-
-| 格式 | 示例 | 说明 |
-|------|------|------|
-| 绝对路径 | `@/home/user/file.txt` | 完整文件路径 |
-| 相对路径 | `@./config.yaml` | 相对于当前工作目录 |
-| 用户目录 | `@~/Documents/report.pdf` | `~` 展开为用户 home 目录 |
-
-**路径补全：**
-
-- 输入 `@` 后跟路径前缀，自动弹出目录文件列表
-- `↑` / `↓` 选择，`Tab` 或 `Enter` 接受补全
-- 目录补全后不加空格，方便继续选择子级路径
-- 输入空格后补全自动收起
-
-**支持的附件类型：**
-
-| 类型 | 扩展名 | 处理方式 |
-|------|--------|---------|
-| 文件 | `.txt`, `.json`, `.csv`, `.yaml`, `.go`, `.py`, `.java` 等 | 文本内容直接拼接指令 |
-| 图片 | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg` | Base64 编码发送，LLM 视觉识别 |
-| 音频 | `.mp3`, `.wav`, `.aac`, `.ogg` | Base64 编码发送，LLM 音频识别 |
-| 视频 | `.mp4`, `.avi`, `.mov`, `.mkv` | Base64 编码发送，LLM 视频识别 |
-
-> **说明：** 附件类型通过文件扩展名自动识别，受服务端 `attachment` 配置约束（允许类型、大小限制等）。发送时 `@path` 引用会被替换为文件名展示在消息区。
-
-**导出对话：**
-
-使用 `/export` 命令可将当前会话的完整对话历史导出为 Markdown 文件，保存到 `~/.groot/exports/chat-<session_id>.md`。
-
-**服务模式说明：**
-
-| 场景 | 行为 |
-|------|------|
-| 端口上无服务运行 | 自动启动嵌入式服务，退出 TUI 时自动关闭 |
-| 端口上已有服务 | 直接连接，退出 TUI 不影响服务运行 |
-| 端口上服务为 chat 启动 | 共享内存中的会话数据 |
-
-> **提示：** 嵌入式模式下日志仅输出到文件，不在终端显示，避免干扰界面渲染。
-
----
-
 ## 八、REST API
 
 ### 8.1 API 列表
@@ -1481,6 +1338,9 @@ TUI 使用全屏 AltScreen 模式，无外层边框。布局从顶到底依次�
 | `/schedule/:id/enable` | POST | 启用定时任务 |
 | `/schedule/:id/archive` | POST | 归档定时任务 |
 | `/schedule/:id/history` | GET | 查询任务执行历史 |
+| `/web/login` | POST | Web 界面登录 |
+| `/web/logout` | POST | Web 界面登出 |
+| `/web/me` | GET | 查询当前登录状态 |
 
 ### 8.2 认证方式
 
@@ -1491,6 +1351,8 @@ X-API-Key: your-secret-key
 ```
 
 Header 名称可在配置文件中自定义。
+
+Web 界面使用登录 Cookie 作为凭证。受保护端点同时接受 API Key 与 Cookie，两者任一有效即可通过认证。
 
 ---
 
@@ -2168,6 +2030,85 @@ Agent 自动调用 schedule_create 工具创建任务：
 ```
 
 内置的 8 个调度工具（`schedule_create`、`schedule_list` 等）会自动注册到 Agent，可通过 `GET /tools` 查看。
+
+### 8.19 POST /web/login - Web 界面登录
+
+用于 Web 界面登录，校验通过后下发 HttpOnly Cookie。
+
+**请求：**
+
+```bash
+curl -X POST http://localhost:8080/web/login \
+  -H "Content-Type: application/json" \
+  -c cookie.txt \
+  -d '{"username": "admin", "password": "your-password"}'
+```
+
+**响应（200）：**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+响应同时携带 `Set-Cookie: groot_web_session=<token>; Path=/; HttpOnly; SameSite=Strict`，有效期为 `web.session_ttl`。
+
+**错误响应：**
+
+| 状态码 | 说明 |
+|--------|------|
+| `400` | 请求体格式错误 |
+| `401` | 用户名或密码错误（配置密码为空时一律拒绝） |
+| `429` | 同一 IP 在 10 分钟窗口内失败达 5 次，暂时拒绝登录 |
+
+`security.web.enabled: false` 时返回 `200` 且 `auth_required: false`，表示无需登录。
+
+### 8.20 POST /web/logout - Web 界面登出
+
+使当前 Cookie 中的会话令牌失效。
+
+**请求：**
+
+```bash
+curl -X POST http://localhost:8080/web/logout -b cookie.txt
+```
+
+**响应（200）：**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+未携带 Cookie 或未开启 Web 登录时同样返回 `200`。
+
+### 8.21 GET /web/me - 查询登录状态
+
+供 Web 界面在加载时判断是否需要跳转登录页。
+
+**请求：**
+
+```bash
+curl http://localhost:8080/web/me -b cookie.txt
+```
+
+**响应（200）：**
+
+```json
+{
+  "authenticated": true,
+  "auth_required": true
+}
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `auth_required` | 是否开启了 Web 登录认证 |
+| `authenticated` | 当前请求是否已通过认证；`auth_required` 为 `false` 时恒为 `true` |
 
 ---
 
