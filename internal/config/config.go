@@ -58,8 +58,7 @@ type ModelConfig struct {
 
 // MemoryConfig 记忆模块配置
 type MemoryConfig struct {
-	Directory     string `yaml:"directory"`      // 记忆目录
-	HistoryWindow int    `yaml:"history_window"` // LLM 上下文窗口（轮次），-1 不限制
+	HistoryWindow int `yaml:"history_window"` // LLM 上下文窗口（轮次），-1 不限制
 }
 
 // ScheduleConfig 定时任务调度配置
@@ -97,11 +96,9 @@ type SubAgentConfig struct {
 
 // ReactConfig holds ReAct execution limits
 type ReactConfig struct {
-	MaxIterations   int `yaml:"max_iterations"`
-	MaxTokens       int `yaml:"max_tokens"`
-	StepTimeout     int `yaml:"step_timeout"`
-	ErrorRetry      int `yaml:"error_retry"`
-	NestingMaxDepth int `yaml:"nesting_max_depth"`
+	MaxIterations int `yaml:"max_iterations"` // ReAct 循环最大迭代次数
+	StepTimeout   int `yaml:"step_timeout"`   // 单步 LLM 调用超时（秒）
+	ErrorRetry    int `yaml:"error_retry"`    // 单步 LLM 调用失败重试次数
 }
 
 // AttachmentConfig holds attachment settings

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import type { UploadRequestOptions } from 'element-plus'
-import { Plus, Close, Document } from '@element-plus/icons-vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import type { UploadRequestOptions, InputInstance } from 'element-plus'
+import { Plus, Close, Document, Top, VideoPause } from '@element-plus/icons-vue'
 import { useMetaStore } from '../../stores/meta'
 import { storeToRefs } from 'pinia'
 import type { ChatAttachment } from '../../api/sse'
 
-const props = defineProps<{ sending: boolean }>()
+// hero: 空会话居中形态。此形态下文本框默认更高，视觉上更接近一个「起始卡片」。
+const props = defineProps<{ sending: boolean; hero?: boolean }>()
 const emit = defineEmits<{
   send: [instruction: string, model: string, agent: string, attachments: ChatAttachment[]]
   stop: []
@@ -23,6 +24,33 @@ const MAIN_AGENT = 'groot'
 
 const text = ref('')
 const selectedModel = ref('')
+
+// 文本框滚动条控制：未达到 maxRows 时随内容增高、隐藏滚动条；
+// 只有高度被 maxRows 封顶（内容真正溢出一行以上）后才允许滚动。
+// 4px 容差吸收 autosize 亚像素取整造成的假性溢出，避免凭空出现滚动条。
+const inputRef = ref<InputInstance>()
+const scrollable = ref(false)
+async function syncScrollable() {
+  await nextTick()
+  const ta = inputRef.value?.textarea
+  scrollable.value = !!ta && ta.scrollHeight > ta.clientHeight + 4
+}
+
+let resizeOb: ResizeObserver | null = null
+onMounted(async () => {
+  await nextTick()
+  const ta = inputRef.value?.textarea
+  if (ta && typeof ResizeObserver !== 'undefined') {
+    // 宽度变化会改变折行数，autosize 重算高度后需同步滚动条状态
+    resizeOb = new ResizeObserver(() => void syncScrollable())
+    resizeOb.observe(ta)
+  }
+  void syncScrollable()
+})
+onBeforeUnmount(() => resizeOb?.disconnect())
+
+// 内容或形态（hero 行数不同）变化后重新判断是否需要滚动条
+watch([text, () => props.hero], () => void syncScrollable())
 const selectedAgent = ref(MAIN_AGENT)
 // 附件本地条目：att 为发送给后端的数据，preview 仅图片有值（完整 data URL，用于缩略图）。
 interface AttachmentItem {
@@ -124,7 +152,7 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
 
 <template>
   <div class="chat-input">
-    <div class="composer">
+    <div class="composer" :class="{ hero: props.hero }">
       <!-- 附件预览区：有附件时撑高输入框，悬浮条目显示删除按钮 -->
       <div v-if="attachments.length" class="attachment-row">
         <div
@@ -149,12 +177,14 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
         </div>
       </div>
       <el-input
+        ref="inputRef"
         v-model="text"
         type="textarea"
         :placeholder="t('chat.inputPlaceholder')"
-        :autosize="{ minRows: 1, maxRows: 6 }"
+        :autosize="{ minRows: props.hero ? 2 : 1, maxRows: 6 }"
         resize="none"
         class="composer-input"
+        :class="{ scrollable }"
         @keydown.enter.exact.prevent="handleSend"
       />
       <div class="toolbar">
@@ -207,10 +237,29 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
               </el-tag>
             </el-option>
           </el-select>
-          <el-button v-if="props.sending" type="danger" @click="emit('stop')">
-            {{ t('chat.stop') }}
+          <!-- 圆形图标按钮：文字改为 title/aria-label，保证读屏与悬浮提示仍可读 -->
+          <el-button
+            v-if="props.sending"
+            type="danger"
+            circle
+            class="action-btn"
+            :title="t('chat.stop')"
+            :aria-label="t('chat.stop')"
+            @click="emit('stop')"
+          >
+            <el-icon :size="16"><VideoPause /></el-icon>
           </el-button>
-          <el-button v-else type="primary" @click="handleSend"> {{ t('chat.send') }} </el-button>
+          <el-button
+            v-else
+            type="primary"
+            circle
+            class="action-btn"
+            :title="t('chat.send')"
+            :aria-label="t('chat.send')"
+            @click="handleSend"
+          >
+            <el-icon :size="16"><Top /></el-icon>
+          </el-button>
         </div>
       </div>
     </div>
@@ -221,17 +270,32 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
 .chat-input {
   padding: 0;
 }
+/* 输入卡片：大圆角 + 柔和底色 + 轻阴影，作为独立的一块承载区而非细边框输入行 */
 .composer {
+  width: 100%;
   max-width: 760px;
   margin: 0 auto;
-  border: 1px solid rgba(127, 127, 127, 0.25);
-  border-radius: 16px;
-  padding: 8px 12px;
-  background: transparent;
-  transition: border-color 0.15s;
+  box-sizing: border-box;
+  border: 1px solid rgba(127, 127, 127, 0.18);
+  border-radius: 22px;
+  padding: 14px 16px 10px;
+  background: var(--el-fill-color-lighter);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .composer:focus-within {
-  border-color: var(--el-color-primary);
+  border-color: rgba(127, 127, 127, 0.32);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+}
+/* 居中起始形态：更宽、内边距更松，占位文字更大 */
+.composer.hero {
+  max-width: 820px;
+  padding: 20px 20px 12px;
+}
+.composer.hero .composer-input :deep(.el-textarea__inner) {
+  /* 用整数像素而非 1.05em（14.7px）：小数字号会让行高取整后
+     与 autosize 计算的高度差出 1px，凭空出现滚动条 */
+  font-size: 15px;
 }
 /* 附件预览区：横向排列可换行，位于文本框上方 */
 .attachment-row {
@@ -298,13 +362,25 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
   background: transparent;
   padding: 4px;
   resize: none;
+  /* 默认隐藏滚动条：未达 maxRows 时靠 autosize 增高承载内容 */
+  overflow-y: hidden;
+}
+/* 内容超过 maxRows、高度被封顶后才允许滚动 */
+.composer-input.scrollable :deep(.el-textarea__inner) {
+  overflow-y: auto;
 }
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 10px;
+}
+/* 发送/停止：圆形图标钮，与参考稿的右下角圆钮一致 */
+.action-btn {
+  width: 34px;
+  height: 34px;
+  margin-left: 4px;
 }
 .toolbar-left,
 .toolbar-right {

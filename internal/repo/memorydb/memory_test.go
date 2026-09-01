@@ -79,6 +79,73 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
+func TestListSessions_TitleFromFirstMainChat(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	r.CreateSession(ctx, &repo.Session{SessionID: "lt-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	// 第 1 轮主 Agent（其指令应成为 title）
+	if err := r.SaveChat(ctx, &memory.ChatRecord{
+		ChatID:      "20260901100000001",
+		SessionID:   "lt-1",
+		Instruction: "你是谁?",
+		Status:      "completed",
+		StartedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveChat round 1: %v", err)
+	}
+	// 子 Agent 记录不应参与 title 选取
+	if err := r.SaveChat(ctx, &memory.ChatRecord{
+		ChatID:      "20260901100000001_sub",
+		SessionID:   "lt-1",
+		Instruction: "查询天气",
+		Status:      "completed",
+		StartedAt:   time.Now(),
+		AgentName:   "weather",
+		Round:       1,
+	}); err != nil {
+		t.Fatalf("SaveChat sub: %v", err)
+	}
+	// 第 2 轮主 Agent（不应覆盖首轮 title）
+	if err := r.SaveChat(ctx, &memory.ChatRecord{
+		ChatID:      "20260901100000002",
+		SessionID:   "lt-1",
+		Instruction: "帮我写个函数",
+		Status:      "completed",
+		StartedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveChat round 2: %v", err)
+	}
+
+	sessions, err := r.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Title != "你是谁?" {
+		t.Errorf("expected title=你是谁?, got %q", sessions[0].Title)
+	}
+}
+
+func TestListSessions_TitleEmptyWithoutChats(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	r.CreateSession(ctx, &repo.Session{SessionID: "lt-empty", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	sessions, err := r.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Title != "" {
+		t.Errorf("expected empty title, got %q", sessions[0].Title)
+	}
+}
+
 func TestSaveChatIncreasesRound(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()

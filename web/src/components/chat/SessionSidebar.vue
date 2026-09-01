@@ -38,7 +38,8 @@ function relTime(iso: string): string {
 }
 
 function title(s: SessionSummary): string {
-  return s.session_id.slice(0, 8)
+  // 优先显示首轮用户指令（与主区顶部标题一致），无对话记录时回退会话 ID 前缀
+  return s.title?.trim() || s.session_id.slice(0, 8)
 }
 </script>
 
@@ -263,6 +264,35 @@ function title(s: SessionSummary): string {
   flex: 1;
   overflow-y: auto;
   padding: 4px 8px 8px;
+  /* 滚动条只保留滑块：轨道透明；默认整体隐藏，悬停侧栏时才显示滑块 */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.sidebar:hover .session-list {
+  scrollbar-color: rgba(127, 127, 127, 0.35) transparent;
+}
+/* Chrome/Safari：改走 WebKit 伪元素以精确控制 10px 宽度。
+   Chrome 一旦设置 scrollbar-width 就会忽略伪元素规则，故此处先撤销标准属性；
+   Firefox 不支持该选择器，继续沿用上面的 thin + scrollbar-color 方案 */
+@supports selector(::-webkit-scrollbar) {
+  .session-list,
+  .sidebar:hover .session-list {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  .session-list::-webkit-scrollbar {
+    width: 10px;
+  }
+  .session-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .session-list::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 5px;
+  }
+  .sidebar:hover .session-list::-webkit-scrollbar-thumb {
+    background: rgba(127, 127, 127, 0.35);
+  }
 }
 .session-item {
   padding: 8px 10px;

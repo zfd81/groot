@@ -139,12 +139,34 @@ export const useChatStore = defineStore('chat', () => {
       const resp = await api.get<SessionHistoryResp>(
         `/sess/history?limit=${PAGE_SIZE}&offset=${sessionsOffset.value}`
       )
-      sessions.value.push(...(resp.sessions || []))
+      for (const s of resp.sessions || []) {
+        // 本地占位条目与翻页窗口偏移都可能带来重复 session_id，
+        // 已存在的用服务端数据原地覆盖，避免列表出现重复 key。
+        const at = sessions.value.findIndex((x) => x.session_id === s.session_id)
+        if (at >= 0) sessions.value[at] = s
+        else sessions.value.push(s)
+      }
       sessionsTotal.value = resp.total
       sessionsOffset.value += resp.sessions?.length || 0
     } finally {
       loadingSessions.value = false
     }
+  }
+
+  // 新会话在流式开始时立即插入列表顶部占位，使侧栏能马上显示执行动画；
+  // 流结束后 loadSessions(true) 会用服务端数据覆盖它。
+  function addSessionPlaceholder(sid: string, title: string) {
+    if (sessions.value.some((s) => s.session_id === sid)) return
+    const iso = new Date().toISOString()
+    sessions.value.unshift({
+      session_id: sid,
+      created_at: iso,
+      last_active_at: iso,
+      round_count: 1,
+      title,
+      path: '',
+    })
+    sessionsTotal.value += 1
   }
 
   // 打开历史会话，加载其消息记录。
@@ -221,7 +243,12 @@ export const useChatStore = defineStore('chat', () => {
         attachments,
         signal: abortCtrl.signal,
         onHeaders: (sid) => {
-          if (sid) sessionId.value = sid
+          if (!sid) return
+          const isNew = sid !== sessionId.value
+          sessionId.value = sid
+          // 新会话：立即在侧栏建条目，让执行动画在流式过程中就可见，
+          // 不必等到流结束后 loadSessions 才出现。
+          if (isNew) addSessionPlaceholder(sid, instruction)
         },
         onEvent: (ev) => applyEvent(live, ev),
       })

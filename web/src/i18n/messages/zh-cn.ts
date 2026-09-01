@@ -18,6 +18,7 @@ export default {
   },
   chat: {
     inputPlaceholder: '输入消息，Enter 发送，Shift+Enter 换行',
+    heroTitle: '有什么可以帮你的？',
     addAttachment: '添加附件',
     removeAttachment: '删除附件',
     stop: '停止',
@@ -61,6 +62,12 @@ export default {
     noTools: '该 Agent 无 MCP 工具',
     noAgents: '无子 Agents',
     agentLabel: 'Agent',
+    workDir: '工作目录',
+    workDirDesc: 'Groot 的主目录，存放配置与运行数据',
+    dbType: '数据库',
+    dbTypeDesc: '会话与记忆数据使用的存储类型',
+    logDir: '日志目录',
+    logDirDesc: '服务运行日志文件的输出位置',
   },
   tool: {
     error: '错误',

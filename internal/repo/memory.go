@@ -12,6 +12,9 @@ type Session struct {
 	UserID    string
 	Prompt    string
 	Round     int
+	// Title 为该会话首轮主 Agent 对话的用户指令，仅由 ListSessions 填充，
+	// 供列表界面展示；无对话记录时为空串。
+	Title     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

@@ -34,8 +34,31 @@ func TestGenerateConfigTemplate_NoStorageBlock(t *testing.T) {
 	if strings.Contains(tpl, "\nstorage:") {
 		t.Error("config.yaml 模板不应包含 'storage:' 顶层节")
 	}
-	if strings.Contains(tpl, "minio:") {
-		t.Error("config.yaml 模板不应包含 minio 配置项")
+	if strings.Contains(tpl, "minio") {
+		t.Error("config.yaml 模板不应包含 minio 相关内容（存储抽象层已移除）")
+	}
+}
+
+// TestGenerateConfigTemplate_NoRemovedKeys 验证已删除的配置项不再出现在
+// 模板中：memory.directory（记忆已迁入数据库）、react.max_tokens 与
+// react.nesting_max_depth（引擎从未据此终止，字段已从 ReactConfig 移除）。
+func TestGenerateConfigTemplate_NoRemovedKeys(t *testing.T) {
+	tpl := GenerateConfigTemplate()
+	for _, key := range []string{"directory: memory", "max_tokens: 100000", "nesting_max_depth"} {
+		if strings.Contains(tpl, key) {
+			t.Errorf("模板不应再包含已删除的配置项 %q", key)
+		}
+	}
+}
+
+// TestGenerateConfigTemplate_HasMessageSection 验证 message 节出现在模板中：
+// 它是生效配置（main.go 据此注册 webhook/email 发送器），必须对用户可见。
+func TestGenerateConfigTemplate_HasMessageSection(t *testing.T) {
+	tpl := GenerateConfigTemplate()
+	for _, key := range []string{"#message:", "queue_size:", "webhook:", "smtp_host:"} {
+		if !strings.Contains(tpl, key) {
+			t.Errorf("模板缺少 message 配置项 %q", key)
+		}
 	}
 }
 

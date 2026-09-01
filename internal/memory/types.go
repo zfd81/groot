@@ -18,6 +18,7 @@ type SessionInfo struct {
 	CreatedAt    time.Time `json:"created_at"`
 	RoundCount   int       `json:"round_count"`
 	LastActiveAt string    `json:"last_active_at"` // 最后活跃时间
+	Title        string    `json:"title"`          // 首轮用户指令，供列表展示；无对话时为空
 	Path         string    `json:"path"`
 }
 

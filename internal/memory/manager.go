@@ -28,11 +28,6 @@ func NewManager(log *logger.Logger, memRepo repo.MemoryRepo) *Manager {
 	}
 }
 
-// GetMemoryDir 保留兼容签名，返回空字符串（数据库模式下无文件目录）
-func (m *Manager) GetMemoryDir() string {
-	return ""
-}
-
 // CreateSession 创建新会话，userID 可为空字符串
 func (m *Manager) CreateSession(sessionID string, userID string) error {
 	now := time.Now()
@@ -93,6 +88,7 @@ func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
 			CreatedAt:    s.CreatedAt,
 			RoundCount:   s.Round,
 			LastActiveAt: lastActiveAt,
+			Title:        s.Title,
 			Path:         "",
 		})
 	}

@@ -69,9 +69,9 @@ func applyDefaults(cfg *Config) {
 		cfg.Server.Port = 8080
 	}
 
-	// Memory defaults
-	if cfg.Memory.Directory == "" {
-		cfg.Memory.Directory = "memory"
+	// Memory defaults（-1 表示不限制轮数，保持原值）
+	if cfg.Memory.HistoryWindow == 0 {
+		cfg.Memory.HistoryWindow = 20
 	}
 
 	// Schedule defaults
@@ -108,17 +108,11 @@ func applyDefaults(cfg *Config) {
 	if cfg.React.MaxIterations == 0 {
 		cfg.React.MaxIterations = 20
 	}
-	if cfg.React.MaxTokens == 0 {
-		cfg.React.MaxTokens = 100000
-	}
 	if cfg.React.StepTimeout == 0 {
 		cfg.React.StepTimeout = 60
 	}
 	if cfg.React.ErrorRetry == 0 {
 		cfg.React.ErrorRetry = 2
-	}
-	if cfg.React.NestingMaxDepth == 0 {
-		cfg.React.NestingMaxDepth = 3
 	}
 
 	// Attachment defaults

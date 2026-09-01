@@ -18,6 +18,7 @@ export default {
   },
   chat: {
     inputPlaceholder: 'Type a message. Enter to send, Shift+Enter for newline',
+    heroTitle: 'How can I help you?',
     addAttachment: 'Add attachment',
     removeAttachment: 'Remove attachment',
     stop: 'Stop',
@@ -61,6 +62,12 @@ export default {
     noTools: 'This agent has no MCP tools',
     noAgents: 'No sub-agents',
     agentLabel: 'Agent',
+    workDir: 'Working Directory',
+    workDirDesc: 'Groot home directory for config and runtime data',
+    dbType: 'Database',
+    dbTypeDesc: 'Storage type for sessions and memory data',
+    logDir: 'Log Directory',
+    logDirDesc: 'Output location of server log files',
   },
   tool: {
     error: 'Error',

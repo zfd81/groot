@@ -54,16 +54,19 @@ func TestDefaultConfig(t *testing.T) {
 	}
 
 	// 验证 Memory 默认值
-	if cfg.Memory.Directory != "memory" {
-		t.Errorf("Memory.Directory 默认值错误: got %s, want memory", cfg.Memory.Directory)
+	if cfg.Memory.HistoryWindow != 20 {
+		t.Errorf("Memory.HistoryWindow 默认值错误: got %d, want 20", cfg.Memory.HistoryWindow)
 	}
 
 	// 验证 React 默认值
 	if cfg.React.MaxIterations != 20 {
 		t.Errorf("React.MaxIterations 默认值错误: got %d, want 20", cfg.React.MaxIterations)
 	}
-	if cfg.React.MaxTokens != 100000 {
-		t.Errorf("React.MaxTokens 默认值错误: got %d, want 100000", cfg.React.MaxTokens)
+	if cfg.React.StepTimeout != 60 {
+		t.Errorf("React.StepTimeout 默认值错误: got %d, want 60", cfg.React.StepTimeout)
+	}
+	if cfg.React.ErrorRetry != 2 {
+		t.Errorf("React.ErrorRetry 默认值错误: got %d, want 2", cfg.React.ErrorRetry)
 	}
 
 	// 验证 Attachment 默认值
@@ -169,10 +172,10 @@ func TestGetModelByName(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		modelName    string
-		expectModel  string
-		expectNil    bool
+		name        string
+		modelName   string
+		expectModel string
+		expectNil   bool
 	}{
 		{
 			name:        "空名称返回默认模型",

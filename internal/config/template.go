@@ -2,8 +2,7 @@ package config
 
 // GenerateConfigTemplate 返回带注释的 config.yaml 模板。
 //
-// 注意：MinIO 等基础设施凭据已剥离到 ~/.groot/env.yaml，本模板不再生成
-// storage 注释块；如需启用 MinIO，请编辑 env.yaml。
+// 注意：数据库等基础设施凭据存放在 ~/.groot/env.yaml，本模板只包含业务配置。
 func GenerateConfigTemplate() string {
 	return `# Groot Agent 配置文件
 # 请根据实际情况修改以下配置
@@ -43,11 +42,9 @@ llm:
 
 # ReAct 执行配置
 #react:
-#  max_iterations: 20               # 最大循环次数
-#  max_tokens: 100000               # 最大 Token 消耗
-#  step_timeout: 60                 # 单步执行超时（秒）
-#  error_retry: 2                   # 单步失败重试次数
-#  nesting_max_depth: 3             # Skills 嵌套最大深度
+#  max_iterations: 20               # ReAct 循环最大迭代次数
+#  step_timeout: 60                 # 单步 LLM 调用超时（秒）
+#  error_retry: 2                   # 单步 LLM 调用失败重试次数
 
 # 附件处理配置
 #attachment:
@@ -58,7 +55,6 @@ llm:
 
 # 记忆模块配置
 #memory:
-#  directory: memory                # 记忆目录
 #  history_window: 20               # LLM 上下文窗口（轮次），-1 不限制
 
 # 定时任务调度配置
@@ -66,6 +62,22 @@ llm:
 #  enabled: false                  # 是否允许在对话中创建定时任务（默认关闭）
 #  max_concurrent_tasks: 3         # 最大并发执行数
 #  sync_interval: 30s              # 目录同步间隔
+
+# 消息通知配置（定时任务执行结果的推送渠道；stdout 始终启用）
+#message:
+#  queue_size: 256                 # 发送队列容量
+#  workers: 2                      # 发送工作协程数
+#  senders:
+#    webhook:
+#      enabled: false              # 是否启用 webhook 通知
+#      url: ""                     # Webhook 地址（接收 POST JSON）
+#    email:
+#      enabled: false              # 是否启用邮件通知
+#      smtp_host: ""               # SMTP 服务器地址
+#      smtp_port: 587              # SMTP 端口
+#      username: ""                # SMTP 用户名
+#      password: ""                # SMTP 密码（建议使用环境变量）
+#      from: ""                    # 发件人地址
 
 # 子 Agent 调度配置（v3.8）
 #subagent:
@@ -98,10 +110,6 @@ llm:
 #    password: ${GROOT_WEB_PASS}    # 登录密码（建议使用环境变量）
 #    session_ttl: 24h               # 登录会话有效期
 #    secure: false                  # 会话 Cookie 是否置 Secure（经 https 部署时设为 true）
-
-# 存储抽象层配置
-# 默认使用本地磁盘存储（无需任何配置）。如需切换到 MinIO 对象存储，
-# 请编辑 ~/.groot/env.yaml（基础设施凭据独立存放，与本文件解耦）。
 
 # 日志配置
 #logging:

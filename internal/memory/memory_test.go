@@ -118,10 +118,8 @@ func TestGenerateStepID_Uniqueness(t *testing.T) {
 // Manager 测试
 
 func TestNewManager(t *testing.T) {
-	mgr := newTestManager(t)
-	// DB 模式下 GetMemoryDir 返回空字符串
-	if mgr.GetMemoryDir() != "" {
-		t.Errorf("NewManager().GetMemoryDir() should be empty in DB mode, got %s", mgr.GetMemoryDir())
+	if mgr := newTestManager(t); mgr == nil {
+		t.Fatal("NewManager() 返回 nil")
 	}
 }
 

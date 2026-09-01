@@ -28,7 +28,6 @@ func DefaultConfig() *Config {
 			},
 		},
 		Memory: MemoryConfig{
-			Directory:     "memory",
 			HistoryWindow: 20,
 		},
 		Schedule: ScheduleConfig{
@@ -51,11 +50,9 @@ func DefaultConfig() *Config {
 			MaxResultLength: 8000,  // 子 Agent 返回文本截断长度
 		},
 		React: ReactConfig{
-			MaxIterations:   20,
-			MaxTokens:       100000,
-			StepTimeout:     60,
-			ErrorRetry:      2,
-			NestingMaxDepth: 3,
+			MaxIterations: 20,
+			StepTimeout:   60,
+			ErrorRetry:    2,
 		},
 		Attachment: AttachmentConfig{
 			MaxSize:      50,

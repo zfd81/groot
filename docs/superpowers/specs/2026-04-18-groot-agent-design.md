@@ -610,7 +610,7 @@ Runner.Run() 返回 AgentEvent 流
 | 客户端断开（SSE 取消） | `ctx.Err() == context.Canceled` | 直接走 `agentCancelled` 分支：`[DONE]` |
 | 致命 LLM 错误 | connection refused / dial tcp / no such host / timeout | `error` + 返回 error 终止 Run |
 
-> 当前没有"最大 token"硬终止逻辑：`react.max_tokens` 字段保留在配置里，但 Engine 不据此主动 break；token 用量只用于累加和后续 ChatRecord 持久化。
+> 事件循环没有"最大 token"硬终止逻辑：token 用量只用于累加和后续 ChatRecord 持久化。上下文规模的实际约束来自两处：`memory.history_window`（按轮数截断）和模型的 `max_context_tokens`（按 token 预算截断）。
 
 #### 4.1.4 客户端断开处理
 
@@ -976,18 +976,17 @@ LLM 异常时 `checks.llm.info.error` 会带具体错误（如 `connection faile
 ```yaml
 react:
   max_iterations: 20          # ChatModelAgent 最大迭代次数（透传到 eino）
-  max_tokens: 100000          # 单对话允许的最大累计 token（保留字段，当前事件循环不主动 break）
   step_timeout: 60            # 单次 LLM API 调用超时（秒）
   error_retry: 2              # ChatModel 瞬时错误（5xx / 网络抖动 / 超时）的重试次数
-  nesting_max_depth: 3        # 保留字段，未在 Engine 中强制检查
 ```
+
+`react` 节的三个配置项全部生效，没有仅作占位的字段：
 
 | 配置项 | 实际效果 | 默认值 |
 |--------|---------|--------|
 | `max_iterations` | 通过 `adk.ChatModelAgentConfig.MaxIterations` 透传给 eino，作为 ReAct 循环上限 | 20 |
 | `step_timeout` | 作为 `openai.ChatModelConfig.Timeout`，控制每次 LLM HTTP 调用的最长时间 | 60 |
 | `error_retry` | `> 0` 时启用 `adk.ModelRetryConfig{MaxRetries}`，对 LLM 瞬时错误自动重试 | 2 |
-| `max_tokens` / `nesting_max_depth` | 配置文件中保留，引擎当前未据此主动终止；token 用量仅累加用于 ChatRecord | 100000 / 3 |
 
 ### 6.2 错误处理
 
@@ -1095,10 +1094,8 @@ llm:
 # ReAct 执行配置
 react:
   max_iterations: 20               # ChatModelAgent 最大迭代次数
-  max_tokens: 100000               # 保留字段，引擎当前不主动 break
   step_timeout: 60                 # LLM API 单次调用超时（秒）
   error_retry: 2                   # ChatModel 瞬时错误重试次数
-  nesting_max_depth: 3             # 保留字段
 
 # 附件处理配置
 attachment:
@@ -1109,9 +1106,6 @@ attachment:
 
 # 记忆模块配置
 memory:
-  directory: memory                # 保留字段（DB 模式下不创建该目录）
-  retention_days: 7                # 会话保留天数
-  cleanup_schedule: "02:00"        # 清理时间（HH:MM）
   history_window: 20               # LLM 上下文窗口（轮次数），-1 不限制
 
 # 子 Agent 调度配置
@@ -1181,6 +1175,35 @@ logging:
 - `{GROOT_HOME}/skills` - Skills 定义目录
 - `{GROOT_HOME}/mcp` - MCP 配置目录
 - `{GROOT_HOME}/subagents` - 子 Agent 定义目录
+
+---
+
+## 九、迭代说明
+
+### 9.1 配置项清理（2026-09-01）
+
+对配置定义、`groot init` 生成的模板与代码实际引用做了一致性核对，移除了不再生效的配置项，补齐了缺失的配置节。
+
+**移除：**
+
+| 配置项 | 移除原因 |
+|--------|---------|
+| `react.max_tokens` | 除 config 包自身外无任何代码引用，事件循环从不据此终止；上下文规模由 `memory.history_window` 与模型 `max_context_tokens` 共同约束 |
+| `react.nesting_max_depth` | 子 Agent 不具备 `call_agent` 工具，嵌套深度恒为 1，该字段无检查点 |
+| `memory.directory` | 会话数据整体迁入数据库，`groot init` 已不创建 `memory/` 目录，字段填了默认值后无人读取 |
+| `memory.retention_days` / `memory.cleanup_schedule` | 仅存在于本文档，`MemoryConfig` 中从未定义 |
+| `Memory.GetMemoryDir()` | 数据库模式下恒返回空字符串的兼容签名，无生产调用方 |
+| 模板中"存储抽象层配置"注释段 | 指向 `env.yaml` 中已不存在的 MinIO 开关；`push/pull/diff` 现走数据库同步 |
+
+**新增：**
+
+- 配置模板补充 `message` 节（队列容量、工作协程数、webhook / email 发送器）。该配置在 `main.go` 中用于注册定时任务的通知渠道，此前仅有 README 记录，生成的配置文件中不可见。
+- `applyDefaults()` 补充 `memory.history_window` 默认值兜底。此前用户未显式配置时该值为 0，`windowSize > 0` 判断不成立，导致轮数不做截断，与文档声明的默认 20 轮不符。
+
+**调整：**
+
+- `groot --help` 中 `push` / `pull` / `diff` 的说明由"MinIO（minio 模式）"改为"数据库（MySQL/PG 模式）"，与实际行为一致。
+- README 目录说明移除会话数据文件目录表项，明确会话、对话历史、附件内容均存于数据库。
 
 ---
 

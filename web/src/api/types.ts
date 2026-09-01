@@ -5,6 +5,8 @@ export interface SessionSummary {
   created_at: string
   round_count: number
   last_active_at: string
+  // 首轮用户指令，作为列表标题展示；旧版后端或无对话记录时为空
+  title?: string
   path: string
 }
 
@@ -105,6 +107,11 @@ export interface HealthResp {
     }
     skills: { status: string; info: { count: number } }
     memory: Record<string, unknown>
+    // 运行环境信息（设置-通用面板展示）；旧版后端可能缺失
+    environment?: {
+      status: string
+      info: { home_dir: string; database: string; log_dir: string }
+    }
   }
 }
 

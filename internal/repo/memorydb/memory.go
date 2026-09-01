@@ -138,11 +138,18 @@ func (r *memoryRepo) ListSessions(ctx context.Context) ([]*repo.Session, error) 
 		UserID    string `db:"user_id"`
 		Prompt    string `db:"prompt"`
 		Round     int    `db:"round"`
+		Title     string `db:"title"`
 		CreatedAt int64  `db:"created_at"`
 		UpdatedAt int64  `db:"updated_at"`
 	}
+	// title 取会话首轮主 Agent 对话（agent_name='' 排除子 Agent 记录）的用户指令，
+	// 供列表界面直接展示，避免前端为每个会话再拉一次详情。
 	if err := r.db.SelectContext(ctx, &rows,
-		`SELECT session_id, user_id, prompt, round, created_at, updated_at FROM memory_sessions ORDER BY updated_at DESC`); err != nil {
+		`SELECT s.session_id, s.user_id, s.prompt, s.round, s.created_at, s.updated_at,
+			COALESCE((SELECT c.instruction FROM memory_chats c
+				WHERE c.session_id = s.session_id AND c.agent_name = ''
+				ORDER BY c.round ASC LIMIT 1), '') AS title
+		 FROM memory_sessions s ORDER BY s.updated_at DESC`); err != nil {
 		return nil, err
 	}
 	sessions := make([]*repo.Session, len(rows))
@@ -152,6 +159,7 @@ func (r *memoryRepo) ListSessions(ctx context.Context) ([]*repo.Session, error) 
 			UserID:    row.UserID,
 			Prompt:    row.Prompt,
 			Round:     row.Round,
+			Title:     row.Title,
 			CreatedAt: time.UnixMilli(row.CreatedAt),
 			UpdatedAt: time.UnixMilli(row.UpdatedAt),
 		}

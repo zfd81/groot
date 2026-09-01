@@ -22,7 +22,4 @@ type Memory interface {
 
 	// 会话文件目录提示
 	GetSessionMdContent(sessionID string) (string, error)
-
-	// 获取记忆目录路径
-	GetMemoryDir() string
 }

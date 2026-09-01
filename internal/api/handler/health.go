@@ -12,6 +12,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -21,6 +22,7 @@ import (
 // HealthHandler handles GET /health
 type HealthHandler struct {
 	config        config.Config
+	homeDir       string
 	skillBackend  skill.Backend
 	mcpManager    *mcp.Manager
 	memoryManager *memory.Manager
@@ -32,6 +34,7 @@ type HealthHandler struct {
 // NewHealthHandler creates a new health handler
 func NewHealthHandler(
 	cfg config.Config,
+	homeDir string,
 	skillBackend skill.Backend,
 	mcpMgr *mcp.Manager,
 	memMgr *memory.Manager,
@@ -40,12 +43,29 @@ func NewHealthHandler(
 ) *HealthHandler {
 	return &HealthHandler{
 		config:        cfg,
+		homeDir:       homeDir,
 		skillBackend:  skillBackend,
 		mcpManager:    mcpMgr,
 		memoryManager: memMgr,
 		runtimeState:  runtime,
 		startTime:     time.Now(),
 		logger:        log,
+	}
+}
+
+// databaseType 返回数据库类型标识（sqlite/mysql/postgres）。
+// Database 配置缺省时按 db.Open 的默认行为视为 sqlite。
+func databaseType(cfg *config.DatabaseConfig) string {
+	if cfg == nil || cfg.Driver == "" {
+		return "sqlite"
+	}
+	switch db.DialectFrom(cfg.Driver) {
+	case db.DialectMySQL:
+		return "mysql"
+	case db.DialectPostgres:
+		return "postgres"
+	default:
+		return "sqlite"
 	}
 }
 
@@ -119,6 +139,16 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			"memory": {
 				Status: "healthy",
 				Info:   map[string]int{"sessions": sessionCount},
+			},
+			// 运行环境信息：工作目录、数据库类型、日志目录（供设置界面展示）。
+			// 日志目录在 main.go 中已解析为绝对路径后才构建 handler。
+			"environment": {
+				Status: "healthy",
+				Info: map[string]string{
+					"home_dir": h.homeDir,
+					"database": databaseType(h.config.Database),
+					"log_dir":  h.config.Logging.File.Directory,
+				},
 			},
 		},
 		Metrics: map[string]interface{}{
