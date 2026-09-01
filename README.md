@@ -327,20 +327,15 @@ http://localhost:8080/ui/
 
 即可使用图形化界面聊天、查看历史会话与服务状态。界面内容随二进制一起分发，无需单独部署前端。
 
-如需登录保护，在 `~/.groot/config.yaml` 中开启：
+Web 界面登录认证始终启用：
 
-```yaml
-security:
-  web:
-    enabled: true
-    username: admin
-    password: ${GROOT_WEB_PASS}   # 建议使用环境变量
-    session_ttl: 24h
-    secure: false                 # 经 https 部署时设为 true
-```
+- **首次使用**：用户表为空时自动进入「创建用户」页面，输入用户名、密码（至少 8 位）和确认密码完成创建，随后跳转登录页登录。
+- **日常使用**：输入用户名和密码登录。登录会话有效期 1 小时，活跃使用时自动续期。
+- **修改密码**：在「设置 → 账户」中输入原始密码、新密码和确认新密码。修改成功后其他浏览器的登录会话立即失效。
+- **重置用户**：忘记密码时在服务器上执行 `groot user reset`（删除用户表全部数据），重启服务后重新进入创建用户流程。
 
-> 注意：若已开启 API Key 认证（`security.auth.enabled: true`），必须同时开启
-> `security.web`，否则浏览器请求会被 API 认证拦截，Web 界面不可用。
+> 用户名和密码保存在数据库中（密码以 bcrypt 加密存储），无需任何配置。
+> 经 https 反向代理部署时，会话 Cookie 会根据 `X-Forwarded-Proto` 自动置 `Secure`。
 
 > 更多安装方式见 [二、安装部署](#二安装部署)，完整配置说明见 [四、配置详解](#四配置详解)，API 详细说明见 [七、REST API](#七rest-api)。
 
@@ -460,12 +455,6 @@ security:
         - name: default            # Key 名称（唯一标识）
           key: ${GROOT_API_KEY}    # Key 值（支持环境变量引用）
           permissions: [all]       # 权限范围：[all] 或 [chat, status, ...]
-  web:
-    enabled: false                 # 是否开启 Web 界面登录认证（默认关闭）
-    username: admin                # 登录用户名
-    password: ${GROOT_WEB_PASS}    # 登录密码（支持环境变量引用）
-    session_ttl: 24h               # 登录会话有效期
-    secure: false                  # 会话 Cookie 是否置 Secure（经 https 部署时设为 true）
 
 # 日志配置
 logging:
@@ -589,22 +578,18 @@ logging:
 | `rate_limit.default_qps` | 否 | 每 API Key 默认 QPS，默认 `10` |
 | `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
 | `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
-| `web.enabled` | 否 | 是否开启 Web 界面登录认证，默认 `false` |
-| `web.username` | 否 | 登录用户名，默认 `admin` |
-| `web.password` | 否 | 登录密码，支持 `${VAR_NAME}` 引用；为空时拒绝所有登录 |
-| `web.session_ttl` | 否 | 登录会话有效期，默认 `24h`；配置非法时回退为 `24h` |
-| `web.secure` | 否 | 会话 Cookie 是否置 `Secure`，默认 `false`；经 https 反向代理部署时设为 `true` |
 
 > **速率限制说明：**
 > - **匿名降级**：认证开启时按 API Key 名称限流；认证关闭（`auth.enabled: false`）时按客户端 IP 限流
 > - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
 
 > **Web 登录说明：**
-> - 登录成功后下发 HttpOnly Cookie（`groot_web_session`），会话令牌保存在服务端内存中，进程重启后需重新登录
-> - 受保护端点同时接受 Cookie 与 `X-API-Key` 两种凭证，程序化调用不受影响
-> - Web 会话通过后即赋予 `all` 等效权限，不参与 API Key 的按端点细粒度权限校验（登录用户即管理员）
+> - Web 界面登录认证始终启用，无需配置；用户名和密码保存在数据库 `users` 表中（密码 bcrypt 加密），首次访问 Web 界面时引导创建
+> - 登录成功后下发 HttpOnly Cookie（`groot_web_session`），会话令牌保存在服务端内存中，进程重启后需重新登录；会话有效期固定 1 小时，活跃访问自动续期
+> - 会话 Cookie 的 `Secure` 标志自动判断：TLS 直连或反向代理注入 `X-Forwarded-Proto: https` 时置位
+> - 受 API 认证保护的端点同时接受 Cookie 与 `X-API-Key` 两种凭证，程序化调用不受影响；Web 会话通过后即赋予 `all` 等效权限（登录用户即管理员）
 > - 登录失败限速以真实 TCP 对端地址为来源键（不采信 `X-Forwarded-For`）；同一来源在 10 分钟滑动窗口内失败达 5 次后暂时拒绝登录，返回 `429`；另设全局兜底，窗口内所有来源合计失败过多时一律锁定
-> - `web.enabled: false` 时 Web 界面匿名可用；若此时 `auth.enabled: true`，浏览器请求会被 API 认证拦截，启动日志会给出提示
+> - 忘记密码时在服务器上执行 `groot user reset` 重置用户，重启服务后重新创建
 
 #### Logging 配置
 
@@ -661,12 +646,11 @@ logging:
 | `detail` | GET /chat/{sid}、GET /chat/{sid}/{cid} | 查询对话详情 |
 | `session` | GET /sess/{sid} | 查询会话详情 |
 | `history` | GET /sess/history | 查询会话列表 |
-| `skills` | GET /skills | 查看 Skills 列表 |
-| `tools` | GET /tools | 查看工具列表（MCP 工具 + 调度工具） |
 | `schedule` | GET/POST/DELETE /schedule | 管理定时任务 |
-| `all` | 以上全部 | 全部权限（`GET /agents`、`GET /models` 仅 `all` 权限可访问） |
+| `all` | 以上全部 | 全部权限 |
 
-> `GET /health` 不需要认证和权限，可直接访问。
+> `GET /web/health` 不需要认证和权限，可直接访问（`groot status` 也使用该端点）。
+> `/web/agents`、`/web/skills`、`/web/tools`、`/web/models` 是 Web 界面专用端点，仅接受 Web 登录会话 Cookie，不参与 API Key 权限体系。
 
 ### 4.6 配置热更新
 
@@ -1023,12 +1007,12 @@ Web 界面输入框左下角的 Agent 下拉可切换当前会话使用的 Agent
 
 | 接口 | 多 Agent 行为 |
 |-----|--------------|
-| `GET /agents` | 列出所有 Agent，主 Agent 排在首位 |
-| `GET /skills` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 skills（不传 = 主 Agent） |
-| `GET /tools` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 MCP 工具（不传 = 主 Agent） |
+| `GET /web/agents` | 列出所有 Agent，主 Agent 排在首位 |
+| `GET /web/skills` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 skills（不传 = 主 Agent） |
+| `GET /web/tools` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 MCP 工具（不传 = 主 Agent） |
 | `GET /chat/status/:sid` | 编排模式下 `progress.sub_agents` 含当前运行的子 Agent 列表 |
 
-注：`GET /tools` 在主 Agent 路径下会额外返回一个合成分组 `_builtin`，包含 `call_agent` 工具及其所有可用子 Agent 描述；Solo 模式（`X-Agent-Name` 指定子 Agent）下不暴露 `call_agent`，避免子 Agent 嵌套调用。
+注：`GET /web/tools` 在主 Agent 路径下会额外返回一个合成分组 `_builtin`，包含 `call_agent` 工具及其所有可用子 Agent 描述；Solo 模式（`X-Agent-Name` 指定子 Agent）下不暴露 `call_agent`，避免子 Agent 嵌套调用。
 
 #### 5.3.6 配置项（`config.yaml`）
 
@@ -1142,15 +1126,11 @@ Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 | `groot` | 启动 Groot 服务 |
 | `groot init` | 初始化工作目录 |
 | `groot status` | 查看运行中实例的状态 |
-| `groot skills list` | 列出所有已安装的 Skills |
-| `groot skills install <path>` | 安装 Skill |
-| `groot skills uninstall <name>` | 卸载 Skill |
-| `groot mcp list` | 列出所有已配置的 MCP Servers |
-| `groot schedule list` | 列出所有定时任务 |
 | `groot tail` | 实时日志查看 |
 | `groot push` | 将本地配置推送到数据库（MySQL/PG 模式） |
 | `groot pull` | 从数据库拉取配置到本地（MySQL/PG 模式） |
 | `groot diff` | 显示本地与数据库的配置差异（MySQL/PG 模式） |
+| `groot user reset` | 重置 Web 登录用户（删除用户表全部数据） |
 
 **全局选项：**
 
@@ -1231,115 +1211,7 @@ Groot 实例状态
 提示: 请确认 Groot 是否已启动，或使用 -p 指定其他端口
 ```
 
-### 6.5 管理 Skills（groot skills）
-
-管理 Groot 的 Skills 安装、卸载和查看。
-
-```bash
-groot skills list                          # 列出已安装的 Skills
-groot skills install /path/to/skill        # 安装 Skill（绝对路径）
-groot skills install ./my-skill            # 安装 Skill（相对路径）
-groot skills uninstall my-skill            # 卸载 Skill
-```
-
-**子命令说明：**
-
-| 子命令 | 说明 |
-|--------|------|
-| `list` | 列出 `{GROOT_HOME}/skills/` 下所有 Skill，含名称和描述 |
-| `install <path>` | 拷贝源目录到 skills 目录，重名则覆盖 |
-| `uninstall <name>` | 删除指定的 Skill 目录 |
-
-**`list` 输出示例：**
-
-```
-已安装的 Skills:
-
-  pdf_analyzer      分析PDF文档并生成摘要
-  code_generator    根据需求生成代码
-  broken_skill      ⚠ 无效
-
-共 2 个 Skill
-```
-
-### 6.6 管理 MCP Servers（groot mcp）
-
-管理 Groot 的 MCP Servers 配置查看。
-
-```bash
-groot mcp list               # 列出所有已配置的 MCP Servers
-```
-
-**子命令说明：**
-
-| 子命令 | 说明 |
-|--------|------|
-| `list` | 列出 `{GROOT_HOME}/mcp/` 下所有 MCP 配置，含名称、类型、状态和描述 |
-
-**`list` 输出示例：**
-
-```
-NAME             TYPE              STATUS    LAST_UPDATED         DESCRIPTION
----------------  ----------------  --------  -------------------  --------------------
-web-search       stdio             active     2026-05-01 10:30     基于 SearXNG 的网页搜索
-filesystem       stdio             active     2026-05-08 14:22     本地文件系统操作
-database         streamable_http   inactive   2026-05-09 09:15     数据库查询服务
-broken-config    -                 -          -                    ⚠ 配置解析失败
-
-共 4 个 MCP Server（2 个活跃，1 个未激活，1 个异常）
-```
-
-### 6.7 管理定时任务（groot schedule）
-
-管理 Groot 的定时任务，支持查看、详情、历史、删除、禁用、启用和归档操作。
-
-```bash
-groot schedule list                          # 列出所有定时任务
-groot schedule inspect task-xxx              # 查看任务详情（JSON 格式）
-groot schedule history task-xxx              # 查看任务执行历史
-groot schedule delete task-xxx               # 删除任务
-groot schedule disable task-xxx              # 禁用任务（active → disabled）
-groot schedule enable task-xxx               # 启用任务（disabled → active）
-groot schedule archive task-xxx              # 归档任务（→ archive）
-```
-
-**子命令说明：**
-
-| 子命令 | 说明 |
-|--------|------|
-| `list` | 列出所有任务（active/disabled/archive），含名称、调度表达式和状态 |
-| `inspect <id>` | 查看任务完整定义（JSON 格式） |
-| `history <id>` | 查看任务执行历史，含时间、触发类型、状态、耗时 |
-| `delete <id>` | 物理删除任务及相关执行记录 |
-| `disable <id>` | 禁用活跃任务，从调度器中移除 |
-| `enable <id>` | 启用已禁用的任务，重新注册到调度器 |
-| `archive <id>` | 归档任务（从任意状态） |
-
-**`list` 输出示例：**
-
-```
-ID                                       NAME                          SCHEDULE              STATUS
-----------------------------------------  ----------------------------  --------------------  ----------
-daily-report                             每日报表生成                   0 9 * * *             active
-weekly-cleanup                           每周数据清理                   0 2 * * 0             disabled
-one-time-reminder                        一次性提醒                    2026-06-01T09:00:00Z  archive
-
-共 3 个任务（活跃: 1, 禁用: 1, 归档: 1）
-```
-
-**`history` 输出示例：**
-
-```
-EXEC_TIME            TRIGGER          STATUS      DURATION    STEPS
---------------------  ---------------  ----------  ----------  ----------
-2026-05-11 09:00:05  cron             completed   1234ms      3
-2026-05-10 09:00:02  cron             completed   1156ms      3
-2026-05-09 09:00:08  cron             failed      5002ms      1
-
-共 3 条记录
-```
-
-### 6.8 日志查看（groot tail）
+### 6.5 日志查看（groot tail）
 
 实时查看 Groot 日志，类似 `tail -f`，支持格式化和过滤。
 
@@ -1359,7 +1231,7 @@ groot tail -k "api_request" # 过滤包含关键词的日志
 
 退出方式：按 `Ctrl+C`。
 
-### 6.9 配置同步（push/pull/diff）
+### 6.6 配置同步（push/pull/diff）
 
 在 MySQL/PostgreSQL 模式下（需配置 `~/.groot/env.yaml` 中的 `database` 节），集群共享的配置资源（`config.yaml`、skills、subagents、mcp 等）以数据库中的镜像为准。三个子命令用于在本地工作目录与数据库之间同步：
 
@@ -1385,6 +1257,17 @@ groot diff skills/weather        # 只比较指定路径
 
 > **说明：** SQLite 模式（单机）下配置直接读取本地文件，这三个命令不可用，会提示同步功能未启用。
 
+### 6.7 重置 Web 登录用户（groot user reset）
+
+删除数据库用户表中的全部数据。重置后再次访问 Web 界面将重新进入创建用户流程，适用于忘记密码等场景。
+
+```bash
+groot user reset      # 显示将删除的用户数量，交互确认后执行
+groot user reset -y   # 跳过确认直接执行
+```
+
+> **注意：** 正在运行的服务其内存中的登录会话不会随重置立即失效，需重启服务（或等原会话过期）后生效。
+
 ## 七、REST API
 
 ### 7.1 API 列表
@@ -1397,11 +1280,6 @@ groot diff skills/weather        # 只比较指定路径
 | `/chat/{sid}/{cid}` | GET | 查询指定对话详情 |
 | `/sess/{sid}` | GET | 查询会话详情（完整对话历史） |
 | `/sess/history` | GET | 查询会话列表 |
-| `/health` | GET | 健康检查（无需认证） |
-| `/agents` | GET | 列出所有 Agent（主 Agent + 子 Agent） |
-| `/skills` | GET | 列出可用 Skills |
-| `/tools` | GET | 列出可用工具（MCP 工具 + 内置工具） |
-| `/models` | GET | 列出可用 LLM 模型 |
 | `/schedule` | GET | 列出所有定时任务 |
 | `/schedule/:id` | GET | 查询任务详情 |
 | `/schedule/:id` | DELETE | 删除定时任务 |
@@ -1409,9 +1287,16 @@ groot diff skills/weather        # 只比较指定路径
 | `/schedule/:id/enable` | POST | 启用定时任务 |
 | `/schedule/:id/archive` | POST | 归档定时任务 |
 | `/schedule/:id/history` | GET | 查询任务执行历史 |
+| `/web/health` | GET | 健康检查（无需认证） |
+| `/web/setup` | POST | 创建首个 Web 登录用户（仅用户表为空时可用） |
 | `/web/login` | POST | Web 界面登录 |
 | `/web/logout` | POST | Web 界面登出 |
 | `/web/me` | GET | 查询当前登录状态 |
+| `/web/password` | POST | 修改登录密码（需登录会话） |
+| `/web/agents` | GET | 列出所有 Agent（Web 界面专用，需登录会话） |
+| `/web/skills` | GET | 列出可用 Skills（Web 界面专用，需登录会话） |
+| `/web/tools` | GET | 列出可用工具（Web 界面专用，需登录会话） |
+| `/web/models` | GET | 列出可用 LLM 模型（Web 界面专用，需登录会话） |
 
 ### 7.2 认证方式
 
@@ -1423,7 +1308,7 @@ X-API-Key: your-secret-key
 
 Header 名称可在配置文件中自定义。
 
-Web 界面使用登录 Cookie 作为凭证。受保护端点同时接受 API Key 与 Cookie，两者任一有效即可通过认证。
+Web 界面使用登录 Cookie 作为凭证。受 API 认证保护的端点同时接受 API Key 与 Cookie，两者任一有效即可通过认证。`/web` 前缀下的会话保护端点（`/web/password`、`/web/agents`、`/web/skills`、`/web/tools`、`/web/models`）仅接受登录 Cookie。
 
 ---
 
@@ -1875,7 +1760,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.8 GET /health - 健康检查
+### 7.8 GET /web/health - 健康检查
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -1929,7 +1814,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.9 GET /agents - 列出所有 Agent
+### 7.9 GET /web/agents - 列出所有 Agent（需登录会话）
 
 列出主 Agent 和所有已注册的子 Agent，主 Agent（`groot`）始终排在首位，其余按字典序排列。每个 Agent 附带其 Skills 摘要。
 
@@ -1955,7 +1840,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.10 GET /skills - 列出可用 Skills
+### 7.10 GET /web/skills - 列出可用 Skills（需登录会话）
 
 **响应示例：**
 ```json
@@ -1970,7 +1855,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.11 GET /tools - 列出可用工具
+### 7.11 GET /web/tools - 列出可用工具（需登录会话）
 
 列出所有可用 MCP 工具，按来源分组返回。
 
@@ -2003,11 +1888,11 @@ X-API-Key: your-secret-key
 | `tools[].description` | 工具描述 |
 | `total` | 该组工具数量 |
 
-> **注意：** `GET /tools` 返回所有工具，包括 MCP 工具和内置调度工具（`schedule_create`、`schedule_list` 等 8 个，需 `schedule.enabled: true`）。支持 `X-Agent-Name` 请求头查看指定子 Agent 的工具（见 5.3.5）。
+> **注意：** `GET /web/tools` 返回所有工具，包括 MCP 工具和内置调度工具（`schedule_create`、`schedule_list` 等 8 个，需 `schedule.enabled: true`）。支持 `X-Agent-Name` 请求头查看指定子 Agent 的工具（见 5.3.5）。
 
 ---
 
-### 7.12 GET /models - 列出可用模型
+### 7.12 GET /web/models - 列出可用模型（需登录会话）
 
 列出 `config.yaml` 中配置的所有 LLM 模型，供调用方（含 Web 界面）选择 `X-Model-Name` 时使用。
 
@@ -2184,11 +2069,40 @@ Agent 自动调用 schedule_create 工具创建任务：
 - notify_on_success: ["webhook"]
 ```
 
-内置的 8 个调度工具（`schedule_create`、`schedule_list`、`schedule_inspect`、`schedule_history`、`schedule_delete`、`schedule_disable`、`schedule_enable`、`schedule_archive`）在 `schedule.enabled: true` 时自动注册到 Agent，可通过 `GET /tools` 查看。
+内置的 8 个调度工具（`schedule_create`、`schedule_list`、`schedule_inspect`、`schedule_history`、`schedule_delete`、`schedule_disable`、`schedule_enable`、`schedule_archive`）在 `schedule.enabled: true` 时自动注册到 Agent，可通过 `GET /web/tools` 查看。
 
-### 7.21 POST /web/login - Web 界面登录
+### 7.21 POST /web/setup - 创建首个用户
 
-用于 Web 界面登录，校验通过后下发 HttpOnly Cookie。
+首次初始化时创建 Web 登录用户，仅在用户表为空时可用。密码以 bcrypt 加密存储，用户的系统编号按 `yyyyMMddHHmmss` 格式自动生成。
+
+**请求：**
+
+```bash
+curl -X POST http://localhost:8080/web/setup \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "your-password"}'
+```
+
+**响应（200）：**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+创建成功后不自动登录，需调用 `/web/login` 登录。
+
+**错误响应：**
+
+| 状态码 | 说明 |
+|--------|------|
+| `400` | 请求体格式错误 / 用户名为空 / 密码少于 8 位 |
+| `409` | 用户已存在（`already_initialized`） |
+
+### 7.22 POST /web/login - Web 界面登录
+
+用于 Web 界面登录，按用户名查库并以 bcrypt 校验密码，通过后下发 HttpOnly Cookie 并更新用户的最后登录时间。
 
 **请求：**
 
@@ -2207,19 +2121,17 @@ curl -X POST http://localhost:8080/web/login \
 }
 ```
 
-响应同时携带 `Set-Cookie: groot_web_session=<token>; Path=/; HttpOnly; SameSite=Strict`，有效期为 `web.session_ttl`。
+响应同时携带 `Set-Cookie: groot_web_session=<token>; Path=/; HttpOnly; SameSite=Strict`（经 https 到达时附加 `Secure`）。会话有效期 1 小时，活跃访问自动续期；Cookie 本身为浏览器会话 Cookie，有效期由服务端控制。
 
 **错误响应：**
 
 | 状态码 | 说明 |
 |--------|------|
 | `400` | 请求体格式错误 |
-| `401` | 用户名或密码错误（配置密码为空时一律拒绝） |
+| `401` | 用户名或密码错误 |
 | `429` | 同一 IP 在 10 分钟窗口内失败达 5 次，暂时拒绝登录 |
 
-`security.web.enabled: false` 时返回 `200` 且 `auth_required: false`，表示无需登录。
-
-### 7.22 POST /web/logout - Web 界面登出
+### 7.23 POST /web/logout - Web 界面登出
 
 使当前 Cookie 中的会话令牌失效。
 
@@ -2237,11 +2149,11 @@ curl -X POST http://localhost:8080/web/logout -b cookie.txt
 }
 ```
 
-未携带 Cookie 或未开启 Web 登录时同样返回 `200`。
+未携带 Cookie 时同样返回 `200`（幂等）。
 
-### 7.23 GET /web/me - 查询登录状态
+### 7.24 GET /web/me - 查询登录状态
 
-供 Web 界面在加载时判断是否需要跳转登录页。
+供 Web 界面在加载时判断进入创建用户页、登录页还是主界面。
 
 **请求：**
 
@@ -2254,7 +2166,9 @@ curl http://localhost:8080/web/me -b cookie.txt
 ```json
 {
   "authenticated": true,
-  "auth_required": true
+  "auth_required": true,
+  "needs_setup": false,
+  "username": "admin"
 }
 ```
 
@@ -2262,8 +2176,38 @@ curl http://localhost:8080/web/me -b cookie.txt
 
 | 字段 | 说明 |
 |------|------|
-| `auth_required` | 是否开启了 Web 登录认证 |
-| `authenticated` | 当前请求是否已通过认证；`auth_required` 为 `false` 时恒为 `true` |
+| `authenticated` | 当前请求是否携带有效登录会话 |
+| `auth_required` | 恒为 `true`（Web 登录认证始终启用） |
+| `needs_setup` | 用户表是否为空；为 `true` 时前端进入创建用户页 |
+| `username` | 当前登录用户名，仅已认证时返回 |
+
+### 7.25 POST /web/password - 修改密码
+
+修改当前登录用户的密码，需携带有效登录会话。修改成功后该用户的其他会话全部失效，当前会话保留。
+
+**请求：**
+
+```bash
+curl -X POST http://localhost:8080/web/password \
+  -H "Content-Type: application/json" \
+  -b cookie.txt \
+  -d '{"old_password": "your-password", "new_password": "new-password"}'
+```
+
+**响应（200）：**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+**错误响应：**
+
+| 状态码 | 说明 |
+|--------|------|
+| `400` | 请求体格式错误 / 新密码少于 8 位 |
+| `401` | 未登录、会话过期，或原始密码错误（`wrong_password`） |
 
 ---
 
@@ -2364,19 +2308,7 @@ client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报�
 # 任务定义保存到数据库并自动注册到调度器
 ```
 
-**3. 管理任务（CLI / API）：**
-
-```bash
-# CLI 查看任务列表
-groot schedule list
-
-# CLI 查看执行历史
-groot schedule history daily-sales-report
-
-# 禁用/启用任务
-groot schedule disable daily-sales-report
-groot schedule enable daily-sales-report
-```
+**3. 管理任务（API）：**
 
 ```bash
 # API 管理
@@ -2538,7 +2470,6 @@ export OPENAI_API_KEY="your-api-key"
 | `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件有 `${OPENAI_API_KEY}` 时需设置 |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | 配置文件有 `${DEEPSEEK_API_KEY}` 时需设置 |
 | `GROOT_API_KEY` | 认证密钥 | 启用认证且配置文件有引用时需设置 |
-| `GROOT_WEB_PASS` | Web 界面登录密码 | 启用 Web 登录且配置文件有引用时需设置 |
 | `GROOT_DB_PASSWORD` | 数据库密码 | `env.yaml` 的 DSN 中有引用时需设置 |
 
 > **判断方法：** 查看配置文件中是否使用 `${VAR_NAME}` 格式引用。如果引用了某个变量，则需设置对应的环境变量；如果配置文件直接写明文密钥，则不需要设置环境变量。变量名可自定义。

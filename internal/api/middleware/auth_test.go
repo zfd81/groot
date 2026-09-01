@@ -37,7 +37,7 @@ func serveAuth(m *AuthMiddleware, setup func(rc *app.RequestContext)) *app.Reque
 // TestAuth_ValidCookie 有效 Web 会话 Cookie 应通过认证，caller 为 web。
 func TestAuth_ValidCookie(t *testing.T) {
 	store := websession.NewStore(time.Hour)
-	token := store.Create()
+	token := store.Create("u1")
 	m := NewAuthMiddleware(enabledAuthConfig(), store)
 	rc := serveAuth(m, func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Cookie", websession.CookieName+"="+token)

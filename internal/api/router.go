@@ -5,12 +5,14 @@ import (
 
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
+	"github.com/zfd81/groot/internal/api/websession"
 )
 
 // RegisterRoutes registers all API routes
 func RegisterRoutes(h *server.Hertz,
 	authMW *middleware.AuthMiddleware,
 	rateLimitMW *middleware.RateLimitMiddleware,
+	webStore *websession.Store,
 	chatH *handler.ChatHandler,
 	statusH *handler.StatusHandler,
 	detailH *handler.DetailHandler,
@@ -23,16 +25,24 @@ func RegisterRoutes(h *server.Hertz,
 	scheduleH *handler.ScheduleHandler,
 	webAuthH *handler.WebAuthHandler,
 ) {
-	// Health check (no auth required)
-	h.GET("/health", healthH.Serve)
-
-	// Web UI 登录端点（自身即认证入口，不经 API 认证中间件）
+	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
+	h.GET("/web/health", healthH.Serve)
 	h.POST("/web/login", webAuthH.Login)
 	h.POST("/web/logout", webAuthH.Logout)
 	h.GET("/web/me", webAuthH.Me)
+	h.POST("/web/setup", webAuthH.Setup)
 
 	// Web UI 静态资源托管（/ui/*）
 	RegisterWebUI(h)
+
+	// Web UI 专用端点：需要有效登录会话
+	webGroup := h.Group("/web")
+	webGroup.Use(middleware.WebSession(webStore), rateLimitMW.Serve())
+	webGroup.POST("/password", webAuthH.ChangePassword)
+	webGroup.GET("/agents", agentsH.Serve)
+	webGroup.GET("/skills", skillsH.Serve)
+	webGroup.GET("/tools", toolsH.Serve)
+	webGroup.GET("/models", modelsH.Serve)
 
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")
@@ -47,12 +57,6 @@ func RegisterRoutes(h *server.Hertz,
 	// Session endpoints - 会话管理
 	apiGroup.GET("/sess/:sid", sessionH.GetSession)
 	apiGroup.GET("/sess/history", sessionH.ListSessions)
-
-	// Info endpoints
-	apiGroup.GET("/agents", agentsH.Serve)
-	apiGroup.GET("/skills", skillsH.Serve)
-	apiGroup.GET("/tools", toolsH.Serve)
-	apiGroup.GET("/models", modelsH.Serve)
 
 	// Schedule endpoints
 	if scheduleH != nil {

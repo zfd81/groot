@@ -118,6 +118,8 @@ export interface HealthResp {
 export interface MeResp {
   authenticated: boolean
   auth_required: boolean
+  needs_setup: boolean
+  username?: string
 }
 
 export interface SkillInfo {

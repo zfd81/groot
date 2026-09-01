@@ -79,13 +79,6 @@ func DefaultConfig() *Config {
 					},
 				},
 			},
-			Web: WebConfig{
-				Enabled:    false,
-				Username:   "admin",
-				Password:   "",
-				SessionTTL: "24h",
-				Secure:     false,
-			},
 		},
 		Logging: LoggingConfig{
 			Level:  "info",

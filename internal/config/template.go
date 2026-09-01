@@ -104,12 +104,6 @@ llm:
 #        - name: default            # Key 名称
 #          key: ${GROOT_API_KEY}    # Key 值（建议使用环境变量）
 #          permissions: [all]       # 权限范围
-#  web:
-#    enabled: false                 # 是否启用 Web 界面登录认证
-#    username: admin                # 登录用户名
-#    password: ${GROOT_WEB_PASS}    # 登录密码（建议使用环境变量）
-#    session_ttl: 24h               # 登录会话有效期
-#    secure: false                  # 会话 Cookie 是否置 Secure（经 https 部署时设为 true）
 
 # 日志配置
 #logging:

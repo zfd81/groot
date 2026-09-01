@@ -130,7 +130,7 @@ func TestFetchHealthStatus_Success(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/web/health" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}

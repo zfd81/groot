@@ -32,12 +32,15 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			return
 		}
 
-		// Web 会话 Cookie 凭证：有效则等同 all 权限放行
+		// Web 会话 Cookie 凭证：有效则等同 all 权限放行（Validate 顺带滑动续期）
 		if m.webStore != nil {
-			if token := string(rc.Cookie(websession.CookieName)); token != "" && m.webStore.Validate(token) {
-				rc.Set("caller", "web")
-				rc.Next(ctx)
-				return
+			if token := string(rc.Cookie(websession.CookieName)); token != "" {
+				if userID, ok := m.webStore.Validate(token); ok {
+					rc.Set("caller", "web")
+					rc.Set("web_user_id", userID)
+					rc.Next(ctx)
+					return
+				}
 			}
 		}
 
@@ -104,11 +107,6 @@ func (m *AuthMiddleware) hasPermission(perms []string, required string) bool {
 
 // getRequiredPermission maps path to required permission
 func getRequiredPermission(path, method string) string {
-	// Health check - no permission required
-	if path == "/health" {
-		return ""
-	}
-
 	// Chat endpoint (POST /chat)
 	if path == "/chat" && method == "POST" {
 		return "chat"
@@ -132,16 +130,6 @@ func getRequiredPermission(path, method string) string {
 	// Session endpoints
 	if strings.HasPrefix(path, "/sess/") {
 		return "session"
-	}
-
-	// Skills endpoint
-	if path == "/skills" {
-		return "skills"
-	}
-
-	// Tools endpoint
-	if path == "/tools" {
-		return "tools"
 	}
 
 	// Schedule endpoints

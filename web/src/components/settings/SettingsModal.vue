@@ -5,7 +5,8 @@ import { Sunny, Moon, Monitor } from '@element-plus/icons-vue'
 import { useThemeStore, type ThemeMode } from '../../stores/theme'
 import { useLanguageStore, type Lang } from '../../stores/language'
 import { useMetaStore } from '../../stores/meta'
-import { api } from '../../api/client'
+import { useAuthStore } from '../../stores/auth'
+import { api, ApiError } from '../../api/client'
 import type { SkillsResp, ToolsResp, AgentsResp, AgentInfo, HealthResp } from '../../api/types'
 
 const { t } = useI18n()
@@ -26,6 +27,7 @@ const menuOptions = computed(() => [
   { label: t('settings.menuAgents'), key: 'agents' },
   { label: t('settings.menuSkills'), key: 'skills' },
   { label: t('settings.menuTools'), key: 'tools' },
+  { label: t('settings.menuAccount'), key: 'account' },
 ])
 
 // 外观三选一卡片配置。
@@ -73,6 +75,46 @@ const language = computed<Lang>({
   set: (v) => langStore.setLocale(v),
 })
 
+// 账户：修改密码表单
+const auth = useAuthStore()
+const oldPassword = ref('')
+const newPassword = ref('')
+const confirmNewPassword = ref('')
+const changingPassword = ref(false)
+
+async function handleChangePassword() {
+  if (!oldPassword.value || !newPassword.value || !confirmNewPassword.value) {
+    ElNotification.warning({ title: t('password.notifyTitle'), message: t('password.needAllFields') })
+    return
+  }
+  if (newPassword.value.length < 8) {
+    ElNotification.warning({ title: t('password.notifyTitle'), message: t('password.tooShort') })
+    return
+  }
+  if (newPassword.value !== confirmNewPassword.value) {
+    ElNotification.warning({ title: t('password.notifyTitle'), message: t('password.mismatch') })
+    return
+  }
+  changingPassword.value = true
+  try {
+    await auth.changePassword(oldPassword.value, newPassword.value)
+    ElNotification.success({ title: t('password.notifyTitle'), message: t('password.success') })
+    oldPassword.value = ''
+    newPassword.value = ''
+    confirmNewPassword.value = ''
+  } catch (e) {
+    let message: string
+    if (e instanceof ApiError && e.status === 401) {
+      message = t('password.wrongOldPassword')
+    } else {
+      message = e instanceof Error ? e.message : t('password.failed')
+    }
+    ElNotification.error({ title: t('password.notifyTitle'), message })
+  } finally {
+    changingPassword.value = false
+  }
+}
+
 // 通用面板的运行环境行：标题/描述 + 右侧值，与语言行同样的 .row 布局
 const envRows = computed(() =>
   envInfo.value
@@ -97,8 +139,8 @@ async function ensureLoaded() {
   loading.value = true
   try {
     const [a, h] = await Promise.all([
-      api.get<AgentsResp>('/agents').catch(() => null),
-      api.get<HealthResp>('/health').catch(() => null),
+      api.get<AgentsResp>('/web/agents').catch(() => null),
+      api.get<HealthResp>('/web/health').catch(() => null),
     ])
     agents.value = a?.agents || []
     envInfo.value = h?.checks?.environment?.info || null
@@ -119,8 +161,8 @@ async function loadAgentScoped() {
       : undefined
   try {
     const [s, t] = await Promise.all([
-      api.get<SkillsResp>('/skills', headers).catch(() => null),
-      api.get<ToolsResp>('/tools', headers).catch(() => null),
+      api.get<SkillsResp>('/web/skills', headers).catch(() => null),
+      api.get<ToolsResp>('/web/tools', headers).catch(() => null),
     ])
     skills.value = s
     tools.value = t
@@ -182,6 +224,32 @@ watch(
             </div>
             <span class="mono env-value">{{ r.value }}</span>
           </div>
+        </div>
+
+        <!-- 账户：修改密码 -->
+        <div v-else-if="section === 'account'" class="account-panel">
+          <div class="account-user">
+            <div class="label-title">{{ t('password.currentUser') }}</div>
+            <span class="mono">{{ auth.username || '-' }}</span>
+          </div>
+          <div class="label-desc password-title">{{ t('password.desc') }}</div>
+          <el-form label-position="top" class="password-form" @submit.prevent="handleChangePassword">
+            <el-form-item :label="t('password.oldPassword')">
+              <el-input v-model="oldPassword" type="password" show-password
+                :placeholder="t('password.oldPassword')" />
+            </el-form-item>
+            <el-form-item :label="t('password.newPassword')">
+              <el-input v-model="newPassword" type="password" show-password
+                :placeholder="t('password.newPasswordHint')" />
+            </el-form-item>
+            <el-form-item :label="t('password.confirmPassword')">
+              <el-input v-model="confirmNewPassword" type="password" show-password
+                :placeholder="t('password.confirmPassword')" @keyup.enter="handleChangePassword" />
+            </el-form-item>
+            <el-button type="primary" :loading="changingPassword" @click="handleChangePassword">
+              {{ t('password.submit') }}
+            </el-button>
+          </el-form>
         </div>
 
         <!-- 模型 -->
@@ -327,6 +395,23 @@ watch(
 
 .appearance-block {
   padding: 16px 0;
+}
+
+.account-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+}
+
+.password-title {
+  margin-top: 16px;
+}
+
+.password-form {
+  margin-top: 12px;
+  max-width: 320px;
 }
 
 .theme-cards {

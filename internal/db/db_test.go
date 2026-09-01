@@ -15,7 +15,7 @@ func TestOpen_SQLite(t *testing.T) {
 	}
 	tables := []string{
 		"cluster_members", "schedule_tasks", "schedule_executions",
-		"memory_sessions", "memory_chats", "shared_resources",
+		"memory_sessions", "memory_chats", "shared_resources", "users",
 	}
 	for _, tbl := range tables {
 		var n int

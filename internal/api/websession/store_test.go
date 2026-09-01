@@ -13,20 +13,21 @@ func newTestStore(ttl time.Duration) (*Store, *time.Time) {
 	return s, &now
 }
 
-// TestStore_CreateValidate 令牌创建后可校验，且两次创建的令牌不同。
+// TestStore_CreateValidate 令牌创建后可校验并返回所属用户，且两次创建的令牌不同。
 func TestStore_CreateValidate(t *testing.T) {
 	s, _ := newTestStore(time.Hour)
-	tok := s.Create()
+	tok := s.Create("u1")
 	if tok == "" || len(tok) != 64 {
 		t.Fatalf("token should be 64 hex chars, got %q", tok)
 	}
-	if !s.Validate(tok) {
-		t.Error("fresh token should validate")
+	uid, ok := s.Validate(tok)
+	if !ok || uid != "u1" {
+		t.Errorf("fresh token should validate with userID u1, got (%q, %v)", uid, ok)
 	}
-	if s.Validate("nonexistent") {
+	if _, ok := s.Validate("nonexistent"); ok {
 		t.Error("unknown token should not validate")
 	}
-	if s.Create() == tok {
+	if s.Create("u1") == tok {
 		t.Error("tokens should be unique")
 	}
 }
@@ -34,20 +35,69 @@ func TestStore_CreateValidate(t *testing.T) {
 // TestStore_Expiry 过期令牌校验失败。
 func TestStore_Expiry(t *testing.T) {
 	s, now := newTestStore(time.Hour)
-	tok := s.Create()
+	tok := s.Create("u1")
 	*now = now.Add(2 * time.Hour)
-	if s.Validate(tok) {
+	if _, ok := s.Validate(tok); ok {
 		t.Error("expired token should not validate")
+	}
+}
+
+// TestStore_SlidingRenewal 活跃访问滑动续期：每次 Validate 刷新过期时间；
+// 持续不访问超过 TTL 则失效。
+func TestStore_SlidingRenewal(t *testing.T) {
+	s, now := newTestStore(time.Hour)
+	tok := s.Create("u1")
+
+	// 40 分钟后访问一次（续期），再过 40 分钟仍应有效（距上次访问未超 1h）
+	*now = now.Add(40 * time.Minute)
+	if _, ok := s.Validate(tok); !ok {
+		t.Fatal("token should be valid at 40min")
+	}
+	*now = now.Add(40 * time.Minute)
+	if _, ok := s.Validate(tok); !ok {
+		t.Error("token should be renewed by previous Validate")
+	}
+
+	// 距上次访问 61 分钟不再访问，应失效
+	*now = now.Add(61 * time.Minute)
+	if _, ok := s.Validate(tok); ok {
+		t.Error("token should expire after 61min of inactivity")
 	}
 }
 
 // TestStore_Delete 删除后令牌失效。
 func TestStore_Delete(t *testing.T) {
 	s, _ := newTestStore(time.Hour)
-	tok := s.Create()
+	tok := s.Create("u1")
 	s.Delete(tok)
-	if s.Validate(tok) {
+	if _, ok := s.Validate(tok); ok {
 		t.Error("deleted token should not validate")
+	}
+}
+
+// TestStore_DeleteOtherByUser 删除该用户除保留令牌外的所有会话，不影响其他用户。
+func TestStore_DeleteOtherByUser(t *testing.T) {
+	s, _ := newTestStore(time.Hour)
+	keep := s.Create("u1")
+	other1 := s.Create("u1")
+	other2 := s.Create("u1")
+	alien := s.Create("u2")
+
+	n := s.DeleteOtherByUser("u1", keep)
+	if n != 2 {
+		t.Errorf("DeleteOtherByUser removed %d, want 2", n)
+	}
+	if _, ok := s.Validate(keep); !ok {
+		t.Error("keepToken should survive")
+	}
+	if _, ok := s.Validate(other1); ok {
+		t.Error("other1 should be deleted")
+	}
+	if _, ok := s.Validate(other2); ok {
+		t.Error("other2 should be deleted")
+	}
+	if uid, ok := s.Validate(alien); !ok || uid != "u2" {
+		t.Error("other user's session should not be affected")
 	}
 }
 
@@ -110,9 +160,9 @@ func TestStore_IsLockedPrunesEmptyKey(t *testing.T) {
 // TestStore_CreateSweepsExpired Create 时惰性清除已过期会话，防止内存泄漏。
 func TestStore_CreateSweepsExpired(t *testing.T) {
 	s, now := newTestStore(time.Hour)
-	old := s.Create()
+	old := s.Create("u1")
 	*now = now.Add(2 * time.Hour) // old 已过期
-	s.Create()                    // 触发清扫
+	s.Create("u1")                // 触发清扫
 	if _, ok := s.sessions[old]; ok {
 		t.Error("expired session should be swept on Create")
 	}

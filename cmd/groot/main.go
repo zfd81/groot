@@ -79,15 +79,6 @@ func main() {
 		case "status":
 			handleStatusCommand(args[1:])
 			return
-		case "skills":
-			handleSkillsCommand(args[1:])
-			return
-		case "mcp":
-			handleMcpCommand(args[1:])
-			return
-		case "schedule":
-			handleScheduleCommand(args[1:])
-			return
 		case "tail":
 			handleTailCommand(args[1:])
 			return
@@ -99,6 +90,9 @@ func main() {
 			return
 		case "diff":
 			handleDiffCommand(args[1:])
+			return
+		case "user":
+			handleUserCommand(args[1:])
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", command)
@@ -125,45 +119,6 @@ func handleStatusCommand(args []string) {
 	}
 }
 
-func handleSkillsCommand(args []string) {
-	flags, err := cmd.ParseSkillsFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-
-	if err := cmd.RunSkills(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-}
-
-func handleMcpCommand(args []string) {
-	flags, err := cmd.ParseMcpFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-
-	if err := cmd.RunMcp(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-}
-
-func handleScheduleCommand(args []string) {
-	flags, err := cmd.ParseScheduleFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-
-	if err := cmd.RunSchedule(flags); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-}
-
 func handleTailCommand(args []string) {
 	flags, err := cmd.ParseTailFlags(args)
 	if err != nil {
@@ -177,10 +132,8 @@ func handleTailCommand(args []string) {
 	}
 }
 
-// openSyncRepo 为 push/pull/diff 子命令加载配置并打开数据库,返回 ResourceRepo。
-// SQLite 模式下 ResourceRepo 使用本地文件系统实现,此时 sync 命令会因
-// NewSyncManager 内的 disabledSyncManager 返回 ErrSyncDisabled。
-func openSyncRepo(homeDir string) repo.ResourceRepo {
+// openRepos 为需要访问数据库的子命令加载配置并打开数据库，返回全部 Repos。
+func openRepos(homeDir string) *repofactory.Repos {
 	cfg, err := config.Load(homeDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "加载配置失败: %s\n", err)
@@ -191,9 +144,29 @@ func openSyncRepo(homeDir string) repo.ResourceRepo {
 		fmt.Fprintf(os.Stderr, "初始化数据库失败: %s\n", err)
 		os.Exit(1)
 	}
-	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 	// Note: sqlxDB is intentionally not closed here; the process exits after the command.
-	return repos.Resource
+	return repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
+}
+
+// openSyncRepo 为 push/pull/diff 子命令加载配置并打开数据库,返回 ResourceRepo。
+// SQLite 模式下 ResourceRepo 使用本地文件系统实现,此时 sync 命令会因
+// NewSyncManager 内的 disabledSyncManager 返回 ErrSyncDisabled。
+func openSyncRepo(homeDir string) repo.ResourceRepo {
+	return openRepos(homeDir).Resource
+}
+
+func handleUserCommand(args []string) {
+	flags, err := cmd.ParseUserFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
+	homeDir := cmd.GetDefaultHome()
+	repos := openRepos(homeDir)
+	if err := cmd.RunUserReset(flags, repos.User, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
+		os.Exit(1)
+	}
 }
 
 func handlePushCommand(args []string) {
@@ -484,7 +457,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -535,13 +508,11 @@ func printHelp() {
 	fmt.Println("子命令:")
 	fmt.Println("  init              初始化工作目录")
 	fmt.Println("  status            查看运行中实例的状态")
-	fmt.Println("  skills            管理 Skills（list/install/uninstall）")
-	fmt.Println("  mcp               管理 MCP Servers（list）")
-	fmt.Println("  schedule          管理定时任务（list/inspect/history 等）")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println("  push              将本地配置推送到数据库（MySQL/PG 模式）")
 	fmt.Println("  pull              从数据库拉取配置到本地（MySQL/PG 模式）")
 	fmt.Println("  diff              显示本地与数据库的配置差异（MySQL/PG 模式）")
+	fmt.Println("  user              管理 Web 登录用户（reset）")
 	fmt.Println()
 	fmt.Println("选项:")
 	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
@@ -555,22 +526,8 @@ func printHelp() {
 	fmt.Println("  -p <port>        指定 Groot 服务端口")
 	fmt.Println("  -h, --help        显示 status 子命令帮助")
 	fmt.Println()
-	fmt.Println("skills 子命令:")
-	fmt.Println("  list              列出所有已安装的 Skills")
-	fmt.Println("  install <path>    安装 Skill")
-	fmt.Println("  uninstall <name>  卸载 Skill")
-	fmt.Println()
-	fmt.Println("mcp 子命令:")
-	fmt.Println("  list              列出所有已配置的 MCP Servers")
-	fmt.Println()
-	fmt.Println("schedule 子命令:")
-	fmt.Println("  list              列出所有定时任务")
-	fmt.Println("  inspect <id>      查看任务详情")
-	fmt.Println("  history <id>      查看执行历史")
-	fmt.Println("  delete <id>       删除任务")
-	fmt.Println("  disable <id>      禁用任务")
-	fmt.Println("  enable <id>       启用任务")
-	fmt.Println("  archive <id>      归档任务")
+	fmt.Println("user 子命令:")
+	fmt.Println("  reset             重置 Web 登录用户（删除用户表全部数据，-y 跳过确认）")
 	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
@@ -586,10 +543,6 @@ func printHelp() {
 	fmt.Println("  groot init                    # 初始化默认工作目录 ~/.groot")
 	fmt.Println("  groot status                  # 查看实例状态")
 	fmt.Println("  groot status -p 9090         # 查看 9090 端口实例状态")
-	fmt.Println("  groot skills list             # 列出所有 Skills")
-	fmt.Println("  groot skills install ./my-skill  # 安装 Skill")
-	fmt.Println("  groot skills uninstall my-skill  # 卸载 Skill")
-	fmt.Println("  groot mcp list                  # 列出所有 MCP Servers")
 	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
 	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")

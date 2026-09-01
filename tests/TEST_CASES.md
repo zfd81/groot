@@ -71,46 +71,73 @@
 
 ### 1.3 Web 界面测试
 
-**配置解析** (`internal/config/webconfig_test.go`)
+**用户存储** (`internal/repo/userdb/user_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestWebConfigDefaults | `security.web` 默认值：enabled=false、username=admin、session_ttl=24h |
-| TestWebConfigParse | YAML 解析 `security.web` 全部字段 |
-| TestWebConfigTemplate | 配置模板含 `security.web` 段与注释说明 |
+| TestUserRepo_CreateAndGet | 创建用户后按用户名/ID 查询往返一致，新用户 last_login_at 为 nil |
+| TestUserRepo_DuplicateUsername | 用户名唯一约束：重复插入报错 |
+| TestUserRepo_NotFound | 查询/更新不存在的用户返回 ErrNotFound |
+| TestUserRepo_Count | 用户数量统计 0 → 1 |
+| TestUserRepo_UpdatePassword | 更新密码哈希并刷新 updated_at |
+| TestUserRepo_UpdateLastLogin | 最后登录时间 NULL → 值 |
+| TestUserRepo_DeleteAll | 删除全部用户并返回条数 |
 
 **登录会话存储** (`internal/api/websession/store_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestStore_CreateAndValidate | 创建令牌后校验通过 |
-| TestStore_Expired | 超过 TTL 的令牌校验失败 |
+| TestStore_CreateValidate | 创建令牌后校验通过并返回所属用户 ID |
+| TestStore_Expiry | 超过 TTL 的令牌校验失败 |
+| TestStore_SlidingRenewal | 滑动续期：活跃访问刷新过期时间；不活跃超 TTL 失效 |
 | TestStore_Delete | 删除令牌后校验失败 |
-| TestStore_InvalidToken | 未知令牌校验失败 |
-| TestStore_LoginLock | 同 IP 连续 5 次失败后锁定 |
-| TestStore_LockWindowSlide | 失败记录超出 10 分钟窗口后不再计入 |
-| TestStore_ResetOnSuccess | 登录成功清空该 IP 失败计数 |
+| TestStore_DeleteOtherByUser | 踢出该用户其他会话，保留指定令牌，不影响他人 |
+| TestStore_FailureLockout | 同 IP 连续 5 次失败后锁定；窗口滑过解锁；成功清零 |
+| TestStore_IsLockedPrunesEmptyKey | 过期失败记录清理，防伪造来源撑爆内存 |
+| TestStore_CreateSweepsExpired | Create 惰性清扫过期会话 |
+| TestStore_GlobalBackstop | 全局兜底锁定：多来源合计失败过多一律拒绝 |
 
-**登录端点** (`internal/api/handler/webauth_test.go`)
+**认证端点** (`internal/api/handler/webauth_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestWebAuth_LoginSuccess | 密码正确返回 200 并下发 HttpOnly Cookie |
-| TestWebAuth_LoginWrongPassword | 密码错误返回 401 |
-| TestWebAuth_LoginEmptyConfiguredPassword | 配置密码为空时拒绝登录 |
-| TestWebAuth_LoginRateLimited | 连续失败达阈值返回 429 |
-| TestWebAuth_Me | `/web/me` 三态：未开启 / 已登录 / 未登录 |
-| TestWebAuth_Logout | 登出后令牌失效 |
-| TestWebAuth_NilStore | Web 认证关闭（store 为 nil）时三个端点均返回 200 且不 panic |
+| TestWebSetup_Success | 空表创建用户：ID 为 14 位时间编号、密码 bcrypt 可校验 |
+| TestWebSetup_AlreadyInitialized | 表非空时创建返回 409 |
+| TestWebSetup_InvalidInput | 密码不足 8 位 / 用户名为空返回 400 |
+| TestWebLogin_Success | 密码正确返回 200、下发 HttpOnly Cookie、更新最后登录时间 |
+| TestWebLogin_WrongPassword | 密码错误 / 用户不存在均返回 401 |
+| TestWebLogin_Lockout | 连续失败达阈值返回 429 |
+| TestWebLogin_SecureCookie | X-Forwarded-Proto: https 时 Cookie 置 Secure，否则不置 |
+| TestWebMe | `/web/me` 三态：needs_setup / 未登录 / 已登录（含 username） |
+| TestWebLogout | 登出后令牌失效 |
+| TestWebChangePassword | 修改密码全分支：无会话 401、原密码错 401、新密码短 400、成功后其他会话被踢且新旧密码切换生效 |
+
+**Web 会话中间件** (`internal/api/middleware/websession_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestWebSession_NoCookie | 无 Cookie 返回 401 |
+| TestWebSession_InvalidToken | 无效令牌返回 401 |
+| TestWebSession_ValidToken | 有效令牌放行并注入 caller=web 与 web_user_id |
 
 **认证中间件双凭证** (`internal/api/middleware/auth_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestAuth_CookiePass | 有效 Cookie 通过认证 |
-| TestAuth_InvalidCookieFallback | 无效 Cookie 回退到 API Key 校验 |
+| TestAuth_ValidCookie | 有效 Cookie 通过认证 |
+| TestAuth_InvalidCookieFallsBack | 无效 Cookie 回退到 API Key 校验 |
 | TestAuth_APIKeyStillWorks | 原有 X-API-Key 认证不回归 |
-| TestAuth_Anonymous | 认证关闭时匿名访问通过 |
+| TestAuth_DisabledPassesAnonymous | 认证关闭时匿名访问通过 |
+
+**用户重置命令** (`internal/cmd/user_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestParseUserFlags | 参数解析：reset / -y / 未知子命令与 flag 报错 |
+| TestRunUserReset_Confirm | 输入 y 确认后删除 |
+| TestRunUserReset_Cancel | 输入 n 取消不删除 |
+| TestRunUserReset_Yes | -y 跳过确认直接删除 |
+| TestRunUserReset_Empty | 用户表为空时不执行删除 |
 
 **静态托管** (`internal/api/webui_test.go`)
 
@@ -494,7 +521,7 @@ curl -X POST http://localhost:8080/chat \
 | TC-WEB-006 | test_web_auth.py | 正确登录下发 Cookie，可访问受保护端点，登出后令牌失效 |
 | TC-WEB-007 | test_web_auth.py | 无凭证访问受保护端点返回 401 |
 
-登录类用例需 `security.web.enabled: true`，并设置环境变量 `GROOT_WEB_USER` / `GROOT_WEB_PASS`；未开启时自动跳过。
+登录类用例：Web 登录认证始终启用，用户保存在数据库中；测试前需通过 `POST /web/setup`（或 Web 界面）创建用户，重置用 `groot user reset`。
 
 ---
 
@@ -510,9 +537,12 @@ curl -X POST http://localhost:8080/chat \
 | 历史会话 | 侧栏列出历史会话，点击可载入完整消息流，支持翻页加载 |
 | 新建会话 | 清空当前消息流，URL 回到 `/ui/` |
 | 主题切换 | 浅色 / 深色 / 跟随系统三种模式生效并持久化（刷新后保持） |
-| 设置弹窗 | 五个分类均可打开：通用（主题）、模型、Skills、MCP 工具（按服务分组）、子 Agents |
+| 设置弹窗 | 六个分类均可打开：通用（主题）、模型、Skills、MCP 工具（按服务分组）、子 Agents、修改密码 |
 | 仪表盘 | 服务状态、运行时长、LLM 连通、版本、会话总数、Skills 数、MCP 工具数、MCP 服务列表均有数据 |
-| 登录流程 | 开启 `security.web` 后未登录跳转登录页，登录成功进入聊天页，登出回到登录页 |
+| 首次初始化 | 用户表为空时自动进入创建用户页；密码不足 8 位 / 两次不一致被拦截；创建成功跳转登录页 |
+| 登录流程 | 未登录访问任意页面跳转登录页，登录成功进入聊天页，登出回到登录页 |
+| 修改密码 | 设置 → 账户中修改密码；原密码错误报错；成功后其他浏览器会话失效、当前会话保留 |
+| 用户重置 | `groot user reset` 后（重启服务）重新进入创建用户流程 |
 
 ---
 

@@ -9,6 +9,7 @@ import (
 	"github.com/zfd81/groot/internal/repo/resourcedb"
 	"github.com/zfd81/groot/internal/repo/resourcelocal"
 	"github.com/zfd81/groot/internal/repo/scheduledb"
+	"github.com/zfd81/groot/internal/repo/userdb"
 	"github.com/zfd81/groot/internal/schedule"
 )
 
@@ -18,6 +19,7 @@ type Repos struct {
 	Schedule schedule.ScheduleRepo
 	Memory   repo.MemoryRepo
 	Resource repo.ResourceRepo
+	User     repo.UserRepo
 }
 
 // NewRepos constructs all Repository implementations.
@@ -35,5 +37,6 @@ func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
 		Schedule: scheduledb.New(sqlxDB, dialect),
 		Memory:   memorydb.New(sqlxDB, dialect),
 		Resource: resourceRepo,
+		User:     userdb.New(sqlxDB, dialect),
 	}
 }

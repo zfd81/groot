@@ -175,6 +175,15 @@ func sqliteDDL() []string {
 			updated_at   INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sr_updated_at ON shared_resources(updated_at)`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id            TEXT NOT NULL PRIMARY KEY,
+			username      TEXT NOT NULL,
+			password      TEXT NOT NULL,
+			created_at    INTEGER NOT NULL,
+			updated_at    INTEGER NOT NULL,
+			last_login_at INTEGER
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_users_username ON users(username)`,
 	}
 }
 
@@ -259,6 +268,15 @@ func mysqlDDL() []string {
 			content_hash CHAR(40)     NOT NULL DEFAULT '',
 			updated_at   BIGINT       NOT NULL,
 			KEY idx_updated_at (updated_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id            VARCHAR(32)  NOT NULL PRIMARY KEY,
+			username      VARCHAR(64)  NOT NULL,
+			password      VARCHAR(100) NOT NULL,
+			created_at    BIGINT       NOT NULL,
+			updated_at    BIGINT       NOT NULL,
+			last_login_at BIGINT,
+			UNIQUE KEY uk_users_username (username)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
@@ -345,5 +363,14 @@ func postgresDDL() []string {
 			updated_at   BIGINT       NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sr_updated_at ON shared_resources(updated_at)`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id            VARCHAR(32)  NOT NULL PRIMARY KEY,
+			username      VARCHAR(64)  NOT NULL,
+			password      VARCHAR(100) NOT NULL,
+			created_at    BIGINT       NOT NULL,
+			updated_at    BIGINT       NOT NULL,
+			last_login_at BIGINT
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_users_username ON users(username)`,
 	}
 }

@@ -95,9 +95,9 @@ func RunStatus(flags *StatusFlags) error {
 	return nil
 }
 
-// fetchHealthStatus makes an HTTP GET to /health and parses the response
+// fetchHealthStatus makes an HTTP GET to /web/health and parses the response
 func fetchHealthStatus(port int) (*types.HealthResponse, error) {
-	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
+	url := fmt.Sprintf("http://127.0.0.1:%d/web/health", port)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
