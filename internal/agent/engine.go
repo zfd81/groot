@@ -36,7 +36,7 @@ type ProgressCallback struct {
 
 // Engine wraps eino's ChatModelAgent for task execution
 type Engine struct {
-	llmConfig          config.LLMConfig
+	models             *llm.ModelService
 	homeDir            string // GROOT_HOME 目录，用于读取 GROOT.md
 	middlewares        []adk.ChatModelAgentMiddleware
 	mcpManager         *mcp.Manager
@@ -50,7 +50,7 @@ type Engine struct {
 
 // EngineConfig 是 NewEngine 的命名参数集合，避免位置参数过多。
 type EngineConfig struct {
-	LLM                config.LLMConfig
+	Models             *llm.ModelService
 	HomeDir            string // GROOT_HOME 目录
 	Middlewares        []adk.ChatModelAgentMiddleware
 	MCP                *mcp.Manager
@@ -71,7 +71,7 @@ func NewEngine(cfg EngineConfig) *Engine {
 		name = MainAgentName
 	}
 	return &Engine{
-		llmConfig:          cfg.LLM,
+		models:             cfg.Models,
 		homeDir:            cfg.HomeDir,
 		middlewares:        cfg.Middlewares,
 		mcpManager:         cfg.MCP,
@@ -96,13 +96,15 @@ func (e *Engine) Run(
 	cb *ProgressCallback,
 	agentMdContent string,
 ) (*RunResult, error) {
-	// 0. 解析实际生效的 model 名（modelName 为空时回退到 LLMConfig.DefaultModel），
-	// 并把它放进 ctx —— call_agent 工具运行时通过它把同一个 model
+	// 0. 从数据库解析实际生效的模型（modelName 为空时取默认模型）。
+	// 每次执行实时读库，WebUI 中的模型变更立即生效。
+	// 解析出的 model 名放进 ctx —— call_agent 工具运行时通过它把同一个 model
 	// 透传给子 Agent，保证编排模式下子 Agent 跟随主 Agent 当前选定的 model。
-	resolvedModel := modelName
-	if resolvedModel == "" {
-		resolvedModel = e.llmConfig.DefaultModel
+	mdl, err := e.models.GetByName(ctx, modelName)
+	if err != nil {
+		return nil, fmt.Errorf("模型配置不可用: %w", err)
 	}
+	resolvedModel := mdl.Name
 	ctx = WithParentModel(ctx, resolvedModel)
 
 	// 主 Agent 自身的 model 名记入累加器，Run 收尾时取出写入 RunResult.Model。
@@ -114,7 +116,7 @@ func (e *Engine) Run(
 
 	// 1. Create ChatModel with per-call timeout
 	stepTimeout := time.Duration(e.reactConfig.StepTimeout) * time.Second
-	chatModel, err := llm.NewChatModel(ctx, e.llmConfig, modelName, stepTimeout)
+	chatModel, err := llm.NewChatModel(ctx, mdl, stepTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
 	}
@@ -349,7 +351,7 @@ eventLoop:
 					}
 					stream.Close()
 
-				// Handle non-streaming response (only when no streaming was done)
+					// Handle non-streaming response (only when no streaming was done)
 				} else if msgOutput.Message != nil {
 					msg := msgOutput.Message
 
@@ -492,9 +494,9 @@ func convertToolCalls(tcs []schema.ToolCall) []ToolCall {
 			continue
 		}
 		result = append(result, ToolCall{
-			Index:    tc.Index,
-			ID:       tc.ID,
-			Type:     tc.Type,
+			Index: tc.Index,
+			ID:    tc.ID,
+			Type:  tc.Type,
 			Function: FunctionCall{
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,

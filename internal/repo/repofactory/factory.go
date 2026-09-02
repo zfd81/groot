@@ -6,6 +6,7 @@ import (
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/repo/memberdb"
 	"github.com/zfd81/groot/internal/repo/memorydb"
+	"github.com/zfd81/groot/internal/repo/modeldb"
 	"github.com/zfd81/groot/internal/repo/resourcedb"
 	"github.com/zfd81/groot/internal/repo/resourcelocal"
 	"github.com/zfd81/groot/internal/repo/scheduledb"
@@ -20,6 +21,7 @@ type Repos struct {
 	Memory   repo.MemoryRepo
 	Resource repo.ResourceRepo
 	User     repo.UserRepo
+	Model    repo.ModelRepo
 }
 
 // NewRepos constructs all Repository implementations.
@@ -38,5 +40,6 @@ func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
 		Memory:   memorydb.New(sqlxDB, dialect),
 		Resource: resourceRepo,
 		User:     userdb.New(sqlxDB, dialect),
+		Model:    modeldb.New(sqlxDB, dialect),
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
@@ -20,10 +21,10 @@ import (
 type TaskStatus string
 
 const (
-	StatusRunning    TaskStatus = "running"
-	StatusCompleted  TaskStatus = "completed"
-	StatusFailed     TaskStatus = "failed"
-	StatusCancelled  TaskStatus = "cancelled"
+	StatusRunning   TaskStatus = "running"
+	StatusCompleted TaskStatus = "completed"
+	StatusFailed    TaskStatus = "failed"
+	StatusCancelled TaskStatus = "cancelled"
 )
 
 // MultimodalContent carries attachment data for multimodal LLM processing
@@ -37,23 +38,23 @@ type MultimodalContent struct {
 
 // Task represents a task (temporary definition until memory module)
 type Task struct {
-	ID                  string
-	Instruction         string
-	Prompt              string
-	Status              TaskStatus
-	StartTime           time.Time
-	EndTime             *time.Time
-	Duration            int
-	Result              string
-	Error               *TaskError
-	Steps               []StepRecord
-	MultiModalContents  []MultimodalContent // carried for multimodal LLM processing
-	Caller              string
-	Progress            *ProgressInfo
-	Round               int
-	HistoryMessages     []memory.Message
-	ModelName           string
-	AgentName           string // Solo 模式时为子 Agent 名；编排模式空字符串
+	ID                 string
+	Instruction        string
+	Prompt             string
+	Status             TaskStatus
+	StartTime          time.Time
+	EndTime            *time.Time
+	Duration           int
+	Result             string
+	Error              *TaskError
+	Steps              []StepRecord
+	MultiModalContents []MultimodalContent // carried for multimodal LLM processing
+	Caller             string
+	Progress           *ProgressInfo
+	Round              int
+	HistoryMessages    []memory.Message
+	ModelName          string
+	AgentName          string // Solo 模式时为子 Agent 名；编排模式空字符串
 }
 
 // TaskError represents task error
@@ -90,6 +91,7 @@ type Executor struct {
 	subAgentRegistry  *SubAgentRegistry
 	tokenAccumulators *TokenAccumulators
 	runtimeState      *RuntimeState
+	models            *llm.ModelService
 	config            config.Config
 	logger            *logger.Logger
 }
@@ -102,6 +104,7 @@ func NewExecutor(
 	mcpMgr *mcp.Manager,
 	subAgentReg *SubAgentRegistry,
 	runtime *RuntimeState,
+	models *llm.ModelService,
 	cfg config.Config,
 	log *logger.Logger,
 ) *Executor {
@@ -113,6 +116,7 @@ func NewExecutor(
 		subAgentRegistry:  subAgentReg,
 		tokenAccumulators: NewTokenAccumulators(),
 		runtimeState:      runtime,
+		models:            models,
 		config:            cfg,
 		logger:            log,
 	}
@@ -241,7 +245,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 
 	// Create engine using eino
 	engine := NewEngine(EngineConfig{
-		LLM:                e.config.LLM,
+		Models:             e.models,
 		HomeDir:            e.homeDir,
 		Middlewares:        middlewares,
 		MCP:                mcpMgr,
@@ -326,6 +330,11 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 	// If execution failed (not cancelled), close SSE stream
 	if err != nil && !ctxCancelled {
 		e.logger.Error("Agent execution failed: " + err.Error())
+		// 错误必须到达 SSE 流：否则用户界面表现为静默空回复
+		// （典型场景：模型配置不可用——尚未创建模型 / 模型被禁用）。
+		if writeErr := sse.WriteError(agentName, err.Error()); writeErr != nil {
+			e.logger.Error("Failed to write SSE error: " + writeErr.Error())
+		}
 		if writeErr := sse.WriteDone(); writeErr != nil {
 			e.logger.Error("Failed to write SSE done: " + writeErr.Error())
 		}
@@ -357,10 +366,10 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 
 		// 构建 ChatRecord
 		var (
-			recModel       string
-			recPrompt      int
-			recCompletion  int
-			recTotal       int
+			recModel      string
+			recPrompt     int
+			recCompletion int
+			recTotal      int
 		)
 		if result != nil {
 			recModel = result.Model
@@ -447,7 +456,6 @@ func convertSteps(steps []StepRecord) []memory.Step {
 	}
 	return result
 }
-
 
 // formatDuration formats duration for display
 func formatDuration(d time.Duration) string {

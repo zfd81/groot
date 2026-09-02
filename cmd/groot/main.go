@@ -16,9 +16,9 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 
+	"github.com/cloudwego/eino-ext/adk/backend/local"
 	"github.com/cloudwego/eino/adk"
 	einoskill "github.com/cloudwego/eino/adk/middlewares/skill"
-	"github.com/cloudwego/eino-ext/adk/backend/local"
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api"
@@ -27,9 +27,10 @@ import (
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/filesystem"
+	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/mcp"
+	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/message/senders"
 	"github.com/zfd81/groot/internal/repo"
@@ -337,6 +338,9 @@ func startServer(homeDir string, port int) {
 	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 	log.Info("数据库初始化完成", zap.Int("dialect", int(dbDialect)))
 
+	// 模型配置业务层：模型配置唯一存储于数据库，每次使用实时读取
+	modelService := llm.NewModelService(repos.Model)
+
 	// Initialize memory manager
 	memMgr := memory.NewManager(log, repos.Memory)
 	log.Info("Memory 初始化完成")
@@ -360,11 +364,11 @@ func startServer(homeDir string, port int) {
 
 	// Load sub-agents (fixed directory: {GROOT_HOME}/subagents)
 	subAgentDir := filepath.Join(homeDir, "subagents")
-	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, cfg.LLM, log)
+	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, modelService, log)
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
 	// Create executor (used by both API server and schedule runner)
-	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, modelService, *cfg, log)
 
 	// Declare schedule module variables (used by leader callbacks and API server)
 	var sched *scheduler.Scheduler
@@ -457,7 +461,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -489,7 +493,6 @@ func startServer(homeDir string, port int) {
 
 		log.Info("Groot Agent 已关闭")
 	}()
-
 
 	// Start server
 	log.Info("API 服务启动",

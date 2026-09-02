@@ -32,7 +32,7 @@ func WithParentModel(ctx context.Context, modelName string) context.Context {
 }
 
 // ParentModelFromContext 取出父任务 modelName；不存在返回空字符串
-// （由 BuildAgentTool 进一步退到 LLMCfg.DefaultModel）。
+// （由 BuildAgentTool 通过 ModelService 解析默认模型）。
 func ParentModelFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(parentModelKey{}).(string); ok {
 		return v

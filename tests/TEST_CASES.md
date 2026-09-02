@@ -523,6 +523,29 @@ curl -X POST http://localhost:8080/chat \
 
 登录类用例：Web 登录认证始终启用，用户保存在数据库中；测试前需通过 `POST /web/setup`（或 Web 界面）创建用户，重置用 `groot user reset`。
 
+### 2.23 模型管理测试
+
+模型配置唯一存储于数据库，通过 `/web/models` 系列端点（WebSession Cookie 认证）管理。
+
+| 用例点 | 测试文件 | 测试内容 |
+|-------|---------|---------|
+| 模型 CRUD | test_models_api.py | 创建模型 → 列表可见 → 更新参数生效 → 删除后列表不可见 |
+| 首个模型自动默认 | test_models_api.py | 空库创建首个模型后自动成为默认模型（`is_default: true`，`default` 字段为其名称） |
+| 默认模型删除保护 | test_models_api.py | 删除默认模型返回 409 `default_model_protected` |
+| 默认模型禁用保护 | test_models_api.py | 更新默认模型为 `enabled: false` 返回 409 |
+| 重名冲突 | test_models_api.py | 创建同名模型返回 409 `model_name_exists` |
+| api_key 脱敏 | test_models_api.py | 列表响应中 api_key 只保留尾 4 位，不含明文原文（`${ENV_VAR}` 引用原样展示） |
+| api_key 留空不改 | test_models_api.py | 更新时 api_key 传空字符串，库中原密钥保持不变，其他字段正常更新 |
+| 设默认 | test_models_api.py | `PUT /web/models/{name}/default` 切换默认模型，全表有且只有一个默认 |
+| 启用/禁用 | test_models_api.py | 更新 `enabled` 字段生效；禁用模型不可设为默认（返回 400 `model_disabled`） |
+| 更新不存在模型 | test_models_api.py | `PUT /web/models/{不存在}` 返回 404 `model_not_found` |
+| 连接测试 | test_models_api.py | `POST /web/models/test` 对不可达地址返回 200 且 `status: unhealthy` |
+| chat 引用不存在模型 | test_models_api.py | `X-Model-Name` 指定不存在的模型时 chat 返回 400 `invalid_model` |
+| chat 引用禁用模型 | test_models_api.py | `X-Model-Name` 指定已禁用的模型时 chat 返回 400 |
+| 无默认模型时 chat 报错 | 手工验证 | 空库（未创建任何模型）时 chat 返回 400，提示"尚未配置模型，请在设置中创建模型"；`/web/health` 中 llm 检查为 `unconfigured` |
+
+模型管理用例前置：groot 服务已启动且已创建 Web 登录用户；环境变量 `GROOT_TEST_HOST` / `GROOT_TEST_PORT`（默认 `localhost:8080`）定位服务，`GROOT_WEB_USER` / `GROOT_WEB_PASS` 提供登录凭据（未设置有效凭据时登录类用例自动跳过）。
+
 ---
 
 ## 三、手工验证（Web 界面）

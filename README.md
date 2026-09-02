@@ -31,7 +31,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **自然语言交互** | 接收指令 + 附件，无需编写代码逻辑，AI 自动理解意图 |
 | **智能决策执行** | 自动判断意图，自主选择调用 Skills 或 MCP 工具完成任务 |
 | **多 Agent 协作** | 支持声明子 Agent，主 Agent 自动编排调度，也可直连指定子 Agent（Solo 模式） |
-| **多模型切换** | 可配置多个 LLM 模型，按请求通过 `X-Model-Name` 指定，Web 界面可视化切换 |
+| **多模型切换** | 支持创建多个 LLM 模型（Web UI 管理），按请求通过 `X-Model-Name` 指定，Web 界面可视化切换 |
 | **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
 | **定时任务调度** | 通过对话创建定时任务，系统在指定时间自动执行并推送通知 |
 | **消息通知** | 支持 webhook / email / stdout 多渠道通知，任务完成/失败自动推送 |
@@ -232,7 +232,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 
 **用户自定义环境变量：**
 
-配置文件中 `${VAR_NAME}` 引用的变量名由用户自定义，是否需要设置取决于配置文件的写法：
+配置文件与 Web UI 模型配置中 `${VAR_NAME}` 引用的变量名由用户自定义，是否需要设置取决于填写方式：
 
 ```bash
 # 示例（变量名可自定义）
@@ -240,7 +240,7 @@ export OPENAI_API_KEY="sk-xxxx"
 export DEEPSEEK_API_KEY="sk-xxxx"
 ```
 
-> **判断方法：** 配置文件有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
+> **判断方法：** 配置中有 `${VAR_NAME}` 引用则需设置，直接写密钥则不需要。
 
 ### 2.7 配置文件
 
@@ -248,10 +248,12 @@ export DEEPSEEK_API_KEY="sk-xxxx"
 
 | 文件 | 用途 |
 |------|------|
-| `~/.groot/config.yaml` | 业务配置（LLM、服务端口、安全、日志等），包含完整注释模板 |
+| `~/.groot/config.yaml` | 业务配置（服务端口、安全、日志等），包含完整注释模板 |
 | `~/.groot/env.yaml` | 基础设施环境配置（数据库连接凭据），默认全注释即 SQLite 本地模式 |
 
-**LLM 配置为必填项**，`config.yaml` 中其他所有配置项（server、react、attachment、memory、security、logging 等）均已注释并标注默认值，按需取消注释即可。
+`config.yaml` 中所有配置项（server、react、attachment、memory、security、logging 等）均已注释并标注默认值，按需取消注释即可。
+
+> **模型配置不在配置文件中**：模型配置通过 Web UI 管理，登录后进入 设置 → 模型，可创建、编辑、删除模型，切换默认模型，启用/禁用模型并测试连接。API Key 支持填写 `${ENV_VAR}` 引用环境变量。
 
 > 完整配置项说明见 [四、配置详解](#四配置详解)，数据库配置见 [4.7 数据库配置（env.yaml）](#47-数据库配置envyaml)。
 
@@ -285,39 +287,13 @@ groot init
 
 初始化会在 `~/.groot` 下生成 `config.yaml`、`env.yaml`、`GROOT.md` 及资源目录。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置envyaml)。
 
-### 3.2 配置 LLM
-
-编辑 `~/.groot/config.yaml`，填入必填的 LLM 配置：
-
-```yaml
-llm:
-  default_model: gpt-4o
-  models:
-    gpt-4o:
-      base_url: https://api.openai.com/v1
-      api_key: ${OPENAI_API_KEY}
-      model: gpt-4o
-```
-
-```bash
-export OPENAI_API_KEY="sk-xxxx"
-```
-
-### 3.3 启动服务
+### 3.2 启动服务
 
 ```bash
 groot
 ```
 
-### 3.4 第一次调用
-
-```bash
-curl -X POST http://localhost:8080/chat \
-  -H "Content-Type: application/json" \
-  -d '{"instruction": "你好，请介绍一下你自己"}'
-```
-
-### 3.5 打开 Web 界面
+### 3.3 打开 Web 界面
 
 服务启动后，浏览器访问：
 
@@ -336,6 +312,27 @@ Web 界面登录认证始终启用：
 
 > 用户名和密码保存在数据库中（密码以 bcrypt 加密存储），无需任何配置。
 > 经 https 反向代理部署时，会话 Cookie 会根据 `X-Forwarded-Proto` 自动置 `Secure`。
+
+### 3.4 创建模型
+
+模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，点击「新建模型」，填写模型名称、API 地址（`base_url`）、API 密钥（`api_key`）和 Model ID 后保存。首个创建的模型自动成为默认模型。
+
+- 可创建、编辑、删除模型，切换默认模型，启用/禁用模型并测试连接
+- API Key 支持填写 `${ENV_VAR}` 引用环境变量，例如填写 `${OPENAI_API_KEY}` 后：
+
+```bash
+export OPENAI_API_KEY="sk-xxxx"
+```
+
+> **从旧版本升级**：原 `config.yaml` 中的 `llm` 配置不再生效，需登录 Web UI 在 设置 → 模型 中重新创建模型。
+
+### 3.5 第一次调用
+
+```bash
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "你好，请介绍一下你自己"}'
+```
 
 > 更多安装方式见 [二、安装部署](#二安装部署)，完整配置说明见 [四、配置详解](#四配置详解)，API 详细说明见 [七、REST API](#七rest-api)。
 
@@ -367,29 +364,7 @@ server:
   host: 0.0.0.0                    # 服务监听地址
   port: 8080                       # 服务监听端口
 
-# LLM 配置（OpenAI兼容协议）
-llm:
-  default_model: gpt-4o             # 默认模型名称
-  models:
-    gpt-4o:                        # 模型配置名称（自定义）
-      base_url: https://api.openai.com/v1    # LLM API 地址
-      api_key: ${OPENAI_API_KEY}             # API 密钥（支持环境变量引用）
-      model: gpt-4o                          # 实际调用时的模型名称
-      max_completion_tokens: 4096            # 最大输出 Token 数
-      max_context_tokens: 0                  # 输入上下文 Token 预算（0 表示不限制）
-      temperature: 0.7                       # 输出随机性（0.0~2.0）
-      top_p: 1.0                             # 核采样系数（0.0~1.0）
-      frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
-      presence_penalty: 0.0                  # 存在惩罚（-2.0~2.0）
-      seed: 0                                # 随机种子（0 表示不设置）
-      stop: []                               # 停止序列
-      thinking: false                        # 深度思考模式（Qwen/DeepSeek 等模型）
-    deepseek-v3:
-      base_url: https://api.deepseek.com/v1
-      api_key: ${DEEPSEEK_API_KEY}
-      model: deepseek-chat
-      max_completion_tokens: 4096
-      temperature: 0.7
+# 模型配置通过 Web UI 管理（登录后进入 设置 → 模型），不在本文件中配置
 
 # ReAct 执行配置
 react:
@@ -483,23 +458,35 @@ logging:
 | `host` | 否 | 监听地址，默认 `0.0.0.0`（所有网卡） |
 | `port` | 否 | 监听端口，默认 `8080` |
 
-#### LLM 配置
+#### 模型配置（Web UI 管理）
 
-| 字段 | 必需 | 说明 |
+模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，可创建、编辑、删除模型，切换默认模型，启用/禁用模型并测试连接。API Key 支持填写 `${ENV_VAR}` 引用环境变量。模型配置存储在数据库中，增删改**立即生效，无需重启**。
+
+模型参数说明（在 Web UI 表单中填写）：
+
+| 字段 | 必填 | 说明 |
 |------|------|------|
-| `default_model` | **是** | 默认模型名称，对应 models 中的某个 key，修改后需重启 |
-| `models.{name}.base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
-| `models.{name}.api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
-| `models.{name}.model` | **是** | 实际调用时的模型名称 |
-| `models.{name}.max_completion_tokens` | 否 | 最大输出 Token 数，默认 `4096` |
-| `models.{name}.max_context_tokens` | 否 | 输入上下文 Token 预算，超出时自动截断最早的历史轮次，`0` 表示不限制，默认 `0` |
-| `models.{name}.temperature` | 否 | 输出随机性（0.0~2.0），默认 `0.7` |
-| `models.{name}.top_p` | 否 | 核采样系数（0.0~1.0），默认 `1.0` |
-| `models.{name}.frequency_penalty` | 否 | 频率惩罚（-2.0~2.0），默认 `0.0` |
-| `models.{name}.presence_penalty` | 否 | 存在惩罚（-2.0~2.0），默认 `0.0` |
-| `models.{name}.seed` | 否 | 随机种子，`0` 表示不设置 |
-| `models.{name}.stop` | 否 | 停止序列列表，默认空 |
-| `models.{name}.thinking` | 否 | 深度思考模式（Qwen/DeepSeek 等），默认 `false` |
+| 模型名称 | **是** | 模型的逻辑名称，全局唯一，即 `X-Model-Name` 的取值 |
+| `base_url` | **是** | LLM API 地址（OpenAI 兼容协议） |
+| `api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
+| `model` | **是** | 实际调用时的模型名称（Model ID） |
+| `max_completion_tokens` | 否 | 最大输出 Token 数，默认 `4096` |
+| `max_context_tokens` | 否 | 输入上下文 Token 预算，超出时自动截断最早的历史轮次，`0` 表示不限制，默认 `0` |
+| `temperature` | 否 | 输出随机性（0.0~2.0），默认 `0.7` |
+| `top_p` | 否 | 核采样系数（0.0~1.0），默认 `1.0` |
+| `frequency_penalty` | 否 | 频率惩罚（-2.0~2.0），默认 `0.0` |
+| `presence_penalty` | 否 | 存在惩罚（-2.0~2.0），默认 `0.0` |
+| `seed` | 否 | 随机种子，`0` 表示不设置 |
+| `stop` | 否 | 停止序列列表，默认空 |
+| `thinking` | 否 | 深度思考模式（Qwen/DeepSeek 等），默认 `false` |
+
+默认模型规则：
+
+- 首个创建的模型自动成为默认模型
+- 默认模型不允许删除或禁用，需先将其他模型设为默认
+- 禁用的模型不可设为默认，也不会出现在聊天下拉框中
+
+> **从旧版本升级**：原 `config.yaml` 中的 `llm` 配置不再生效，需登录 Web UI 在 设置 → 模型 中重新创建模型。
 
 > **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。Skills 热插拔天然支持，无需配置开关。
 
@@ -947,7 +934,7 @@ frontmatter 字段：
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `description` | 是 | 子 Agent 用途说明，主 Agent 编排时据此选择调用哪个子 Agent |
-| `model` | 否 | 钉死特定模型（覆盖运行期跟随逻辑），值需在 `llm.models` 中存在；省略时跟随主 Agent 当前 model |
+| `model` | 否 | 钉死特定模型（覆盖运行期跟随逻辑），值需为 Web UI 中已创建的模型名称；省略时跟随主 Agent 当前 model |
 
 注：子 Agent 目录名不能为 `groot`（主 Agent 保留名）；缺 `description` 或 `agent.md` 的目录会在启动期被跳过并记录日志。
 
@@ -978,9 +965,9 @@ curl -X POST http://localhost:8080/chat \
 
 1. **`agent.md` 的 `model` 字段**（最高优先级）：显式钉死特定模型，无视运行期切换
 2. **主 Agent 当前 model**（编排模式默认）：编排模式下子 Agent 跟随主 Agent 实际选用的 model；Web 界面切换主 Agent 的 model 后，再触发的子 Agent 调用就用新 model
-3. **`llm.default_model`**（兜底）：以上两者都缺时使用配置文件默认模型
+3. **默认模型**（兜底）：以上两者都缺时使用 Web UI 中设置的默认模型
 
-Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当前 model"取 `X-Model-Name` 请求头或 `default_model`，逻辑相同。
+Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当前 model"取 `X-Model-Name` 请求头或默认模型，逻辑相同。
 
 实际效果：
 
@@ -988,7 +975,7 @@ Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当�
 |------|--------------------------|
 | `agent.md` 写了 `model: kimi-k2.5`，主 Agent 用 `gpt-4o` 编排 | `kimi-k2.5`（钉死） |
 | `agent.md` 不写 `model`，主 Agent 在 Web 界面选用 `gpt-4o` | `gpt-4o`（跟随） |
-| `agent.md` 不写 `model`，请求未指定 model | `llm.default_model` 配置值 |
+| `agent.md` 不写 `model`，请求未指定 model | Web UI 中设置的默认模型 |
 
 #### 5.3.4 Web 界面切换
 
@@ -1296,7 +1283,12 @@ groot user reset -y   # 跳过确认直接执行
 | `/web/agents` | GET | 列出所有 Agent（Web 界面专用，需登录会话） |
 | `/web/skills` | GET | 列出可用 Skills（Web 界面专用，需登录会话） |
 | `/web/tools` | GET | 列出可用工具（Web 界面专用，需登录会话） |
-| `/web/models` | GET | 列出可用 LLM 模型（Web 界面专用，需登录会话） |
+| `/web/models` | GET | 列出全部 LLM 模型（Web 界面专用，需登录会话） |
+| `/web/models` | POST | 创建模型（需登录会话） |
+| `/web/models/test` | POST | 模型连接测试（需登录会话） |
+| `/web/models/{name}` | PUT | 更新模型（需登录会话） |
+| `/web/models/{name}` | DELETE | 删除模型（需登录会话） |
+| `/web/models/{name}/default` | PUT | 设为默认模型（需登录会话） |
 
 ### 7.2 认证方式
 
@@ -1308,7 +1300,7 @@ X-API-Key: your-secret-key
 
 Header 名称可在配置文件中自定义。
 
-Web 界面使用登录 Cookie 作为凭证。受 API 认证保护的端点同时接受 API Key 与 Cookie，两者任一有效即可通过认证。`/web` 前缀下的会话保护端点（`/web/password`、`/web/agents`、`/web/skills`、`/web/tools`、`/web/models`）仅接受登录 Cookie。
+Web 界面使用登录 Cookie 作为凭证。受 API 认证保护的端点同时接受 API Key 与 Cookie，两者任一有效即可通过认证。`/web` 前缀下的会话保护端点（`/web/password`、`/web/agents`、`/web/skills`、`/web/tools`、`/web/models` 系列）仅接受登录 Cookie。
 
 ---
 
@@ -1319,7 +1311,7 @@ Web 界面使用登录 Cookie 作为凭证。受 API 认证保护的端点同时
 | Header | 必填 | 说明 |
 |--------|------|------|
 | `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
-| `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值见 `GET /models`）；为空则使用配置中的默认模型 |
+| `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值见 `GET /web/models`）；为空则使用 Web UI 中设置的默认模型；指定不存在或已禁用的模型返回 400 |
 | `X-Agent-Name` | 否 | 直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 |
 | `Content-Type` | 是 | `application/json` |
 | `X-API-Key` | 是 | 认证密钥（启用认证时） |
@@ -1768,7 +1760,7 @@ X-API-Key: your-secret-key
 
 | 检查项 | 说明 | 检查内容 |
 |-------|------|---------|
-| `llm` | LLM 服务 | 实际调用 API 检查连接状态 |
+| `llm` | LLM 服务 | 实际调用 API 检查连接状态；尚未创建任何模型时状态为 `unconfigured` |
 | `mcp_servers` | MCP 工具 | 各 MCP 服务状态和工具数量 |
 | `skills` | Skills | 已加载 Skills 数量 |
 | `memory` | 会话存储 | 当前会话数量 |
@@ -1892,16 +1884,25 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.12 GET /web/models - 列出可用模型（需登录会话）
+### 7.12 /web/models - 模型管理（需登录会话）
 
-列出 `config.yaml` 中配置的所有 LLM 模型，供调用方（含 Web 界面）选择 `X-Model-Name` 时使用。
+模型配置存储在数据库中，通过以下端点管理（Web 界面 设置 → 模型 即基于这些端点），变更立即生效：
 
-**响应示例：**
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/web/models` | GET | 列出全部模型 |
+| `/web/models` | POST | 创建模型（首个模型自动成为默认） |
+| `/web/models/{name}` | PUT | 更新模型（`api_key` 传空表示保持原值） |
+| `/web/models/{name}` | DELETE | 删除模型（默认模型不允许删除） |
+| `/web/models/{name}/default` | PUT | 设为默认模型（禁用的模型不可设为默认） |
+| `/web/models/test` | POST | 连接测试（body：`name`/`base_url`/`api_key`/`model`，`api_key` 为空且 `name` 非空时取库中已存密钥） |
+
+**GET /web/models 响应示例：**
 ```json
 {
   "models": [
-    {"name": "gpt-4o", "model": "gpt-4o", "base_url": "https://api.openai.com/v1"},
-    {"name": "kimi-k2.5", "model": "kimi-k2.5", "base_url": "https://api.moonshot.cn/v1"}
+    {"name": "gpt-4o", "model": "gpt-4o", "base_url": "https://api.openai.com/v1", "api_key": "****abcd", "is_default": true, "enabled": true},
+    {"name": "kimi-k2.5", "model": "kimi-k2.5", "base_url": "https://api.moonshot.cn/v1", "api_key": "${MOONSHOT_API_KEY}", "is_default": false, "enabled": true}
   ],
   "default": "gpt-4o",
   "total": 2
@@ -1910,10 +1911,25 @@ X-API-Key: your-secret-key
 
 | 字段 | 说明 |
 |------|------|
-| `models[].name` | 模型配置名称（`llm.models` 的 key，即 `X-Model-Name` 的取值） |
+| `models[].name` | 模型逻辑名称（全局唯一，即 `X-Model-Name` 的取值） |
 | `models[].model` | 实际调用时的模型名称 |
 | `models[].base_url` | 该模型的 API 地址 |
-| `default` | 默认模型配置名称 |
+| `models[].api_key` | 脱敏后的 API 密钥（只保留尾 4 位；`${ENV_VAR}` 环境变量引用原样展示） |
+| `models[].is_default` | 是否为默认模型 |
+| `models[].enabled` | 是否启用（禁用的模型不出现在聊天下拉框，也不可通过 `X-Model-Name` 使用） |
+| `default` | 默认模型名称 |
+
+响应中还包含 `max_completion_tokens`、`max_context_tokens`、`temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed`、`stop`、`thinking` 等模型参数字段，字段含义见 [4.3 配置字段详解](#43-配置字段详解)。
+
+**错误码：**
+
+| HTTP 状态码 | 错误码 | 说明 |
+|------------|--------|------|
+| 400 | `invalid_model_config` | 模型参数校验失败（必填缺失或参数超界） |
+| 400 | `model_disabled` | 模型已禁用（如将禁用模型设为默认） |
+| 404 | `model_not_found` | 模型不存在 |
+| 409 | `model_name_exists` | 模型名称已存在 |
+| 409 | `default_model_protected` | 默认模型不允许删除或禁用 |
 
 ---
 
@@ -2336,15 +2352,15 @@ groot init
 
 ---
 
-### Q2: 启动时报错 "环境变量 OPENAI_API_KEY 未设置"
+### Q2: 模型调用报错 API Key 无效或环境变量未生效
 
-**原因：** 配置文件中 api_key 使用环境变量引用 `${OPENAI_API_KEY}`，但环境变量未设置。
+**原因：** Web UI 模型配置中 api_key 填写了环境变量引用（如 `${OPENAI_API_KEY}`），但服务进程的环境变量未设置。
 
 **解决：**
 ```bash
 export OPENAI_API_KEY="your-api-key"
 ```
-或在配置文件中直接填写 api_key（不使用环境变量引用）。
+设置后重启服务（环境变量需在服务进程中生效），或在 Web UI 的模型配置中直接填写 api_key（不使用环境变量引用）。可在 设置 → 模型 → 编辑 中使用「测试连接」验证。
 
 ---
 
@@ -2439,12 +2455,13 @@ export OPENAI_API_KEY="your-api-key"
 ### Q12: 配置修改后需要重启吗
 
 **需要重启的配置：**
-- LLM、Server、Security、Rate Limit、Memory、Logging、Schedule、Message 配置（`config.yaml`）
+- Server、Security、Rate Limit、Memory、Logging、Schedule、Message 配置（`config.yaml`）
 - 数据库配置（`env.yaml`）
 - MCP 配置文件（`mcp/*.json`）
 - 子 Agent 定义（`subagents/<name>/agent.md`）
 
 **不需要重启的配置：**
+- 模型配置：通过 Web UI（设置 → 模型）管理，存储在数据库中，增删改立即生效
 - Skills（`SKILL.md`）：支持热加载
 - GROOT.md：支持热加载
 - 定时任务：存储在数据库中，由 sync 机制自动同步到调度器，无需重启
@@ -2463,16 +2480,16 @@ export OPENAI_API_KEY="your-api-key"
 
 **用户自定义环境变量：**
 
-配置文件中使用 `${VAR_NAME}` 引用的环境变量，变量名由用户自定义。以下是常见示例：
+配置文件或 Web UI 模型配置中使用 `${VAR_NAME}` 引用的环境变量，变量名由用户自定义。以下是常见示例：
 
 | 变量（示例） | 用途 | 必需性 |
 |------|------|------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 | 配置文件有 `${OPENAI_API_KEY}` 时需设置 |
-| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | 配置文件有 `${DEEPSEEK_API_KEY}` 时需设置 |
+| `OPENAI_API_KEY` | OpenAI API 密钥 | Web UI 模型配置的 api_key 填写 `${OPENAI_API_KEY}` 时需设置 |
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | Web UI 模型配置的 api_key 填写 `${DEEPSEEK_API_KEY}` 时需设置 |
 | `GROOT_API_KEY` | 认证密钥 | 启用认证且配置文件有引用时需设置 |
 | `GROOT_DB_PASSWORD` | 数据库密码 | `env.yaml` 的 DSN 中有引用时需设置 |
 
-> **判断方法：** 查看配置文件中是否使用 `${VAR_NAME}` 格式引用。如果引用了某个变量，则需设置对应的环境变量；如果配置文件直接写明文密钥，则不需要设置环境变量。变量名可自定义。
+> **判断方法：** 查看配置文件或 Web UI 模型配置中是否使用 `${VAR_NAME}` 格式引用。如果引用了某个变量，则需设置对应的环境变量；如果直接写明文密钥，则不需要设置环境变量。变量名可自定义。
 
 ### B. 文件路径约定
 

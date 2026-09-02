@@ -42,7 +42,12 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.GET("/agents", agentsH.Serve)
 	webGroup.GET("/skills", skillsH.Serve)
 	webGroup.GET("/tools", toolsH.Serve)
-	webGroup.GET("/models", modelsH.Serve)
+	webGroup.GET("/models", modelsH.List)
+	webGroup.POST("/models", modelsH.Create)
+	webGroup.POST("/models/test", modelsH.Test)
+	webGroup.PUT("/models/:name", modelsH.Update)
+	webGroup.PUT("/models/:name/default", modelsH.SetDefault)
+	webGroup.DELETE("/models/:name", modelsH.Delete)
 
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")

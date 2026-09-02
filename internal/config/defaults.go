@@ -11,22 +11,6 @@ func DefaultConfig() *Config {
 			Host: "0.0.0.0",
 			Port: 8080,
 		},
-		LLM: LLMConfig{
-			DefaultModel: "gpt-4o",
-			Models: map[string]ModelConfig{
-				"gpt-4o": {
-					BaseURL:             "https://api.openai.com/v1",
-					APIKey:              "${OPENAI_API_KEY}",
-					Model:               "gpt-4o",
-					MaxCompletionTokens: 4096,
-					MaxContextTokens:    0, // 0 表示不限制
-					Temperature:         0.7,
-					TopP:                1.0,
-					FrequencyPenalty:    0.0,
-					PresencePenalty:     0.0,
-				},
-			},
-		},
 		Memory: MemoryConfig{
 			HistoryWindow: 20,
 		},

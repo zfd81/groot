@@ -65,7 +65,7 @@ async function handleSetup() {
         </el-form-item>
         <el-button
           type="primary"
-          style="width: 100%"
+          class="submit-btn"
           :loading="loading"
           @click="handleSetup"
         >
@@ -91,5 +91,11 @@ async function handleSetup() {
   margin: 0 0 16px;
   font-size: 0.88em;
   opacity: 0.65;
+}
+/* 与上方输入框、下方卡片底边都留出呼吸空间 */
+.submit-btn {
+  width: 100%;
+  margin-top: 8px;
+  margin-bottom: 8px;
 }
 </style>

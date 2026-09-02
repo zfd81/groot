@@ -37,7 +37,7 @@ import (
 // model 选择优先级（在 BuildAgentTool 内实现）：
 //  1. AgentMdModel —— agent.md 显式声明（钉死特定模型，覆盖一切）
 //  2. parent modelName —— 父任务运行时 model（编排模式默认行为）
-//  3. llmCfg.DefaultModel —— 配置默认值兜底
+//  3. ModelService 解析默认模型兜底
 type SubAgentEntry struct {
 	Name        string
 	Description string
@@ -51,7 +51,7 @@ type SubAgentEntry struct {
 	RetryConfig   *adk.ModelRetryConfig        // 可空
 	SkillMW       adk.ChatModelAgentMiddleware // 已构建的 skill middleware；可空
 	StepTimeout   time.Duration                // 单步 LLM 调用超时
-	LLMCfg        config.LLMConfig             // ChatModel 实例化材料
+	Models        *llm.ModelService            // 模型配置读取入口
 
 	// testTool 仅供 _test.go 注入预制 InvokableTool 跳过 BuildAgentTool 的真实
 	// LLM dial。生产路径绝不写入；BuildAgentTool 在非 nil 时直接返回它。
@@ -248,7 +248,7 @@ func BuildSubAgentRegistry(
 	dir string,
 	reactCfg config.ReactConfig,
 	subCfg config.SubAgentConfig,
-	llmCfg config.LLMConfig,
+	models *llm.ModelService,
 	log *logger.Logger,
 ) *SubAgentRegistry {
 	reg := &SubAgentRegistry{
@@ -258,7 +258,7 @@ func BuildSubAgentRegistry(
 	}
 
 	for _, p := range scanSubAgentDirs(dir, log) {
-		entry, err := buildSubAgentEntry(ctx, p, reactCfg, llmCfg, log)
+		entry, err := buildSubAgentEntry(ctx, p, reactCfg, models, log)
 		if err != nil {
 			log.Error("build subagent failed, skip", zap.String("name", p.name), zap.Error(err))
 			continue
@@ -283,7 +283,7 @@ func buildSubAgentEntry(
 	ctx context.Context,
 	p parsedSubAgent,
 	reactCfg config.ReactConfig,
-	llmCfg config.LLMConfig,
+	models *llm.ModelService,
 	log *logger.Logger,
 ) (*SubAgentEntry, error) {
 	// 1. MCP Manager（专属，可空）
@@ -341,7 +341,7 @@ func buildSubAgentEntry(
 		RetryConfig:   retryCfg,
 		SkillMW:       skillMW,
 		StepTimeout:   stepTimeout,
-		LLMCfg:        llmCfg,
+		Models:        models,
 	}, nil
 }
 
@@ -350,34 +350,32 @@ func buildSubAgentEntry(
 // 跟随主 Agent 当前选定的 model（除非 agent.md 显式声明 model）。
 //
 // model 选择优先级：
-//  1. e.AgentMdModel    — agent.md 显式声明（钉死特定模型）
-//  2. parentModelName   — 父任务运行时 model（编排模式默认）
-//  3. e.LLMCfg.DefaultModel — 配置默认值兜底
-//
-// BuildAgentTool 构造子 Agent 工具实例，model 选择优先级：
-//  1. e.AgentMdModel    — agent.md 显式声明（钉死特定模型）
-//  2. parentModelName   — 父任务运行时 model（编排模式默认）
-//  3. e.LLMCfg.DefaultModel — 配置默认值兜底
+//  1. e.AgentMdModel  — agent.md 显式声明（钉死特定模型）
+//  2. parentModelName — 父任务运行时 model（编排模式默认）
+//  3. ModelService 解析默认模型兜底
 //
 // 返回 (InvokableTool, resolvedModel, error)。resolvedModel 反映本次调用实际选用的
-// model 名（即传给 NewChatModel 的字符串），调用方可写入 ChatRecord.Model。
+// model 名（即传给 NewChatModel 的模型配置名），调用方可写入 ChatRecord.Model。
 func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, extraTools ...tool.BaseTool) (tool.InvokableTool, string, error) {
 	modelName := e.AgentMdModel
 	if modelName == "" {
 		modelName = parentModelName
 	}
-	if modelName == "" {
-		modelName = e.LLMCfg.DefaultModel
-	}
+	// modelName 仍为空时由 ModelService 解析默认模型
 
-	// 单测注入路径：跳过真实 LLM 构造，但仍返回算出的 modelName 以便测试断言。
+	// 单测注入路径：跳过真实 LLM 构造，返回当前算出的 modelName 以便测试断言。
 	if e.testTool != nil {
 		return e.testTool, modelName, nil
 	}
 
-	chatModel, err := llm.NewChatModel(ctx, e.LLMCfg, modelName, e.StepTimeout)
+	mdl, err := e.Models.GetByName(ctx, modelName)
 	if err != nil {
-		return nil, modelName, fmt.Errorf("chat model: %w", err)
+		return nil, modelName, fmt.Errorf("模型配置不可用: %w", err)
+	}
+
+	chatModel, err := llm.NewChatModel(ctx, mdl, e.StepTimeout)
+	if err != nil {
+		return nil, mdl.Name, fmt.Errorf("chat model: %w", err)
 	}
 
 	// 子 Agent 工具集 = MCP 工具 + 调用方透传的额外工具（可空）。
@@ -403,13 +401,13 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 	}
 	cmAgent, err := adk.NewChatModelAgent(ctx, agentCfg)
 	if err != nil {
-		return nil, modelName, fmt.Errorf("chat model agent: %w", err)
+		return nil, mdl.Name, fmt.Errorf("chat model agent: %w", err)
 	}
 
 	agentTool := adk.NewAgentTool(ctx, cmAgent)
 	invokableTool, ok := agentTool.(tool.InvokableTool)
 	if !ok {
-		return nil, modelName, fmt.Errorf("agent tool does not implement InvokableTool")
+		return nil, mdl.Name, fmt.Errorf("agent tool does not implement InvokableTool")
 	}
-	return invokableTool, modelName, nil
+	return invokableTool, mdl.Name, nil
 }

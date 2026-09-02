@@ -16,6 +16,7 @@ import (
 	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
@@ -45,6 +46,7 @@ func NewServer(
 	subAgentReg *agent.SubAgentRegistry,
 	scheduleMgr **schedule.Manager,
 	users repo.UserRepo,
+	models *llm.ModelService,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -77,15 +79,15 @@ func NewServer(
 	rateLimitMW := middleware.NewRateLimitMiddleware(rateLimiter)
 
 	// Create handlers
-	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, subAgentReg, attHandler, cfg, log)
+	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, subAgentReg, attHandler, models, cfg, log)
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
-	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, log)
+	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log)
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
-	modelsH := handler.NewModelsHandler(&cfg)
+	modelsH := handler.NewModelsHandler(models, log)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)
 

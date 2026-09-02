@@ -195,11 +195,23 @@ type ModelsResponse struct {
 	Total   int         `json:"total"`
 }
 
-// ModelInfo represents model information
+// ModelInfo represents model information（api_key 为脱敏后的展示值）
 type ModelInfo struct {
-	Name    string `json:"name"`
-	Model   string `json:"model"`
-	BaseURL string `json:"base_url"`
+	Name                string   `json:"name"`
+	Model               string   `json:"model"`
+	BaseURL             string   `json:"base_url"`
+	APIKey              string   `json:"api_key"`
+	MaxCompletionTokens int      `json:"max_completion_tokens"`
+	MaxContextTokens    int      `json:"max_context_tokens"`
+	Temperature         float64  `json:"temperature"`
+	TopP                float64  `json:"top_p"`
+	FrequencyPenalty    float64  `json:"frequency_penalty"`
+	PresencePenalty     float64  `json:"presence_penalty"`
+	Seed                int      `json:"seed"`
+	Stop                []string `json:"stop"`
+	Thinking            bool     `json:"thinking"`
+	IsDefault           bool     `json:"is_default"`
+	Enabled             bool     `json:"enabled"`
 }
 
 // ErrorResponse represents error response

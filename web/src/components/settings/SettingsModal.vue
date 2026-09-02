@@ -8,6 +8,7 @@ import { useMetaStore } from '../../stores/meta'
 import { useAuthStore } from '../../stores/auth'
 import { api, ApiError } from '../../api/client'
 import type { SkillsResp, ToolsResp, AgentsResp, AgentInfo, HealthResp } from '../../api/types'
+import ModelsPanel from './ModelsPanel.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ show: boolean }>()
@@ -18,7 +19,6 @@ const { mode } = storeToRefs(theme)
 const langStore = useLanguageStore()
 const { locale } = storeToRefs(langStore)
 const meta = useMetaStore()
-const { models, defaultModel } = storeToRefs(meta)
 
 const section = ref<string>('general')
 const menuOptions = computed(() => [
@@ -187,11 +187,12 @@ watch(
   <el-dialog :model-value="show" :title="t('settings.title')" width="750px" align-center
     class="settings-dialog" @update:model-value="emit('update:show', $event)">
     <div class="settings-body">
-      <el-menu :default-active="section" class="settings-menu" @select="(k: string) => (section = k)">
-        <el-menu-item v-for="o in menuOptions" :key="o.key" :index="o.key">
+      <div class="settings-menu">
+        <button v-for="o in menuOptions" :key="o.key" type="button" class="menu-item"
+          :class="{ active: section === o.key }" @click="section = o.key">
           {{ o.label }}
-        </el-menu-item>
-      </el-menu>
+        </button>
+      </div>
       <div class="settings-content">
         <!-- 通用 -->
         <div v-if="section === 'general'" class="general-panel">
@@ -254,24 +255,7 @@ watch(
 
         <!-- 模型 -->
         <div v-else-if="section === 'models'">
-          <div v-for="m in models" :key="m.name" class="list-item">
-            <div class="item-header">
-              <span class="model-name">{{ m.name }}</span>
-              <el-tag v-if="m.name === defaultModel" size="small" type="primary" effect="light"
-                style="margin-left: 8px">
-                {{ t('settings.default') }}
-              </el-tag>
-            </div>
-            <div class="model-field">
-              <span class="field-label">{{ t('settings.apiUrl') }}</span>
-              <span class="mono">{{ m.base_url }}</span>
-            </div>
-            <div class="model-field">
-              <span class="field-label">{{ t('settings.modelName') }}</span>
-              <span class="mono">{{ m.model }}</span>
-            </div>
-          </div>
-          <el-empty v-if="!models.length" :description="t('settings.noModels')" :image-size="60" />
+          <ModelsPanel />
         </div>
 
         <!-- Skills -->
@@ -354,10 +338,33 @@ watch(
 }
 
 .settings-menu {
-  width: 140px;
+  width: 160px;
   flex-shrink: 0;
-  border-right: 1px solid var(--el-border-color);
   overflow-y: auto;
+  padding: 4px 12px 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 菜单项：普通按钮，悬浮/选中同为圆角灰底（参照稿风格），无分隔竖线 */
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.menu-item:hover,
+.menu-item.active {
+  background: var(--el-fill-color, rgba(127, 127, 127, 0.12));
 }
 
 .settings-content {
@@ -365,6 +372,31 @@ watch(
   min-width: 0;
   padding: 16px;
   overflow-y: auto;
+  /* Firefox：细滚动条，轨道透明只留滑块 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.35)) transparent;
+}
+
+/* WebKit：轨道透明，只显示圆角滑块 */
+.settings-content::-webkit-scrollbar,
+.settings-menu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings-content::-webkit-scrollbar-track,
+.settings-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-content::-webkit-scrollbar-thumb,
+.settings-menu::-webkit-scrollbar-thumb {
+  background: var(--el-border-color-darker, rgba(127, 127, 127, 0.35));
+  border-radius: 3px;
+}
+
+.settings-menu {
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.35)) transparent;
 }
 
 .row {
@@ -496,25 +528,6 @@ watch(
   text-align: right;
   word-break: break-all;
   padding-top: 2px;
-}
-
-.model-name {
-  font-weight: 600;
-}
-
-.model-field {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-top: 2px;
-}
-
-.field-label {
-  font-size: 0.78em;
-  opacity: 0.75;
-  font-weight: 700;
-  flex-shrink: 0;
-  width: 4em;
 }
 
 .tool-group {

@@ -184,6 +184,27 @@ func sqliteDDL() []string {
 			last_login_at INTEGER
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_users_username ON users(username)`,
+		`CREATE TABLE IF NOT EXISTS models (
+			id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+			name                  TEXT NOT NULL,
+			base_url              TEXT NOT NULL,
+			api_key               TEXT NOT NULL,
+			model                 TEXT NOT NULL,
+			max_completion_tokens INTEGER NOT NULL DEFAULT 0,
+			max_context_tokens    INTEGER NOT NULL DEFAULT 0,
+			temperature           REAL NOT NULL DEFAULT 0.7,
+			top_p                 REAL NOT NULL DEFAULT 1.0,
+			frequency_penalty     REAL NOT NULL DEFAULT 0,
+			presence_penalty      REAL NOT NULL DEFAULT 0,
+			seed                  INTEGER NOT NULL DEFAULT 0,
+			stop                  TEXT NOT NULL DEFAULT '[]',
+			thinking              INTEGER NOT NULL DEFAULT 0,
+			is_default            INTEGER NOT NULL DEFAULT 0,
+			enabled               INTEGER NOT NULL DEFAULT 1,
+			created_at            INTEGER NOT NULL,
+			updated_at            INTEGER NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_models_name ON models(name)`,
 	}
 }
 
@@ -277,6 +298,27 @@ func mysqlDDL() []string {
 			updated_at    BIGINT       NOT NULL,
 			last_login_at BIGINT,
 			UNIQUE KEY uk_users_username (username)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS models (
+			id                    BIGINT PRIMARY KEY AUTO_INCREMENT,
+			name                  VARCHAR(64)  NOT NULL,
+			base_url              VARCHAR(255) NOT NULL,
+			api_key               VARCHAR(512) NOT NULL,
+			model                 VARCHAR(128) NOT NULL,
+			max_completion_tokens INT     NOT NULL DEFAULT 0,
+			max_context_tokens    INT     NOT NULL DEFAULT 0,
+			temperature           DOUBLE  NOT NULL DEFAULT 0.7,
+			top_p                 DOUBLE  NOT NULL DEFAULT 1.0,
+			frequency_penalty     DOUBLE  NOT NULL DEFAULT 0,
+			presence_penalty      DOUBLE  NOT NULL DEFAULT 0,
+			seed                  INT     NOT NULL DEFAULT 0,
+			stop                  TEXT    NOT NULL,
+			thinking              TINYINT(1) NOT NULL DEFAULT 0,
+			is_default            TINYINT(1) NOT NULL DEFAULT 0,
+			enabled               TINYINT(1) NOT NULL DEFAULT 1,
+			created_at            BIGINT NOT NULL,
+			updated_at            BIGINT NOT NULL,
+			UNIQUE KEY uk_models_name (name)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
@@ -372,5 +414,26 @@ func postgresDDL() []string {
 			last_login_at BIGINT
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_users_username ON users(username)`,
+		`CREATE TABLE IF NOT EXISTS models (
+			id                    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			name                  VARCHAR(64)  NOT NULL,
+			base_url              VARCHAR(255) NOT NULL,
+			api_key               VARCHAR(512) NOT NULL,
+			model                 VARCHAR(128) NOT NULL,
+			max_completion_tokens INTEGER NOT NULL DEFAULT 0,
+			max_context_tokens    INTEGER NOT NULL DEFAULT 0,
+			temperature           DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+			top_p                 DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+			frequency_penalty     DOUBLE PRECISION NOT NULL DEFAULT 0,
+			presence_penalty      DOUBLE PRECISION NOT NULL DEFAULT 0,
+			seed                  INTEGER NOT NULL DEFAULT 0,
+			stop                  TEXT NOT NULL DEFAULT '[]',
+			thinking              BOOLEAN NOT NULL DEFAULT FALSE,
+			is_default            BOOLEAN NOT NULL DEFAULT FALSE,
+			enabled               BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at            BIGINT NOT NULL,
+			updated_at            BIGINT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_models_name ON models(name)`,
 	}
 }

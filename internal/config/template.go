@@ -7,29 +7,6 @@ func GenerateConfigTemplate() string {
 	return `# Groot Agent 配置文件
 # 请根据实际情况修改以下配置
 
-# LLM 配置（必填）
-# 请填写你的 LLM API 信息，支持 OpenAI 兼容协议
-llm:
-  default_model: gpt-4o           # 默认模型名称
-  models:
-    gpt-4o:
-      base_url: https://api.openai.com/v1    # API 地址
-      api_key: ${OPENAI_API_KEY}             # API 密钥（建议使用环境变量）
-      model: gpt-4o                          # 模型名称
-      max_completion_tokens: 4096            # 最大输出 Token 数
-      max_context_tokens: 0                  # 输入上下文 Token 预算（0 表示不限制）
-      temperature: 0.7                       # 温度参数（0.0~2.0）
-      top_p: 1.0                             # 核采样系数（0.0~1.0）
-      frequency_penalty: 0.0                 # 频率惩罚（-2.0~2.0）
-      presence_penalty: 0.0                  # 存在惩罚（-2.0~2.0）
-      seed: 0                                # 随机种子（0 表示不设置）
-      stop: []                               # 停止序列
-      thinking: false                        # 深度思考模式（Qwen/DeepSeek 等模型）
-
-# ============================================================
-# 以下配置项均有默认值，如需修改请取消注释并编辑
-# ============================================================
-
 # Agent 基础配置
 #agent:
 #  name: groot                      # Agent 名称

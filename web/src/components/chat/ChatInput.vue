@@ -76,7 +76,7 @@ watch(
 )
 
 const modelOptions = computed(() =>
-  models.value.map((m) => ({
+  models.value.filter((m) => m.enabled).map((m) => ({
     label: m.name,
     value: m.name,
     isDefault: m.name === defaultModel.value,

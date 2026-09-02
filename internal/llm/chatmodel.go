@@ -11,53 +11,31 @@ import (
 	openai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 
-	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/repo"
 )
 
-// NewChatModel creates an OpenAI-compatible ChatModel using eino-ext
-// modelName parameter: if empty, uses default model; otherwise uses specified model
-// timeout parameter: per-call timeout for LLM API requests (0 means no timeout)
-func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string, timeout time.Duration) (model.BaseChatModel, error) {
-	// Get model config by name
-	modelCfg := cfg.GetModelByName(modelName)
-	if modelCfg == nil {
-		if modelName == "" {
-			return nil, fmt.Errorf("default model not found in config")
-		}
-		return nil, fmt.Errorf("model '%s' not found in config", modelName)
-	}
-
-	// Prepare parameters for API call
-	maxTokens := modelCfg.MaxCompletionTokens
-	temperature := float32(modelCfg.Temperature)
-	topP := float32(modelCfg.TopP)
-	frequencyPenalty := float32(modelCfg.FrequencyPenalty)
-	presencePenalty := float32(modelCfg.PresencePenalty)
+// NewChatModel creates an OpenAI-compatible ChatModel using eino-ext.
+// m 为已解析的模型配置（APIKey 已展开环境变量，由 ModelService 保证）。
+// timeout: per-call timeout for LLM API requests (0 means no timeout)
+// 采样参数只透传 temperature、max_completion_tokens、thinking 三项；
+// 其余字段（top_p、penalty、seed、stop 等）保留在数据模型中供以后扩展，暂不下发。
+func NewChatModel(ctx context.Context, m *repo.Model, timeout time.Duration) (model.BaseChatModel, error) {
+	temperature := float32(m.Temperature)
 
 	chatCfg := &openai.ChatModelConfig{
-		Model:              modelCfg.Model,
-		APIKey:             modelCfg.APIKey,
-		BaseURL:            modelCfg.BaseURL,
-		MaxCompletionTokens: &maxTokens,
-		Temperature:        &temperature,
-		TopP:               &topP,
-		FrequencyPenalty:   &frequencyPenalty,
-		PresencePenalty:    &presencePenalty,
-		Timeout:            timeout,
+		Model:       m.Model,
+		APIKey:      m.APIKey,
+		BaseURL:     m.BaseURL,
+		Temperature: &temperature,
+		Timeout:     timeout,
 	}
-
-	// Seed: only set when > 0 (0 means not specified)
-	if modelCfg.Seed > 0 {
-		chatCfg.Seed = &modelCfg.Seed
+	// MaxCompletionTokens: only set when > 0 (0 means not specified;
+	// 显式传 0 会被多数 OpenAI 兼容后端拒绝)
+	if m.MaxCompletionTokens > 0 {
+		maxTokens := m.MaxCompletionTokens
+		chatCfg.MaxCompletionTokens = &maxTokens
 	}
-
-	// Stop: only set when non-empty
-	if len(modelCfg.Stop) > 0 {
-		chatCfg.Stop = modelCfg.Stop
-	}
-
-	// Thinking: pass via extra_fields for models like Qwen/DeepSeek
-	if modelCfg.Thinking {
+	if m.Thinking {
 		chatCfg.ExtraFields = map[string]any{
 			"thinking": map[string]any{"type": "enabled"},
 		}
@@ -67,20 +45,14 @@ func NewChatModel(ctx context.Context, cfg config.LLMConfig, modelName string, t
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
 	}
-
 	return chatModel, nil
 }
 
 // CheckConnection checks if LLM API is reachable and properly configured
 // Returns (status, errorMessage) where status is "healthy" or "unhealthy"
-func CheckConnection(cfg config.LLMConfig) (status string, errorMsg string) {
-	modelCfg := cfg.GetDefaultModel()
-	if modelCfg == nil {
-		return "unhealthy", "default model not configured"
-	}
-
+func CheckConnection(m *repo.Model) (status string, errorMsg string) {
 	// Ensure base_url ends with /v1 for OpenAI-compatible APIs
-	baseURL := modelCfg.BaseURL
+	baseURL := m.BaseURL
 	if !strings.HasSuffix(baseURL, "/v1") && !strings.HasSuffix(baseURL, "/v1/") {
 		baseURL = strings.TrimSuffix(baseURL, "/") + "/v1"
 	}
@@ -94,7 +66,7 @@ func CheckConnection(cfg config.LLMConfig) (status string, errorMsg string) {
 		return "unhealthy", "failed to create request: " + err.Error()
 	}
 
-	req.Header.Set("Authorization", "Bearer "+modelCfg.APIKey)
+	req.Header.Set("Authorization", "Bearer "+m.APIKey)
 
 	resp, err := client.Do(req)
 	if err != nil {

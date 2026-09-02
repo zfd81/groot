@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
@@ -28,6 +30,7 @@ type ChatHandler struct {
 	mcpManager        *mcp.Manager
 	subAgentRegistry  *agent.SubAgentRegistry
 	attachmentHandler *attachment.Handler
+	models            *llm.ModelService
 	config            config.Config
 	log               *logger.Logger
 }
@@ -40,6 +43,7 @@ func NewChatHandler(
 	mcpMgr *mcp.Manager,
 	subAgentReg *agent.SubAgentRegistry,
 	attHandler *attachment.Handler,
+	models *llm.ModelService,
 	cfg config.Config,
 	log *logger.Logger,
 ) *ChatHandler {
@@ -50,6 +54,7 @@ func NewChatHandler(
 		mcpManager:        mcpMgr,
 		subAgentRegistry:  subAgentReg,
 		attachmentHandler: attHandler,
+		models:            models,
 		config:            cfg,
 		log:               log,
 	}
@@ -57,14 +62,14 @@ func NewChatHandler(
 
 // ChatRequest 对话请求
 type ChatRequest struct {
-	Instruction string        `json:"instruction"`
-	Prompt      string        `json:"prompt,omitempty"`
-	Attachments []Attachment  `json:"attachments,omitempty"`
+	Instruction string       `json:"instruction"`
+	Prompt      string       `json:"prompt,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Attachment 附件
 type Attachment struct {
-	Type    string `json:"type"`    // file/image
+	Type    string `json:"type"` // file/image
 	Name    string `json:"name"`
 	Content string `json:"content"` // Base64 content (for file/image)
 }
@@ -87,11 +92,21 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	// 2.5. 提取 X-Model-Name header
 	modelName := string(rc.GetHeader("X-Model-Name"))
 
-	// 2.6. 验证模型名称
-	if modelName != "" && !h.config.LLM.ValidateModel(modelName) {
-		rc.JSON(400, utils.H{
-			"status":  "invalid_model",
-			"message": fmt.Sprintf("模型 '%s' 不存在", modelName),
+	// 2.6. 解析模型配置：校验存在性与启用状态，无默认模型时给出引导性错误。
+	// mdl 同时供后文 MaxContextTokens 使用。
+	mdl, err := h.models.GetByName(ctx, modelName)
+	if err != nil {
+		if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) || errors.Is(err, llm.ErrNoDefaultModel) {
+			rc.JSON(400, utils.H{
+				"status":  "invalid_model",
+				"message": err.Error(),
+			})
+			return
+		}
+		h.log.Error("获取模型配置失败", zap.Error(err))
+		rc.JSON(500, utils.H{
+			"status":  "error",
+			"message": "获取模型配置失败",
 		})
 		return
 	}
@@ -173,19 +188,12 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		// 继续会话
 		isNew = false
 		round = h.memory.GetRoundCount(sessionID) + 1
-		var err error
-
-		// 获取当前请求使用的模型配置
-		modelConfig := h.config.LLM.GetModelByName(modelName)
-		if modelConfig == nil {
-			modelConfig = h.config.LLM.GetDefaultModel()
-		}
 
 		// 使用新方法，传入 token 预算
 		historyMessages, err = h.memory.GetContextMessagesWithTokenLimit(
 			sessionID,
 			h.config.Memory.HistoryWindow,
-			modelConfig.MaxContextTokens,
+			mdl.MaxContextTokens,
 		)
 		if err != nil {
 			rc.JSON(500, utils.H{"status": "error", "message": "获取上下文失败"})
@@ -198,7 +206,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 8. 立即注册活跃状态 - 在创建 session 或获取历史之后立即执行
 	// 这确保了同一 session 的并发请求只有一个能成功注册
-	_, err := h.runtimeState.Register(sessionID, chatID)
+	_, err = h.runtimeState.Register(sessionID, chatID)
 	if err != nil {
 		// Register 返回错误表示有冲突（已有活跃对话）
 		rc.JSON(409, utils.H{

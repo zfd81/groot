@@ -43,11 +43,6 @@ func Load(homeDir string) (*Config, error) {
 	// Expand environment variables in all relevant fields
 	expandConfigEnvVars(cfg)
 
-	// Validate LLM configuration
-	if err := ValidateLLMConfig(&cfg.LLM); err != nil {
-		return nil, fmt.Errorf("LLM 配置验证失败: %w", err)
-	}
-
 	return cfg, nil
 }
 
@@ -149,12 +144,6 @@ func applyDefaults(cfg *Config) {
 
 // expandConfigEnvVars expands environment variables in config
 func expandConfigEnvVars(cfg *Config) {
-	// Expand LLM API keys
-	for name, model := range cfg.LLM.Models {
-		model.APIKey = ExpandEnv(model.APIKey)
-		cfg.LLM.Models[name] = model
-	}
-
 	// Expand API Keys
 	for i, keyInfo := range cfg.Security.Auth.APIKey.Keys {
 		keyInfo.Key = ExpandEnv(keyInfo.Key)

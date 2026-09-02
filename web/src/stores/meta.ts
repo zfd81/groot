@@ -28,5 +28,11 @@ export const useMetaStore = defineStore('meta', () => {
     loaded.value = true
   }
 
-  return { models, defaultModel, agents, loaded, load }
+  // 模型管理界面增删改后调用，强制重新拉取模型列表
+  async function reload() {
+    loaded.value = false
+    await load()
+  }
+
+  return { models, defaultModel, agents, loaded, load, reload }
 })

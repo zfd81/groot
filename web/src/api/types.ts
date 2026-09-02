@@ -80,6 +80,41 @@ export interface ModelInfo {
   name: string
   model: string
   base_url: string
+  api_key: string // 脱敏后的展示值
+  max_completion_tokens: number
+  max_context_tokens: number
+  temperature: number
+  top_p: number
+  frequency_penalty: number
+  presence_penalty: number
+  seed: number
+  stop: string[]
+  thinking: boolean
+  is_default: boolean
+  enabled: boolean
+}
+
+// 创建/更新模型的请求体（api_key 为空表示更新时保持原值）
+export interface ModelForm {
+  name: string
+  model: string
+  base_url: string
+  api_key: string
+  max_completion_tokens: number
+  max_context_tokens: number
+  temperature: number
+  top_p: number
+  frequency_penalty: number
+  presence_penalty: number
+  seed: number
+  stop: string[]
+  thinking: boolean
+  enabled: boolean
+}
+
+export interface ModelTestResp {
+  status: string // healthy | unhealthy
+  message: string
 }
 
 export interface ModelsResp {

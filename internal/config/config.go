@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"strings"
 )
@@ -10,7 +9,6 @@ import (
 type Config struct {
 	Agent      AgentConfig      `yaml:"agent"`
 	Server     ServerConfig     `yaml:"server"`
-	LLM        LLMConfig        `yaml:"llm"`
 	Memory     MemoryConfig     `yaml:"memory"`
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
@@ -32,28 +30,6 @@ type AgentConfig struct {
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
-}
-
-// LLMConfig holds LLM settings
-type LLMConfig struct {
-	DefaultModel string                 `yaml:"default_model"`
-	Models       map[string]ModelConfig `yaml:"models"`
-}
-
-// ModelConfig holds individual model settings
-type ModelConfig struct {
-	BaseURL             string   `yaml:"base_url"`
-	APIKey              string   `yaml:"api_key"`
-	Model               string   `yaml:"model"`
-	MaxCompletionTokens int      `yaml:"max_completion_tokens"`
-	MaxContextTokens    int      `yaml:"max_context_tokens"` // 输入上下文 token 预算（0 表示不限制）
-	Temperature         float64  `yaml:"temperature"`
-	TopP                float64  `yaml:"top_p"`
-	FrequencyPenalty    float64  `yaml:"frequency_penalty"`
-	PresencePenalty     float64  `yaml:"presence_penalty"`
-	Seed                int      `yaml:"seed"`
-	Stop                []string `yaml:"stop"`
-	Thinking            bool     `yaml:"thinking"`
 }
 
 // MemoryConfig 记忆模块配置
@@ -176,98 +152,4 @@ func ExpandEnv(value string) string {
 		return os.Getenv(envVar)
 	}
 	return value
-}
-
-// GetDefaultModel returns the default model configuration
-func (c *LLMConfig) GetDefaultModel() *ModelConfig {
-	if model, ok := c.Models[c.DefaultModel]; ok {
-		// Expand environment variables in API key
-		model.APIKey = ExpandEnv(model.APIKey)
-		return &model
-	}
-	return nil
-}
-
-// GetModelByName returns the model configuration by name
-// If name is empty, returns the default model
-func (c *LLMConfig) GetModelByName(name string) *ModelConfig {
-	if name == "" {
-		return c.GetDefaultModel()
-	}
-	if model, ok := c.Models[name]; ok {
-		// Expand environment variables in API key
-		model.APIKey = ExpandEnv(model.APIKey)
-		return &model
-	}
-	return nil
-}
-
-// ValidateModel checks if a model name exists in config
-// Empty name is valid (will use default model)
-func (c *LLMConfig) ValidateModel(name string) bool {
-	if name == "" {
-		return true // Empty is valid, will use default model
-	}
-	_, exists := c.Models[name]
-	return exists
-}
-
-// validateModelParams checks parameter ranges for a model configuration
-func validateModelParams(name string, model *ModelConfig) error {
-	if model.Temperature < 0.0 || model.Temperature > 2.0 {
-		return fmt.Errorf("模型 %s 的 temperature 超出范围：%.1f（有效范围 0.0~2.0）", name, model.Temperature)
-	}
-	if model.TopP < 0.0 || model.TopP > 1.0 {
-		return fmt.Errorf("模型 %s 的 top_p 超出范围：%.1f（有效范围 0.0~1.0）", name, model.TopP)
-	}
-	if model.FrequencyPenalty < -2.0 || model.FrequencyPenalty > 2.0 {
-		return fmt.Errorf("模型 %s 的 frequency_penalty 超出范围：%.1f（有效范围 -2.0~2.0）", name, model.FrequencyPenalty)
-	}
-	if model.PresencePenalty < -2.0 || model.PresencePenalty > 2.0 {
-		return fmt.Errorf("模型 %s 的 presence_penalty 超出范围：%.1f（有效范围 -2.0~2.0）", name, model.PresencePenalty)
-	}
-	return nil
-}
-
-// ValidateLLMConfig validates LLM configuration at startup.
-// Returns detailed error messages to help users fix configuration issues.
-func ValidateLLMConfig(cfg *LLMConfig) error {
-	if len(cfg.Models) == 0 {
-		return fmt.Errorf("LLM models 配置为空，请编辑 config.yaml 添加模型配置")
-	}
-
-	if cfg.DefaultModel == "" {
-		// Use first model as default if not specified
-		for name := range cfg.Models {
-			cfg.DefaultModel = name
-			break
-		}
-	}
-
-	if !cfg.ValidateModel(cfg.DefaultModel) {
-		return fmt.Errorf("default_model '%s' 不存在于 models 配置中", cfg.DefaultModel)
-	}
-
-	// Check each model's configuration
-	for name, model := range cfg.Models {
-		if model.BaseURL == "" {
-			return fmt.Errorf("模型 %s 的 base_url 为空，请编辑 config.yaml", name)
-		}
-		if model.APIKey == "" {
-			return fmt.Errorf("模型 %s 的 api_key 为空，请编辑 config.yaml 或设置对应的环境变量", name)
-		}
-		// Check if APIKey is an env var reference that's not set
-		if strings.HasPrefix(model.APIKey, "${") && strings.HasSuffix(model.APIKey, "}") {
-			envVar := model.APIKey[2 : len(model.APIKey)-1]
-			if os.Getenv(envVar) == "" {
-				return fmt.Errorf("环境变量 %s 未设置，请设置后重试\n\n提示: export %s=\"your-api-key\"\n      或在 config.yaml 中直接填写 api_key", envVar, envVar)
-			}
-		}
-		// Validate parameter ranges
-		if err := validateModelParams(name, &model); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }

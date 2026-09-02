@@ -27,6 +27,7 @@ type HealthHandler struct {
 	mcpManager    *mcp.Manager
 	memoryManager *memory.Manager
 	runtimeState  *agent.RuntimeState
+	models        *llm.ModelService
 	startTime     time.Time
 	logger        *logger.Logger
 }
@@ -39,6 +40,7 @@ func NewHealthHandler(
 	mcpMgr *mcp.Manager,
 	memMgr *memory.Manager,
 	runtime *agent.RuntimeState,
+	models *llm.ModelService,
 	log *logger.Logger,
 ) *HealthHandler {
 	return &HealthHandler{
@@ -48,6 +50,7 @@ func NewHealthHandler(
 		mcpManager:    mcpMgr,
 		memoryManager: memMgr,
 		runtimeState:  runtime,
+		models:        models,
 		startTime:     time.Now(),
 		logger:        log,
 	}
@@ -112,9 +115,13 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		mcpInfos = append(mcpInfos, mcpInfo)
 	}
 
-	// Check LLM connection
-	llmStatus, llmError := llm.CheckConnection(h.config.LLM)
-	llmInfo := map[string]string{"model": h.config.LLM.DefaultModel}
+	// Check LLM connection（无默认模型时报告 unconfigured 而非失败）
+	llmStatus, llmError, llmModelName := "unconfigured", "尚未配置模型", ""
+	if m, err := h.models.GetByName(ctx, ""); err == nil {
+		llmModelName = m.Name
+		llmStatus, llmError = llm.CheckConnection(m)
+	}
+	llmInfo := map[string]string{"model": llmModelName}
 	if llmError != "" {
 		llmInfo["error"] = llmError
 	}

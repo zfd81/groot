@@ -51,7 +51,7 @@ async function handleLogin() {
         </el-form-item>
         <el-button
           type="primary"
-          style="width: 100%"
+          class="submit-btn"
           :loading="loading"
           @click="handleLogin"
         >
@@ -72,5 +72,11 @@ async function handleLogin() {
 .login-card {
   width: 360px;
   max-width: 90vw;
+}
+/* 与上方密码输入框、下方卡片底边都留出呼吸空间 */
+.submit-btn {
+  width: 100%;
+  margin-top: 8px;
+  margin-bottom: 8px;
 }
 </style>
