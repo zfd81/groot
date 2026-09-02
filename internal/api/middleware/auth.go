@@ -2,36 +2,36 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/zfd81/groot/internal/api/websession"
+	"github.com/zfd81/groot/internal/auth"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/logger"
+	"github.com/zfd81/groot/internal/repo"
 )
 
-// AuthMiddleware provides API Key / Web Cookie authentication
+// AuthMiddleware 提供 API Key（JWT）/ Web Cookie 认证，始终开启。
 type AuthMiddleware struct {
 	config   config.SecurityConfig
 	webStore *websession.Store
+	apiKeys  repo.APIKeyRepo
+	log      *logger.Logger
 }
 
 // NewAuthMiddleware creates a new auth middleware.
 // webStore 为 Web 登录会话存储；传 nil 表示不启用 Cookie 凭证。
-func NewAuthMiddleware(cfg config.SecurityConfig, webStore *websession.Store) *AuthMiddleware {
-	return &AuthMiddleware{config: cfg, webStore: webStore}
+func NewAuthMiddleware(cfg config.SecurityConfig, webStore *websession.Store, apiKeys repo.APIKeyRepo, log *logger.Logger) *AuthMiddleware {
+	return &AuthMiddleware{config: cfg, webStore: webStore, apiKeys: apiKeys, log: log}
 }
 
 // Serve returns a Hertz middleware handler
 func (m *AuthMiddleware) Serve() app.HandlerFunc {
 	return func(ctx context.Context, rc *app.RequestContext) {
-		if !m.config.Auth.Enabled {
-			rc.Set("caller", "anonymous")
-			rc.Next(ctx)
-			return
-		}
-
 		// Web 会话 Cookie 凭证：有效则等同 all 权限放行（Validate 顺带滑动续期）
 		if m.webStore != nil {
 			if token := string(rc.Cookie(websession.CookieName)); token != "" {
@@ -44,58 +44,60 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			}
 		}
 
-		// Get API Key from header
-		headerName := m.config.Auth.APIKey.HeaderName
+		headerName := m.config.Auth.HeaderName
 		if headerName == "" {
 			headerName = "X-API-Key"
 		}
-		apiKey := string(rc.GetHeader(headerName))
+		tokenStr := string(rc.GetHeader(headerName))
+		if tokenStr == "" {
+			writeUnauthorized(rc)
+			return
+		}
 
-		if apiKey == "" {
+		// 1) 验签 + 过期检查；2) 以 jti 反查数据库确认未被删除（删除即吊销）。
+		// 三类失败统一 401 不区分原因，避免向攻击者泄露信息。
+		jti, err := auth.Verify(tokenStr, m.config.Auth.Secret)
+		if err != nil {
+			writeUnauthorized(rc)
+			return
+		}
+		key, err := m.apiKeys.GetByID(ctx, jti)
+		if err != nil {
+			// 未找到属预期路径（删除即吊销），不打日志；库故障等其他错误记 Error 供运维区分
+			if !errors.Is(err, repo.ErrNotFound) {
+				m.log.Error("API Key 认证查询失败: " + err.Error())
+			}
+			writeUnauthorized(rc)
+			return
+		}
+
+		// 权限检查以数据库行为准
+		path := string(rc.URI().Path())
+		method := string(rc.Method())
+		requiredPerm := getRequiredPermission(path, method)
+		if requiredPerm != "" && !hasPermission(key.Permissions, requiredPerm) {
 			rc.SetContentType("application/json")
-			rc.SetStatusCode(401)
-			rc.Write([]byte(`{"status":"unauthorized","message":"API Key 无效或缺失"}`))
+			rc.SetStatusCode(403)
+			rc.Write([]byte(fmt.Sprintf(`{"status":"forbidden","message":"权限不足: 需要 %s 权限"}`, requiredPerm)))
 			rc.Abort()
 			return
 		}
 
-		// Validate API Key and check permissions
-		for _, keyInfo := range m.config.Auth.APIKey.Keys {
-			if keyInfo.Key == apiKey {
-				// Check permission for this path
-				path := string(rc.URI().Path())
-				method := string(rc.Method())
-				requiredPerm := getRequiredPermission(path, method)
-
-				if requiredPerm != "" && !m.hasPermission(keyInfo.Permissions, requiredPerm) {
-					rc.SetContentType("application/json")
-					rc.SetStatusCode(403)
-					rc.Write([]byte(fmt.Sprintf(`{"status":"forbidden","message":"权限不足: 需要 %s 权限"}`, requiredPerm)))
-					rc.Abort()
-					return
-				}
-
-				// Store caller info in context
-				rc.Set("caller", keyInfo.Name)
-				rc.Next(ctx)
-				return
-			}
-		}
-
-		// Key not found
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(401)
-		rc.Write([]byte(`{"status":"unauthorized","message":"API Key 无效或缺失"}`))
-		rc.Abort()
+		rc.Set("caller", key.Name)
+		rc.Next(ctx)
 	}
 }
 
-// hasPermission checks if key has required permission
-func (m *AuthMiddleware) hasPermission(perms []string, required string) bool {
-	if len(perms) == 0 {
-		return true // No permissions defined = all access
-	}
+func writeUnauthorized(rc *app.RequestContext) {
+	rc.SetContentType("application/json")
+	rc.SetStatusCode(401)
+	rc.Write([]byte(`{"status":"unauthorized","message":"API Key 无效或缺失"}`))
+	rc.Abort()
+}
 
+// hasPermission 判断权限集合是否满足所需权限点。
+// 空集合一律拒绝：创建流程保证至少一个权限点，空集只可能来自脏数据。
+func hasPermission(perms []string, required string) bool {
 	for _, perm := range perms {
 		perm = strings.TrimSpace(perm)
 		if perm == "all" || perm == required {

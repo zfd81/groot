@@ -54,14 +54,7 @@ func DefaultConfig() *Config {
 				CleanupInterval:    "5m",
 			},
 			Auth: AuthConfig{
-				Enabled: false, // 默认关闭认证，方便测试
-				Type:    "api_key",
-				APIKey: APIKeyConfig{
-					HeaderName: "X-API-Key",
-					Keys: []KeyInfo{
-						{Name: "default", Key: "${GROOT_API_KEY}", Permissions: []string{"all"}},
-					},
-				},
+				HeaderName: "X-API-Key",
 			},
 		},
 		Logging: LoggingConfig{

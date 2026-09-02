@@ -244,6 +244,12 @@ func startServer(homeDir string, port int) {
 		cfg.Server.Port = port
 	}
 
+	// 认证始终开启：secret 缺失（老版本升级）时自动生成并回写 config.yaml
+	if err := config.EnsureAuthSecret(homeDir, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "初始化认证密钥失败: %s\n", err)
+		os.Exit(1)
+	}
+
 	// Resolve log directory path (before logger initialization)
 	cfg.Logging.File.Directory = config.ResolvePath(cfg.Logging.File.Directory, homeDir)
 
@@ -461,7 +467,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)
