@@ -101,24 +101,10 @@ type RateLimitConfig struct {
 	CleanupInterval    string  `yaml:"cleanup_interval"`
 }
 
-// AuthConfig holds authentication settings
+// AuthConfig holds authentication settings（认证始终开启，无开关）
 type AuthConfig struct {
-	Enabled bool         `yaml:"enabled"`
-	Type    string       `yaml:"type"`
-	APIKey  APIKeyConfig `yaml:"api_key"`
-}
-
-// APIKeyConfig holds API Key settings
-type APIKeyConfig struct {
-	HeaderName string    `yaml:"header_name"`
-	Keys       []KeyInfo `yaml:"keys"`
-}
-
-// KeyInfo holds individual key info
-type KeyInfo struct {
-	Name        string   `yaml:"name"`
-	Key         string   `yaml:"key"`
-	Permissions []string `yaml:"permissions"`
+	HeaderName string `yaml:"header_name"` // API Key 请求头名称，默认 X-API-Key
+	Secret     string `yaml:"secret"`      // JWT 签名密钥；为空时服务启动自动生成并回写 config.yaml
 }
 
 // LoggingConfig holds logging settings

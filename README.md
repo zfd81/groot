@@ -328,9 +328,12 @@ export OPENAI_API_KEY="sk-xxxx"
 
 ### 3.5 第一次调用
 
+API 认证始终开启，调用前先创建 API Key：登录 Web 界面，进入 **设置 → API Keys**，创建时设置名称、过期时间与权限范围，创建后复制 Key。
+
 ```bash
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
   -d '{"instruction": "你好，请介绍一下你自己"}'
 ```
 
@@ -422,14 +425,8 @@ security:
     default_concurrency: 5         # 每 API Key 默认并发数
     cleanup_interval: 5m           # 空闲限流器清理间隔
   auth:
-    enabled: true                  # 是否开启认证
-    type: api_key                  # 认证类型
-    api_key:
-      header_name: X-API-Key       # 认证 Header 名称
-      keys:
-        - name: default            # Key 名称（唯一标识）
-          key: ${GROOT_API_KEY}    # Key 值（支持环境变量引用）
-          permissions: [all]       # 权限范围：[all] 或 [chat, status, ...]
+    header_name: X-API-Key         # API Key 请求头名称
+    secret: "..."                  # JWT 签名密钥（init 自动生成，请勿泄露）
 
 # 日志配置
 logging:
@@ -553,12 +550,8 @@ logging:
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `auth.enabled` | 否 | 是否开启认证，默认 `false` |
-| `auth.type` | 否 | 认证类型，目前只支持 `api_key` |
-| `auth.api_key.header_name` | 否 | 认证 Header 名称，默认 `X-API-Key` |
-| `auth.api_key.keys[].name` | 否 | Key 名称（唯一标识） |
-| `auth.api_key.keys[].key` | 否 | Key 值，支持 `${VAR_NAME}` 引用 |
-| `auth.api_key.keys[].permissions` | 否 | 权限范围：`all` 或 `[chat, status, ...]` |
+| `auth.header_name` | 否 | API Key 请求头名称，默认 `X-API-Key` |
+| `auth.secret` | 否 | JWT 签名密钥；`groot init` 自动生成，为空时启动自动补齐。更换后所有 API Key 立即失效 |
 | `rate_limit.enabled` | 否 | 是否启用速率限制，默认 `false` |
 | `rate_limit.global_qps` | 否 | 全局 QPS 限制，`0` 表示不限制 |
 | `rate_limit.global_concurrency` | 否 | 全局并发限制，`0` 表示不限制 |
@@ -567,8 +560,13 @@ logging:
 | `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
 
 > **速率限制说明：**
-> - **匿名降级**：认证开启时按 API Key 名称限流；认证关闭（`auth.enabled: false`）时按客户端 IP 限流
+> - **限流维度**：按 API Key 名称（caller）维度限流
 > - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
+
+> **API 认证说明：**
+> - **API 认证始终开启**：对外 API 请求需在请求头（默认 `X-API-Key`）中携带 API Key
+> - **API Key 管理**：登录 Web 界面，进入 **设置 → API Keys** 创建；每个 Key 可设置名称、过期时间（1天/7天/1个月/半年/1年/10年）与权限范围，创建后可随时查看、复制，删除后立即失效
+> - **权限点**：`chat`、`status`、`detail`、`history`、`session`、`schedule`、`all`（各权限对应的 API 见 [4.5 权限说明](#45-权限说明)）
 
 > **Web 登录说明：**
 > - Web 界面登录认证始终启用，无需配置；用户名和密码保存在数据库 `users` 表中（密码 bcrypt 加密），首次访问 Web 界面时引导创建
@@ -637,7 +635,6 @@ logging:
 | `all` | 以上全部 | 全部权限 |
 
 > `GET /web/health` 不需要认证和权限，可直接访问（`groot status` 也使用该端点）。
-> `/web/agents`、`/web/skills`、`/web/tools`、`/web/models` 是 Web 界面专用端点，仅接受 Web 登录会话 Cookie，不参与 API Key 权限体系。
 
 ### 4.6 配置热更新
 
@@ -945,6 +942,7 @@ frontmatter 字段：
 ```bash
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
   -d '{"instruction":"查询昨天的订单总金额"}'
 ```
 
@@ -954,6 +952,7 @@ curl -X POST http://localhost:8080/chat \
 curl -X POST http://localhost:8080/chat \
   -H "X-Agent-Name: db-agent" \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
   -d '{"instruction":"查询昨天的订单总金额"}'
 ```
 
@@ -994,12 +993,7 @@ Web 界面输入框左下角的 Agent 下拉可切换当前会话使用的 Agent
 
 | 接口 | 多 Agent 行为 |
 |-----|--------------|
-| `GET /web/agents` | 列出所有 Agent，主 Agent 排在首位 |
-| `GET /web/skills` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 skills（不传 = 主 Agent） |
-| `GET /web/tools` + `X-Agent-Name: <name>` | 返回指定子 Agent 的 MCP 工具（不传 = 主 Agent） |
 | `GET /chat/status/:sid` | 编排模式下 `progress.sub_agents` 含当前运行的子 Agent 列表 |
-
-注：`GET /web/tools` 在主 Agent 路径下会额外返回一个合成分组 `_builtin`，包含 `call_agent` 工具及其所有可用子 Agent 描述；Solo 模式（`X-Agent-Name` 指定子 Agent）下不暴露 `call_agent`，避免子 Agent 嵌套调用。
 
 #### 5.3.6 配置项（`config.yaml`）
 
@@ -1061,18 +1055,9 @@ EOF
 groot
 ```
 
-**4. 验证 REST 接口**
+**4. 验证子 Agent 已注册**
 
-```bash
-# 列出所有 Agent，应能看到 weather
-curl -s http://localhost:8080/agents | jq
-
-# 列出 weather 的 MCP 工具
-curl -s -H 'X-Agent-Name: weather' http://localhost:8080/tools | jq
-
-# 主 Agent /tools 应包含 _builtin.call_agent，描述里能看到 weather
-curl -s http://localhost:8080/tools | jq '._builtin.tools[0].description'
-```
+登录 Web 界面（`http://localhost:8080/ui/`），进入 **设置 → Agents** 应能看到 `weather`；在 **设置 → MCP 工具** 中可查看 weather 加载的 MCP 工具。
 
 **5. 调用：编排模式 vs Solo 模式**
 
@@ -1080,12 +1065,14 @@ curl -s http://localhost:8080/tools | jq '._builtin.tools[0].description'
 # 编排模式：让主 Agent 自己决定调度 weather
 curl -X POST http://localhost:8080/chat \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: 在Web界面创建的APIKey' \
   -d '{"instruction":"今天北京天气怎么样？"}'
 
 # Solo 模式：跳过主 Agent，直连 weather
 curl -X POST http://localhost:8080/chat \
   -H 'X-Agent-Name: weather' \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: 在Web界面创建的APIKey' \
   -d '{"instruction":"今天北京天气怎么样？"}'
 ```
 
@@ -1275,32 +1262,18 @@ groot user reset -y   # 跳过确认直接执行
 | `/schedule/:id/archive` | POST | 归档定时任务 |
 | `/schedule/:id/history` | GET | 查询任务执行历史 |
 | `/web/health` | GET | 健康检查（无需认证） |
-| `/web/setup` | POST | 创建首个 Web 登录用户（仅用户表为空时可用） |
-| `/web/login` | POST | Web 界面登录 |
-| `/web/logout` | POST | Web 界面登出 |
-| `/web/me` | GET | 查询当前登录状态 |
-| `/web/password` | POST | 修改登录密码（需登录会话） |
-| `/web/agents` | GET | 列出所有 Agent（Web 界面专用，需登录会话） |
-| `/web/skills` | GET | 列出可用 Skills（Web 界面专用，需登录会话） |
-| `/web/tools` | GET | 列出可用工具（Web 界面专用，需登录会话） |
-| `/web/models` | GET | 列出全部 LLM 模型（Web 界面专用，需登录会话） |
-| `/web/models` | POST | 创建模型（需登录会话） |
-| `/web/models/test` | POST | 模型连接测试（需登录会话） |
-| `/web/models/{name}` | PUT | 更新模型（需登录会话） |
-| `/web/models/{name}` | DELETE | 删除模型（需登录会话） |
-| `/web/models/{name}/default` | PUT | 设为默认模型（需登录会话） |
 
 ### 7.2 认证方式
 
-如果启用了认证（`security.auth.enabled: true`），需要在请求头携带 API Key：
+API 认证始终开启，请求需在请求头携带 API Key：
 
 ```http
-X-API-Key: your-secret-key
+X-API-Key: 在Web界面创建的APIKey
 ```
 
-Header 名称可在配置文件中自定义。
+Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web 界面 **设置 → API Keys** 中创建与管理（可设置名称、过期时间与权限范围），删除后立即失效。
 
-Web 界面使用登录 Cookie 作为凭证。受 API 认证保护的端点同时接受 API Key 与 Cookie，两者任一有效即可通过认证。`/web` 前缀下的会话保护端点（`/web/password`、`/web/agents`、`/web/skills`、`/web/tools`、`/web/models` 系列）仅接受登录 Cookie。
+在浏览器中通过 Web 界面登录后，受 API 认证保护的端点也接受登录 Cookie 作为凭证，两者任一有效即可通过认证。
 
 ---
 
@@ -1311,10 +1284,10 @@ Web 界面使用登录 Cookie 作为凭证。受 API 认证保护的端点同时
 | Header | 必填 | 说明 |
 |--------|------|------|
 | `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
-| `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值见 `GET /web/models`）；为空则使用 Web UI 中设置的默认模型；指定不存在或已禁用的模型返回 400 |
+| `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值为 Web 界面 设置 → 模型 中配置的模型名称）；为空则使用 Web UI 中设置的默认模型；指定不存在或已禁用的模型返回 400 |
 | `X-Agent-Name` | 否 | 直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 |
 | `Content-Type` | 是 | `application/json` |
-| `X-API-Key` | 是 | 认证密钥（启用认证时） |
+| `X-API-Key` | 是 | API Key（在 Web 界面 设置 → API Keys 中创建） |
 
 **请求 Body：**
 
@@ -1540,7 +1513,7 @@ eventSource.onmessage = (e) => {
 **新会话请求：**
 ```bash
 curl -X POST http://localhost:8080/chat \
-  -H "X-API-Key: your-api-key" \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
   -H "Content-Type: application/json" \
   -d '{"instruction": "帮我分析这份PDF财务报告", "attachments": [{"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}]}'
 ```
@@ -1549,7 +1522,7 @@ curl -X POST http://localhost:8080/chat \
 ```bash
 curl -X POST http://localhost:8080/chat \
   -H "X-Session-ID: 20260419103000523_a1b2" \
-  -H "X-API-Key: your-api-key" \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
   -H "Content-Type: application/json" \
   -d '{"instruction": "根据刚才的分析，生成一份总结报告"}'
 ```
@@ -1719,7 +1692,7 @@ curl -X POST http://localhost:8080/chat \
 
 ```http
 GET /sess/history?limit=10&offset=0
-X-API-Key: your-secret-key
+X-API-Key: 在Web界面创建的APIKey
 ```
 
 **Query 参数：**
@@ -1806,134 +1779,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.9 GET /web/agents - 列出所有 Agent（需登录会话）
-
-列出主 Agent 和所有已注册的子 Agent，主 Agent（`groot`）始终排在首位，其余按字典序排列。每个 Agent 附带其 Skills 摘要。
-
-**响应示例：**
-```json
-{
-  "agents": [
-    {
-      "name": "groot",
-      "description": "主 Agent",
-      "skills": [
-        {"name": "pdf_analyzer", "description": "分析PDF文档并生成摘要"}
-      ]
-    },
-    {
-      "name": "db-agent",
-      "description": "数据库查询专家，擅长 SQL 编写与解读",
-      "skills": []
-    }
-  ]
-}
-```
-
----
-
-### 7.10 GET /web/skills - 列出可用 Skills（需登录会话）
-
-**响应示例：**
-```json
-{
-  "skills": [
-    {"name": "pdf_analyzer", "description": "分析PDF文档并生成摘要"},
-    {"name": "code_generator", "description": "根据需求生成代码"}
-  ],
-  "total": 2
-}
-```
-
----
-
-### 7.11 GET /web/tools - 列出可用工具（需登录会话）
-
-列出所有可用 MCP 工具，按来源分组返回。
-
-**响应示例：**
-```json
-{
-  "filesystem": {
-    "tools": [
-      {"name": "file_read", "description": "读取文件内容"},
-      {"name": "file_write", "description": "写入文件内容"}
-    ],
-    "total": 2
-  },
-  "http_request": {
-    "tools": [
-      {"name": "http_get", "description": "发送HTTP GET请求"}
-    ],
-    "total": 1
-  }
-}
-```
-
-**响应结构说明：**
-
-| 字段 | 说明 |
-|------|------|
-| 顶层 key | MCP 服务名称 |
-| `tools` | 工具列表数组 |
-| `tools[].name` | 工具名称 |
-| `tools[].description` | 工具描述 |
-| `total` | 该组工具数量 |
-
-> **注意：** `GET /web/tools` 返回所有工具，包括 MCP 工具和内置调度工具（`schedule_create`、`schedule_list` 等 8 个，需 `schedule.enabled: true`）。支持 `X-Agent-Name` 请求头查看指定子 Agent 的工具（见 5.3.5）。
-
----
-
-### 7.12 /web/models - 模型管理（需登录会话）
-
-模型配置存储在数据库中，通过以下端点管理（Web 界面 设置 → 模型 即基于这些端点），变更立即生效：
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/web/models` | GET | 列出全部模型 |
-| `/web/models` | POST | 创建模型（首个模型自动成为默认） |
-| `/web/models/{name}` | PUT | 更新模型（`api_key` 传空表示保持原值） |
-| `/web/models/{name}` | DELETE | 删除模型（默认模型不允许删除） |
-| `/web/models/{name}/default` | PUT | 设为默认模型（禁用的模型不可设为默认） |
-| `/web/models/test` | POST | 连接测试（body：`name`/`base_url`/`api_key`/`model`，`api_key` 为空且 `name` 非空时取库中已存密钥） |
-
-**GET /web/models 响应示例：**
-```json
-{
-  "models": [
-    {"name": "gpt-4o", "model": "gpt-4o", "base_url": "https://api.openai.com/v1", "api_key": "****abcd", "is_default": true, "enabled": true},
-    {"name": "kimi-k2.5", "model": "kimi-k2.5", "base_url": "https://api.moonshot.cn/v1", "api_key": "${MOONSHOT_API_KEY}", "is_default": false, "enabled": true}
-  ],
-  "default": "gpt-4o",
-  "total": 2
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `models[].name` | 模型逻辑名称（全局唯一，即 `X-Model-Name` 的取值） |
-| `models[].model` | 实际调用时的模型名称 |
-| `models[].base_url` | 该模型的 API 地址 |
-| `models[].api_key` | 脱敏后的 API 密钥（只保留尾 4 位；`${ENV_VAR}` 环境变量引用原样展示） |
-| `models[].is_default` | 是否为默认模型 |
-| `models[].enabled` | 是否启用（禁用的模型不出现在聊天下拉框，也不可通过 `X-Model-Name` 使用） |
-| `default` | 默认模型名称 |
-
-响应中还包含 `max_completion_tokens`、`max_context_tokens`、`temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed`、`stop`、`thinking` 等模型参数字段，字段含义见 [4.3 配置字段详解](#43-配置字段详解)。
-
-**错误码：**
-
-| HTTP 状态码 | 错误码 | 说明 |
-|------------|--------|------|
-| 400 | `invalid_model_config` | 模型参数校验失败（必填缺失或参数超界） |
-| 400 | `model_disabled` | 模型已禁用（如将禁用模型设为默认） |
-| 404 | `model_not_found` | 模型不存在 |
-| 409 | `model_name_exists` | 模型名称已存在 |
-| 409 | `default_model_protected` | 默认模型不允许删除或禁用 |
-
----
-
-### 7.13 GET /schedule - 列出定时任务
+### 7.9 GET /schedule - 列出定时任务
 
 查询所有定时任务，支持按状态过滤。
 
@@ -1969,7 +1815,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.14 GET /schedule/:id - 查询任务详情
+### 7.10 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -1977,11 +1823,11 @@ X-API-Key: your-secret-key
 |------|------|------|------|
 | `id` | string | 是 | 任务 ID（路径参数） |
 
-**响应：** 返回完整任务定义，格式同 7.13 中单条任务。
+**响应：** 返回完整任务定义，格式同 7.9 中单条任务。
 
 ---
 
-### 7.15 DELETE /schedule/:id - 删除任务
+### 7.11 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -2001,7 +1847,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.16 POST /schedule/:id/disable - 禁用任务
+### 7.12 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -2015,7 +1861,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.17 POST /schedule/:id/enable - 启用任务
+### 7.13 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -2029,7 +1875,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.18 POST /schedule/:id/archive - 归档任务
+### 7.14 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -2043,7 +1889,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.19 GET /schedule/:id/history - 执行历史
+### 7.15 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -2071,7 +1917,7 @@ X-API-Key: your-secret-key
 
 ---
 
-### 7.20 定时任务创建（通过对话）
+### 7.16 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
@@ -2085,145 +1931,7 @@ Agent 自动调用 schedule_create 工具创建任务：
 - notify_on_success: ["webhook"]
 ```
 
-内置的 8 个调度工具（`schedule_create`、`schedule_list`、`schedule_inspect`、`schedule_history`、`schedule_delete`、`schedule_disable`、`schedule_enable`、`schedule_archive`）在 `schedule.enabled: true` 时自动注册到 Agent，可通过 `GET /web/tools` 查看。
-
-### 7.21 POST /web/setup - 创建首个用户
-
-首次初始化时创建 Web 登录用户，仅在用户表为空时可用。密码以 bcrypt 加密存储，用户的系统编号按 `yyyyMMddHHmmss` 格式自动生成。
-
-**请求：**
-
-```bash
-curl -X POST http://localhost:8080/web/setup \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "your-password"}'
-```
-
-**响应（200）：**
-
-```json
-{
-  "status": "ok"
-}
-```
-
-创建成功后不自动登录，需调用 `/web/login` 登录。
-
-**错误响应：**
-
-| 状态码 | 说明 |
-|--------|------|
-| `400` | 请求体格式错误 / 用户名为空 / 密码少于 8 位 |
-| `409` | 用户已存在（`already_initialized`） |
-
-### 7.22 POST /web/login - Web 界面登录
-
-用于 Web 界面登录，按用户名查库并以 bcrypt 校验密码，通过后下发 HttpOnly Cookie 并更新用户的最后登录时间。
-
-**请求：**
-
-```bash
-curl -X POST http://localhost:8080/web/login \
-  -H "Content-Type: application/json" \
-  -c cookie.txt \
-  -d '{"username": "admin", "password": "your-password"}'
-```
-
-**响应（200）：**
-
-```json
-{
-  "status": "ok"
-}
-```
-
-响应同时携带 `Set-Cookie: groot_web_session=<token>; Path=/; HttpOnly; SameSite=Strict`（经 https 到达时附加 `Secure`）。会话有效期 1 小时，活跃访问自动续期；Cookie 本身为浏览器会话 Cookie，有效期由服务端控制。
-
-**错误响应：**
-
-| 状态码 | 说明 |
-|--------|------|
-| `400` | 请求体格式错误 |
-| `401` | 用户名或密码错误 |
-| `429` | 同一 IP 在 10 分钟窗口内失败达 5 次，暂时拒绝登录 |
-
-### 7.23 POST /web/logout - Web 界面登出
-
-使当前 Cookie 中的会话令牌失效。
-
-**请求：**
-
-```bash
-curl -X POST http://localhost:8080/web/logout -b cookie.txt
-```
-
-**响应（200）：**
-
-```json
-{
-  "status": "ok"
-}
-```
-
-未携带 Cookie 时同样返回 `200`（幂等）。
-
-### 7.24 GET /web/me - 查询登录状态
-
-供 Web 界面在加载时判断进入创建用户页、登录页还是主界面。
-
-**请求：**
-
-```bash
-curl http://localhost:8080/web/me -b cookie.txt
-```
-
-**响应（200）：**
-
-```json
-{
-  "authenticated": true,
-  "auth_required": true,
-  "needs_setup": false,
-  "username": "admin"
-}
-```
-
-**字段说明：**
-
-| 字段 | 说明 |
-|------|------|
-| `authenticated` | 当前请求是否携带有效登录会话 |
-| `auth_required` | 恒为 `true`（Web 登录认证始终启用） |
-| `needs_setup` | 用户表是否为空；为 `true` 时前端进入创建用户页 |
-| `username` | 当前登录用户名，仅已认证时返回 |
-
-### 7.25 POST /web/password - 修改密码
-
-修改当前登录用户的密码，需携带有效登录会话。修改成功后该用户的其他会话全部失效，当前会话保留。
-
-**请求：**
-
-```bash
-curl -X POST http://localhost:8080/web/password \
-  -H "Content-Type: application/json" \
-  -b cookie.txt \
-  -d '{"old_password": "your-password", "new_password": "new-password"}'
-```
-
-**响应（200）：**
-
-```json
-{
-  "status": "ok"
-}
-```
-
-**错误响应：**
-
-| 状态码 | 说明 |
-|--------|------|
-| `400` | 请求体格式错误 / 新密码少于 8 位 |
-| `401` | 未登录、会话过期，或原始密码错误（`wrong_password`） |
+内置的 8 个调度工具（`schedule_create`、`schedule_list`、`schedule_inspect`、`schedule_history`、`schedule_delete`、`schedule_disable`、`schedule_enable`、`schedule_archive`）在 `schedule.enabled: true` 时自动注册到 Agent。
 
 ---
 
@@ -2236,7 +1944,7 @@ curl -X POST http://localhost:8080/web/password \
 ```python
 from groot_client import GrootClient
 
-client = GrootClient("http://localhost:8080", "your-api-key")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
 
 # 新会话
 result = client.execute_chat("分析这份财报", callback=lambda t, d: print(f"[{t}] {d}"))
@@ -2251,7 +1959,7 @@ result2 = client.execute_chat("生成摘要", session_id=result["session_id"])
 ### 8.2 Java
 
 ```java
-GrootClient client = new GrootClient("http://localhost:8080", "your-api-key");
+GrootClient client = new GrootClient("http://localhost:8080", "在Web界面创建的APIKey");
 
 // 新会话
 ChatResult result = client.executeChat("分析这份财报", (type, data) -> {
@@ -2272,7 +1980,7 @@ ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), n
 ### 9.1 多轮文档分析
 
 ```python
-client = GrootClient("http://localhost:8080", "your-api-key")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
 
 # 第1轮：上传文档并分析
 result1 = client.execute_chat("分析这份财报，提取营收、利润等关键指标")
@@ -2288,7 +1996,7 @@ result3 = client.execute_chat("生成一份分析报告摘要", session_id=sid)
 ### 9.2 渐进式代码开发
 
 ```python
-client = GrootClient("http://localhost:8080", "your-api-key")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
 
 result1 = client.execute_chat("写一个 Python 数据处理工具类，包含 CSV 读取功能",
                               prompt="你是资深 Python 开发者")
@@ -2315,7 +2023,7 @@ message:
 **2. 通过对话创建任务：**
 
 ```python
-client = GrootClient("http://localhost:8080", "your-api-key")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
 
 # 创建定时任务
 client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报表，结果发送到 webhook")
@@ -2328,7 +2036,7 @@ client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报�
 
 ```bash
 # API 管理
-curl -X POST http://localhost:8080/schedule/daily-sales-report/disable   -H "X-API-Key: your-api-key"
+curl -X POST http://localhost:8080/schedule/daily-sales-report/disable   -H "X-API-Key: 在Web界面创建的APIKey"
 ```
 
 **4. 执行结果通知：**
@@ -2394,11 +2102,11 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q6: 认证失败 401 Unauthorized
 
-**原因：** API Key 无效或未携带。
+**原因：** API Key 无效、已过期、已删除或未携带。
 
 **解决：**
-1. 确认配置了正确的 API Key
-2. 检查请求头是否携带 `X-API-Key`
+1. 登录 Web 界面，在 设置 → API Keys 中确认 Key 存在且未过期，必要时重新创建
+2. 检查请求头是否携带 `X-API-Key`（或自定义的 `auth.header_name`）
 
 ---
 
@@ -2486,7 +2194,6 @@ export OPENAI_API_KEY="your-api-key"
 |------|------|------|
 | `OPENAI_API_KEY` | OpenAI API 密钥 | Web UI 模型配置的 api_key 填写 `${OPENAI_API_KEY}` 时需设置 |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | Web UI 模型配置的 api_key 填写 `${DEEPSEEK_API_KEY}` 时需设置 |
-| `GROOT_API_KEY` | 认证密钥 | 启用认证且配置文件有引用时需设置 |
 | `GROOT_DB_PASSWORD` | 数据库密码 | `env.yaml` 的 DSN 中有引用时需设置 |
 
 > **判断方法：** 查看配置文件或 Web UI 模型配置中是否使用 `${VAR_NAME}` 格式引用。如果引用了某个变量，则需设置对应的环境变量；如果直接写明文密钥，则不需要设置环境变量。变量名可自定义。

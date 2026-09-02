@@ -8,7 +8,7 @@ import (
 )
 
 func TestGenerateConfigTemplate(t *testing.T) {
-	content := GenerateConfigTemplate()
+	content := GenerateConfigTemplate("test-secret")
 
 	// 模型配置已迁入数据库（Web UI 管理），模板不应再包含 llm 段
 	if strings.Contains(content, "\nllm:") {
@@ -24,10 +24,19 @@ func TestGenerateConfigTemplate(t *testing.T) {
 	if !strings.Contains(content, "#") {
 		t.Error("模板缺少注释说明")
 	}
+	if !strings.Contains(content, `secret: "test-secret"`) {
+		t.Error("template should contain the injected auth secret")
+	}
+	if strings.Contains(content, "keys:") || strings.Contains(content, "# 是否开启认证") {
+		t.Error("template should not contain legacy auth keys config")
+	}
+	if strings.Contains(content, "%!") {
+		t.Error("template contains botched format verb output")
+	}
 }
 
 func TestGenerateConfigTemplate_NoStorageBlock(t *testing.T) {
-	tpl := GenerateConfigTemplate()
+	tpl := GenerateConfigTemplate("test-secret")
 	// database 凭据已剥离到 env.yaml，config.yaml 模板不应再生成 storage/minio/database 顶层节。
 	if strings.Contains(tpl, "\nstorage:") {
 		t.Error("config.yaml 模板不应包含 'storage:' 顶层节")
@@ -41,7 +50,7 @@ func TestGenerateConfigTemplate_NoStorageBlock(t *testing.T) {
 // 模板中：memory.directory（记忆已迁入数据库）、react.max_tokens 与
 // react.nesting_max_depth（引擎从未据此终止，字段已从 ReactConfig 移除）。
 func TestGenerateConfigTemplate_NoRemovedKeys(t *testing.T) {
-	tpl := GenerateConfigTemplate()
+	tpl := GenerateConfigTemplate("test-secret")
 	for _, key := range []string{"directory: memory", "max_tokens: 100000", "nesting_max_depth"} {
 		if strings.Contains(tpl, key) {
 			t.Errorf("模板不应再包含已删除的配置项 %q", key)
@@ -52,7 +61,7 @@ func TestGenerateConfigTemplate_NoRemovedKeys(t *testing.T) {
 // TestGenerateConfigTemplate_HasMessageSection 验证 message 节出现在模板中：
 // 它是生效配置（main.go 据此注册 webhook/email 发送器），必须对用户可见。
 func TestGenerateConfigTemplate_HasMessageSection(t *testing.T) {
-	tpl := GenerateConfigTemplate()
+	tpl := GenerateConfigTemplate("test-secret")
 	for _, key := range []string{"#message:", "queue_size:", "webhook:", "smtp_host:"} {
 		if !strings.Contains(tpl, key) {
 			t.Errorf("模板缺少 message 配置项 %q", key)
@@ -63,7 +72,7 @@ func TestGenerateConfigTemplate_HasMessageSection(t *testing.T) {
 // TestGenerateConfigTemplate_IsValidYAML 验证模板原文就是合法 yaml，
 // 捕获未来维护时引入的语法错误（缩进错乱、tab/space 混用等）。
 func TestGenerateConfigTemplate_IsValidYAML(t *testing.T) {
-	tpl := GenerateConfigTemplate()
+	tpl := GenerateConfigTemplate("test-secret")
 	var c Config
 	if err := yaml.Unmarshal([]byte(tpl), &c); err != nil {
 		t.Fatalf("template should be valid YAML, unmarshal error: %v", err)
@@ -71,6 +80,13 @@ func TestGenerateConfigTemplate_IsValidYAML(t *testing.T) {
 	// config.yaml 不包含 database/storage 节（凭据在 env.yaml 中）
 	if c.Database != nil {
 		t.Error("config.yaml 模板解析后 Database 必须为 nil（已迁移到 env.yaml）")
+	}
+	// security.auth 节是生效配置，解析后 secret 应等于注入值
+	if c.Security.Auth.Secret != "test-secret" {
+		t.Errorf("security.auth.secret = %q, want 注入值 test-secret", c.Security.Auth.Secret)
+	}
+	if c.Security.Auth.HeaderName != "X-API-Key" {
+		t.Errorf("security.auth.header_name = %q, want X-API-Key", c.Security.Auth.HeaderName)
 	}
 }
 

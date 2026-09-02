@@ -121,6 +121,11 @@ func applyDefaults(cfg *Config) {
 		cfg.Attachment.MaxCount = 10
 	}
 
+	// Auth defaults（认证始终开启，只需 header 名默认值；secret 由 EnsureAuthSecret 兜底）
+	if cfg.Security.Auth.HeaderName == "" {
+		cfg.Security.Auth.HeaderName = "X-API-Key"
+	}
+
 	// Logging defaults
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
@@ -144,12 +149,6 @@ func applyDefaults(cfg *Config) {
 
 // expandConfigEnvVars expands environment variables in config
 func expandConfigEnvVars(cfg *Config) {
-	// Expand API Keys
-	for i, keyInfo := range cfg.Security.Auth.APIKey.Keys {
-		keyInfo.Key = ExpandEnv(keyInfo.Key)
-		cfg.Security.Auth.APIKey.Keys[i] = keyInfo
-	}
-
 	// Expand database DSN
 	if cfg.Database != nil {
 		cfg.Database.DSN = ExpandEnv(cfg.Database.DSN)

@@ -4,6 +4,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/repo"
+	"github.com/zfd81/groot/internal/repo/apikeydb"
 	"github.com/zfd81/groot/internal/repo/memberdb"
 	"github.com/zfd81/groot/internal/repo/memorydb"
 	"github.com/zfd81/groot/internal/repo/modeldb"
@@ -22,6 +23,7 @@ type Repos struct {
 	Resource repo.ResourceRepo
 	User     repo.UserRepo
 	Model    repo.ModelRepo
+	APIKey   repo.APIKeyRepo
 }
 
 // NewRepos constructs all Repository implementations.
@@ -41,5 +43,6 @@ func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
 		Resource: resourceRepo,
 		User:     userdb.New(sqlxDB, dialect),
 		Model:    modeldb.New(sqlxDB, dialect),
+		APIKey:   apikeydb.New(sqlxDB, dialect),
 	}
 }

@@ -136,8 +136,13 @@ func createConfigFile(homeDir string) error {
 		return fmt.Errorf("检查配置文件失败: %w", err)
 	}
 
-	template := config.GenerateConfigTemplate()
-	if err := os.WriteFile(configPath, []byte(template), 0644); err != nil {
+	secret, err := config.GenerateAuthSecret()
+	if err != nil {
+		return fmt.Errorf("生成认证密钥失败: %w", err)
+	}
+	template := config.GenerateConfigTemplate(secret)
+	// config.yaml 含 JWT 签名密钥，权限 0600（仅当前用户可读写），看齐 env.yaml 的凭据文件标准
+	if err := os.WriteFile(configPath, []byte(template), 0600); err != nil {
 		return fmt.Errorf("创建配置文件失败: %w", err)
 	}
 

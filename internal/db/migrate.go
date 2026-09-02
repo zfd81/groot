@@ -205,6 +205,14 @@ func sqliteDDL() []string {
 			updated_at            INTEGER NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_models_name ON models(name)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id          TEXT NOT NULL PRIMARY KEY,
+			name        TEXT NOT NULL,
+			permissions TEXT NOT NULL DEFAULT '[]',
+			expires_at  INTEGER NOT NULL,
+			created_at  INTEGER NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_api_keys_name ON api_keys(name)`,
 	}
 }
 
@@ -319,6 +327,14 @@ func mysqlDDL() []string {
 			created_at            BIGINT NOT NULL,
 			updated_at            BIGINT NOT NULL,
 			UNIQUE KEY uk_models_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id          VARCHAR(14)  NOT NULL PRIMARY KEY,
+			name        VARCHAR(64)  NOT NULL,
+			permissions TEXT         NOT NULL,
+			expires_at  BIGINT       NOT NULL,
+			created_at  BIGINT       NOT NULL,
+			UNIQUE KEY uk_api_keys_name (name)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
@@ -435,5 +451,13 @@ func postgresDDL() []string {
 			updated_at            BIGINT NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_models_name ON models(name)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id          VARCHAR(14)  NOT NULL PRIMARY KEY,
+			name        VARCHAR(64)  NOT NULL,
+			permissions TEXT         NOT NULL DEFAULT '[]',
+			expires_at  BIGINT       NOT NULL,
+			created_at  BIGINT       NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_api_keys_name ON api_keys(name)`,
 	}
 }

@@ -9,6 +9,7 @@ import { useAuthStore } from '../../stores/auth'
 import { api, ApiError } from '../../api/client'
 import type { SkillsResp, ToolsResp, AgentsResp, AgentInfo, HealthResp } from '../../api/types'
 import ModelsPanel from './ModelsPanel.vue'
+import ApiKeysPanel from './ApiKeysPanel.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ show: boolean }>()
@@ -27,6 +28,7 @@ const menuOptions = computed(() => [
   { label: t('settings.menuAgents'), key: 'agents' },
   { label: t('settings.menuSkills'), key: 'skills' },
   { label: t('settings.menuTools'), key: 'tools' },
+  { label: t('settings.menuApiKeys'), key: 'apikeys' },
   { label: t('settings.menuAccount'), key: 'account' },
 ])
 
@@ -256,6 +258,11 @@ watch(
         <!-- 模型 -->
         <div v-else-if="section === 'models'">
           <ModelsPanel />
+        </div>
+
+        <!-- API Keys -->
+        <div v-else-if="section === 'apikeys'">
+          <ApiKeysPanel />
         </div>
 
         <!-- Skills -->

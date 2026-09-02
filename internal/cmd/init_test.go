@@ -87,8 +87,13 @@ func TestRunInit(t *testing.T) {
 
 	// 检查配置文件创建
 	configPath := filepath.Join(homeDir, "config.yaml")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Errorf("配置文件未创建")
+	stat, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat config.yaml: %v", err)
+	}
+	// config.yaml 含 JWT 签名密钥，权限要求 0600（仅当前用户可读写）
+	if perm := stat.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config.yaml 权限 = %o, want 0600（含 JWT 签名密钥应私密）", perm)
 	}
 }
 
@@ -115,6 +120,9 @@ func TestRunInitExistingDirectory(t *testing.T) {
 	}
 }
 
+// TestRunInitExistingConfig 验证已存在的 config.yaml 不会被 init 覆盖。
+// 此行为很关键：config.yaml 含 JWT 签名密钥，覆盖意味着重新生成 secret，
+// 所有已签发的 API Key 会立即失效。
 func TestRunInitExistingConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	homeDir := filepath.Join(tmpDir, "config_exists")
@@ -229,7 +237,7 @@ func TestRunInit_CreatesEnvYaml(t *testing.T) {
 }
 
 // TestRunInit_PreservesExistingEnvYaml 验证已存在的 env.yaml 不会被 init 覆盖
-//（用户填好的 MinIO 凭据安全）。
+// （用户填好的 MinIO 凭据安全）。
 func TestRunInit_PreservesExistingEnvYaml(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(home, 0755); err != nil {

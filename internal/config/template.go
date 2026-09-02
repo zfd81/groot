@@ -1,10 +1,13 @@
 package config
 
-// GenerateConfigTemplate 返回带注释的 config.yaml 模板。
+import "fmt"
+
+// GenerateConfigTemplate 返回带注释的 config.yaml 模板，
+// authSecret 会被注入 security.auth.secret 作为 JWT 签名密钥。
 //
 // 注意：数据库等基础设施凭据存放在 ~/.groot/env.yaml，本模板只包含业务配置。
-func GenerateConfigTemplate() string {
-	return `# Groot Agent 配置文件
+func GenerateConfigTemplate(authSecret string) string {
+	return fmt.Sprintf(`# Groot Agent 配置文件
 # 请根据实际情况修改以下配置
 
 # Agent 基础配置
@@ -64,7 +67,10 @@ func GenerateConfigTemplate() string {
 #  max_result_length: 8000         # 子 Agent 返回文本截断长度
 
 # 安全配置
-#security:
+security:
+  auth:
+    header_name: X-API-Key         # API Key 请求头名称
+    secret: "%s"                   # JWT 签名密钥（自动生成，请勿泄露；更换后所有 API Key 立即失效）
 #  rate_limit:
 #    enabled: false                   # 是否启用速率限制
 #    global_qps: 0                    # 全局 QPS 限制（0 表示不限制）
@@ -72,15 +78,6 @@ func GenerateConfigTemplate() string {
 #    default_qps: 10                  # 每个 API Key 的默认 QPS
 #    default_concurrency: 5           # 每个 API Key 的默认并发数
 #    cleanup_interval: 5m             # 空闲限流器清理间隔
-#  auth:
-#    enabled: false                 # 是否开启认证
-#    type: api_key                  # 认证类型
-#    api_key:
-#      header_name: X-API-Key       # 认证 Header 名称
-#      keys:
-#        - name: default            # Key 名称
-#          key: ${GROOT_API_KEY}    # Key 值（建议使用环境变量）
-#          permissions: [all]       # 权限范围
 
 # 日志配置
 #logging:
@@ -93,5 +90,5 @@ func GenerateConfigTemplate() string {
 #    max_age: 7                     # 日志保留天数
 
 # 完整配置说明请参考：https://github.com/zfd81/groot
-`
+`, authSecret)
 }

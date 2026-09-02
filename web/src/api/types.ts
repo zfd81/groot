@@ -189,3 +189,26 @@ export interface AgentInfo {
 export interface AgentsResp {
   agents: AgentInfo[]
 }
+
+// API Key 管理（/web/apikeys）
+export interface ApiKeyInfo {
+  id: string
+  name: string
+  permissions: string[]
+  expires_at: number
+  created_at: number
+  expired: boolean
+}
+
+export interface ApiKeysResp {
+  keys: ApiKeyInfo[]
+  total: number
+}
+
+export interface ApiKeyCreateResp extends ApiKeyInfo {
+  token: string
+}
+
+export interface ApiKeyTokenResp {
+  token: string
+}
