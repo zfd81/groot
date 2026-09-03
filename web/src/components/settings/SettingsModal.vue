@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Sunny, Moon, Monitor, Document } from '@element-plus/icons-vue'
+import { Sunny, Moon, Monitor, Document, Collection, Tools } from '@element-plus/icons-vue'
 import { useThemeStore, type ThemeMode } from '../../stores/theme'
 import { useLanguageStore, type Lang } from '../../stores/language'
 import { useMetaStore } from '../../stores/meta'
 import { useAuthStore } from '../../stores/auth'
 import { api, ApiError } from '../../api/client'
-import type { SkillsResp, ToolsResp, AgentsResp, AgentInfo, AgentDefinitionResp, HealthResp } from '../../api/types'
+import type { ToolsResp, AgentsResp, AgentInfo, AgentDefinitionResp, HealthResp } from '../../api/types'
 import ModelsPanel from './ModelsPanel.vue'
 import ApiKeysPanel from './ApiKeysPanel.vue'
 
@@ -26,8 +26,6 @@ const menuOptions = computed(() => [
   { label: t('settings.menuGeneral'), key: 'general' },
   { label: t('settings.menuModels'), key: 'models' },
   { label: t('settings.menuAgents'), key: 'agents' },
-  { label: t('settings.menuSkills'), key: 'skills' },
-  { label: t('settings.menuTools'), key: 'tools' },
   { label: t('settings.menuApiKeys'), key: 'apikeys' },
   { label: t('settings.menuAccount'), key: 'account' },
 ])
@@ -44,7 +42,6 @@ const langOptions: { label: string; value: Lang }[] = [
   { label: 'English', value: 'en' },
 ]
 
-const skills = ref<SkillsResp | null>(null)
 const tools = ref<ToolsResp | null>(null)
 const agents = ref<AgentInfo[]>([])
 // 运行环境信息（工作目录/数据库类型/日志目录），来自 /health 的 environment 检查项
@@ -56,16 +53,6 @@ const loadedOnce = ref(false)
 // el-select 把空串当作“未选中”而回落到 placeholder；用非空值才能正确显示选中态。
 // 后端把 X-Agent-Name=groot 视为等价于不传（即主 Agent）。
 const MAIN_AGENT = 'groot'
-
-// Skills / MCP 工具按 Agent 维度查看：'groot' 表示主 Agent。
-const filterAgent = ref(MAIN_AGENT)
-const filterLoading = ref(false)
-const agentFilterOptions = computed(() => [
-  { label: MAIN_AGENT, value: MAIN_AGENT, isDefault: true },
-  ...agents.value
-    .filter((a) => a.name !== MAIN_AGENT)
-    .map((a) => ({ label: a.name, value: a.name, isDefault: false })),
-])
 
 const themeMode = computed<ThemeMode>({
   get: () => mode.value,
@@ -128,13 +115,19 @@ const envRows = computed(() =>
     : []
 )
 
+// 后端主 Agent 路径下会把内置工具（如 call_agent）合成为 "_builtin" 分组，
+// 设置页只展示真实配置的 MCP，展示时过滤掉该合成分组。
+const BUILTIN_GROUP = '_builtin'
+
 const toolGroups = computed(() =>
   tools.value
-    ? Object.entries(tools.value).map(([name, g]) => ({ name, ...g }))
+    ? Object.entries(tools.value)
+      .filter(([name]) => name !== BUILTIN_GROUP)
+      .map(([name, g]) => ({ name, ...g }))
     : []
 )
 
-// 打开时加载 Agent 列表（用于筛选下拉），并首次拉取当前筛选 Agent 的 skills/tools。
+// 打开时加载 Agent 列表与运行环境信息。
 async function ensureLoaded() {
   await meta.load()
   if (loadedOnce.value) return
@@ -146,36 +139,11 @@ async function ensureLoaded() {
     ])
     agents.value = a?.agents || []
     envInfo.value = h?.checks?.environment?.info || null
-    await loadAgentScoped()
     loadedOnce.value = true
   } finally {
     loading.value = false
   }
 }
-
-// 按当前 filterAgent 拉取该 Agent 的 skills 与 MCP 工具。
-// 'groot' = 主 Agent（等价于不传 header）；非主 Agent 则通过 X-Agent-Name 指定子 Agent。
-async function loadAgentScoped() {
-  filterLoading.value = true
-  const headers =
-    filterAgent.value && filterAgent.value !== MAIN_AGENT
-      ? { 'X-Agent-Name': filterAgent.value }
-      : undefined
-  try {
-    const [s, t] = await Promise.all([
-      api.get<SkillsResp>('/web/skills', headers).catch(() => null),
-      api.get<ToolsResp>('/web/tools', headers).catch(() => null),
-    ])
-    skills.value = s
-    tools.value = t
-  } finally {
-    filterLoading.value = false
-  }
-}
-
-watch(filterAgent, () => {
-  if (loadedOnce.value) void loadAgentScoped()
-})
 
 watch(
   () => props.show,
@@ -209,6 +177,34 @@ async function openAgentDef(a: AgentInfo) {
     defError.value = e instanceof Error ? e.message : t('settings.agentDefLoadFail')
   } finally {
     defLoading.value = false
+  }
+}
+
+// Agent Skills 查看弹窗：展示该 Agent 的 skills 列表（数据来自 /web/agents，无需再请求）。
+const skillsShow = ref(false)
+const skillsAgent = ref<AgentInfo | null>(null)
+
+function openAgentSkills(a: AgentInfo) {
+  skillsAgent.value = a
+  skillsShow.value = true
+}
+
+// Agent MCP 工具查看弹窗：打开时按 Agent 实时拉取 /web/tools。
+// 主 Agent（groot）不传 header；子 Agent 通过 X-Agent-Name 指定。
+const toolsShow = ref(false)
+const toolsLoading = ref(false)
+const toolsAgentName = ref('')
+
+async function openAgentTools(a: AgentInfo) {
+  toolsAgentName.value = a.name
+  tools.value = null
+  toolsShow.value = true
+  toolsLoading.value = true
+  const headers = a.name !== MAIN_AGENT ? { 'X-Agent-Name': a.name } : undefined
+  try {
+    tools.value = await api.get<ToolsResp>('/web/tools', headers).catch(() => null)
+  } finally {
+    toolsLoading.value = false
   }
 }
 </script>
@@ -261,7 +257,7 @@ async function openAgentDef(a: AgentInfo) {
         <div v-else-if="section === 'account'" class="account-panel">
           <div class="account-user">
             <div class="label-title">{{ t('password.currentUser') }}</div>
-            <span class="mono">{{ auth.username || '-' }}</span>
+            <span class="account-username">{{ auth.username || '-' }}</span>
           </div>
           <div class="label-desc password-title">{{ t('password.desc') }}</div>
           <el-form label-position="top" class="password-form" @submit.prevent="handleChangePassword">
@@ -293,56 +289,7 @@ async function openAgentDef(a: AgentInfo) {
           <ApiKeysPanel />
         </div>
 
-        <!-- Skills -->
-        <div v-else-if="section === 'skills'">
-          <div class="filter-bar">
-            <span class="filter-label">{{ t('settings.agentLabel') }}</span>
-            <el-select v-model="filterAgent" size="small" style="width: 180px">
-              <el-option v-for="o in agentFilterOptions" :key="o.value" :label="o.label" :value="o.value">
-                <span class="opt-label">{{ o.label }}</span>
-                <el-tag v-if="o.isDefault" size="small" type="primary" effect="light" class="opt-tag">
-                  {{ t('settings.default') }}
-                </el-tag>
-              </el-option>
-            </el-select>
-          </div>
-          <div v-loading="loading || filterLoading">
-            <div v-for="s in skills?.skills || []" :key="s.name" class="list-item">
-              <div class="item-title">{{ s.name }}</div>
-              <div class="item-desc">{{ s.description }}</div>
-            </div>
-            <el-empty v-if="!loading && !filterLoading && !(skills?.skills?.length)"
-              :description="t('settings.noSkills')" :image-size="60" />
-          </div>
-        </div>
-
-        <!-- MCP 工具 -->
-        <div v-else-if="section === 'tools'">
-          <div class="filter-bar">
-            <span class="filter-label">{{ t('settings.agentLabel') }}</span>
-            <el-select v-model="filterAgent" size="small" style="width: 180px">
-              <el-option v-for="o in agentFilterOptions" :key="o.value" :label="o.label" :value="o.value">
-                <span class="opt-label">{{ o.label }}</span>
-                <el-tag v-if="o.isDefault" size="small" type="primary" effect="light" class="opt-tag">
-                  {{ t('settings.default') }}
-                </el-tag>
-              </el-option>
-            </el-select>
-          </div>
-          <div v-loading="loading || filterLoading">
-            <div v-for="g in toolGroups" :key="g.name" class="tool-group">
-              <div class="group-title">{{ g.name }} ({{ g.total }})</div>
-              <div v-for="tl in g.tools" :key="tl.name" class="list-item">
-                <div class="item-title">{{ tl.name }}</div>
-                <div class="item-desc">{{ tl.description }}</div>
-              </div>
-            </div>
-            <el-empty v-if="!loading && !filterLoading && !toolGroups.length" :description="t('settings.noTools')"
-              :image-size="60" />
-          </div>
-        </div>
-
-        <!-- Agents：卡片网格，每卡一个「查看」按钮弹窗展示定义 md 原文 -->
+        <!-- Agents：卡片网格，每卡三个按钮分别弹窗展示定义 md 原文 / Skills / MCP 工具 -->
         <div v-else-if="section === 'agents'">
           <div v-loading="loading">
             <div class="agent-grid">
@@ -360,6 +307,18 @@ async function openAgentDef(a: AgentInfo) {
                     @click="openAgentDef(a)">
                     <el-icon>
                       <Document />
+                    </el-icon>
+                  </button>
+                  <button type="button" class="agent-icon-btn" :title="t('settings.viewAgentSkills')"
+                    @click="openAgentSkills(a)">
+                    <el-icon>
+                      <Collection />
+                    </el-icon>
+                  </button>
+                  <button type="button" class="agent-icon-btn" :title="t('settings.viewAgentTools')"
+                    @click="openAgentTools(a)">
+                    <el-icon>
+                      <Tools />
                     </el-icon>
                   </button>
                 </div>
@@ -381,6 +340,45 @@ async function openAgentDef(a: AgentInfo) {
       </div>
       <template #footer>
         <el-button round @click="defShow = false">{{ t('common.close') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Agent Skills 查看弹窗（嵌套于设置弹窗之上） -->
+    <el-dialog v-model="skillsShow" :title="t('settings.agentSkillsTitle', { name: skillsAgent?.name || '' })"
+      width="720px" align-center append-to-body class="agent-def-dialog">
+      <div class="skills-box">
+        <div v-for="s in skillsAgent?.skills || []" :key="s.name" class="skill-entry">
+          <div class="skill-entry-name">{{ s.name }}</div>
+          <div class="skill-entry-desc">{{ s.description }}</div>
+        </div>
+        <el-empty v-if="!(skillsAgent?.skills?.length)" :description="t('settings.noSkills')" :image-size="60" />
+      </div>
+      <template #footer>
+        <el-button round @click="skillsShow = false">{{ t('common.close') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Agent MCP 工具查看弹窗（嵌套于设置弹窗之上） -->
+    <el-dialog v-model="toolsShow" :title="t('settings.agentToolsTitle', { name: toolsAgentName })"
+      width="720px" align-center append-to-body class="agent-def-dialog">
+      <div v-loading="toolsLoading" class="skills-box tools-box">
+        <div v-for="g in toolGroups" :key="g.name" class="tool-group">
+          <div class="group-title">
+            <span>{{ g.name }} ({{ g.total }})</span>
+            <el-tag v-if="g.type" size="small" effect="plain" round class="group-tag">
+              {{ g.type }}
+            </el-tag>
+          </div>
+          <div v-if="g.description" class="group-desc">{{ g.description }}</div>
+          <div v-for="tl in g.tools" :key="tl.name" class="skill-entry">
+            <div class="skill-entry-name">{{ tl.name }}</div>
+            <div class="skill-entry-desc">{{ tl.description }}</div>
+          </div>
+        </div>
+        <el-empty v-if="!toolsLoading && !toolGroups.length" :description="t('settings.noTools')" :image-size="60" />
+      </div>
+      <template #footer>
+        <el-button round @click="toolsShow = false">{{ t('common.close') }}</el-button>
       </template>
     </el-dialog>
   </el-dialog>
@@ -496,6 +494,12 @@ async function openAgentDef(a: AgentInfo) {
   border-bottom: 1px solid rgba(127, 127, 127, 0.15);
 }
 
+/* 当前用户名：与左侧标题同级的视觉分量，不做缩小弱化 */
+.account-username {
+  font-size: 1em;
+  font-weight: 600;
+}
+
 .password-title {
   margin-top: 16px;
 }
@@ -542,30 +546,6 @@ async function openAgentDef(a: AgentInfo) {
   font-size: 22px;
 }
 
-.list-item {
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.12);
-}
-
-.item-header {
-  display: flex;
-  align-items: center;
-}
-
-.item-title {
-  font-weight: 500;
-}
-
-.item-desc {
-  font-size: 0.85em;
-  opacity: 0.65;
-  margin-top: 2px;
-}
-
-.item-footer {
-  margin-top: 6px;
-}
-
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
@@ -593,34 +573,31 @@ async function openAgentDef(a: AgentInfo) {
   margin-bottom: 16px;
 }
 
-.filter-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
+.tool-group:last-of-type {
+  margin-bottom: 0;
 }
 
-.filter-label {
-  font-size: 0.85em;
-  font-weight: 600;
-  opacity: 0.7;
+/* 多个 MCP 分组之间用分割线区隔 */
+.tool-group+.tool-group {
+  border-top: 1px solid var(--el-border-color-lighter, rgba(127, 127, 127, 0.2));
+  padding-top: 14px;
 }
 
 .group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
   font-size: 0.9em;
   opacity: 0.7;
   margin-bottom: 4px;
 }
 
-/* 下拉项：名称占满、默认标签靠右（展开时可见，选中后只显示名称） */
-.opt-label {
-  margin-right: 8px;
-}
-
-.opt-tag {
-  float: right;
-  margin-top: 6px;
+/* MCP 定义中的描述：分组标题下方一行，弱化显示 */
+.group-desc {
+  font-size: 0.9em;
+  opacity: 0.65;
+  margin-bottom: 4px;
 }
 
 /* ---- Agents 卡片网格 ---- */
@@ -679,6 +656,7 @@ async function openAgentDef(a: AgentInfo) {
 .agent-card-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 4px;
   border-top: 1px solid rgba(127, 127, 127, 0.15);
   margin-top: 10px;
   padding-top: 6px;
@@ -748,6 +726,59 @@ async function openAgentDef(a: AgentInfo) {
   text-align: center;
   color: var(--el-color-danger);
   font-size: 0.9em;
+}
+
+/* Skills 弹窗列表区：容器与文字样式对齐定义查看弹窗（.def-content）——
+   同样的边框圆角容器、等宽字体、主文字颜色，超高时独立滚动 */
+.skills-box {
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-primary);
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.35)) transparent;
+}
+
+.skill-entry {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.12);
+}
+
+.skill-entry:last-of-type {
+  border-bottom: none;
+}
+
+.skill-entry-name {
+  font-weight: 600;
+}
+
+.skill-entry-desc {
+  margin-top: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* MCP 工具弹窗：加载中内容为空时保证 loading 遮罩有可视高度 */
+.tools-box {
+  min-height: 120px;
+}
+
+.skills-box::-webkit-scrollbar {
+  width: 6px;
+}
+
+.skills-box::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.skills-box::-webkit-scrollbar-thumb {
+  background: var(--el-border-color-darker, rgba(127, 127, 127, 0.35));
+  border-radius: 3px;
 }
 </style>
 

@@ -9,12 +9,25 @@ WebUI 设置弹窗中的 Agents 面板以卡片网格的形式展示系统内所
 ### 1.2 能力清单
 
 - 以两列卡片网格展示 Agent 列表：每张卡片包含 Agent 名称、标签（主 Agent 显示「默认」标签）、职责描述、等宽字体的 Agent 标识，以及底部操作区。
-- 卡片底部操作区提供一个「查看」图标按钮，点击后弹出定义查看弹窗。
+- 卡片底部操作区提供三个图标按钮：「查看定义」、「查看 Skills」与「查看 MCP 工具」。
 - 定义查看弹窗：
   - 标题为「查看 · {Agent 名称}」；
   - 标题下方标注定义文件名（主 Agent 为 `GROOT.md`，子 Agent 为 `agent.md`）；
   - 正文为可滚动的等宽字体文本区域，原样展示定义文件的完整内容（含 frontmatter）；
   - 底部提供「关闭」按钮。
+- Skills 查看弹窗：
+  - 标题为「Skills · {Agent 名称}」；
+  - 列表展示该 Agent 的全部 skills（名称 + 描述），数据来自 `/web/agents` 已加载的列表，无需额外请求；
+  - 无 skills 时显示空态提示；底部提供「关闭」按钮。
+- MCP 工具查看弹窗：
+  - 标题为「MCP 工具 · {Agent 名称}」；
+  - 打开时按 Agent 实时请求 `GET /web/tools`（主 Agent 不传 header，子 Agent 通过 `X-Agent-Name` 请求头指定），按 MCP 分组展示；
+  - 只展示真实配置的 MCP：后端为主 Agent 合成的内置分组（`_builtin`，如 call_agent）在前端过滤，不展示；
+  - 每个分组的标题行展示 MCP 的 `name`（含工具数量）与类型标签（定义中 `type` 字段的值，如 `stdio`/`sse`/`streamable_http`）；
+  - 分组标题下方展示 MCP 定义中的 `description`；分组内逐条展示工具（名称 + 描述）；
+  - 多个 MCP 分组之间以分割线区隔；
+  - 无工具时显示空态提示；底部提供「关闭」按钮。
+- Skills 与 MCP 工具弹窗的内容区与定义查看弹窗保持一致的视觉样式：边框圆角容器、等宽字体、主文字颜色、内容超高时容器内独立滚动。
 - 定义内容通过接口实时读取磁盘文件，保证查看到的始终是当前生效的定义。
 
 ### 1.3 设计细节
@@ -57,6 +70,11 @@ GET /web/agents/:name/definition
 ### 2.1 与上一版差异
 
 - 调整：Agents 面板由纵向列表（名称 + 描述 + skills 标签）改为两列卡片网格样式。
-- 新增：卡片底部「查看」按钮与定义查看弹窗，展示 Agent 定义 md 文件原文。
+- 新增：卡片底部「查看定义」按钮与定义查看弹窗，展示 Agent 定义 md 文件原文。
+- 新增：卡片底部「查看 Skills」按钮与 Skills 查看弹窗，按 Agent 展示 skills 列表。
+- 新增：卡片底部「查看 MCP 工具」按钮与 MCP 工具查看弹窗，按 Agent 展示 MCP 工具分组列表。
+- 调整：`GET /web/tools` 响应的每个分组回填 MCP 定义中的 `type` 与 `description` 字段（合成分组 `_builtin` 二者为空）。
 - 新增：后端端点 `GET /web/agents/:name/definition`。
-- 移除：Agent 卡片上的 skills 标签展示（skills 信息仍可在 Skills 面板按 Agent 筛选查看）。
+- 移除：设置弹窗左侧栏的「Skills」菜单及对应面板（skills 改为在 Agent 卡片上查看）。
+- 移除：设置弹窗左侧栏的「MCP 工具」菜单及对应面板（含按 Agent 筛选下拉，改为在 Agent 卡片上查看）。
+- 移除：Agent 卡片上的 skills 标签展示。

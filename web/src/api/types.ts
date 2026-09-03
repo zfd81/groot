@@ -173,6 +173,9 @@ export interface ToolInfo {
 }
 
 export interface ToolsGroup {
+  // MCP 定义中的 type / description；合成分组（_builtin）无这两个字段
+  type?: string
+  description?: string
   tools: ToolInfo[]
   total: number
 }

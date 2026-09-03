@@ -80,15 +80,17 @@ func (h *ToolsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			grouped[t.MCP] = group
 		}
 
-		// 确保所有 MCP 都显示（包括工具数为 0 的）
+		// 确保所有 MCP 都显示（包括工具数为 0 的），并回填 MCP 定义中的
+		// type/description（供前端在分组标题处展示类型标签与描述）。
 		mcpInfos := mgr.ListWithToolCount()
 		for _, info := range mcpInfos {
-			if _, exists := grouped[info.Name]; !exists {
-				grouped[info.Name] = types.ToolsGroup{
-					Tools: []types.ToolInfo{},
-					Total: 0,
-				}
+			group := grouped[info.Name]
+			if group.Tools == nil {
+				group.Tools = []types.ToolInfo{}
 			}
+			group.Type = string(info.Type)
+			group.Description = info.Description
+			grouped[info.Name] = group
 			// Log MCPs with errors
 			if info.Error != "" {
 				h.logger.Error("MCP has discovery error",

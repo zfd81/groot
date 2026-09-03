@@ -12,6 +12,7 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/logger"
+	"github.com/zfd81/groot/internal/mcp"
 )
 
 // TestToolsHandler_UnknownAgent 验证 X-Agent-Name 指向未注册子 Agent 时返 400。
@@ -117,5 +118,51 @@ func TestToolsHandler_SubAgentDoesNotExposeCallAgent(t *testing.T) {
 	}
 	if _, ok := grouped["_builtin"]; ok {
 		t.Errorf("Solo 模式 /tools 不应含 _builtin (call_agent)，实际 %+v", grouped)
+	}
+}
+
+// TestToolsHandler_GroupCarriesMCPTypeAndDescription 验证响应分组回填 MCP 定义中的
+// type 与 description（前端在分组标题处展示类型标签与描述）；合成分组 _builtin 二者为空。
+func TestToolsHandler_GroupCarriesMCPTypeAndDescription(t *testing.T) {
+	mgr := mcp.NewManager(logger.NewNop())
+	mgr.Register(
+		&mcp.MCPConfig{Name: "api-proxy", Type: mcp.MCPTypeSSE, Description: "HTTP API 代理", IsActive: true},
+		[]mcp.ToolDefinition{{Name: "call_api", Description: "Call predefined HTTP APIs"}},
+		"",
+	)
+	h := NewToolsHandler(mgr, agent.NewRegistryForTest(1), logger.NewNop())
+
+	rc := app.NewContext(0)
+	rc.Request.Header.SetMethod(consts.MethodGet)
+	h.Serve(context.Background(), rc)
+
+	if got := rc.Response.StatusCode(); got != 200 {
+		t.Fatalf("expected 200, got %d body=%s", got, rc.Response.Body())
+	}
+	var grouped map[string]types.ToolsGroup
+	if err := json.Unmarshal(rc.Response.Body(), &grouped); err != nil {
+		t.Fatalf("解析失败：%v body=%s", err, rc.Response.Body())
+	}
+
+	g, ok := grouped["api-proxy"]
+	if !ok {
+		t.Fatalf("响应应含 api-proxy group，实际 %+v", grouped)
+	}
+	if g.Type != "sse" {
+		t.Errorf("api-proxy group Type 应为 sse，实际 %q", g.Type)
+	}
+	if g.Description != "HTTP API 代理" {
+		t.Errorf("api-proxy group Description 应为 MCP 定义中的描述，实际 %q", g.Description)
+	}
+	if g.Total != 1 || len(g.Tools) != 1 || g.Tools[0].Name != "call_api" {
+		t.Errorf("api-proxy group 工具列表不符，实际 %+v", g)
+	}
+
+	builtin, ok := grouped["_builtin"]
+	if !ok {
+		t.Fatalf("主 Agent 响应应含 _builtin group，实际 %+v", grouped)
+	}
+	if builtin.Type != "" || builtin.Description != "" {
+		t.Errorf("_builtin 合成分组不应携带 type/description，实际 type=%q desc=%q", builtin.Type, builtin.Description)
 	}
 }

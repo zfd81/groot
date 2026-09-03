@@ -182,10 +182,14 @@ type ToolInfo struct {
 	MCP         string `json:"mcp,omitempty"`
 }
 
-// ToolsGroup represents a group of tools from a single MCP
+// ToolsGroup represents a group of tools from a single MCP.
+// Type/Description 来自 MCP 定义（config 中的 type 与 description 字段）；
+// 合成分组（如 _builtin）二者为空。
 type ToolsGroup struct {
-	Tools []ToolInfo `json:"tools"`
-	Total int        `json:"total"`
+	Type        string     `json:"type,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Tools       []ToolInfo `json:"tools"`
+	Total       int        `json:"total"`
 }
 
 // ModelsResponse represents models list response
