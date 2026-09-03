@@ -210,8 +210,8 @@ async function openAgentTools(a: AgentInfo) {
 </script>
 
 <template>
-  <el-dialog :model-value="show" :title="t('settings.title')" width="750px" align-center
-    class="settings-dialog" @update:model-value="emit('update:show', $event)">
+  <el-dialog :model-value="show" :title="t('settings.title')" width="750px" align-center class="settings-dialog"
+    @update:model-value="emit('update:show', $event)">
     <div class="settings-body">
       <div class="settings-menu">
         <button v-for="o in menuOptions" :key="o.key" type="button" class="menu-item"
@@ -262,8 +262,7 @@ async function openAgentTools(a: AgentInfo) {
           <div class="label-desc password-title">{{ t('password.desc') }}</div>
           <el-form label-position="top" class="password-form" @submit.prevent="handleChangePassword">
             <el-form-item :label="t('password.oldPassword')">
-              <el-input v-model="oldPassword" type="password" show-password
-                :placeholder="t('password.oldPassword')" />
+              <el-input v-model="oldPassword" type="password" show-password :placeholder="t('password.oldPassword')" />
             </el-form-item>
             <el-form-item :label="t('password.newPassword')">
               <el-input v-model="newPassword" type="password" show-password
@@ -303,24 +302,28 @@ async function openAgentTools(a: AgentInfo) {
                 <div class="agent-card-desc">{{ a.description }}</div>
                 <div class="agent-card-id mono">{{ a.name }}</div>
                 <div class="agent-card-footer">
-                  <button type="button" class="agent-icon-btn" :title="t('settings.viewAgentDef')"
-                    @click="openAgentDef(a)">
-                    <el-icon>
-                      <Document />
-                    </el-icon>
-                  </button>
-                  <button type="button" class="agent-icon-btn" :title="t('settings.viewAgentSkills')"
-                    @click="openAgentSkills(a)">
-                    <el-icon>
-                      <Collection />
-                    </el-icon>
-                  </button>
-                  <button type="button" class="agent-icon-btn" :title="t('settings.viewAgentTools')"
-                    @click="openAgentTools(a)">
-                    <el-icon>
-                      <Tools />
-                    </el-icon>
-                  </button>
+                  <!-- 原生 title 提示的出现延迟由浏览器固定（约 1s），改用 el-tooltip 缩短到 200ms -->
+                  <el-tooltip :content="t('settings.viewAgentDef')" :show-after="200" placement="top">
+                    <button type="button" class="agent-icon-btn" @click="openAgentDef(a)">
+                      <el-icon>
+                        <Document />
+                      </el-icon>
+                    </button>
+                  </el-tooltip>
+                  <el-tooltip :content="t('settings.viewAgentSkills')" :show-after="200" placement="top">
+                    <button type="button" class="agent-icon-btn" @click="openAgentSkills(a)">
+                      <el-icon>
+                        <Collection />
+                      </el-icon>
+                    </button>
+                  </el-tooltip>
+                  <el-tooltip :content="t('settings.viewAgentTools')" :show-after="200" placement="top">
+                    <button type="button" class="agent-icon-btn" @click="openAgentTools(a)">
+                      <el-icon>
+                        <Tools />
+                      </el-icon>
+                    </button>
+                  </el-tooltip>
                 </div>
               </div>
             </div>
@@ -331,8 +334,8 @@ async function openAgentTools(a: AgentInfo) {
     </div>
 
     <!-- Agent 定义查看弹窗（嵌套于设置弹窗之上） -->
-    <el-dialog v-model="defShow" :title="t('settings.viewAgentTitle', { name: defName })" width="720px"
-      align-center append-to-body class="agent-def-dialog">
+    <el-dialog v-model="defShow" :title="t('settings.viewAgentTitle', { name: defName })" width="720px" align-center
+      append-to-body class="agent-def-dialog">
       <div class="def-sub">{{ t('settings.agentDefFile', { file: defFile || 'agent.md' }) }}</div>
       <div v-loading="defLoading" class="def-box">
         <div v-if="defError" class="def-error">{{ defError }}</div>
@@ -359,8 +362,8 @@ async function openAgentTools(a: AgentInfo) {
     </el-dialog>
 
     <!-- Agent MCP 工具查看弹窗（嵌套于设置弹窗之上） -->
-    <el-dialog v-model="toolsShow" :title="t('settings.agentToolsTitle', { name: toolsAgentName })"
-      width="720px" align-center append-to-body class="agent-def-dialog">
+    <el-dialog v-model="toolsShow" :title="t('settings.agentToolsTitle', { name: toolsAgentName })" width="720px"
+      align-center append-to-body class="agent-def-dialog">
       <div v-loading="toolsLoading" class="skills-box tools-box">
         <div v-for="g in toolGroups" :key="g.name" class="tool-group">
           <div class="group-title">
@@ -796,6 +799,7 @@ async function openAgentTools(a: AgentInfo) {
   /* 圆角外框；overflow: hidden 已保证内部内容不会溢出直角 */
   border-radius: 16px;
 }
+
 .settings-dialog .el-dialog__body {
   flex: 1;
   min-height: 0;

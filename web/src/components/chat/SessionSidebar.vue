@@ -46,6 +46,7 @@ function title(s: SessionSummary): string {
 <template>
   <!-- 收起态：窄栏，只放展开 + 新建会话两个图标 -->
   <div v-if="props.collapsed" class="rail">
+    <img class="rail-logo" src="../../assets/groot-icon.png" alt="Groot" />
     <button class="rail-btn" type="button" :title="t('sidebar.expand')" @click="emit('expand')">
       <el-icon :size="20">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -77,8 +78,9 @@ function title(s: SessionSummary): string {
   </div>
 
   <div v-else class="sidebar">
-    <!-- 品牌标识（纯文字），高度与主区顶部栏对齐 -->
+    <!-- 品牌标识（图标 + 文字），高度与主区顶部栏对齐 -->
     <div class="brand">
+      <img class="brand-logo" src="../../assets/groot-icon.png" alt="Groot" />
       <span class="brand-name">Groot</span>
       <span class="brand-badge">AGENT</span>
       <button
@@ -175,6 +177,11 @@ function title(s: SessionSummary): string {
   padding-top: 12px;
   border-right: 1px solid rgba(127, 127, 127, 0.15);
 }
+.rail-logo {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
 .rail-btn {
   display: inline-flex;
   align-items: center;
@@ -207,6 +214,12 @@ function title(s: SessionSummary): string {
   align-items: center;
   gap: 8px;
   padding: 0 16px;
+  flex-shrink: 0;
+}
+.brand-logo {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
   flex-shrink: 0;
 }
 .brand-name {
