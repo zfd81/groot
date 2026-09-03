@@ -158,13 +158,13 @@ class TestChatIdFormat:
         # 验证格式
         assert_chat_id_format(chat_id)
 
-        # 格式：chat_{YYYYMMDDHHMMSSmmm}
-        assert chat_id.startswith("chat_")
+        # 格式：{YYYYMMDDHHMMSSmmm}，17 位纯数字，无前缀
+        assert len(chat_id) == 17
 
         SSEClient(response)
 
-    def test_chat_id_prefix(self, server, api_headers):
-        """TC-ID-006: chat_id 有 chat_ 前缀"""
+    def test_chat_id_no_prefix(self, server, api_headers):
+        """TC-ID-006: chat_id 为 17 位纯数字时间戳（无 chat_ 前缀）"""
         payload = {"instruction": "测试对话"}
 
         response = requests.post(
@@ -176,14 +176,11 @@ class TestChatIdFormat:
 
         chat_id = response.headers.get("X-Chat-ID")
 
-        # 验证前缀
-        assert chat_id.startswith("chat_")
+        # 验证无前缀的纯时间戳格式
+        assert not chat_id.startswith("chat_")
 
-        # 验证前缀后的时间戳部分
-        timestamp_part = chat_id[5:]  # 去掉 "chat_"
-
-        assert len(timestamp_part) == 17
-        assert timestamp_part.isdigit()
+        assert len(chat_id) == 17
+        assert chat_id.isdigit()
 
         SSEClient(response)
 
@@ -230,25 +227,38 @@ class TestChatIdFormat:
 
 
 class TestStepIdFormat:
-    """step_id 格式测试"""
+    """step_id 格式测试
 
-    def test_step_id_format(self, server, api_headers):
-        """TC-ID-008: step_id 格式"""
-        payload = {"instruction": "帮我分析数据"}
+    SSE 事件负载不含 step_id 字段，步骤信息（含 step_id）通过
+    GET /chat/:sid 详情接口的 steps[] 获取。
+    """
 
+    @staticmethod
+    def _get_steps(api_headers, instruction="帮我分析数据"):
+        """执行一次对话并通过详情接口返回 steps 列表"""
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json=payload,
+            json={"instruction": instruction},
             stream=True
         )
+        session_id = response.headers.get("X-Session-ID")
+        SSEClient(response)  # 等待对话完成
 
-        sse = SSEClient(response)
+        detail_response = requests.get(
+            f"{BASE_URL}/chat/{session_id}",
+            headers=api_headers
+        )
+        assert detail_response.status_code == 200
+        chat = detail_response.json()["chat"]
+        return chat.get("steps") or []
 
-        steps = sse.get_all_steps()
+    def test_step_id_format(self, server, api_headers):
+        """TC-ID-008: step_id 格式"""
+        steps = self._get_steps(api_headers)
 
         for step in steps:
-            step_id = step["data"]["step_id"]
+            step_id = step["step_id"]
 
             # 验证格式
             assert_step_id_format(step_id)
@@ -263,139 +273,29 @@ class TestStepIdFormat:
 
     def test_step_id_uniqueness(self, server, api_headers):
         """TC-ID-009: step_id 唯一性"""
-        payload = {"instruction": "帮我分析数据"}
+        steps = self._get_steps(api_headers)
 
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        steps = sse.get_all_steps()
-
-        step_ids = [s["data"]["step_id"] for s in steps]
+        step_ids = [s["step_id"] for s in steps]
 
         # 验证唯一性
         assert len(step_ids) == len(set(step_ids))
 
     def test_step_id_pairing(self, server, api_headers):
-        """TC-ID-010: 步骤 step_id 唯一性验证（新协议中 thinking 事件包含步骤信息）"""
-        payload = {"instruction": "帮我分析数据"}
+        """TC-ID-010: 步骤 step_id 唯一性验证（详情接口 steps 包含步骤信息）"""
+        steps = self._get_steps(api_headers)
 
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        steps = sse.get_all_steps()
-
-        step_ids = [s["data"]["step_id"] for s in steps if "step_id" in s["data"]]
+        step_ids = [s["step_id"] for s in steps if "step_id" in s]
 
         # 验证唯一性
         assert len(step_ids) == len(set(step_ids))
 
 
 class TestNestingLevel:
-    """nesting_level 测试"""
+    """nesting_level 测试
 
-    def test_nesting_level_exists(self, server, api_headers):
-        """TC-NEST-001: nesting_level 字段存在"""
-        payload = {"instruction": "帮我分析数据"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        step_starts = sse.get_events_by_type("thinking")
-
-        for step in step_starts:
-            data = step["data"]
-
-            # 验证 nesting_level 字段存在
-            assert "nesting_level" in data
-
-            # 验证值为整数
-            assert isinstance(data["nesting_level"], int)
-
-            # 验证值 >= 0
-            assert data["nesting_level"] >= 0
-
-    def test_main_step_nesting_level_zero(self, server, api_headers):
-        """TC-NEST-002: 主步骤 nesting_level 为 0"""
-        payload = {"instruction": "帮我分析数据"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        step_starts = sse.get_events_by_type("thinking")
-
-        # 主步骤（第一个步骤）nesting_level 应为 0
-        if step_starts:
-            first_step = step_starts[0]["data"]
-            assert first_step["nesting_level"] == 0
-
-    def test_nested_skill_nesting_level_greater(self, server, api_headers):
-        """TC-NEST-003: 嵌套 Skill nesting_level > 0"""
-        # 需要配置有依赖的 Skill
-        payload = {"instruction": "执行嵌套任务"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        step_starts = sse.get_events_by_type("thinking")
-
-        # 查找嵌套步骤
-        nested_steps = [s for s in step_starts if s["data"]["nesting_level"] > 0]
-
-        # 如果有嵌套步骤
-        if nested_steps:
-            for step in nested_steps:
-                assert step["data"]["nesting_level"] >= 1
-
-    def test_nesting_level_limit(self, server, api_headers):
-        """TC-NEST-004: nesting_level 不超过限制（默认3）"""
-        payload = {"instruction": "执行深度嵌套任务"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        step_starts = sse.get_events_by_type("thinking")
-
-        for step in step_starts:
-            nesting_level = step["data"]["nesting_level"]
-
-            # 验证不超过配置限制
-            assert nesting_level <= 3  # 默认 nesting_max_depth
+    SSE 事件负载不含 nesting_level 字段，
+    该字段只出现在 GET /chat/:sid 详情接口的 steps[] 中。
+    """
 
     def test_nesting_level_in_chat_record(self, server, api_headers):
         """TC-NEST-005: chat 记录包含 nesting_level"""

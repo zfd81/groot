@@ -20,6 +20,9 @@
 中途重启。
 """
 
+# 兼容 Python 3.9 venv：让 `X | None` 注解惰性求值
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -33,7 +36,7 @@ import pytest
 import requests
 import yaml
 
-from conftest import GROOT_BIN, TEST_API_KEY, SSEClient
+from conftest import GROOT_BIN, TEST_AUTH_SECRET, SSEClient, _web_login, bootstrap_api_key
 
 
 # 真实 LLM 端点；与 test_real_llm.py / conftest.py 中默认值保持一致
@@ -59,10 +62,11 @@ def _llm_available() -> bool:
         return False
 
 
-# 模块级 skip：LLM 不可达时所有用例自动跳过
+# 模块级 skip：默认跳过（编排语义依赖真实 LLM，且远程端点需要有效凭据）；
+# 设置 GROOT_TEST_REAL_LLM=1 且 LLM 可达时启用
 pytestmark = pytest.mark.skipif(
-    not _llm_available(),
-    reason=f"LLM 服务不可达 ({LLM_BASE_URL})；本文件需要真实 LLM。",
+    os.environ.get("GROOT_TEST_REAL_LLM") != "1" or not _llm_available(),
+    reason=f"需要真实 LLM（设置 GROOT_TEST_REAL_LLM=1 且确保 {LLM_BASE_URL} 可用）",
 )
 
 
@@ -81,7 +85,8 @@ def _wait_health(base_url: str, timeout: int = 30) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = requests.get(f"{base_url}/health", timeout=2)
+            # 健康检查唯一入口为 /web/health（免认证）
+            r = requests.get(f"{base_url}/web/health", timeout=2)
             if r.status_code == 200:
                 return True
         except Exception:
@@ -92,39 +97,29 @@ def _wait_health(base_url: str, timeout: int = 30) -> bool:
 
 def _bootstrap_home() -> str:
     home = tempfile.mkdtemp(prefix="groot_multi_agent_e2e_")
-    for sub in ("skills", "mcp", "subagents", "memory", "logs", "cluster/members"):
+    for sub in ("skills", "mcp", "subagents", "logs"):
         os.makedirs(os.path.join(home, sub), exist_ok=True)
     return home
 
 
 def _write_config(home: str, port: int) -> None:
+    """写入测试配置。
+
+    注意：模型只存数据库（配置文件 llm 节已失效），真实 LLM 模型由
+    _ensure_real_llm_model 通过 /web/models 创建；memory.directory /
+    skills.hot_reload 配置项已删除。
+    """
     cfg = {
         "agent": {"name": "groot", "version": "test"},
         "server": {"host": "127.0.0.1", "port": port},
-        "llm": {
-            "default_model": "qwen-local",
-            "models": {
-                "qwen-local": {
-                    "base_url": LLM_BASE_URL,
-                    "api_key": LLM_API_KEY,
-                    "model": LLM_MODEL,
-                    "max_tokens": 2048,
-                    "temperature": 0.0,
-                }
-            },
-        },
-        "skills": {"hot_reload": {"enabled": False, "debounce_delay": 1}},
+        # 认证始终开启：只需请求头名与 JWT 签名密钥；API Key 通过 Web 端点创建
         "security": {
             "auth": {
-                "enabled": True,
-                "type": "api_key",
-                "api_key": {
-                    "header_name": "X-API-Key",
-                    "keys": [{"name": "test", "key": TEST_API_KEY, "permissions": ["all"]}],
-                },
+                "header_name": "X-API-Key",
+                "secret": TEST_AUTH_SECRET,
             }
         },
-        "memory": {"directory": "memory"},
+        "memory": {"history_window": 20},
         "schedule": {"enabled": False, "max_concurrent_tasks": 1, "sync_interval": "30s"},
         "message": {
             "queue_size": 10,
@@ -132,8 +127,8 @@ def _write_config(home: str, port: int) -> None:
             "senders": {"webhook": {"enabled": False, "url": ""}, "email": {"enabled": False}},
         },
         "logging": {"level": "info", "format": "json", "output": ["stdout"]},
-        "react": {"max_steps": 6},  # 限步避免无限循环
-        "sub_agent": {
+        "react": {"max_iterations": 6},  # 限步避免无限循环
+        "subagent": {
             "max_concurrency": 5,
             "max_task_length": 4000,
             "max_result_length": 8000,
@@ -142,6 +137,32 @@ def _write_config(home: str, port: int) -> None:
     }
     with open(os.path.join(home, "config.yaml"), "w") as f:
         yaml.dump(cfg, f)
+
+
+def _ensure_real_llm_model(base_url: str, session: requests.Session) -> None:
+    """通过 /web/models 创建本文件使用的真实 LLM 模型并设为默认。
+
+    模型只存数据库；每个 _Server 使用全新数据库，因此每次都要创建。
+    参数取自 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（支持环境变量覆盖）。
+    """
+    body = {
+        "name": "real-llm",
+        "model": LLM_MODEL,
+        "base_url": LLM_BASE_URL,
+        "api_key": LLM_API_KEY,
+        "max_completion_tokens": 2048,
+        "temperature": 0.0,
+        "enabled": True,
+    }
+    r = session.post(f"{base_url}/web/models", json=body, timeout=10)
+    if r.status_code not in (200, 409):  # 409 = 重名，视为已存在
+        raise RuntimeError(f"创建真实 LLM 模型失败 ({r.status_code}): {r.text}")
+    # 首个模型自动成为默认；保险起见无默认时显式设置
+    data = session.get(f"{base_url}/web/models", timeout=10).json()
+    if not data.get("default"):
+        r = session.put(f"{base_url}/web/models/real-llm/default", timeout=10)
+        if r.status_code != 200:
+            raise RuntimeError(f"设置默认模型失败 ({r.status_code}): {r.text}")
 
 
 def _write_grootmd(home: str, content: str) -> None:
@@ -168,11 +189,18 @@ def _setup_echo_agent(home: str) -> None:
 
 
 class _Server:
+    """启动一个独占 groot 进程；每个实例使用独立数据库，启动后自动：
+    - 通过 Web 端点创建 API Key（self.headers，用于 /chat 等 API 端点）
+    - 建立 Web 登录 Cookie Session（self.web，用于 /web/tools 等端点）
+    - 通过 /web/models 创建真实 LLM 模型并设为默认（模型只存数据库）"""
+
     def __init__(self, home: str, port: int):
         self.home = home
         self.port = port
         self.base_url = f"http://127.0.0.1:{port}"
         self.proc: subprocess.Popen | None = None
+        self.headers: dict | None = None
+        self.web: requests.Session | None = None
 
     def __enter__(self):
         env = os.environ.copy()
@@ -184,6 +212,15 @@ class _Server:
             self._dump_logs()
             self.proc.kill()
             raise RuntimeError(f"groot 启动失败 (home={self.home})")
+        # 独立数据库：为本实例创建 all 权限的 JWT API Key
+        self.headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": bootstrap_api_key(self.base_url, name="pytest-multi-agent-llm"),
+        }
+        # /web/* 端点需要 Web 登录 Cookie（X-API-Key 无效）
+        self.web = _web_login(self.base_url)
+        # 创建真实 LLM 模型（每个实例全新数据库，必须先建模型才能 /chat）
+        _ensure_real_llm_model(self.base_url, self.web)
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -207,11 +244,6 @@ class _Server:
                 pass
 
 
-@pytest.fixture
-def headers():
-    return {"Content-Type": "application/json", "X-API-Key": TEST_API_KEY}
-
-
 # ---------------------------------------------------------------------------
 # Solo 模式（X-Agent-Name 指定子 Agent）
 # ---------------------------------------------------------------------------
@@ -223,7 +255,7 @@ class TestSoloMode:
     对应 TEST_CASES 2.21.2。
     """
 
-    def test_solo_uses_subagent_instruction(self, headers):
+    def test_solo_uses_subagent_instruction(self):
         """TC-MA-100: 让 echo-agent 复述输入 → 响应应包含原文 "苹果"。
 
         echo-agent 的 instruction 显式要求"原样复述"，主 Agent 没有这个要求，
@@ -237,7 +269,7 @@ class TestSoloMode:
         with _Server(home, port) as srv:
             r = requests.post(
                 f"{srv.base_url}/chat",
-                headers={**headers, "X-Agent-Name": "echo-agent"},
+                headers={**srv.headers, "X-Agent-Name": "echo-agent"},
                 json={"instruction": "苹果"},
                 stream=True,
                 timeout=120,
@@ -260,7 +292,7 @@ class TestSoloMode:
                     f"全部事件:\n{summary}"
                 )
 
-    def test_solo_chatrecord_persists_agent_name(self, headers):
+    def test_solo_chatrecord_persists_agent_name(self):
         """TC-MA-101: Solo 模式 ChatRecord.AgentName 字段持久化为子 Agent 名。
 
         通过 /sess/{sid} 拿历史记录验证。
@@ -273,7 +305,7 @@ class TestSoloMode:
         with _Server(home, port) as srv:
             r = requests.post(
                 f"{srv.base_url}/chat",
-                headers={**headers, "X-Agent-Name": "echo-agent"},
+                headers={**srv.headers, "X-Agent-Name": "echo-agent"},
                 json={"instruction": "你好"},
                 stream=True,
                 timeout=120,
@@ -285,7 +317,7 @@ class TestSoloMode:
 
             # 查会话详情
             sess = requests.get(
-                f"{srv.base_url}/sess/{sid}", headers=headers, timeout=10
+                f"{srv.base_url}/sess/{sid}", headers=srv.headers, timeout=10
             )
             assert sess.status_code == 200
             data = sess.json()
@@ -299,7 +331,7 @@ class TestSoloMode:
                 f"会话详情应包含 echo-agent，实际：{sess_text[:500]}"
             )
 
-    def test_solo_unknown_agent_returns_400(self, headers):
+    def test_solo_unknown_agent_returns_400(self):
         """TC-MA-102: 已经在 test_multi_agent.py 里有 nonLLM 版；这里再测一次
         有真实子 Agent 注册情况下，未知名仍 400。"""
         home = _bootstrap_home()
@@ -310,7 +342,7 @@ class TestSoloMode:
         with _Server(home, port) as srv:
             r = requests.post(
                 f"{srv.base_url}/chat",
-                headers={**headers, "X-Agent-Name": "ghost"},
+                headers={**srv.headers, "X-Agent-Name": "ghost"},
                 json={"instruction": "x"},
                 timeout=10,
             )
@@ -330,10 +362,10 @@ class TestOrchestrationMode:
     LLM 不调用工具直接回答的可能。失败时建议先看 SSE 流日志。
     """
 
-    def test_main_agent_lists_call_agent_tool(self, headers):
-        """TC-MA-110: GET /tools 主 Agent 工具列表含 call_agent。
+    def test_main_agent_lists_call_agent_tool(self):
+        """TC-MA-110: GET /web/tools 主 Agent 工具列表含 call_agent。
 
-        编排模式下 ExtraTools 注入 call_agent，应该在 /tools 列表里。
+        编排模式下 ExtraTools 注入 call_agent，应该在 /web/tools 列表里。
         响应形态：{group_name: {"tools": [{name, description}, ...], "total": N}}。
         call_agent 以合成 group "_builtin" 出现。
         """
@@ -343,20 +375,20 @@ class TestOrchestrationMode:
         _write_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/tools", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/tools", timeout=5)
             assert r.status_code == 200
             grouped = r.json()
-            assert isinstance(grouped, dict), f"/tools 响应应为 group map，实际 {type(grouped).__name__}"
+            assert isinstance(grouped, dict), f"/web/tools 响应应为 group map，实际 {type(grouped).__name__}"
             # 跨所有 group 收集工具名
             names = []
             for group_name, group in grouped.items():
                 for t in group.get("tools", []):
                     names.append(t.get("name", ""))
             assert "call_agent" in names, (
-                f"主 Agent /tools 应含 call_agent，实际 {grouped}"
+                f"主 Agent /web/tools 应含 call_agent，实际 {grouped}"
             )
 
-    def test_orchestration_emits_subagent_events(self, headers):
+    def test_orchestration_emits_subagent_events(self):
         """TC-MA-111: 强 prompt 引导主 Agent 调用 echo-agent；SSE 事件中应出现
         agent_name=echo-agent 的事件（plan Task 10）。
 
@@ -379,7 +411,7 @@ class TestOrchestrationMode:
         with _Server(home, port) as srv:
             r = requests.post(
                 f"{srv.base_url}/chat",
-                headers=headers,
+                headers=srv.headers,
                 json={
                     "instruction": "请委托 echo-agent 复述「测试」二字",
                     "prompt": "你必须使用 call_agent 工具委托 echo-agent 处理；不要自己回答。",
@@ -415,7 +447,7 @@ class TestOrchestrationMode:
                 f"实际看到的 agent_name: {seen_agent_names}"
             )
 
-    def test_orchestration_status_includes_running_subagent(self, headers):
+    def test_orchestration_status_includes_running_subagent(self):
         """TC-MA-112: 编排模式下，子 Agent 运行期间 GET /chat/status/:sid
         应能在 progress.sub_agents 里看到 echo-agent。
 
@@ -436,7 +468,7 @@ class TestOrchestrationMode:
             # stream 启动 chat
             r = requests.post(
                 f"{srv.base_url}/chat",
-                headers=headers,
+                headers=srv.headers,
                 json={
                     "instruction": "请通过 call_agent 让 echo-agent 复述「窗口」",
                     "prompt": "必须用 call_agent 委托 echo-agent。",
@@ -454,7 +486,7 @@ class TestOrchestrationMode:
             while time.time() < deadline:
                 s = requests.get(
                     f"{srv.base_url}/chat/status/{sid}",
-                    headers=headers,
+                    headers=srv.headers,
                     timeout=2,
                 )
                 if s.status_code == 200:
@@ -485,11 +517,12 @@ class TestOrchestrationMode:
 class TestChildChatIDPrefix:
     """子 Agent 的 chatID 应以父 chatID 为前缀（plan Task 2 / 设计 8 节）。"""
 
-    def test_child_chatid_has_parent_prefix(self, headers):
+    def test_child_chatid_has_parent_prefix(self):
         """TC-MA-120: 编排模式下，子 Agent ChatRecord 的 chat_id 应形如
         <parent_chat_id>_<HHMMSSmmm>_<r4>_<agent_name>。
 
-        通过持久化的会话历史拿到父 chat_id 与子 ChatRecord 文件名验证。
+        ChatRecord 已入库（memory_chats 表），直接查 SQLite 验证子记录
+        的 chat_id 前缀与 agent 后缀。
         """
         home = _bootstrap_home()
         _setup_echo_agent(home)
@@ -504,7 +537,7 @@ class TestChildChatIDPrefix:
         with _Server(home, port) as srv:
             r = requests.post(
                 f"{srv.base_url}/chat",
-                headers=headers,
+                headers=srv.headers,
                 json={
                     "instruction": "用 call_agent 调 echo-agent 复述「父子」",
                     "prompt": "必须用 call_agent。",
@@ -521,31 +554,30 @@ class TestChildChatIDPrefix:
             # 等持久化稳定
             time.sleep(1.0)
 
-            # memory/<sid>/chats/ 下的 ChatRecord 文件名通常是 chat_id
-            # 持久化路径见 internal/memory/manager.go:chatPath/chatsDir
-            chats_dir = os.path.join(srv.home, "memory", sid, "chats")
-            if not os.path.isdir(chats_dir):
-                pytest.skip(
-                    f"未找到 chats/ 目录 {chats_dir}；"
-                    "memory 持久化路径可能与预期不同，需要实际验证后再写"
-                )
+            # ChatRecord 存于 {GROOT_HOME}/groot.db 的 memory_chats 表
+            import sqlite3
+            db_path = os.path.join(srv.home, "groot.db")
+            assert os.path.exists(db_path), f"数据库文件不存在: {db_path}"
+            conn = sqlite3.connect(db_path, timeout=5)
+            try:
+                rows = conn.execute(
+                    "SELECT chat_id, agent_name FROM memory_chats WHERE chat_id LIKE ? AND chat_id != ?",
+                    (parent_chat_id + "%", parent_chat_id),
+                ).fetchall()
+            finally:
+                conn.close()
 
-            files = os.listdir(chats_dir)
-            child_files = [
-                f for f in files
-                if f.startswith(parent_chat_id) and f != f"{parent_chat_id}.json"
-                and "echo-agent" in f
-            ]
-            if not child_files:
+            child_rows = [row for row in rows if "echo-agent" in row[0]]
+            if not child_rows:
                 pytest.xfail(
                     f"未找到含父前缀的子 ChatRecord；可能 LLM 没调用 call_agent。"
-                    f"目录内容: {files}"
+                    f"查询结果: {rows}"
                 )
-            # 通过子 chat 文件名进一步验证格式
-            for cf in child_files:
-                assert cf.startswith(parent_chat_id), (
-                    f"子 ChatRecord 文件名 {cf} 应以父 {parent_chat_id} 开头"
+            # 通过子 chat_id 进一步验证格式
+            for chat_id, agent_name in child_rows:
+                assert chat_id.startswith(parent_chat_id), (
+                    f"子 ChatRecord chat_id {chat_id} 应以父 {parent_chat_id} 开头"
                 )
-                assert "echo-agent" in cf, (
-                    f"子 ChatRecord 文件名 {cf} 应含 echo-agent 后缀"
+                assert "echo-agent" in chat_id, (
+                    f"子 ChatRecord chat_id {chat_id} 应含 echo-agent 后缀"
                 )

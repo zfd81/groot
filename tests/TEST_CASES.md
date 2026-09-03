@@ -8,25 +8,10 @@
 
 位于 `internal/` 各包目录下的 `*_test.go` 文件。
 
-### 1.1 Chat TUI 测试
+### 1.1 集群管理测试
 
-| 测试函数 | 测试文件 | 测试内容 |
-|---------|---------|---------|
-| TestParseCommand | commands_test.go | 命令解析：/exit、/model arg、/session switch id、/skills list、普通文本、空字符串 |
-| TestExecuteCommandRouting | commands_test.go | 命令路由：13 条命令 → 对应 Action（quit/clear/render/fetch/export 等） |
-| TestMaskAPIKey | commands_test.go | API Key 脱敏：空值、环境变量引用、短 key、长 key |
-| TestClassifyEvent | client_test.go | SSE 事件分类：thinking/tool_calls/tool_result/message/finish_reason/error/优先级 |
-| TestNewClientDefaults | client_test.go | HTTP 客户端默认值：baseURL 去尾斜杠、modelName 正确设置 |
-| TestStatusBarView | model_test.go | 状态栏渲染：非空输出 |
-| TestCompletionFilter | model_test.go | 补全过滤：前缀匹配 /mod → /model |
-| TestCompletionHide | model_test.go | 补全隐藏：Hide() 后 IsVisible() = false |
-| TestCompletionSelectWrap | model_test.go | 补全选择循环：SelectNext/SelectPrev 首尾环绕 |
-| TestCompletionFilterNoMatch | model_test.go | 补全无匹配：无匹配项时自动隐藏 |
-| TestVisibleWidth | model_test.go | 可见宽度计算：ASCII 和 CJK 字符 |
-
-### 1.2 集群管理测试
-
-位于 `internal/cluster/` 目录。
+位于 `internal/cluster/` 目录。成员注册已入库：多实例共享数据库中的
+`cluster_members` 表（reg_id/role/host/port/pid/heartbeat_at），不再使用注册文件。
 
 **选举逻辑** (`election_test.go`)
 
@@ -39,37 +24,33 @@
 | TestDetermineRole_AllStale | 全部超时 → leader |
 | TestDetermineRole_SelfStaleOthersAlive | 自身超时但其他存活 → 存活最小者选为 leader |
 
-**文件操作** (`member_test.go`)
+**成员存储** (`internal/repo/memberdb/member_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestWriteRegistrationFile | 写入注册文件，验证格式 `{role}\|{host}:{port}\|{pid}` |
-| TestListMembers | 列出目录中所有成员，按文件名排序 |
-| TestListMembers_EmptyDir | 空目录返回零成员 |
-| TestRemoveStaleFile | 删除注册文件，不存在时无操作 |
-| TestEnsureMembersDir | 确保 `cluster/members/` 目录存在 |
-| TestGenerateRegID | 注册编号格式：17 位数字 `YYYYMMDDHHMMSSmmm` |
-| TestFileMtimeUpdates | 覆盖写入后 mtime 更新 |
+| TestRegisterAndGet | 注册成员后往返查询一致 |
+| TestRegister_Idempotent | 重复注册幂等 |
+| TestHeartbeat_NotFound | 心跳更新不存在的成员报错 |
+| TestUpdateRole | 角色变更（leader/follower）持久化 |
+| TestRemoveExpired | 清理超时成员记录 |
+| TestListAll | 列出全部成员 |
 
 **Cluster 集成** (`cluster_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestCluster_JoinAsLeader_NoExistingMembers | 无现有成员时加入成为 leader |
-| TestCluster_JoinAsFollower_ExistingLeader | 已有 leader 时加入成为 follower |
-| TestCluster_Heartbeat_FileLost | 注册文件丢失后重新注册（新 ID） |
-| TestCluster_Heartbeat_LeaderCleanupStale | Leader 心跳清理超时文件 |
-| TestCluster_Leave | 优雅退出删除注册文件 |
-| TestCluster_FollowerPromotionOnLeaderLeave | Leader 退出后 follower 提升 |
+| TestCluster_SingleInstance_BecomesLeader | 单实例加入成为 leader |
+| TestCluster_TwoInstances_OneLeaderOneFollower | 双实例恰好一 leader 一 follower |
+| TestCluster_Leave_RemovesRecord | 优雅退出删除注册记录 |
 | TestCluster_Callbacks_OnBecomeLeader | 成为 leader 时触发回调 |
-| TestCluster_Callbacks_OnLoseLeader | 文件丢失时触发失去 leader 回调 |
-| TestCluster_Callbacks_OnPromotionFromFollower | Follower 提升为 leader 时触发回调 |
-| TestCluster_MultipleInstances_SingleLeader | 3 实例共享 homeDir，恰好 1 个 leader |
-| TestCluster_FollowerHeartbeat_NoStaleCleanup | Follower 不清理过期文件（仅 leader 清理） |
+| TestCluster_Callbacks_OnLoseLeader | 注册记录丢失时触发失去 leader 回调 |
+| TestCluster_FollowerPromotion_AfterLeaderLeaves | Leader 退出后 follower 提升 |
+| TestCluster_MultipleInstances_SingleLeader | 多实例共享数据库，恰好 1 个 leader |
+| TestCluster_Heartbeat_RecordLost_Reregisters | 注册记录丢失后重新注册（新 ID） |
 
 ---
 
-### 1.3 Web 界面测试
+### 1.2 Web 界面测试
 
 **用户存储** (`internal/repo/userdb/user_test.go`)
 
@@ -90,6 +71,7 @@
 | TestStore_CreateValidate | 创建令牌后校验通过并返回所属用户 ID |
 | TestStore_Expiry | 超过 TTL 的令牌校验失败 |
 | TestStore_SlidingRenewal | 滑动续期：活跃访问刷新过期时间；不活跃超 TTL 失效 |
+| TestStore_TTL | 会话 TTL 配置生效 |
 | TestStore_Delete | 删除令牌后校验失败 |
 | TestStore_DeleteOtherByUser | 踢出该用户其他会话，保留指定令牌，不影响他人 |
 | TestStore_FailureLockout | 同 IP 连续 5 次失败后锁定；窗口滑过解锁；成功清零 |
@@ -120,14 +102,33 @@
 | TestWebSession_InvalidToken | 无效令牌返回 401 |
 | TestWebSession_ValidToken | 有效令牌放行并注入 caller=web 与 web_user_id |
 
-**认证中间件双凭证** (`internal/api/middleware/auth_test.go`)
+**认证中间件双凭证（JWT + Cookie）** (`internal/api/middleware/auth_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestAuth_ValidCookie | 有效 Cookie 通过认证 |
-| TestAuth_InvalidCookieFallsBack | 无效 Cookie 回退到 API Key 校验 |
-| TestAuth_APIKeyStillWorks | 原有 X-API-Key 认证不回归 |
-| TestAuth_DisabledPassesAnonymous | 认证关闭时匿名访问通过 |
+| TestAuth_ValidCookie | 有效 Cookie 通过认证（caller=web，等同 all 权限） |
+| TestAuth_MissingToken | 无凭证返回 401 |
+| TestAuth_InvalidCookieFallsBack | 无效 Cookie 回退到 API Key（JWT）校验 |
+| TestAuth_ValidToken | 有效 JWT API Key 放行 |
+| TestAuth_InvalidToken | 签名无效的 JWT 返回 401 |
+| TestAuth_RevokedToken | 已删除（吊销）Key 的 JWT 返回 401 |
+| TestAuth_PermissionDenied | 权限点不足返回 403 |
+| TestAuth_AllPermission | all 权限通行全部端点 |
+| TestAuth_EmptyPermissionsDenied | 空权限列表一律拒绝 |
+
+**API Key 管理端点** (`internal/api/handler/apikeys_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestAPIKeys_CreateAndVerify | 创建 Key：id 为 14 位时间编号、token 可验签 |
+| TestAPIKeys_CreateValidation | 名称/权限/expires_in 校验（400 分支） |
+| TestAPIKeys_CreateDuplicateName | 重名返回 409 |
+| TestAPIKeys_CreateSameSecondRetry | 主键同秒冲突 +1 秒重试 |
+| TestAPIKeys_ListAndExpired | 列表返回与 expired 计算 |
+| TestAPIKeys_DeleteNotFound | 删除不存在的 id 返回 404 |
+| TestAPIKeys_CreateTrimsName | 名称 TrimSpace 处理 |
+| TestAPIKeys_CreateMalformedJSON | 请求体非法 JSON 返回 400 |
+| TestAPIKeys_TokenAndDelete | token 确定性重取与删除即吊销 |
 
 **用户重置命令** (`internal/cmd/user_test.go`)
 
@@ -147,6 +148,8 @@
 | TestWebUI_ServeAsset | 资源文件返回正确 Content-Type |
 | TestWebUI_HistoryFallback | 前端路由路径回退到 index（SPA history 模式） |
 | TestWebUI_NotBuilt | 前端未构建时返回提示页 |
+| TestWebUI_MissingAsset404 | 缺失的资源文件返回 404 |
+| TestWebUI_AssetCacheHeader | 资源文件缓存响应头 |
 | TestWebUI_NoPathTraversal | 路径穿越载荷（`..`、`%2f` 编码、前缀混淆）均不泄漏文件 |
 
 ---
@@ -182,12 +185,17 @@
 
 ### 2.3 认证测试
 
+认证机制：JWT API Key（HS256 签名），认证始终开启；API Key 通过 Web 端点
+（`POST /web/apikeys`）创建并保存在数据库，请求时放在 `X-API-Key` 请求头。
+无 Key / 无效 Key / 已删除 Key → 401；权限不足 → 403；`/web/health` 免认证。
+
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestAuthenticationBasic | test_authentication.py | 认证基础功能 |
-| TestAuthenticationAllAPIs | test_authentication.py | 所有 API 认证 |
+| TestAuthenticationBasic | test_authentication.py | 基础认证（无/无效/空 Key → 401，有效 Key 放行） |
+| TestAuthenticationAllAPIs | test_authentication.py | 所有业务 API 强制认证（无 Key → 401） |
 | TestHealthNoAuth | test_authentication.py | 健康检查免认证 |
-| TestPermissionSystem | test_authentication.py | 权限系统 |
+| TestPermissionSystem | test_authentication.py | 权限点校验（chat/status 受限 Key → 403，all Key 全通） |
+| TestKeyRevocation | test_authentication.py | API Key 删除即吊销（删除后原 token → 401） |
 
 ### 2.4 CLI 参数测试
 
@@ -240,22 +248,26 @@
 
 ### 2.9 记忆系统测试
 
+会话记忆已入库（`{GROOT_HOME}/groot.db` 的会话/聊天记录表），不再有
+`memory/` 目录；用例通过 API（/sess 系列）验证记录结构与状态流转。
+
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestHistoryJSONFormat | test_memory.py | 历史 JSON 格式 |
-| TestChatRecordFormat | test_memory.py | 聊天记录格式 |
-| TestMemoryDirectoryStructure | test_memory.py | 记忆目录结构 |
+| TestSessionHistoryFormat | test_memory.py | 会话历史响应结构（入库后经 API 读取） |
+| TestChatRecordFormat | test_memory.py | 聊天记录字段结构 |
+| TestSessionIDFormat | test_memory.py | session_id 格式（时间戳_随机） |
 | TestMemoryRoundTracking | test_memory.py | 轮次追踪 |
 | TestMemoryStatusTracking | test_memory.py | 状态追踪 |
 
 ### 2.10 路径配置测试
 
+skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目录等少数路径可配置。
+
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestDefaultPathConfig | test_path_config.py | 默认路径配置 |
+| TestFixedDirectoryConfig | test_path_config.py | 固定目录（skills/mcp 等不可配置） |
+| TestConfigurableDirectoryConfig | test_path_config.py | 可配置目录项 |
 | TestAbsolutePathConfig | test_path_config.py | 绝对路径配置 |
-| TestPathResolution | test_path_config.py | 路径解析 |
-| TestConfigDirectoryFields | test_path_config.py | 配置目录字段 |
 | TestDirectoryAutoCreation | test_path_config.py | 目录自动创建 |
 | TestPathConfigIntegration | test_path_config.py | 路径配置集成 |
 
@@ -325,72 +337,61 @@
 
 ### 2.17 调度 API 测试
 
+任务与执行记录已入库（`schedule_tasks` / `schedule_executions` 表）；用例通过
+Python sqlite3 直插数据库预置数据，List/Get/History API 直接读库，无需等待
+sync_interval 同步周期。非 Leader 或 `schedule.enabled=false` 时端点返回
+503 schedule_unavailable，该分支在 CLI 命令组的独立实例用例（TC-CLI-108）上覆盖。
+
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestScheduleListAPI | test_schedule_api.py | 列出定时任务（空列表、有数据、状态过滤） |
+| TestScheduleListAPI | test_schedule_api.py | 列出定时任务（空列表、有数据、状态过滤 active/disabled/archive） |
 | TestScheduleGetAPI | test_schedule_api.py | 查询任务详情（存在、不存在） |
 | TestScheduleDeleteAPI | test_schedule_api.py | 删除定时任务 |
 | TestScheduleDisableAPI | test_schedule_api.py | 禁用定时任务（active → disabled） |
 | TestScheduleEnableAPI | test_schedule_api.py | 启用定时任务（disabled → active） |
 | TestScheduleArchiveAPI | test_schedule_api.py | 归档定时任务（active/disabled → archive） |
-| TestScheduleHistoryAPI | test_schedule_api.py | 查询执行历史（空、有记录） |
+| TestScheduleHistoryAPI | test_schedule_api.py | 查询执行历史（空、有记录，按 started_at 降序） |
 | TestScheduleAPIAuth | test_schedule_api.py | 调度 API 认证（401 验证） |
 | TestScheduleAPIResponseFormat | test_schedule_api.py | 调度 API 响应格式验证 |
-| TestScheduleToolsVisible | test_schedule_api.py | 调度工具在 /tools 中可见 |
+| TestScheduleToolsVisible | test_schedule_api.py | 调度工具在 /web/tools 中可见（Leader + schedule.enabled=true） |
 
-### 2.18 调度 CLI 测试
+### 2.18 补充测试
 
-| 测试类 | 测试文件 | 测试内容 |
-|-------|---------|---------|
-| TestScheduleCLIList | test_schedule_cli.py | CLI 列出任务（空、有数据、表头） |
-| TestScheduleCLIInspect | test_schedule_cli.py | CLI 查看任务详情（JSON 格式） |
-| TestScheduleCLIHistory | test_schedule_cli.py | CLI 查看执行历史（空、有记录） |
-| TestScheduleCLIDelete | test_schedule_cli.py | CLI 删除任务 |
-| TestScheduleCLIDisable | test_schedule_cli.py | CLI 禁用任务 |
-| TestScheduleCLIEnable | test_schedule_cli.py | CLI 启用任务 |
-| TestScheduleCLIArchive | test_schedule_cli.py | CLI 归档任务 |
-| TestScheduleCLIHelp | test_schedule_cli.py | CLI 帮助信息（--help、子命令帮助） |
-| TestScheduleCLIEdgeCases | test_schedule_cli.py | CLI 边界条件（长名称、特殊字符、调度格式） |
-
-### 2.19 补充测试
+（LLM 错误、MCP 工具错误、技能错误、优雅关闭、配置热更新边界、多模型配置、
+权限边界、取消机制等历史用例已随对应功能裁剪/迁移删除，现存清单如下。）
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestLLMErrors | test_supplementary.py | LLM 错误 |
-| TestMCPToolErrors | test_supplementary.py | MCP 工具错误 |
-| TestSkillErrors | test_supplementary.py | 技能错误 |
 | TestMCPConnectionTypes | test_supplementary.py | MCP 连接类型 |
 | TestSkillsDependencies | test_supplementary.py | 技能依赖 |
 | TestPromptValidation | test_supplementary.py | Prompt 验证 |
-| TestHealthDetailedChecks | test_supplementary.py | 健康检查详细 |
-| TestGracefulShutdown | test_supplementary.py | 优雅关闭 |
-| TestConfigHotUpdateBoundaries | test_supplementary.py | 配置热更新边界 |
-| TestLLMMultiModelConfig | test_supplementary.py | LLM 多模型配置 |
-| TestPermissionBoundaries | test_supplementary.py | 权限边界 |
-| TestCancelMechanismDetails | test_supplementary.py | 取消机制详细 |
+| TestHealthDetailedChecks | test_supplementary.py | 健康检查详细（llm/mcp/skills/memory/uptime/environment 块） |
+| TestWebEndpointAccess | test_supplementary.py | Web 端点访问控制 |
 | TestReActExecutionDetails | test_supplementary.py | ReAct 执行详细 |
 | TestSessionHandlingDetails | test_supplementary.py | 会话处理详细 |
 | TestMetricsInHealth | test_supplementary.py | 健康检查指标 |
 
-### 2.20 集群管理系统测试
+### 2.19 集群管理系统测试
 
-位于 `tests/python/test_cluster.py`。
+位于 `tests/python/test_cluster.py`。成员注册已入库：多实例共享同一
+GROOT_HOME 的 `{GROOT_HOME}/groot.db` 的 `cluster_members` 表
+（SQLite WAL + busy_timeout 支持同机多进程读写）。
 
 | 测试类 | 测试函数 | 测试内容 |
 |-------|---------|---------|
 | TestSingleInstance | test_single_instance_becomes_leader | 单实例启动自动成为 leader |
-| TestSingleInstance | test_registration_file_format | 注册文件格式验证（17位ID + 内容格式） |
+| TestSingleInstance | test_registration_record_format | 注册记录格式验证（reg_id/role/host/port/pid） |
 | TestDualInstance | test_second_instance_becomes_follower | 第二个实例成为 follower |
 | TestDualInstance | test_first_instance_is_leader | 先启动（更小编号）的是 leader |
 | TestFailover | test_leader_killed_follower_promotes | 杀 leader → follower 提升为 leader |
 | TestFailover | test_leader_graceful_shutdown_follower_promotes | Leader 优雅退出 → follower 提升 |
 | TestMultipleInstances | test_three_instances_exactly_one_leader | 3 实例恰好 1 leader + 2 follower |
 | TestCrashRecovery | test_restarted_old_leader_becomes_follower | 旧 leader 重启后成为 follower |
-| TestHeartbeatFileUpdate | test_leader_file_mtime_updates | Leader 心跳持续更新文件 mtime |
+| TestHeartbeatUpdate | test_leader_heartbeat_at_updates | Leader 心跳持续刷新 heartbeat_at |
 
 ---
 
-### 2.21 多 Agent 系统测试（v3.8 后）
+### 2.20 多 Agent 系统测试（v3.8 后）
 
 设计 `docs/superpowers/specs/2026-05-24-multi-agent-design.md`、计划 `docs/superpowers/plans/2026-05-28-multi-agent-implementation.md`。Python 系统测试由用户后续落地；以下为人工烟囱测试与覆盖范围清单。
 
@@ -413,7 +414,7 @@ go build -o bin/groot ./cmd/groot
 sleep 2
 ```
 
-#### 2.21.1 子 Agent 注册（启动期扫描）
+#### 2.20.1 子 Agent 注册（启动期扫描）
 
 | 场景 | 期望 |
 |------|------|
@@ -423,7 +424,7 @@ sleep 2
 | 子目录名 == `groot`（与主 Agent 同名） | 启动跳过，日志 ERROR |
 | `subagents/<name>` 是符号链接到目录 | 正常识别为子 Agent |
 
-#### 2.21.2 Solo 模式（X-Agent-Name header）
+#### 2.20.2 Solo 模式（X-Agent-Name header）
 
 ```bash
 # 已注册 → 用子 Agent 执行
@@ -450,7 +451,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 | `X-Agent-Name: groot` | 等价于不传 header，走主 Agent 编排模式 |
 | Solo 模式 ChatRecord.AgentName | 持久化到 memory 的字段含子 Agent 名 |
 
-#### 2.21.3 编排模式（call_agent 工具）
+#### 2.20.3 编排模式（call_agent 工具）
 
 要求 GROOT.md 含调度引导段（`groot init` 已自动写入）。
 
@@ -471,7 +472,7 @@ curl -X POST http://localhost:8080/chat \
 | 并发超 `sub_agent.max_concurrency` | FIFO 排队（`semaphore.Weighted`） |
 | Token 累加 | 子 Agent token 累计回到父 chat 的 ChatRecord |
 
-#### 2.21.4 API 行为
+#### 2.20.4 API 行为
 
 | 接口 | 验证内容 |
 |-----|---------|
@@ -483,17 +484,7 @@ curl -X POST http://localhost:8080/chat \
 | `GET /tools` + `X-Agent-Name: db-agent` | 子 Agent MCP 工具 |
 | `GET /chat/status/:sid` | 活跃 chat 时 `progress.sub_agents` 含当前运行的子 Agent 数组 |
 
-#### 2.21.5 TUI `/agent` 命令
-
-| 操作 | 期望 |
-|------|------|
-| `/agent`（无参） | 弹列表 popup，含 groot + 子 Agent，当前 Agent 标 ✓ |
-| `/agent <name>` | 切换并自动新建会话；状态栏 `Agent: <name>` 更新 |
-| `/agent groot` | 切回主 Agent，client 不再发送 `X-Agent-Name` header |
-| `/agent <未知>` | popup 列表回退（不静默，让用户重选） |
-| `/clear` | 不影响当前 Agent 选择 |
-
-#### 2.21.6 Skills 热插拔（subagents/*/skills/）
+#### 2.20.5 Skills 热插拔（subagents/*/skills/）
 
 | 操作 | 期望 |
 |------|------|
@@ -501,7 +492,7 @@ curl -X POST http://localhost:8080/chat \
 | 在 `subagents/<name>/agent.md` 修改 | watcher 不响应（仅监听 skills 子目录变更） |
 | 在 `subagents/<name>/mcp/` 修改 | watcher 不响应 |
 
-#### 2.21.7 init 行为
+#### 2.20.6 init 行为
 
 | 操作 | 期望 |
 |------|------|
@@ -509,7 +500,7 @@ curl -X POST http://localhost:8080/chat \
 | `groot init` 全新目录 | 写入 `GROOT.md`，含「子 Agent 调度」段（`call_agent` / 按需调用 / 逐个调用 / 明确传参 / 附件引用 关键词） |
 | `groot init` 已有 `GROOT.md` | 跳过不覆盖用户内容 |
 
-### 2.22 Web 界面测试
+### 2.21 Web 认证测试
 
 | 用例编号 | 测试文件 | 测试内容 |
 |---------|---------|---------|
@@ -520,10 +511,17 @@ curl -X POST http://localhost:8080/chat \
 | TC-WEB-005 | test_web_auth.py | 错误密码返回 401（触发限速时 429） |
 | TC-WEB-006 | test_web_auth.py | 正确登录下发 Cookie，可访问受保护端点，登出后令牌失效 |
 | TC-WEB-007 | test_web_auth.py | 无凭证访问受保护端点返回 401 |
+| TC-WEB-008 | test_web_auth.py | 已有用户时 `/web/setup` 返回 409 already_initialized |
+| TC-WEB-009 | test_web_auth.py | 用户已存在时 `/web/me` 的 needs_setup 为 false |
+| TC-WEB-010 | test_web_auth.py | `/web/password` 旧密码错误返回 401 wrong_password（会话保留） |
+| TC-WEB-011 | test_web_auth.py | 修改密码全流程：改后旧密码登录失败、新密码登录成功（测后改回原密码） |
+| TC-WEB-012 | test_web_auth.py | Web Cookie 通行 API 组端点（/sess/history、/schedule，等同 all 权限） |
+| TC-WEB-013 | test_web_auth.py | 修改密码新密码不足 8 位返回 400 |
 
 登录类用例：Web 登录认证始终启用，用户保存在数据库中；测试前需通过 `POST /web/setup`（或 Web 界面）创建用户，重置用 `groot user reset`。
+`/web/setup` 的弱密码校验（<8 位 → 400）在已有用户时不可达（先返回 409），该场景在 CLI 命令组的独立空库实例用例（TC-CLI-108）上覆盖。
 
-### 2.23 模型管理测试
+### 2.22 模型管理测试
 
 模型配置唯一存储于数据库，通过 `/web/models` 系列端点（WebSession Cookie 认证）管理。
 
@@ -545,6 +543,44 @@ curl -X POST http://localhost:8080/chat \
 | 无默认模型时 chat 报错 | 手工验证 | 空库（未创建任何模型）时 chat 返回 400，提示"尚未配置模型，请在设置中创建模型"；`/web/health` 中 llm 检查为 `unconfigured` |
 
 模型管理用例前置：groot 服务已启动且已创建 Web 登录用户；环境变量 `GROOT_TEST_HOST` / `GROOT_TEST_PORT`（默认 `localhost:8080`）定位服务，`GROOT_WEB_USER` / `GROOT_WEB_PASS` 提供登录凭据（未设置有效凭据时登录类用例自动跳过）。
+
+### 2.23 API Key 管理专项测试
+
+API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token 由 secret +
+元数据确定性签发，可通过 `GET /web/apikeys/:id/token` 任意次重取（结果与创建时
+完全一致）。全部端点受 WebSession Cookie 保护。
+
+| 用例编号 | 测试文件 | 测试内容 |
+|---------|---------|---------|
+| TC-KEY-001 | test_apikeys_api.py | 无 Cookie 访问四端点（List/Create/Token/Delete）均 401 |
+| TC-KEY-002 | test_apikeys_api.py | 创建成功：id 14 位数字时间编号、token 三段 JWT、permissions/expires_at 回显、expired=false、List 可见且不回显 token |
+| TC-KEY-003 | test_apikeys_api.py | 名称校验：空名 / 纯空白 / 超 64 字节 → 400；恰 64 字节可创建；保留名 "web" → 400 |
+| TC-KEY-004 | test_apikeys_api.py | 权限校验：非法权限点 / 空权限 → 400 invalid_permissions |
+| TC-KEY-005 | test_apikeys_api.py | expires_in 校验：非 1d/7d/1mo/6mo/1y/10y → 400 invalid_expires_in |
+| TC-KEY-006 | test_apikeys_api.py | 重名 → 409 name_exists |
+| TC-KEY-007 | test_apikeys_api.py | token 确定性重取：与创建返回完全一致，两次重取也一致 |
+| TC-KEY-008 | test_apikeys_api.py | token 重取不存在的 id → 404 not_found |
+| TC-KEY-009 | test_apikeys_api.py | 删除后 List 不含、原 token 立即失效（401）；删不存在的 id → 404 |
+
+说明：系统测试无法预置已过期的 Key，expired=true 分支由 Go 单元测试
+（TestAPIKeys_ListAndExpired）覆盖。
+
+### 2.24 CLI 命令组测试
+
+会写配置或删用户的用例使用独立临时 GROOT_HOME（tempfile.mkdtemp），不碰共享
+测试目录。CLI 子命令直接读写数据库（SQLite WAL 支持多进程），`user reset`
+无需停服即对 `/web/me` 的 needs_setup 生效。
+
+| 用例编号 | 测试文件 | 测试内容 |
+|---------|---------|---------|
+| TC-CLI-101 | test_cli_commands.py | `groot init` 生成 config.yaml（非空 security.auth.secret、权限 0600）、env.yaml（0600）、GROOT.md 与 skills/mcp/subagents/logs 目录 |
+| TC-CLI-102 | test_cli_commands.py | 重复 init 跳过已有文件，secret 不被覆盖；未知 flag 报错退出 |
+| TC-CLI-103 | test_cli_commands.py | `groot --help` 含 init/status/tail/push/pull/diff/user，不含已移除的 chat/schedule 子命令 |
+| TC-CLI-104 | test_cli_commands.py | `groot status` 目标端口无实例：打印「未检测到运行中的 Groot 实例」，退出码 0 |
+| TC-CLI-105 | test_cli_commands.py | `groot status` 对运行中共享服务输出健康信息（状态/端口） |
+| TC-CLI-106 | test_cli_commands.py | `groot push`（SQLite 模式）：报「仅在 MySQL/PostgreSQL 模式下可用」，退出码 1 |
+| TC-CLI-107 | test_cli_commands.py | `groot user reset -y` 空表：提示「用户表为空」，退出码 0 |
+| TC-CLI-108 | test_cli_commands.py | 独立实例全流程：空库弱密码 setup 400 → setup 成功 → schedule 未启用时 /schedule 返回 503 schedule_unavailable → user reset -y 后 needs_setup 回到 true |
 
 ---
 
@@ -594,10 +630,10 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Go 单元测试 | 60 个函数 | 11 |
-| Python 系统测试 | 128 个测试 | 27 |
+| Go 单元测试 | 438 个函数 | 61 |
+| Python 系统测试 | 355 个测试（pytest --collect-only） | 27 |
 
-**总计**: 约 188+ 个测试点覆盖核心功能。
+**总计**: 约 793 个测试点覆盖核心功能。
 
 ---
 

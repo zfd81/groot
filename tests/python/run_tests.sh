@@ -16,8 +16,10 @@ TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 # 默认配置
 GROOT_HOST="${GROOT_TEST_HOST:-localhost}"
 GROOT_PORT="${GROOT_TEST_PORT:-8080}"
-GROOT_API_KEY="${GROOT_TEST_API_KEY:-test-api-key-2026}"
 GROOT_HOME="${GROOT_TEST_HOME:-/tmp/groot_test}"
+# Web 登录账号（用于通过 Web 端点创建 JWT API Key，与 conftest.py 默认值一致）
+GROOT_WEB_USER="${GROOT_WEB_USER:-admin}"
+GROOT_WEB_PASS="${GROOT_WEB_PASS:-test-password-2026}"
 
 echo "================================================"
 echo "  Groot API 测试"
@@ -26,21 +28,21 @@ echo ""
 echo "测试环境配置:"
 echo "  GROOT_HOST:      $GROOT_HOST"
 echo "  GROOT_PORT:      $GROOT_PORT"
-echo "  GROOT_API_KEY:   $GROOT_API_KEY"
+echo "  GROOT_WEB_USER:  $GROOT_WEB_USER"
 echo "  GROOT_HOME:      $GROOT_HOME"
 echo ""
 
 # 设置环境变量
 export GROOT_TEST_HOST="$GROOT_HOST"
 export GROOT_TEST_PORT="$GROOT_PORT"
-export GROOT_TEST_API_KEY="$GROOT_API_KEY"
 export GROOT_TEST_HOME="$GROOT_HOME"
+export GROOT_WEB_USER
+export GROOT_WEB_PASS
 
-# 创建测试目录
+# 创建测试目录（运行时数据已入库，无需 memory 目录）
 mkdir -p "$GROOT_HOME"
 mkdir -p "$GROOT_HOME/skills"
 mkdir -p "$GROOT_HOME/mcp"
-mkdir -p "$GROOT_HOME/memory"
 mkdir -p "$GROOT_HOME/logs"
 
 # 检查 pytest 是否安装
@@ -49,9 +51,9 @@ if ! command -v pytest &> /dev/null; then
     pip install pytest pytest-asyncio requests pyyaml
 fi
 
-# 检查服务是否运行
+# 检查服务是否运行（健康检查端点为 /web/health，免认证）
 echo "检查服务状态..."
-HEALTH_URL="http://$GROOT_HOST:$GROOT_PORT/health"
+HEALTH_URL="http://$GROOT_HOST:$GROOT_PORT/web/health"
 
 if curl -s --connect-timeout 5 "$HEALTH_URL" > /dev/null 2>&1; then
     echo -e "${GREEN}服务已运行${NC}"
@@ -60,8 +62,8 @@ else
     echo ""
     echo "启动服务示例:"
     echo "  export GROOT_HOME=$GROOT_HOME"
-    echo "  export GROOT_API_KEY=$GROOT_API_KEY"
     echo "  groot -p $GROOT_PORT"
+    echo "  # API Key 由测试通过 Web 端点自动创建（JWT），无需环境变量"
     echo ""
     read -p "是否继续测试？测试将尝试启动服务。 [y/N] " -n 1 -r
     echo

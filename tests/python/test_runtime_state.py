@@ -337,7 +337,7 @@ class TestRuntimeStateRunningCount:
             sessions.append(response.headers.get("X-Session-ID"))
 
         # 查询健康状态
-        health_response = requests.get(f"{BASE_URL}/health")
+        health_response = requests.get(f"{BASE_URL}/web/health")
 
         data = health_response.json()
 

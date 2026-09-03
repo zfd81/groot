@@ -9,9 +9,16 @@ import base64
 import struct
 import zlib
 import math
-import os
 import json
-from conftest import BASE_URL, TEST_HOME
+import os
+from conftest import BASE_URL
+
+# 语义类用例（要求 LLM 真正"看懂"图片/文件内容）依赖真实多模态 LLM，
+# Mock LLM 无法通过；默认跳过，设置 GROOT_TEST_REAL_LLM=1 启用
+_needs_real_llm = pytest.mark.skipif(
+    os.environ.get("GROOT_TEST_REAL_LLM") != "1",
+    reason="需要真实多模态 LLM（设置 GROOT_TEST_REAL_LLM=1 启用）",
+)
 
 
 def make_test_png(width=100, height=100, color=(255, 0, 0)):
@@ -140,6 +147,7 @@ def parse_sse_stream(response):
 class TestMultimodalImage:
     """多模态图片附件测试"""
 
+    @_needs_real_llm
     def test_image_attachment_to_llm(self, server, api_headers):
         """TC-MM-001: 上传红色方块图片，验证 LLM 能识别颜色"""
         # 生成红色 PNG 图片
@@ -206,6 +214,7 @@ class TestMultimodalImage:
         result_text, _, _, _ = parse_sse_stream(response)
         print(f"\n[TC-MM-002] LLM 返回结果: {result_text}")
 
+    @_needs_real_llm
     def test_file_attachment_as_base64(self, server, api_headers):
         """TC-MM-003: 上传 file 类型附件（文本文件），验证 Base64 透传"""
         file_content = "Hello from test file\nLine 2: test data"
@@ -290,36 +299,6 @@ class TestMultimodalImage:
         result_text, _, _, _ = parse_sse_stream(response)
         print(f"\n[TC-MM-005] LLM 返回结果: {result_text}")
 
-    def test_attachment_saved_to_disk(self, server, api_headers):
-        """TC-MM-006: 验证多模态附件同时保存到磁盘"""
-        png_bytes = make_test_png(20, 20, color=(128, 0, 128))
-        png_base64 = base64.b64encode(png_bytes).decode()
-
-        payload = {
-            "instruction": "这是什么颜色？",
-            "attachments": [
-                {"type": "image", "name": "purple_test.png", "content": png_base64}
-            ]
-        }
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True,
-            timeout=120
-        )
-
-        session_id = response.headers.get("X-Session-ID")
-        _, _, _, _ = parse_sse_stream(response)
-
-        # 验证文件已保存到磁盘
-        attachment_path = os.path.join(
-            TEST_HOME, "memory", session_id, "attachments", "purple_test.png"
-        )
-        assert os.path.exists(attachment_path), \
-            f"附件未保存到磁盘: {attachment_path}"
-
 
 class TestMultimodalAudio:
     """多模态音频附件测试"""
@@ -382,35 +361,6 @@ class TestMultimodalAudio:
         assert response.status_code == 200
         result_text, _, _, _ = parse_sse_stream(response)
         print(f"\n[TC-MM-008] LLM 返回结果: {result_text}")
-
-    def test_audio_saved_to_disk(self, server, api_headers):
-        """TC-MM-009: 验证音频附件保存到磁盘"""
-        wav_bytes = make_test_wav(duration=0.2, sample_rate=8000, frequency=262)
-        wav_base64 = base64.b64encode(wav_bytes).decode()
-
-        payload = {
-            "instruction": "这是什么音频？",
-            "attachments": [
-                {"type": "audio", "name": "low_tone.wav", "content": wav_base64}
-            ]
-        }
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True,
-            timeout=120
-        )
-
-        session_id = response.headers.get("X-Session-ID")
-        _, _, _, _ = parse_sse_stream(response)
-
-        attachment_path = os.path.join(
-            TEST_HOME, "memory", session_id, "attachments", "low_tone.wav"
-        )
-        assert os.path.exists(attachment_path), \
-            f"音频附件未保存到磁盘: {attachment_path}"
 
     def test_mixed_image_audio(self, server, api_headers):
         """TC-MM-010: 混合附件（image + audio）"""

@@ -13,8 +13,21 @@ from conftest import (
     assert_session_id_format,
     assert_chat_id_format,
     assert_step_id_format,
-    generate_session_id
+    generate_session_id,
+    _web_login
 )
+
+
+# 模块级缓存的 Web 登录 Session（/web/skills、/web/tools 等需要 Cookie 认证）
+_web_session = None
+
+
+def get_web_session():
+    """获取（并缓存）已登录的 Web Session"""
+    global _web_session
+    if _web_session is None:
+        _web_session = _web_login(BASE_URL)
+    return _web_session
 
 
 class TestChatAPI:
@@ -383,12 +396,11 @@ class TestChatDetailAPI:
         assert data["session_id"] == session_id
         assert data["chat"] is not None
 
-        # 验证字段（使用新版名称）
+        # 验证字段（使用新版名称；消息不含 attachments 字段——附件内容不回显）
         chat = data["chat"]
         assert "chat_id" in chat
         assert "round" in chat
         assert "instruction" in chat  # 新版字段名
-        assert "attachments" in chat
         assert "result" in chat  # 新版字段名（非 user_content/assistant_content）
         assert "status" in chat
         assert "started_at" in chat
@@ -451,7 +463,6 @@ class TestSessionDetailAPI:
         assert "round_count" in session
         assert session["round_count"] == 2
         assert "path" in session
-        assert session_id in session["path"]  # path 中包含 session_id（无 sess_ 前缀）
 
         # 验证 history.messages 字段（使用新版名称）
         messages = data["history"]["messages"]
@@ -462,9 +473,7 @@ class TestSessionDetailAPI:
         assert "chat_id" in msg  # 新增字段
         assert "timestamp" in msg
         assert "instruction" in msg  # 新版字段名
-        assert "attachments" in msg
-        assert "result" in msg  # 新版字段名
-        assert "result_attachments" in msg
+        assert "result" in msg  # 新版字段名（消息不含 attachments/result_attachments——附件内容不回显）
         assert "status" in msg
         assert "duration" in msg
         assert "steps_count" in msg
@@ -534,11 +543,11 @@ class TestSessionHistoryAPI:
 
 
 class TestHealthAPI:
-    """GET /health API 测试"""
+    """GET /web/health API 测试（免认证健康检查）"""
 
     def test_health_check(self, server):
         """TC-019: 健康检查接口"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -560,14 +569,11 @@ class TestHealthAPI:
 
 
 class TestSkillsAPI:
-    """GET /skills API 测试"""
+    """GET /web/skills API 测试（Web Cookie 认证）"""
 
-    def test_list_skills(self, server, api_headers):
+    def test_list_skills(self, server):
         """TC-020: 列出 Skills"""
-        response = requests.get(
-            f"{BASE_URL}/skills",
-            headers=api_headers
-        )
+        response = get_web_session().get(f"{BASE_URL}/web/skills")
 
         assert response.status_code == 200
         data = response.json()
@@ -575,15 +581,12 @@ class TestSkillsAPI:
         assert "total" in data
         assert isinstance(data["skills"], list)
 
-    def test_skills_after_add(self, server, api_headers, mock_skill):
+    def test_skills_after_add(self, server, mock_skill):
         """TC-021: 添加 Skill 后列表更新"""
-        # 等待热插拔生效
-        time.sleep(3)
+        # skill 列表按请求实时扫描，稍等文件写入完成即可
+        time.sleep(1)
 
-        response = requests.get(
-            f"{BASE_URL}/skills",
-            headers=api_headers
-        )
+        response = get_web_session().get(f"{BASE_URL}/web/skills")
 
         assert response.status_code == 200
         data = response.json()
@@ -594,14 +597,11 @@ class TestSkillsAPI:
 
 
 class TestToolsAPI:
-    """GET /tools API 测试"""
+    """GET /web/tools API 测试（Web Cookie 认证）"""
 
-    def test_list_tools(self, server, api_headers):
+    def test_list_tools(self, server):
         """TC-022: 列出 MCP 工具 (按 MCP 分组)"""
-        response = requests.get(
-            f"{BASE_URL}/tools",
-            headers=api_headers
-        )
+        response = get_web_session().get(f"{BASE_URL}/web/tools")
 
         assert response.status_code == 200
         data = response.json()
@@ -624,12 +624,9 @@ class TestToolsAPI:
                 # mcp 字段不应存在
                 assert "mcp" not in tool
 
-    def test_tools_include_builtin(self, server, api_headers):
+    def test_tools_include_builtin(self, server):
         """TC-023: 工具列表包含 MCP 工具（验证分组格式）"""
-        response = requests.get(
-            f"{BASE_URL}/tools",
-            headers=api_headers
-        )
+        response = get_web_session().get(f"{BASE_URL}/web/tools")
 
         assert response.status_code == 200
         data = response.json()

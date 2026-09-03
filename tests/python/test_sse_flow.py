@@ -174,9 +174,9 @@ class TestSSEFlowIntegrity:
                 f"tool_calls({len(tool_calls)}) 和 tool_result({len(tool_results)}) 数量不等"
 
     def test_tool_call_result_step_id_matching(self, server, api_headers):
-        """TC-Flow-006: tool_calls 和 tool_result 的 id 必须匹配
+        """TC-Flow-006: tool_result 的 tool_call_id 必须与 tool_calls[].id 匹配
 
-        tool_calls 和 tool_result 通过 id 关联
+        tool_result（role=tool）通过 tool_call_id 字段关联 tool_calls 数组元素的 id
         """
         payload = {"instruction": "读取文件 /tmp/test.txt"}
 
@@ -193,23 +193,20 @@ class TestSSEFlowIntegrity:
         tool_results = sse.get_events_by_type("tool_result")
 
         if tool_calls and tool_results:
-            # 收集 tool_calls 中的 id（可能在不同层级）
+            # 收集 tool_calls 数组元素中的 id
             call_ids = []
             for c in tool_calls:
-                data = c["data"]
-                if "id" in data:
-                    call_ids.append(data["id"])
-                elif "tool_calls" in data:
-                    for tc in data["tool_calls"]:
-                        if "id" in tc:
-                            call_ids.append(tc["id"])
+                for tc in c["data"].get("tool_calls", []):
+                    if "id" in tc:
+                        call_ids.append(tc["id"])
 
-            result_ids = [r["data"].get("id") for r in tool_results if r["data"].get("id")]
+            result_ids = [r["data"].get("tool_call_id") for r in tool_results
+                          if r["data"].get("tool_call_id")]
 
-            # 每个 tool_result 的 id 必须在 tool_calls 中存在
+            # 每个 tool_result 的 tool_call_id 必须在 tool_calls 中存在
             for result_id in result_ids:
                 assert result_id in call_ids, \
-                    f"tool_result id '{result_id}' 在 tool_calls 中不存在"
+                    f"tool_result tool_call_id '{result_id}' 在 tool_calls 中不存在"
 
     def test_complete_event_sequence(self, server, api_headers):
         """TC-Flow-007: 完整事件序列验证
@@ -361,7 +358,7 @@ class TestSSEToolCallStrict:
     def test_no_orphan_tool_result(self, server, api_headers):
         """TC-Tool-003: 不允许孤立的 tool_result
 
-        每个 tool_result 必须有对应的 tool_calls
+        每个 tool_result 的 tool_call_id 必须能在此前 tool_calls[].id 中找到
         """
         payload = {"instruction": "执行 ls 命令"}
 
@@ -377,14 +374,23 @@ class TestSSEToolCallStrict:
         tool_calls = sse.get_events_by_type("tool_calls")
         tool_results = sse.get_events_by_type("tool_result")
 
-        # 不允许 tool_result 比 tool_calls 多
-        if len(tool_results) > len(tool_calls):
-            pytest.fail(
-                f"发现孤立的 tool_result！\n"
-                f"tool_calls 数量: {len(tool_calls)}\n"
-                f"tool_result 数量: {len(tool_results)}\n"
-                f"事件顺序: {sse.get_event_order()}"
-            )
+        # 收集所有 tool_calls 数组元素的 id
+        call_ids = set()
+        for c in tool_calls:
+            for tc in c["data"].get("tool_calls", []):
+                if "id" in tc:
+                    call_ids.add(tc["id"])
+
+        # 每个 tool_result 都必须能通过 tool_call_id 关联到某个 tool_calls 元素
+        for r in tool_results:
+            tool_call_id = r["data"].get("tool_call_id")
+            if tool_call_id and tool_call_id not in call_ids:
+                pytest.fail(
+                    f"发现孤立的 tool_result！\n"
+                    f"tool_call_id: {tool_call_id}\n"
+                    f"已知 tool_calls ids: {sorted(call_ids)}\n"
+                    f"事件顺序: {sse.get_event_order()}"
+                )
 
 
 class TestSSEStreamingOutput:

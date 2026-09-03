@@ -6,8 +6,7 @@
 import pytest
 import requests
 import base64
-import os
-from conftest import BASE_URL, SSEClient, TEST_HOME
+from conftest import BASE_URL, SSEClient
 
 
 class TestAttachmentBasic:
@@ -279,10 +278,9 @@ class TestAttachmentFilenameSafety:
         assert response.status_code == 200
         session_id = response.headers.get("X-Session-ID")
 
-        # 验证文件名被替换
-        # 斜杠应被替换为下划线
-        attachment_path = f"{TEST_HOME}/memory/{session_id}/attachments"
-        # 实际文件名应为 path_to_file.csv
+        # 附件不落盘：文件名安全处理（斜杠替换为下划线）在服务端校验层完成，
+        # 此处只验证请求被正常接受
+        assert session_id
 
     def test_filename_with_backslash(self, server, api_headers, test_file_base64):
         """TC-ATT-012: 文件名包含反斜杠"""
@@ -369,13 +367,7 @@ class TestAttachmentFilenameSafety:
         )
 
         assert response2.status_code == 200
-
-        # 验证文件被覆盖（只有一个 data.csv）
-        attachment_path = f"{TEST_HOME}/memory/{session_id}/attachments"
-        if os.path.exists(attachment_path):
-            files = os.listdir(attachment_path)
-            data_csv_count = sum(1 for f in files if f == "data.csv")
-            assert data_csv_count == 1  # 只有一个
+        # 附件不落盘（服务端只做校验），无磁盘文件可检查；请求成功即可
 
 
 class TestAttachmentStorage:
@@ -400,17 +392,11 @@ class TestAttachmentStorage:
         session_id = response.headers.get("X-Session-ID")
         SSEClient(response)
 
-        # 验证附件路径（无 sess_ 前缀）
-        attachment_path = f"{TEST_HOME}/memory/{session_id}/attachments/test.csv"
-
-        # 如果路径存在，验证文件
-        if os.path.exists(attachment_path):
-            with open(attachment_path, "r") as f:
-                content = f.read()
-                assert "name,age,city" in content
+        # 附件不落盘（服务端只做校验），无磁盘路径可验证；请求成功即视为通过
+        assert session_id
 
     def test_attachment_recorded_in_history(self, server, api_headers, test_file_base64):
-        """TC-ATT-016: 附件记录在 history.json 中"""
+        """TC-ATT-016: 带附件的对话被记录到会话历史（消息不回显 attachments 字段）"""
         payload = {
             "instruction": "分析文件",
             "attachments": [
@@ -437,7 +423,9 @@ class TestAttachmentStorage:
         assert detail_response.status_code == 200
         data = detail_response.json()
 
-        # 验证 attachments 字段
+        # 带附件的这轮对话应被正常记录（附件内容/文件名不在消息中回显）
         messages = data["history"]["messages"]
-        if messages:
-            assert "test.csv" in messages[0]["attachments"]
+        assert messages, "带附件的对话应记录到会话历史"
+        assert messages[0]["instruction"] == "分析文件"
+        # 状态枚举见 memory/types.go：completed/failed/cancelled
+        assert messages[0]["status"] in ("completed", "failed", "cancelled")

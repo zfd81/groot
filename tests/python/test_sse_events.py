@@ -254,10 +254,11 @@ class TestSSEEventFields:
             assert isinstance(call["tool_calls"], list)
             assert len(call["tool_calls"]) > 0
 
-            # 数组内每个元素应包含 name 和 arguments
+            # 数组内每个元素应包含 id/type/function，name 和 arguments 嵌套在 function 对象里
             for tc in call["tool_calls"]:
-                assert "name" in tc
-                assert "arguments" in tc
+                assert "function" in tc
+                assert "name" in tc["function"]
+                assert "arguments" in tc["function"]
 
     def test_tool_result_event_fields(self, server, api_headers):
         """TC-SSE-011: tool_result 事件字段验证"""
@@ -279,9 +280,8 @@ class TestSSEEventFields:
             # tool_result 必填字段：role 为 tool
             assert result.get("role") == "tool"
 
-            # 可选字段：output 或 error
-            # 成功时有 output，失败时有 error
-            assert "output" in result or "error" in result
+            # 内容字段为 content（tool_result 负载），失败时有 error 标记
+            assert "content" in result or "error" in result
 
     def test_message_start_event_fields(self, server, api_headers):
         """TC-SSE-012: message 事件字段验证（首个 message 替代旧 message_start）"""
@@ -339,7 +339,7 @@ class TestSSEEventFields:
             event = finish_events[0]["data"]
             assert event.get("role") == "assistant"
             assert "finish_reason" in event
-            assert event["finish_reason"] in ["stop", "tool_calls"]
+            assert event["finish_reason"] in ["stop", "tool_calls", "length"]
 
     def test_completed_event_fields(self, server, api_headers):
         """TC-SSE-015: finish 事件字段验证（替代旧 completed）"""
@@ -363,7 +363,7 @@ class TestSSEEventFields:
         assert "finish_reason" in data
 
         # 验证 finish_reason 可选值
-        assert data["finish_reason"] in ["stop", "tool_calls"]
+        assert data["finish_reason"] in ["stop", "tool_calls", "length"]
 
 
 class TestSSECancelledEvent:
@@ -408,7 +408,7 @@ class TestSSECancelledEvent:
         elif finish_events:
             data = finish_events[0]["data"]
             # 如果是正常 finish，finish_reason 应为 stop
-            assert data.get("finish_reason") in ["stop", "tool_calls"]
+            assert data.get("finish_reason") in ["stop", "tool_calls", "length"]
 
 
 class TestSSEMultipleRounds:

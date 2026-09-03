@@ -1,176 +1,31 @@
 """
-补充测试 - LLM/MCP 错误处理、重试策略、连接类型等
-覆盖设计文档第六章错误码和重试策略
+补充测试
+
+用例清单（裁剪后）：
+- TestMCPConnectionTypes    MCP 连接类型配置（stdio/sse/streamable_http/env 引用）
+- TestSkillsDependencies    Skill dependencies 递归调用
+- TestPromptValidation      /chat 的 prompt 参数
+- TestHealthDetailedChecks  /web/health 详细检查（llm、mcp、skills、memory、uptime、version）
+- TestWebEndpointAccess     /web/* 端点访问控制（Cookie 才 200；X-API-Key 打 /web/* 401）
+- TestReActExecutionDetails ReAct 步骤（SSE thinking 事件 + /chat/:sid 的 steps 持久化）
+- TestSessionHandlingDetails 会话处理（新会话/续会话/无效 session_id）
+- TestMetricsInHealth       /web/health 的 metrics 字段
+
+已删除的空壳/过时用例组：LLM 错误码组、MCP 工具错误组、Skill 错误组、
+优雅关闭组、配置热更新边界组、LLM 多模型配置组（由 test_models_api 取代）、
+取消机制组（与 test_runtime_state 重复）。
 """
 
 import pytest
 import requests
 import time
-from conftest import BASE_URL, SSEClient
+from conftest import BASE_URL, SSEClient, _web_login
 
 
-class TestLLMErrors:
-    """LLM 错误处理测试"""
-
-    def test_llm_connection_error_code(self, server, api_headers):
-        """TC-LLM-001: llm_connection_error 错误码"""
-        # 发送请求到配置错误的 LLM
-        # 具体行为取决于配置
-        payload = {"instruction": "测试"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        # 如果 LLM 连接失败，应返回对应错误
-        sse = SSEClient(response)
-        error_events = sse.get_events_by_type("error")
-
-        if error_events:
-            error = error_events[0]["data"]
-            # 验证错误码格式
-            assert "code" in error
-            # 可能的错误码：llm_connection_error, llm_rate_limited 等
-
-    def test_llm_rate_limited_error(self, server, api_headers):
-        """TC-LLM-002: llm_rate_limited 错误码"""
-        # 快速发送多个请求触发 LLM API 限流
-        # 具体行为取决于 LLM API 配置
-        payload = {"instruction": "测试"}
-
-        # 发送多个请求
-        for i in range(5):
-            response = requests.post(
-                f"{BASE_URL}/chat",
-                headers=api_headers,
-                json={"instruction": f"test{i}"},
-                stream=True
-            )
-
-        # 验证是否有 rate_limited 错误（如果触发）
-
-    def test_llm_connection_retry(self, server, api_headers):
-        """TC-LLM-003: LLM 连接失败重试（3次，间隔2s）"""
-        # 发送请求，观察重试行为
-        payload = {"instruction": "测试"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        # 如果有重试，tool_result 会有多次失败然后成功
-        tool_results = sse.get_events_by_type("tool_result")
-
-        # 统计失败和成功的工具结果
-        failed_results = [r for r in tool_results if "error" in r["data"]]
-        success_results = [r for r in tool_results if "error" not in r["data"]]
-
-        # 验证重试行为（如果有失败）
-
-    def test_llm_rate_limit_retry_delay(self, server, api_headers):
-        """TC-LLM-004: LLM Rate Limit 重试间隔（5s）"""
-        # 验证 Rate Limit 重试时有正确间隔
-        # 需要触发 rate limit 场景
-        payload = {"instruction": "测试"}
-
-        start_time = time.time()
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        SSEClient(response)
-
-        elapsed = time.time() - start_time
-
-        # 如果有重试，总时间应包含重试间隔
-
-
-class TestMCPToolErrors:
-    """MCP 工具错误处理测试"""
-
-    def test_tool_call_error_code(self, server, api_headers):
-        """TC-MCP-001: tool_call_error 错误码"""
-        # 发送可能触发工具调用失败的请求
-        payload = {"instruction": "读取不存在路径的文件 /nonexistent/path"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-        tool_results = sse.get_events_by_type("tool_result")
-
-        # 查找失败的工具结果
-        for result in tool_results:
-            if "error" in result["data"]:
-                error = result["data"].get("error", {})
-                if isinstance(error, dict):
-                    assert "code" in error or "message" in error
-
-        # 查找失败的工具调用
-        for result in tool_results:
-            if "error" in result["data"]:
-                assert result["data"]["error"] is not None
-
-    def test_mcp_tool_retry(self, server, api_headers):
-        """TC-MCP-002: MCP 工具失败重试（2次，间隔1s）"""
-        payload = {"instruction": "执行可能失败的工具调用"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        # 观察是否有重试步骤
-        thinking_events = sse.get_events_by_type("thinking")
-        tool_calls = sse.get_events_by_type("tool_calls")
-
-        # 同一个工具可能有多个 thinking（重试）
-
-
-class TestSkillErrors:
-    """Skill 错误处理测试"""
-
-    def test_skill_not_found_error(self, server, api_headers):
-        """TC-SKILL-001: skill_not_found 错误码"""
-        # 发送请求调用不存在的 Skill
-        payload = {"instruction": "使用 nonexistent_skill 来处理数据"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        sse = SSEClient(response)
-
-        # Agent 可能：
-        # 1. 直接忽略，自己处理
-        # 2. 返回 skill_not_found 错误
-        error_events = sse.get_events_by_type("error")
-        if error_events:
-            error = error_events[0]["data"]
-            # 验证错误码
+@pytest.fixture(scope="module")
+def web(server):
+    """Web 登录 Cookie Session（/web/* 端点只认 Cookie，X-API-Key 无效）"""
+    return _web_login(BASE_URL)
 
 
 class TestMCPConnectionTypes:
@@ -370,10 +225,6 @@ description: "子Skill"
             shutil.rmtree(sub_skill_dir)
 
 
-# HTTP request and code execution limits are now handled by external MCP servers
-# These tests are removed as builtin MCP tools are no longer available
-
-
 class TestPromptValidation:
     """prompt 参数验证测试"""
 
@@ -417,24 +268,24 @@ class TestPromptValidation:
 
 
 class TestHealthDetailedChecks:
-    """Health 详细检查测试"""
+    """Health 详细检查测试（健康检查唯一入口 /web/health，免认证）"""
 
     def test_health_llm_check(self, server):
         """TC-HEALTH-001: LLM 连接就绪检查"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
-        # 验证 LLM 检查
+        # 验证 LLM 检查（无默认模型时状态为 unconfigured）
         if "checks" in data and "llm" in data["checks"]:
             llm_check = data["checks"]["llm"]
-            assert llm_check["status"] in ["healthy", "unhealthy"]
-            if "model" in llm_check:
+            assert llm_check["status"] in ["healthy", "unhealthy", "unconfigured"]
+            if llm_check["status"] != "unconfigured" and "model" in llm_check:
                 assert llm_check["model"]  # 模型名不为空
 
     def test_health_mcp_check(self, server):
         """TC-HEALTH-002: MCP 服务连接就绪检查"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
@@ -447,7 +298,7 @@ class TestHealthDetailedChecks:
 
     def test_health_skills_check(self, server):
         """TC-HEALTH-003: Skills 加载完成检查"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
@@ -459,7 +310,7 @@ class TestHealthDetailedChecks:
 
     def test_health_memory_check(self, server):
         """TC-HEALTH-004: Memory 使用检查"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
@@ -471,17 +322,30 @@ class TestHealthDetailedChecks:
 
     def test_health_uptime(self, server):
         """TC-HEALTH-005: uptime 字段"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
         assert "uptime" in data
         # uptime 格式如 "2h30m"
+
+    def test_health_environment_check(self, server):
+        """TC-HEALTH-006: environment 检查块含运行环境三字段
+        （internal/api/handler/health.go：home_dir / database / log_dir）"""
+        response = requests.get(f"{BASE_URL}/web/health")
+        data = response.json()
+
+        assert "environment" in data.get("checks", {}), "checks 应含 environment 块"
+        env_check = data["checks"]["environment"]
+        assert env_check["status"] == "healthy"
+        info = env_check.get("info", {})
+        for field in ("home_dir", "database", "log_dir"):
+            assert field in info, f"environment.info 应含 {field} 字段"
         assert data["uptime"]
 
     def test_health_version(self, server):
         """TC-HEALTH-006: version 字段"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
@@ -489,281 +353,46 @@ class TestHealthDetailedChecks:
         assert data["version"]
 
 
-class TestGracefulShutdown:
-    """优雅关闭测试"""
+class TestWebEndpointAccess:
+    """/web/* 端点访问控制测试
 
-    def test_shutdown_waits_for_running_chats(self, server, api_headers):
-        """TC-SHUT-001: 关闭时等待运行中的对话"""
-        # 此测试验证关闭流程
-        # 实际关闭行为需要在服务停止时观察
-        # 测试服务响应正常
-        response = requests.get(f"{BASE_URL}/health")
-        assert response.status_code == 200
+    语义：/web/skills /web/tools /web/agents 需要 Web 登录 Cookie；
+    X-API-Key（JWT）只对 API 端点（/chat /sess /schedule）有效，
+    拿它打 /web/* 应得到 401。
+    """
 
-    def test_shutdown_timeout_30_seconds(self, server, api_headers):
-        """TC-SHUT-002: 关闭超时30秒"""
-        # 验证服务运行正常
-        # 关闭超时配置在设计文档中定义
-        response = requests.get(f"{BASE_URL}/health")
-        assert response.status_code == 200
+    def test_web_endpoints_with_cookie_ok(self, server, web):
+        """TC-PERM-010: 携带登录 Cookie 访问 /web/* → 200"""
+        for endpoint in ["/web/skills", "/web/tools", "/web/agents"]:
+            response = web.get(f"{BASE_URL}{endpoint}")
+            assert response.status_code == 200, (
+                f"{endpoint} 携带 Cookie 应返回 200，实际 {response.status_code}"
+            )
 
+    def test_web_endpoints_reject_api_key(self, server, api_headers):
+        """TC-PERM-011: 拿 X-API-Key（无 Cookie）打 /web/* → 401"""
+        for endpoint in ["/web/skills", "/web/tools", "/web/agents"]:
+            response = requests.get(f"{BASE_URL}{endpoint}", headers=api_headers)
+            assert response.status_code == 401, (
+                f"{endpoint} 仅认 Cookie，X-API-Key 应返回 401，实际 {response.status_code}"
+            )
 
-class TestConfigHotUpdateBoundaries:
-    """配置热更新边界测试"""
+    def test_web_endpoints_reject_anonymous(self, server, no_auth_headers):
+        """TC-PERM-012: 无任何认证打 /web/* → 401"""
+        for endpoint in ["/web/skills", "/web/tools", "/web/agents"]:
+            response = requests.get(f"{BASE_URL}{endpoint}", headers=no_auth_headers)
+            assert response.status_code == 401
 
-    def test_llm_config_no_hot_update(self, server, api_headers):
-        """TC-CFG-HOT-001: LLM 配置不支持热更新"""
-        # LLM 配置修改需重启服务
-        # 此测试验证配置存在
-        response = requests.get(f"{BASE_URL}/health")
-        data = response.json()
-
-        if "checks" in data and "llm" in data["checks"]:
-            # LLM 配置应存在
-            assert data["checks"]["llm"]["status"] in ["healthy", "unhealthy"]
-
-    def test_server_config_no_hot_update(self, server):
-        """TC-CFG-HOT-002: Server 配置不支持热更新"""
-        # Server 配置修改需重启服务
-        response = requests.get(f"{BASE_URL}/health")
-        assert response.status_code == 200
-
-    def test_security_config_no_hot_update(self, server, api_headers):
-        """TC-CFG-HOT-003: Security 配置不支持热更新"""
-        # Security 配置修改需重启服务
-        # 验证认证机制生效
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            json={"instruction": "test"}
-        )
-
-        # 无 API Key 应返回 401
-        assert response.status_code == 401
-
-    def test_skills_hot_update_supported(self, server, api_headers):
-        """TC-CFG-HOT-004: Skills 配置支持热更新"""
-        import os
-        from conftest import TEST_HOME
-
-        skill_dir = f"{TEST_HOME}/skills/hot_update_test"
-        os.makedirs(skill_dir, exist_ok=True)
-
-        skill_content = """---
-name: hot_update_test
-description: "热更新测试"
----
-"""
-
-        with open(f"{skill_dir}/SKILL.md", "w") as f:
-            f.write(skill_content)
-
-        time.sleep(5)
-
-        # 验证 Skill 加载
-        response = requests.get(
-            f"{BASE_URL}/skills",
-            headers=api_headers
-        )
-
-        skills = response.json()["skills"]
-        skill_names = [s["name"] for s in skills]
-
-        assert "hot_update_test" in skill_names
-
-        # 清理
-        import shutil
-        shutil.rmtree(skill_dir)
-
-    def test_mcp_hot_update_supported(self, server, api_headers):
-        """TC-CFG-HOT-005: MCP 配置支持热更新"""
-        import json
-        import os
-        from conftest import TEST_HOME
-
-        mcp_file = f"{TEST_HOME}/mcp/hot_update_test.json"
-
-        mcp_config = {
-            "name": "hot_update_test",
-            "type": "stdio",
-            "description": "热更新测试",
-            "isActive": False,
-            "command": "echo",
-            "args": ["test"]
-        }
-
-        with open(mcp_file, "w") as f:
-            json.dump(mcp_config, f)
-
-        time.sleep(5)
-
-        # 清理
-        os.remove(mcp_file)
-
-
-class TestLLMMultiModelConfig:
-    """LLM 多模型配置测试"""
-
-    def test_default_model_field(self, server):
-        """TC-LLM-CFG-001: default_model 配置"""
-        response = requests.get(f"{BASE_URL}/health")
-
-        data = response.json()
-
-        if "checks" in data and "llm" in data["checks"]:
-            llm_check = data["checks"]["llm"]
-            if "model" in llm_check:
-                # 验证 default_model 已设置
-                assert llm_check["model"]
-
-    def test_models_list_config(self, server, api_headers):
-        """TC-LLM-CFG-002: models 配置列表"""
-        # 验证 LLM 配置正确加载
-        response = requests.get(f"{BASE_URL}/health")
-
-        data = response.json()
-
-        # 服务运行正常表示 LLM 配置有效
-        assert data["status"] == "healthy"
-
-    def test_model_env_variable_reference(self, server, api_headers):
-        """TC-LLM-CFG-003: api_key 环境变量引用"""
-        # 验证环境变量引用生效
-        # ${OPENAI_API_KEY} 格式
-        response = requests.get(f"{BASE_URL}/health")
-
-        data = response.json()
-
-        if "checks" in data and "llm" in data["checks"]:
-            # LLM 健康表示配置正确
-            assert data["checks"]["llm"]["status"] in ["healthy", "unhealthy"]
-
-
-class TestPermissionBoundaries:
-    """权限边界测试"""
-
-    def test_permission_chat_only(self, server):
-        """TC-PERM-001: chat 权限仅允许对话"""
-        # 需要配置只有 chat 权限的 API Key
-        # 此测试验证基本权限机制
-        pass
-
-    def test_permission_status_only(self, server):
-        """TC-PERM-002: status 权限仅允许状态查询"""
-        # 需要配置只有 status 权限的 API Key
-        pass
-
-    def test_permission_all_access(self, server, api_headers):
-        """TC-PERM-003: all 权限可访问所有 API"""
-        # 当前测试 API Key 应有 all 权限
-        endpoints = [
-            ("/chat", "POST"),
-            ("/skills", "GET"),
-            ("/tools", "GET"),
-            ("/health", "GET"),
-        ]
-
-        for endpoint, method in endpoints:
-            if method == "GET":
-                response = requests.get(
-                    f"{BASE_URL}{endpoint}",
-                    headers=api_headers
-                )
-            else:
-                response = requests.post(
-                    f"{BASE_URL}{endpoint}",
-                    headers=api_headers,
-                    json={"instruction": "test"},
-                    stream=True
-                )
-
-            # all 权限应可访问所有端点
-            assert response.status_code in [200, 401]  # 401 可能因为需要特定参数
-
-
-class TestCancelMechanismDetails:
-    """取消机制详细测试"""
-
-    def test_cancel_interrupts_llm_call(self, server, api_headers):
-        """TC-CANCEL-001: 取消中断 LLM 调用"""
-        payload = {"instruction": "长任务"}
-
+    def test_api_endpoint_accepts_api_key(self, server, api_headers):
+        """TC-PERM-013: all 权限 API Key 可访问 API 端点（/chat）"""
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
-            json=payload,
+            json={"instruction": "test"},
             stream=True
         )
-
-        session_id = response.headers.get("X-Session-ID")
-
-        # DELETE /chat/{sid} 端点已删除
-        cancel_response = requests.delete(
-            f"{BASE_URL}/chat/{session_id}",
-            headers=api_headers
-        )
-
-        assert cancel_response.status_code == 404
-
-        # SSE 流正常完成（无法通过 DELETE 取消）
-        sse = SSEClient(response)
-        completed = sse.get_completed_event()
-
-        if completed:
-            assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
-
-    def test_cancel_interrupts_mcp_tool(self, server, api_headers):
-        """TC-CANCEL-002: 取消中断 MCP 工具调用"""
-        payload = {"instruction": "读取大文件"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        session_id = response.headers.get("X-Session-ID")
-
-        # DELETE /chat/{sid} 端点已删除
-        cancel_response = requests.delete(
-            f"{BASE_URL}/chat/{session_id}",
-            headers=api_headers
-        )
-
-        assert cancel_response.status_code == 404
-
-        # 流正常完成
-        SSEClient(response)
-
-    def test_cancel_sse_pushes_event(self, server, api_headers):
-        """TC-CANCEL-003: 取消推送 SSE cancelled 事件"""
-        from conftest import SSEClient
-
-        payload = {"instruction": "长任务"}
-
-        response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=api_headers,
-            json=payload,
-            stream=True
-        )
-
-        session_id = response.headers.get("X-Session-ID")
-
-        # DELETE /chat/{sid} 端点已删除
-        cancel_response = requests.delete(
-            f"{BASE_URL}/chat/{session_id}",
-            headers=api_headers
-        )
-
-        assert cancel_response.status_code == 404
-
-        # SSE 流正常完成
-        sse = SSEClient(response)
-        completed = sse.get_completed_event()
-
-        if completed:
-            assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
+        assert response.status_code == 200
+        SSEClient(response)  # drain
 
 
 class TestReActExecutionDetails:
@@ -791,8 +420,12 @@ class TestReActExecutionDetails:
             for event in thinking_events:
                 assert "reasoning_content" in event["data"]
 
-    def test_acting_tool_call_step(self, server, api_headers):
-        """TC-REACT-002: Acting 工具调用步骤"""
+    def test_steps_persisted_in_chat_record(self, server, api_headers):
+        """TC-REACT-002: 执行步骤持久化在 ChatRecord.steps 中
+
+        SSE 事件不携带 step_id 等字段；步骤详情通过 GET /chat/:sid
+        返回的 steps 数组断言（step_id/type/name/status 等）。
+        """
         payload = {"instruction": "读取文件 /tmp/test.txt"}
 
         response = requests.post(
@@ -801,20 +434,23 @@ class TestReActExecutionDetails:
             json=payload,
             stream=True
         )
+        session_id = response.headers.get("X-Session-ID")
+        SSEClient(response)  # drain 至完成
 
-        sse = SSEClient(response)
+        detail = requests.get(f"{BASE_URL}/chat/{session_id}", headers=api_headers)
+        assert detail.status_code == 200
+        chat = detail.json()["chat"]
+        assert "steps" in chat
 
-        # 查找 tool_call 事件
-        tool_calls = sse.get_events_by_type("tool_calls")
+        # 有步骤时验证结构（Mock LLM 可能不触发工具调用，steps 可为空）
+        for step in chat["steps"] or []:
+            assert "step_id" in step
+            assert "type" in step
+            assert "name" in step
+            assert "status" in step
 
-        if tool_calls:
-            for call in tool_calls:
-                assert "step_id" in call["data"]
-                assert "name" in call["data"]
-                assert "arguments" in call["data"]
-
-    def test_observation_result_update(self, server, api_headers):
-        """TC-REACT-003: Observation 结果更新"""
+    def test_step_timing_fields(self, server, api_headers):
+        """TC-REACT-003: 步骤含起止时间与嵌套层级字段"""
         payload = {"instruction": "测试对话"}
 
         response = requests.post(
@@ -823,16 +459,18 @@ class TestReActExecutionDetails:
             json=payload,
             stream=True
         )
+        session_id = response.headers.get("X-Session-ID")
+        SSEClient(response)
 
-        sse = SSEClient(response)
+        detail = requests.get(f"{BASE_URL}/chat/{session_id}", headers=api_headers)
+        assert detail.status_code == 200
+        chat = detail.json()["chat"]
 
-        # tool_result 事件包含工具执行结果
-        tool_results = sse.get_events_by_type("tool_result")
-
-        for result in tool_results:
-            assert "step_id" in result["data"]
-            # output 或 error 字段
-            assert "output" in result["data"] or "error" in result["data"]
+        for step in chat.get("steps") or []:
+            assert "start_time" in step
+            assert "end_time" in step
+            assert "nesting_level" in step
+            assert step["nesting_level"] >= 0
 
 
 class TestSessionHandlingDetails:
@@ -926,7 +564,7 @@ class TestMetricsInHealth:
 
     def test_chats_running_metric(self, server, api_headers):
         """TC-METRICS-001: chats_running 指标"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 
@@ -936,7 +574,7 @@ class TestMetricsInHealth:
 
     def test_success_rate_metric(self, server, api_headers):
         """TC-METRICS-002: success_rate 指标"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 

@@ -36,7 +36,7 @@ class TestTimeout:
     def test_step_timeout_in_config(self, server, api_headers):
         """TC-PERF-002: step_timeout 配置生效"""
         # 验证配置中 step_timeout 存在（默认60秒）
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         # health 接口不直接显示超时配置
         # 验证服务运行正常
@@ -218,7 +218,9 @@ class TestConcurrency:
 
     def test_concurrent_requests_per_session(self, server, api_headers):
         """TC-PERF-012: 同一会话并发限制（RuntimeState）"""
-        # 先获取一个 session_id
+        # 先获取一个 session_id，并读完响应体确保这轮对话已结束、会话空闲
+        # （stream=True 只拿到头就返回，不消费 body 的话会话仍在执行中，
+        #   后面 3 个并发请求会全部 409）
         response = requests.post(
             f"{BASE_URL}/chat",
             headers=api_headers,
@@ -227,6 +229,7 @@ class TestConcurrency:
         )
 
         session_id = response.headers.get("X-Session-ID")
+        _ = response.text  # 消费完 SSE 流，等待本轮结束
 
         # 同时发送多个请求到同一会话
         headers2 = api_headers.copy()
@@ -267,7 +270,7 @@ class TestResourceUsage:
             SSEClient(response)
 
         # 验证服务仍然正常
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
         assert response.status_code == 200
 
         # 验证内存使用在合理范围（通过 health 接口）
@@ -278,7 +281,7 @@ class TestResourceUsage:
 
     def test_running_count_in_metrics(self, server, api_headers):
         """TC-PERF-014: health 接口显示运行数"""
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
 
         data = response.json()
 

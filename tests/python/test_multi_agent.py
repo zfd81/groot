@@ -7,8 +7,8 @@
 
 本文件覆盖**无需真实 LLM**的部分：
 - 子 Agent 启动期注册行为
-- /agents 列表接口
-- /skills /tools + X-Agent-Name 路由
+- /web/agents 列表接口（Web 登录 Cookie）
+- /web/skills /web/tools + X-Agent-Name 路由（Web 登录 Cookie）
 - /chat 的 X-Agent-Name 输入校验（unknown_agent → 400）
 - /chat/status 含 sub_agents 字段
 - groot init 子目录与 GROOT.md 调度引导段
@@ -19,6 +19,9 @@
 每个测试自带独立 GROOT_HOME 与端口，不复用 conftest 的 session 级 server fixture，
 原因：BuildSubAgentRegistry 只在启动期扫描一次，必须先写好 subagents/ 再启动。
 """
+
+# 兼容 Python 3.9 venv：让 `X | None` 注解惰性求值
+from __future__ import annotations
 
 import os
 import shutil
@@ -32,7 +35,7 @@ import pytest
 import requests
 import yaml
 
-from conftest import GROOT_BIN, TEST_API_KEY
+from conftest import GROOT_BIN, TEST_AUTH_SECRET, _web_login, bootstrap_api_key, ensure_default_model
 
 
 def _free_port() -> int:
@@ -46,7 +49,8 @@ def _wait_health(base_url: str, timeout: int = 30) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = requests.get(f"{base_url}/health", timeout=2)
+            # 健康检查唯一入口为 /web/health（免认证）
+            r = requests.get(f"{base_url}/web/health", timeout=2)
             if r.status_code == 200:
                 return True
         except Exception:
@@ -56,34 +60,22 @@ def _wait_health(base_url: str, timeout: int = 30) -> bool:
 
 
 def _write_minimal_config(home: str, port: int) -> None:
-    """写入测试用最小配置；LLM 段配真但不会被本文件用到——只跑非 LLM 接口。"""
+    """写入测试用最小配置。
+
+    注意：模型只存数据库（配置文件 llm 节已失效），模型由 ensure_default_model
+    通过 /web/models 创建；memory.directory / skills.hot_reload 配置项已删除。
+    """
     cfg = {
         "agent": {"name": "groot", "version": "test"},
         "server": {"host": "127.0.0.1", "port": port},
-        "llm": {
-            "default_model": "qwen-local",
-            "models": {
-                "qwen-local": {
-                    "base_url": "http://127.0.0.1:8230/v1",
-                    "api_key": "unused",
-                    "model": "test",
-                    "max_tokens": 1024,
-                    "temperature": 0.0,
-                }
-            },
-        },
-        "skills": {"hot_reload": {"enabled": True, "debounce_delay": 1}},
+        # 认证始终开启：只需请求头名与 JWT 签名密钥；API Key 通过 Web 端点创建
         "security": {
             "auth": {
-                "enabled": True,
-                "type": "api_key",
-                "api_key": {
-                    "header_name": "X-API-Key",
-                    "keys": [{"name": "test", "key": TEST_API_KEY, "permissions": ["all"]}],
-                },
+                "header_name": "X-API-Key",
+                "secret": TEST_AUTH_SECRET,
             }
         },
-        "memory": {"directory": "memory"},
+        "memory": {"history_window": 20},
         "schedule": {"enabled": False, "max_concurrent_tasks": 1, "sync_interval": "30s"},
         "message": {
             "queue_size": 10,
@@ -91,7 +83,7 @@ def _write_minimal_config(home: str, port: int) -> None:
             "senders": {"webhook": {"enabled": False, "url": ""}, "email": {"enabled": False}},
         },
         "logging": {"level": "info", "format": "json", "output": ["stdout"]},
-        "sub_agent": {
+        "subagent": {
             "max_concurrency": 5,
             "max_task_length": 4000,
             "max_result_length": 8000,
@@ -117,7 +109,7 @@ def _bootstrap_home(extra_dirs: list[str] | None = None) -> str:
     extra_dirs 用来插入额外目录（例如某些 fixture 测试要预置 broken subagent）。
     """
     home = tempfile.mkdtemp(prefix="groot_multi_agent_")
-    for sub in ("skills", "mcp", "subagents", "memory", "logs", "cluster/members"):
+    for sub in ("skills", "mcp", "subagents", "logs"):
         os.makedirs(os.path.join(home, sub), exist_ok=True)
     for sub in extra_dirs or []:
         os.makedirs(os.path.join(home, sub), exist_ok=True)
@@ -125,13 +117,22 @@ def _bootstrap_home(extra_dirs: list[str] | None = None) -> str:
 
 
 class _Server:
-    """启动一个独占 groot 进程，按指定 home + port 跑；上下文管理器自动清理。"""
+    """启动一个独占 groot 进程，按指定 home + port 跑；上下文管理器自动清理。
+
+    每个实例使用独立数据库，启动后自动：
+    - 通过 Web 端点创建 API Key（self.headers，用于 /chat 等 API 端点）
+    - 建立 Web 登录 Cookie Session（self.web，用于 /web/agents|skills|tools）
+    - 确保模型库中有默认模型（TC-MA-020 等依赖：模型解析先于 agent 校验，
+      空模型库时打不存在的 agent 会返回 invalid_model 而非 unknown_agent）
+    """
 
     def __init__(self, home: str, port: int):
         self.home = home
         self.port = port
         self.base_url = f"http://127.0.0.1:{port}"
         self.proc: subprocess.Popen | None = None
+        self.headers: dict | None = None
+        self.web: requests.Session | None = None
 
     def __enter__(self):
         env = os.environ.copy()
@@ -147,6 +148,15 @@ class _Server:
             self._dump_logs()
             self.proc.kill()
             raise RuntimeError(f"groot 启动失败 (home={self.home}, port={self.port})")
+        # 独立数据库：为本实例创建 all 权限的 JWT API Key
+        self.headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": bootstrap_api_key(self.base_url, name="pytest-multi-agent"),
+        }
+        # /web/* 端点需要 Web 登录 Cookie（X-API-Key 无效）
+        self.web = _web_login(self.base_url)
+        # 模型只存数据库：确保空库中有默认模型
+        ensure_default_model(self.base_url)
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -172,11 +182,6 @@ class _Server:
                 pass
 
 
-@pytest.fixture
-def headers():
-    return {"Content-Type": "application/json", "X-API-Key": TEST_API_KEY}
-
-
 # ---------------------------------------------------------------------------
 # 12.2.1 子 Agent 启动期注册（4 用例）
 # ---------------------------------------------------------------------------
@@ -185,26 +190,26 @@ def headers():
 class TestSubAgentRegistration:
     """启动期扫描 subagents/ 的容错与正确性。对应 TEST_CASES 2.21.1。"""
 
-    def test_no_subagents_dir_only_groot(self, headers):
-        """TC-MA-001: subagents/ 目录不存在 → 启动正常，/agents 仅返回 groot。
+    def test_no_subagents_dir_only_groot(self):
+        """TC-MA-001: subagents/ 目录不存在 → 启动正常，/web/agents 仅返回 groot。
 
         覆盖 plan Task 7：scanSubAgentDirs 对缺失根目录静默返回空切片。
         """
         home = tempfile.mkdtemp(prefix="groot_no_subagents_")
         # 故意只建 skills / mcp 等基础目录，不建 subagents
-        for sub in ("skills", "mcp", "memory", "logs"):
+        for sub in ("skills", "mcp", "logs"):
             os.makedirs(os.path.join(home, sub), exist_ok=True)
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/agents", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/agents", timeout=5)
             assert r.status_code == 200
             data = r.json()
             names = [a["name"] for a in data["agents"]]
             assert names == ["groot"], f"应只返回 groot，实际 {names}"
 
-    def test_missing_description_skipped(self, headers):
+    def test_missing_description_skipped(self):
         """TC-MA-002: agent.md 缺 description → 启动跳过该目录，其它正常加载。"""
         home = _bootstrap_home()
         # 合法 Agent
@@ -219,13 +224,13 @@ class TestSubAgentRegistration:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/agents", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/agents", timeout=5)
             assert r.status_code == 200
             names = [a["name"] for a in r.json()["agents"]]
             assert "good-agent" in names
             assert "no-desc" not in names
 
-    def test_missing_agent_md_skipped(self, headers):
+    def test_missing_agent_md_skipped(self):
         """TC-MA-003: agent.md 缺失 → 启动跳过该目录。"""
         home = _bootstrap_home()
         _write_subagent(home, "good-agent", "合法 Agent")
@@ -236,12 +241,12 @@ class TestSubAgentRegistration:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/agents", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/agents", timeout=5)
             names = [a["name"] for a in r.json()["agents"]]
             assert "good-agent" in names
             assert "empty-dir" not in names
 
-    def test_directory_named_groot_skipped(self, headers):
+    def test_directory_named_groot_skipped(self):
         """TC-MA-004: 子目录名为 "groot"（与主 Agent 同名）→ 跳过，日志 ERROR。
 
         覆盖 plan Task 7：MainAgentName 保留检查。
@@ -255,7 +260,7 @@ class TestSubAgentRegistration:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/agents", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/agents", timeout=5)
             data = r.json()
             # groot 仅出现一次（主 Agent），且主 Agent 的 description 不是 "冒名顶替"
             groot_entries = [a for a in data["agents"] if a["name"] == "groot"]
@@ -271,7 +276,7 @@ class TestSubAgentRegistration:
 class TestAgentsAPI:
     """GET /agents 接口。对应 TEST_CASES 2.21.4。"""
 
-    def test_groot_first_then_subagents_alphabetical(self, headers):
+    def test_groot_first_then_subagents_alphabetical(self):
         """TC-MA-010: groot 首位 + 子 Agent 按字典序。"""
         home = _bootstrap_home()
         # 故意按非字典序写入；返回应自动排序
@@ -283,7 +288,7 @@ class TestAgentsAPI:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/agents", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/agents", timeout=5)
             assert r.status_code == 200
             names = [a["name"] for a in r.json()["agents"]]
             assert names[0] == "groot"
@@ -291,7 +296,7 @@ class TestAgentsAPI:
             sub = names[1:]
             assert sub == sorted(sub), f"子 Agent 应按字典序，实际 {sub}"
 
-    def test_each_entry_has_required_fields(self, headers):
+    def test_each_entry_has_required_fields(self):
         """TC-MA-011: 每条 Agent 含 name / description / skills 字段。"""
         home = _bootstrap_home()
         _write_subagent(home, "db-agent", "数据库专家")
@@ -299,7 +304,7 @@ class TestAgentsAPI:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(f"{srv.base_url}/agents", headers=headers, timeout=5)
+            r = srv.web.get(f"{srv.base_url}/web/agents", timeout=5)
             data = r.json()
             for a in data["agents"]:
                 assert "name" in a
@@ -314,20 +319,24 @@ class TestAgentsAPI:
 
 
 class TestXAgentNameValidation:
-    """/chat / /skills / /tools 的 X-Agent-Name 输入校验。
+    """/chat /web/skills /web/tools 的 X-Agent-Name 输入校验。
 
     本组用例**只验证错误路径**（unknown_agent → 400 / 主 Agent 等价空），
     不真实触发 LLM 推理。对应 TEST_CASES 2.21.2 / 2.21.4。
     """
 
-    def test_chat_unknown_agent_returns_400(self, headers):
-        """TC-MA-020: POST /chat + X-Agent-Name=ghost → 400 unknown_agent。"""
+    def test_chat_unknown_agent_returns_400(self):
+        """TC-MA-020: POST /chat + X-Agent-Name=ghost → 400 unknown_agent。
+
+        注意：chat.go 先解析模型再校验 agent，_Server 已经保证模型库中有
+        默认模型，因此此处应得到 unknown_agent 而非 invalid_model。
+        """
         home = _bootstrap_home()
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            h = {**headers, "X-Agent-Name": "ghost-agent"}
+            h = {**srv.headers, "X-Agent-Name": "ghost-agent"}
             r = requests.post(
                 f"{srv.base_url}/chat",
                 headers=h,
@@ -337,26 +346,32 @@ class TestXAgentNameValidation:
             assert r.status_code == 400
             assert "unknown_agent" in r.text or "Unknown" in r.text
 
-    def test_skills_unknown_agent_returns_400(self, headers):
-        """TC-MA-021: GET /skills + X-Agent-Name=ghost → 400 unknown_agent。"""
+    def test_skills_unknown_agent_returns_400(self):
+        """TC-MA-021: GET /web/skills + X-Agent-Name=ghost → 400 unknown_agent。"""
         home = _bootstrap_home()
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            h = {**headers, "X-Agent-Name": "ghost-agent"}
-            r = requests.get(f"{srv.base_url}/skills", headers=h, timeout=5)
+            r = srv.web.get(
+                f"{srv.base_url}/web/skills",
+                headers={"X-Agent-Name": "ghost-agent"},
+                timeout=5,
+            )
             assert r.status_code == 400
 
-    def test_tools_unknown_agent_returns_400(self, headers):
-        """TC-MA-022: GET /tools + X-Agent-Name=ghost → 400 unknown_agent。"""
+    def test_tools_unknown_agent_returns_400(self):
+        """TC-MA-022: GET /web/tools + X-Agent-Name=ghost → 400 unknown_agent。"""
         home = _bootstrap_home()
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            h = {**headers, "X-Agent-Name": "ghost-agent"}
-            r = requests.get(f"{srv.base_url}/tools", headers=h, timeout=5)
+            r = srv.web.get(
+                f"{srv.base_url}/web/tools",
+                headers={"X-Agent-Name": "ghost-agent"},
+                timeout=5,
+            )
             assert r.status_code == 400
 
 
@@ -368,35 +383,35 @@ class TestXAgentNameValidation:
 class TestMainAgentEquivalence:
     """X-Agent-Name=groot 等价于不传 header（plan Task 13）。"""
 
-    def test_skills_groot_header_equals_omit(self, headers):
-        """TC-MA-030: /skills + X-Agent-Name=groot vs 不传 → 响应相同。"""
+    def test_skills_groot_header_equals_omit(self):
+        """TC-MA-030: /web/skills + X-Agent-Name=groot vs 不传 → 响应相同。"""
         home = _bootstrap_home()
         _write_subagent(home, "db-agent", "数据库专家")
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r1 = requests.get(f"{srv.base_url}/skills", headers=headers, timeout=5)
-            r2 = requests.get(
-                f"{srv.base_url}/skills",
-                headers={**headers, "X-Agent-Name": "groot"},
+            r1 = srv.web.get(f"{srv.base_url}/web/skills", timeout=5)
+            r2 = srv.web.get(
+                f"{srv.base_url}/web/skills",
+                headers={"X-Agent-Name": "groot"},
                 timeout=5,
             )
             assert r1.status_code == 200 and r2.status_code == 200
             # skills 列表语义上相同；忽略字段顺序
             assert r1.json() == r2.json()
 
-    def test_tools_groot_header_equals_omit(self, headers):
-        """TC-MA-031: /tools + X-Agent-Name=groot vs 不传 → 响应相同。"""
+    def test_tools_groot_header_equals_omit(self):
+        """TC-MA-031: /web/tools + X-Agent-Name=groot vs 不传 → 响应相同。"""
         home = _bootstrap_home()
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r1 = requests.get(f"{srv.base_url}/tools", headers=headers, timeout=5)
-            r2 = requests.get(
-                f"{srv.base_url}/tools",
-                headers={**headers, "X-Agent-Name": "groot"},
+            r1 = srv.web.get(f"{srv.base_url}/web/tools", timeout=5)
+            r2 = srv.web.get(
+                f"{srv.base_url}/web/tools",
+                headers={"X-Agent-Name": "groot"},
                 timeout=5,
             )
             assert r1.status_code == 200 and r2.status_code == 200
@@ -409,11 +424,11 @@ class TestMainAgentEquivalence:
 
 
 class TestSubAgentRouting:
-    """X-Agent-Name=<已注册子 Agent> 时 /skills /tools 走子 Agent 后端。"""
+    """X-Agent-Name=<已注册子 Agent> 时 /web/skills /web/tools 走子 Agent 后端。"""
 
-    def test_skills_subagent_returns_subagent_skills(self, headers):
+    def test_skills_subagent_returns_subagent_skills(self):
         """TC-MA-040: 写一个 SKILL.md 进 subagents/db-agent/skills/，
-        然后 GET /skills + X-Agent-Name=db-agent 应能返回它。
+        然后 GET /web/skills + X-Agent-Name=db-agent 应能返回它。
         """
         home = _bootstrap_home()
         _write_subagent(home, "db-agent", "数据库专家")
@@ -430,9 +445,9 @@ class TestSubAgentRouting:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(
-                f"{srv.base_url}/skills",
-                headers={**headers, "X-Agent-Name": "db-agent"},
+            r = srv.web.get(
+                f"{srv.base_url}/web/skills",
+                headers={"X-Agent-Name": "db-agent"},
                 timeout=5,
             )
             assert r.status_code == 200
@@ -440,8 +455,8 @@ class TestSubAgentRouting:
             names = [s.get("name") for s in skills]
             assert "sql-review" in names, f"未找到 sql-review，实际 {names}"
 
-    def test_tools_subagent_no_mcp_returns_empty(self, headers):
-        """TC-MA-041: 子 Agent 没有 mcp/ 目录时 /tools 返回空 group map（不是 500，
+    def test_tools_subagent_no_mcp_returns_empty(self):
+        """TC-MA-041: 子 Agent 没有 mcp/ 目录时 /web/tools 返回空 group map（不是 500，
         也不挂 call_agent —— Solo 模式不挂载内置工具）。"""
         home = _bootstrap_home()
         _write_subagent(home, "minimal-agent", "最小化 Agent，无 mcp")
@@ -449,9 +464,9 @@ class TestSubAgentRouting:
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            r = requests.get(
-                f"{srv.base_url}/tools",
-                headers={**headers, "X-Agent-Name": "minimal-agent"},
+            r = srv.web.get(
+                f"{srv.base_url}/web/tools",
+                headers={"X-Agent-Name": "minimal-agent"},
                 timeout=5,
             )
             assert r.status_code == 200
@@ -474,7 +489,7 @@ class TestSubAgentRouting:
 class TestStatusSubAgents:
     """/chat/status 响应字段验证。LLM 真实跑动并发场景在 real_llm 文件。"""
 
-    def test_status_idle_session_has_chat_null(self, headers):
+    def test_status_idle_session_has_chat_null(self):
         """TC-MA-050: 不存在的 session → status=idle, chat=null（plan Task 19）。"""
         home = _bootstrap_home()
         port = _free_port()
@@ -483,7 +498,7 @@ class TestStatusSubAgents:
         with _Server(home, port) as srv:
             r = requests.get(
                 f"{srv.base_url}/chat/status/never-existed",
-                headers=headers,
+                headers=srv.headers,
                 timeout=5,
             )
             assert r.status_code == 200

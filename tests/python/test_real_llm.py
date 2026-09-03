@@ -11,6 +11,14 @@ import base64
 import os
 from conftest import BASE_URL, TEST_HOME, SSEClient
 
+# 本文件的断言依赖真实 LLM 的智能输出（代码生成/翻译/数学等语义验证），
+# Mock LLM 返回固定文案无法通过。默认跳过；配好真实 LLM（模型库默认模型
+# 指向真实端点）后设置 GROOT_TEST_REAL_LLM=1 启用。
+pytestmark = pytest.mark.skipif(
+    os.environ.get("GROOT_TEST_REAL_LLM") != "1",
+    reason="需要真实 LLM（设置 GROOT_TEST_REAL_LLM=1 启用）",
+)
+
 
 class TestRealLLMBasic:
     """真实 LLM 基础对话测试"""

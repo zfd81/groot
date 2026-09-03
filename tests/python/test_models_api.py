@@ -24,10 +24,10 @@ import uuid
 import pytest
 import requests
 
-from conftest import BASE_URL
+from conftest import BASE_URL, TEST_WEB_PASS, TEST_WEB_USER
 
-WEB_USER = os.environ.get("GROOT_WEB_USER", "admin")
-WEB_PASS = os.environ.get("GROOT_WEB_PASS", "")
+WEB_USER = os.environ.get("GROOT_WEB_USER", TEST_WEB_USER)
+WEB_PASS = os.environ.get("GROOT_WEB_PASS", TEST_WEB_PASS)
 
 
 @pytest.fixture(scope="module")

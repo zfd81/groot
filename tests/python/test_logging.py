@@ -4,7 +4,7 @@
 
 新版设计变化：
 - 日志事件名：chat_completed（旧版是 task_completed）
-- 日志事件类型：api_request, chat_completed, skill_hot_reload, mcp_hot_reload
+- 日志事件类型：api_request, chat_completed
 """
 
 import pytest
@@ -31,7 +31,7 @@ class TestLogFormat:
     def test_log_file_format(self, server, api_headers):
         """TC-LOG-002: 日志文件命名格式"""
         # 执行一次请求以产生日志
-        requests.get(f"{BASE_URL}/health")
+        requests.get(f"{BASE_URL}/web/health")
 
         logs_dir = f"{TEST_HOME}/logs"
 
@@ -47,7 +47,7 @@ class TestLogFormat:
     def test_log_json_structure(self, server, api_headers):
         """TC-LOG-003: JSON 结构化日志"""
         # 执行请求
-        requests.get(f"{BASE_URL}/health")
+        requests.get(f"{BASE_URL}/web/health")
 
         logs_dir = f"{TEST_HOME}/logs"
 
@@ -82,7 +82,7 @@ class TestLogLevels:
     def test_log_level_info(self, server, api_headers):
         """TC-LOG-004: INFO 级别日志"""
         # 执行正常操作
-        requests.get(f"{BASE_URL}/health")
+        requests.get(f"{BASE_URL}/web/health")
 
         logs_dir = f"{TEST_HOME}/logs"
 
@@ -148,7 +148,6 @@ class TestLogEvents:
                                 assert data["event"] in [
                                     "api_request",
                                     "chat_completed",
-                                    "mcp_hot_reload",
                                     "memory_cleanup"
                                 ]
                         except:
@@ -203,5 +202,5 @@ class TestLogOutput:
         # 验证服务启动时日志输出
         # stdout 日志通常在服务控制台查看
 
-        response = requests.get(f"{BASE_URL}/health")
+        response = requests.get(f"{BASE_URL}/web/health")
         assert response.status_code == 200

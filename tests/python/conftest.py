@@ -18,7 +18,10 @@ from datetime import datetime
 # 测试环境配置
 TEST_HOST = os.environ.get("GROOT_TEST_HOST", "localhost")
 TEST_PORT = os.environ.get("GROOT_TEST_PORT", "8080")
-TEST_API_KEY = os.environ.get("GROOT_TEST_API_KEY", "test-api-key-2026")
+# JWT API Key 认证：服务端只需 HS256 签名密钥；API Key 通过 Web 端点创建
+TEST_AUTH_SECRET = os.environ.get("GROOT_TEST_AUTH_SECRET", "groot-test-secret-0123456789abcdef")
+TEST_WEB_USER = os.environ.get("GROOT_WEB_USER", "admin")
+TEST_WEB_PASS = os.environ.get("GROOT_WEB_PASS", "test-password-2026")
 TEST_HOME = os.environ.get("GROOT_TEST_HOME", "/tmp/groot_test")
 # GROOT_BIN: tests/python -> tests -> groot -> bin/groot
 GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "bin", "groot"))
@@ -34,9 +37,8 @@ def generate_session_id() -> str:
 
 
 def generate_chat_id() -> str:
-    """生成测试用的 chat_id"""
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
-    return f"chat_{timestamp}"
+    """生成测试用的 chat_id（格式：{YYYYMMDDHHMMSSmmm}，17 位纯数字，无前缀）"""
+    return datetime.now().strftime("%Y%m%d%H%M%S%f")[:17]
 
 
 def generate_step_id() -> str:
@@ -48,17 +50,122 @@ def generate_step_id() -> str:
 
 
 def wait_for_server(timeout: int = 30) -> bool:
-    """等待服务器启动"""
+    """等待服务器启动（健康检查端点为 /web/health，免认证）"""
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            response = requests.get(f"{BASE_URL}/health", timeout=2)
+            response = requests.get(f"{BASE_URL}/web/health", timeout=2)
             if response.status_code == 200:
                 return True
         except:
             pass
         time.sleep(1)
     return False
+
+
+def _web_login(base_url: str, username: str = None, password: str = None) -> requests.Session:
+    """确保 Web 用户存在并登录，返回携带 groot_web_session Cookie 的 Session。
+
+    注意：/web/login 有失败锁定（429），此处不做错误密码重试。
+    """
+    username = username or TEST_WEB_USER
+    password = password or TEST_WEB_PASS
+
+    # 用户表为空（needs_setup=true）时先创建初始管理员
+    me = requests.get(f"{base_url}/web/me", timeout=10).json()
+    if me.get("needs_setup"):
+        # 已有用户时会返回 409，此时直接走登录即可，不视为错误
+        requests.post(
+            f"{base_url}/web/setup",
+            json={"username": username, "password": password},
+            timeout=10,
+        )
+
+    session = requests.Session()
+    resp = session.post(
+        f"{base_url}/web/login",
+        json={"username": username, "password": password},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Web 登录失败 ({resp.status_code}): {resp.text}")
+    return session
+
+
+def ensure_default_model(base_url, username=None, password=None):
+    """确保模型库中存在默认模型（模型只存数据库，空库时 /chat 会报 400 invalid_model）。
+
+    登录 Web 后检查 GET /web/models：已有默认模型则直接返回；
+    否则创建测试模型（重名 409 视为已存在），并在必要时显式设为默认。
+    """
+    session = _web_login(base_url, username, password)
+
+    resp = session.get(f"{base_url}/web/models", timeout=10)
+    if resp.status_code != 200:
+        raise RuntimeError(f"获取模型列表失败 ({resp.status_code}): {resp.text}")
+    data = resp.json()
+    if data.get("default"):
+        return data["default"]
+
+    # 无默认模型：创建测试模型（首个模型会自动成为默认）
+    model_name = "qwen-local"
+    body = {
+        "name": model_name,
+        "model": "Qwen3.5-122B-A10B-6bit",
+        "base_url": "http://127.0.0.1:8230/v1",
+        "api_key": "bonc1q2w3e",
+        "max_completion_tokens": 40960,
+        "temperature": 0.2,
+        "enabled": True,
+    }
+    resp = session.post(f"{base_url}/web/models", json=body, timeout=10)
+    if resp.status_code not in (200, 409):  # 409 = 重名，视为已存在
+        raise RuntimeError(f"创建模型失败 ({resp.status_code}): {resp.text}")
+
+    # 若仍无默认（如已有模型但默认为空），显式设为默认
+    data = session.get(f"{base_url}/web/models", timeout=10).json()
+    if not data.get("default"):
+        r = session.put(f"{base_url}/web/models/{model_name}/default", timeout=10)
+        if r.status_code != 200:
+            raise RuntimeError(f"设置默认模型失败 ({r.status_code}): {r.text}")
+        return model_name
+    return data["default"]
+
+
+def bootstrap_api_key(base_url, name="pytest-all", permissions=None, expires_in="1d",
+                      username=None, password=None):
+    """确保 Web 用户存在并登录，创建（或重名时重取）API Key，返回 JWT token 字符串"""
+    session = _web_login(base_url, username, password)
+
+    payload = {
+        "name": name,
+        "expires_in": expires_in,
+        "permissions": permissions if permissions is not None else ["all"],
+    }
+    resp = session.post(f"{base_url}/web/apikeys", json=payload, timeout=10)
+    if resp.status_code == 200:
+        return resp.json()["token"]
+
+    if resp.status_code == 409:
+        # 重名：按 name 找到已有 Key 的 id，再确定性重取 token
+        keys = session.get(f"{base_url}/web/apikeys", timeout=10).json().get("keys", [])
+        for k in keys:
+            if k.get("name") == name:
+                r = session.get(f"{base_url}/web/apikeys/{k['id']}/token", timeout=10)
+                if r.status_code == 200:
+                    return r.json()["token"]
+                raise RuntimeError(f"重取 API Key token 失败 ({r.status_code}): {r.text}")
+        raise RuntimeError(f"创建 API Key 返回 409，但列表中未找到重名 Key {name!r}")
+
+    raise RuntimeError(f"创建 API Key 失败 ({resp.status_code}): {resp.text}")
+
+
+def delete_api_key(base_url, key_id, username=None, password=None):
+    """登录后删除指定 API Key（删除即吊销，供权限/吊销测试使用）"""
+    session = _web_login(base_url, username, password)
+    resp = session.delete(f"{base_url}/web/apikeys/{key_id}", timeout=10)
+    if resp.status_code != 200:
+        raise RuntimeError(f"删除 API Key 失败 ({resp.status_code}): {resp.text}")
 
 
 class SSEClient:
@@ -203,56 +310,28 @@ class SSEClient:
 def server():
     """启动测试服务器（session级别）"""
     # 创建测试目录（无论服务器是否已运行）
+    # 模型/记忆/调度等数据均已入库（{GROOT_HOME}/groot.db），无需创建 memory、schedules 目录
     os.makedirs(TEST_HOME, exist_ok=True)
-    # 固定目录：skills, mcp, api
+    # 固定目录：skills, mcp（{home}/api 目录已无代码引用，不再创建）
     os.makedirs(f"{TEST_HOME}/skills", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/mcp", exist_ok=True)
-    os.makedirs(f"{TEST_HOME}/api", exist_ok=True)
-    os.makedirs(f"{TEST_HOME}/memory", exist_ok=True)
     os.makedirs(f"{TEST_HOME}/logs", exist_ok=True)
-    os.makedirs(f"{TEST_HOME}/schedules/active", exist_ok=True)
-    os.makedirs(f"{TEST_HOME}/schedules/disabled", exist_ok=True)
-    os.makedirs(f"{TEST_HOME}/schedules/archive", exist_ok=True)
-    os.makedirs(f"{TEST_HOME}/schedules/executions", exist_ok=True)
 
     # 写入测试配置（无论服务器是否已运行，确保配置正确）
-    # 使用本地 LLM 配置
+    # 注意：模型只存数据库（配置文件 llm 节已失效），通过 ensure_default_model 建模型
     config = {
         "agent": {"name": "groot", "version": "1.0.0"},
         "server": {"host": "0.0.0.0", "port": int(TEST_PORT)},
-        "llm": {
-            "default_model": "qwen-local",
-            "models": {
-                "qwen-local": {
-                    "base_url": "http://127.0.0.1:8230/v1",
-                    "api_key": "bonc1q2w3e",
-                    "model": "Qwen3.5-122B-A10B-6bit",
-                    "max_tokens": 40960,
-                    "temperature": 0.2
-                }
-            }
-        },
-        "skills": {
-            "hot_reload": {
-                "enabled": True,
-                "debounce_delay": 2
-            }
-        },
         # skills/mcp/api directory 已移除配置，使用固定位置
+        # 认证始终开启：只需配置请求头名与 JWT 签名密钥
         "security": {
             "auth": {
-                "enabled": True,
-                "type": "api_key",
-                "api_key": {
-                    "header_name": "X-API-Key",
-                    "keys": [
-                        {"name": "test_client", "key": TEST_API_KEY, "permissions": ["all"]}
-                    ]
-                }
+                "header_name": "X-API-Key",
+                "secret": TEST_AUTH_SECRET
             }
         },
         "memory": {
-            "directory": "memory"
+            "history_window": 20
         },
         "schedule": {
             "enabled": True,
@@ -282,25 +361,28 @@ def server():
 
     # 检查服务器是否已运行
     if wait_for_server(timeout=5):
-        # 服务器已运行，需要重启以使用新配置
-        # 尝试通过发送信号停止
+        # 服务器已运行，需要重启以使用新配置。
+        # 只按"bin/groot -p 测试端口"精确匹配杀进程，
+        # 禁止 pkill -f groot（会误杀开发环境或其他端口的实例）
         try:
-            # 通过 API 尝试关闭（如果有 shutdown endpoint）
-            # 否则使用 pkill
-            subprocess.run(["pkill", "-f", "groot"], check=False, capture_output=True)
+            subprocess.run(
+                ["pkill", "-f", f"bin/groot -p {TEST_PORT}"],
+                check=False, capture_output=True,
+            )
             time.sleep(2)
         except Exception:
             pass
 
         # 再次检查
         if wait_for_server(timeout=5):
+            # 确保模型库中有默认模型（模型只存数据库）
+            ensure_default_model(BASE_URL)
             yield BASE_URL
             return
 
     # 启动 groot 进程
     env = os.environ.copy()
     env["GROOT_HOME"] = TEST_HOME
-    env["GROOT_API_KEY"] = TEST_API_KEY
 
     process = subprocess.Popen(
         [GROOT_BIN, "-p", TEST_PORT],
@@ -314,6 +396,9 @@ def server():
         process.kill()
         raise RuntimeError("服务器启动失败")
 
+    # 确保模型库中有默认模型（模型只存数据库，空库时 /chat 返回 400 invalid_model）
+    ensure_default_model(BASE_URL)
+
     yield BASE_URL
 
     # 清理：停止服务器
@@ -321,12 +406,18 @@ def server():
     process.wait(timeout=10)
 
 
+@pytest.fixture(scope="session")
+def api_key(server):
+    """session 级 API Key（all 权限）：通过 Web 端点创建，返回 JWT token 字符串"""
+    return bootstrap_api_key(BASE_URL)
+
+
 @pytest.fixture
-def api_headers():
-    """标准 API Headers"""
+def api_headers(api_key):
+    """标准 API Headers（携带 JWT API Key）"""
     return {
         "Content-Type": "application/json",
-        "X-API-Key": TEST_API_KEY
+        "X-API-Key": api_key
     }
 
 
@@ -338,10 +429,10 @@ def no_auth_headers():
 
 @pytest.fixture
 def invalid_auth_headers():
-    """无效认证 Headers"""
+    """无效认证 Headers：格式像 JWT 但签名无效"""
     return {
         "Content-Type": "application/json",
-        "X-API-Key": "invalid-key-12345"
+        "X-API-Key": "eyJhbGciOiJIUzI1NiJ9.invalid.invalid"
     }
 
 
@@ -376,18 +467,11 @@ def session_id_generator():
 
 @pytest.fixture
 def cleanup_memory():
-    """清理测试 memory 目录"""
-    memory_dir = f"{TEST_HOME}/memory"
+    """历史遗留 fixture：会话记忆已入库（groot.db），不再有 memory/ 目录可清理。
 
+    保留 fixture 名以兼容既有用例引用，实际为 no-op。
+    """
     yield
-
-    # 测试后清理
-    if os.path.exists(memory_dir):
-        for session_dir in os.listdir(memory_dir):
-            session_path = os.path.join(memory_dir, session_dir)
-            if os.path.isdir(session_path):
-                import shutil
-                shutil.rmtree(session_path)
 
 
 @pytest.fixture
@@ -456,12 +540,11 @@ def assert_session_id_format(session_id: str):
 
 
 def assert_chat_id_format(chat_id: str):
-    """验证 chat_id 格式"""
+    """验证 chat_id 格式：{YYYYMMDDHHMMSSmmm}，17 位纯数字（见 memory/idgen.go GenerateChatID）"""
     assert chat_id, "chat_id 不能为空"
-    assert chat_id.startswith("chat_"), "chat_id 应以 chat_ 开头"
-    timestamp_part = chat_id[5:]  # 去掉 "chat_" 前缀
-    assert len(timestamp_part) == 17, f"时间戳部分应为17位，实际: {len(timestamp_part)}"
-    assert timestamp_part.isdigit(), "时间戳部分应为数字"
+    assert not chat_id.startswith("chat_"), "chat_id 不应有 chat_ 前缀"
+    assert len(chat_id) == 17, f"chat_id 应为17位时间戳，实际: {len(chat_id)}"
+    assert chat_id.isdigit(), "chat_id 应为纯数字"
 
 
 def assert_step_id_format(step_id: str):
