@@ -190,6 +190,13 @@ export interface AgentsResp {
   agents: AgentInfo[]
 }
 
+// /web/agents/:name/definition 返回 Agent 定义文件原文
+export interface AgentDefinitionResp {
+  name: string
+  file: string
+  content: string
+}
+
 // API Key 管理（/web/apikeys）
 export interface ApiKeyInfo {
   id: string

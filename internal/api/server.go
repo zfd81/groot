@@ -86,7 +86,7 @@ func NewServer(
 	sessionH := handler.NewSessionHandler(mem)
 	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log)
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
-	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, log)
+	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
 	modelsH := handler.NewModelsHandler(models, log)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)

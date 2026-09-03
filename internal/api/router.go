@@ -41,6 +41,7 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.Use(middleware.WebSession(webStore), rateLimitMW.Serve())
 	webGroup.POST("/password", webAuthH.ChangePassword)
 	webGroup.GET("/agents", agentsH.Serve)
+	webGroup.GET("/agents/:name/definition", agentsH.Definition)
 	webGroup.GET("/skills", skillsH.Serve)
 	webGroup.GET("/tools", toolsH.Serve)
 	webGroup.GET("/models", modelsH.List)

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Sunny, Moon, Monitor } from '@element-plus/icons-vue'
+import { Sunny, Moon, Monitor, Document } from '@element-plus/icons-vue'
 import { useThemeStore, type ThemeMode } from '../../stores/theme'
 import { useLanguageStore, type Lang } from '../../stores/language'
 import { useMetaStore } from '../../stores/meta'
 import { useAuthStore } from '../../stores/auth'
 import { api, ApiError } from '../../api/client'
-import type { SkillsResp, ToolsResp, AgentsResp, AgentInfo, HealthResp } from '../../api/types'
+import type { SkillsResp, ToolsResp, AgentsResp, AgentInfo, AgentDefinitionResp, HealthResp } from '../../api/types'
 import ModelsPanel from './ModelsPanel.vue'
 import ApiKeysPanel from './ApiKeysPanel.vue'
 
@@ -183,6 +183,34 @@ watch(
     if (v) void ensureLoaded()
   }
 )
+
+// Agent 定义查看弹窗：点击卡片「查看」按钮时实时拉取该 Agent 的 md 文件原文。
+const defShow = ref(false)
+const defLoading = ref(false)
+const defName = ref('')
+const defFile = ref('')
+const defContent = ref('')
+const defError = ref('')
+
+async function openAgentDef(a: AgentInfo) {
+  defName.value = a.name
+  defFile.value = ''
+  defContent.value = ''
+  defError.value = ''
+  defShow.value = true
+  defLoading.value = true
+  try {
+    const resp = await api.get<AgentDefinitionResp>(
+      `/web/agents/${encodeURIComponent(a.name)}/definition`
+    )
+    defFile.value = resp.file
+    defContent.value = resp.content
+  } catch (e) {
+    defError.value = e instanceof Error ? e.message : t('settings.agentDefLoadFail')
+  } finally {
+    defLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -314,16 +342,27 @@ watch(
           </div>
         </div>
 
-        <!-- Agents -->
+        <!-- Agents：卡片网格，每卡一个「查看」按钮弹窗展示定义 md 原文 -->
         <div v-else-if="section === 'agents'">
           <div v-loading="loading">
-            <div v-for="a in agents" :key="a.name" class="list-item">
-              <div class="item-title">{{ a.name }}</div>
-              <div class="item-desc">{{ a.description }}</div>
-              <div v-if="a.skills?.length" class="item-footer">
-                <el-tag v-for="sk in a.skills" :key="sk.name" size="small" effect="light" style="margin-right: 6px">
-                  {{ sk.name }}
-                </el-tag>
+            <div class="agent-grid">
+              <div v-for="a in agents" :key="a.name" class="agent-card">
+                <div class="agent-card-head">
+                  <span class="agent-card-title">{{ a.name }}</span>
+                  <el-tag v-if="a.name === MAIN_AGENT" size="small" effect="plain" round class="agent-card-tag">
+                    {{ t('settings.default') }}
+                  </el-tag>
+                </div>
+                <div class="agent-card-desc">{{ a.description }}</div>
+                <div class="agent-card-id mono">{{ a.name }}</div>
+                <div class="agent-card-footer">
+                  <button type="button" class="agent-icon-btn" :title="t('settings.viewAgentDef')"
+                    @click="openAgentDef(a)">
+                    <el-icon>
+                      <Document />
+                    </el-icon>
+                  </button>
+                </div>
               </div>
             </div>
             <el-empty v-if="!loading && !agents.length" :description="t('settings.noAgents')" :image-size="60" />
@@ -331,6 +370,19 @@ watch(
         </div>
       </div>
     </div>
+
+    <!-- Agent 定义查看弹窗（嵌套于设置弹窗之上） -->
+    <el-dialog v-model="defShow" :title="t('settings.viewAgentTitle', { name: defName })" width="720px"
+      align-center append-to-body class="agent-def-dialog">
+      <div class="def-sub">{{ t('settings.agentDefFile', { file: defFile || 'agent.md' }) }}</div>
+      <div v-loading="defLoading" class="def-box">
+        <div v-if="defError" class="def-error">{{ defError }}</div>
+        <pre v-else class="def-content">{{ defContent }}</pre>
+      </div>
+      <template #footer>
+        <el-button round @click="defShow = false">{{ t('common.close') }}</el-button>
+      </template>
+    </el-dialog>
   </el-dialog>
 </template>
 
@@ -570,6 +622,133 @@ watch(
   float: right;
   margin-top: 6px;
 }
+
+/* ---- Agents 卡片网格 ---- */
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--el-border-color);
+  border-radius: 12px;
+  padding: 16px 16px 8px;
+  transition: border-color 0.2s;
+}
+
+.agent-card:hover {
+  border-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.45));
+}
+
+.agent-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-card-title {
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+.agent-card-tag {
+  flex-shrink: 0;
+}
+
+.agent-card-desc {
+  flex: 1;
+  font-size: 0.85em;
+  opacity: 0.7;
+  line-height: 1.6;
+  margin-top: 8px;
+  /* 描述过长时截断，保持卡片高度整齐 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-card-id {
+  margin-top: 10px;
+  opacity: 0.45;
+}
+
+.agent-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid rgba(127, 127, 127, 0.15);
+  margin-top: 10px;
+  padding-top: 6px;
+}
+
+.agent-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.agent-icon-btn:hover {
+  background: var(--el-fill-color, rgba(127, 127, 127, 0.12));
+}
+
+/* ---- Agent 定义查看弹窗内容 ---- */
+.def-sub {
+  font-size: 0.95em;
+  margin-bottom: 12px;
+}
+
+.def-box {
+  min-height: 120px;
+}
+
+.def-content {
+  margin: 0;
+  max-height: 52vh;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--el-text-color-primary);
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.35)) transparent;
+}
+
+.def-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.def-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.def-content::-webkit-scrollbar-thumb {
+  background: var(--el-border-color-darker, rgba(127, 127, 127, 0.35));
+  border-radius: 3px;
+}
+
+.def-error {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--el-color-danger);
+  font-size: 0.9em;
+}
 </style>
 
 <!-- 弹窗根元素在 scoped 作用域外，用非 scoped 规则限定其最大高度：
@@ -590,5 +769,10 @@ watch(
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Agent 定义查看弹窗：圆角外框，与设置弹窗风格一致 */
+.agent-def-dialog {
+  border-radius: 16px;
 }
 </style>

@@ -121,16 +121,15 @@ async function handleCreate() {
   }
   creating.value = true
   try {
-    const resp = await api.post<ApiKeyCreateResp>('/web/apikeys', {
+    await api.post<ApiKeyCreateResp>('/web/apikeys', {
       name: form.value.name.trim(),
       expires_in: form.value.expires_in,
       permissions: form.value.permissions,
     })
+    // 创建成功后收起表单回到列表；完整 Key 通过卡片菜单「复制 Key」随时获取
     closeForm()
+    ElNotification.success({ title: t('apikeys.title'), message: t('apikeys.created') })
     await load()
-    // 自动展开新建 Key 的查看面板；完整 Key 通过菜单「复制 Key」获取
-    openKeyId.value = resp.id
-    void revealEl(() => viewPanelEl.value)
   } catch (e) {
     notifyError(e)
   } finally {

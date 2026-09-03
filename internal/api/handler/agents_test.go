@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/cloudwego/hertz/pkg/route/param"
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
@@ -42,7 +45,7 @@ func TestAgentsHandler_ListsGrootFirst(t *testing.T) {
 	reg.SetEntryForTest("db-agent", &agent.SubAgentEntry{Name: "db-agent", Description: "数据库专家"})
 	reg.SetEntryForTest("weather-agent", &agent.SubAgentEntry{Name: "weather-agent", Description: "天气查询"})
 
-	h := NewAgentsHandler(reg, nil, logger.NewNop())
+	h := NewAgentsHandler(reg, nil, "", logger.NewNop())
 
 	rc := app.NewContext(0)
 	rc.Request.Header.SetMethod(consts.MethodGet)
@@ -76,7 +79,7 @@ func TestAgentsHandler_ListsGrootFirst(t *testing.T) {
 
 // TestAgentsHandler_NilRegistryReturnsOnlyGroot 验证 registry 为 nil 时只返回主 Agent。
 func TestAgentsHandler_NilRegistryReturnsOnlyGroot(t *testing.T) {
-	h := NewAgentsHandler(nil, nil, logger.NewNop())
+	h := NewAgentsHandler(nil, nil, "", logger.NewNop())
 	rc := app.NewContext(0)
 	rc.Request.Header.SetMethod(consts.MethodGet)
 	h.Serve(context.Background(), rc)
@@ -105,7 +108,7 @@ func TestAgentsHandler_BackendListError(t *testing.T) {
 		Description: "skill backend 不稳",
 		SkillBK:     &fakeSkillBackend{err: errors.New("boom")},
 	})
-	h := NewAgentsHandler(reg, nil, logger.NewNop())
+	h := NewAgentsHandler(reg, nil, "", logger.NewNop())
 
 	rc := app.NewContext(0)
 	rc.Request.Header.SetMethod(consts.MethodGet)
@@ -148,7 +151,7 @@ func TestAgentsHandler_BackendListSuccess(t *testing.T) {
 		Description: "数据查询",
 		SkillBK:     &fakeSkillBackend{matters: matters},
 	})
-	h := NewAgentsHandler(reg, nil, logger.NewNop())
+	h := NewAgentsHandler(reg, nil, "", logger.NewNop())
 
 	rc := app.NewContext(0)
 	rc.Request.Header.SetMethod(consts.MethodGet)
@@ -170,5 +173,112 @@ func TestAgentsHandler_BackendListSuccess(t *testing.T) {
 	}
 	if data.Skills[1].Name != "sql" || data.Skills[1].Description != "查 SQL" {
 		t.Errorf("Skills[1] mismatch: %+v", data.Skills[1])
+	}
+}
+
+// defRequest 构造带 :name 路由参数的请求上下文并调用 Definition。
+func defRequest(h *AgentsHandler, name string) *app.RequestContext {
+	rc := app.NewContext(0)
+	rc.Request.Header.SetMethod(consts.MethodGet)
+	rc.Params = append(rc.Params, param.Param{Key: "name", Value: name})
+	h.Definition(context.Background(), rc)
+	return rc
+}
+
+// TestAgentsHandler_DefinitionMainAgent 验证主 Agent 定义读取 {homeDir}/GROOT.md，
+// 响应携带 name/file/content 三字段。
+func TestAgentsHandler_DefinitionMainAgent(t *testing.T) {
+	home := t.TempDir()
+	want := "# GROOT.md\n\n主 Agent 定义"
+	if err := os.WriteFile(filepath.Join(home, "GROOT.md"), []byte(want), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewAgentsHandler(nil, nil, home, logger.NewNop())
+	rc := defRequest(h, agent.MainAgentName)
+
+	if got := rc.Response.StatusCode(); got != 200 {
+		t.Fatalf("expected 200, got %d body=%s", got, rc.Response.Body())
+	}
+	var resp types.AgentDefinitionResponse
+	if err := json.Unmarshal(rc.Response.Body(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Name != agent.MainAgentName || resp.File != "GROOT.md" || resp.Content != want {
+		t.Errorf("unexpected resp: %+v", resp)
+	}
+}
+
+// TestAgentsHandler_DefinitionSubAgent 验证已注册子 Agent 定义读取
+// {homeDir}/subagents/{name}/agent.md。
+func TestAgentsHandler_DefinitionSubAgent(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "subagents", "db-agent")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	want := "---\ndescription: 数据库专家\n---\n\n# 指令"
+	if err := os.WriteFile(filepath.Join(dir, "agent.md"), []byte(want), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := agent.NewRegistryForTest(1)
+	reg.SetEntryForTest("db-agent", &agent.SubAgentEntry{Name: "db-agent", Description: "数据库专家"})
+	h := NewAgentsHandler(reg, nil, home, logger.NewNop())
+	rc := defRequest(h, "db-agent")
+
+	if got := rc.Response.StatusCode(); got != 200 {
+		t.Fatalf("expected 200, got %d body=%s", got, rc.Response.Body())
+	}
+	var resp types.AgentDefinitionResponse
+	if err := json.Unmarshal(rc.Response.Body(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Name != "db-agent" || resp.File != "agent.md" || resp.Content != want {
+		t.Errorf("unexpected resp: %+v", resp)
+	}
+}
+
+// TestAgentsHandler_DefinitionUnknownAgent 验证未注册 name 一律 404：
+//   - registry 非 nil 但未命中
+//   - registry 为 nil
+//
+// 该约束同时兜住路径穿越（如 name="../../etc"）——不查文件系统直接拒绝。
+func TestAgentsHandler_DefinitionUnknownAgent(t *testing.T) {
+	home := t.TempDir()
+	reg := agent.NewRegistryForTest(1)
+	h := NewAgentsHandler(reg, nil, home, logger.NewNop())
+
+	for _, name := range []string{"nonexistent", "../../etc"} {
+		rc := defRequest(h, name)
+		if got := rc.Response.StatusCode(); got != 404 {
+			t.Errorf("name=%q expected 404, got %d body=%s", name, got, rc.Response.Body())
+		}
+	}
+
+	hNil := NewAgentsHandler(nil, nil, home, logger.NewNop())
+	rc := defRequest(hNil, "any-agent")
+	if got := rc.Response.StatusCode(); got != 404 {
+		t.Errorf("nil registry expected 404, got %d", got)
+	}
+}
+
+// TestAgentsHandler_DefinitionFileMissing 验证注册表命中但磁盘文件缺失时返回 404，
+// 不泄漏磁盘路径细节（message 为固定文案）。
+func TestAgentsHandler_DefinitionFileMissing(t *testing.T) {
+	home := t.TempDir()
+	reg := agent.NewRegistryForTest(1)
+	reg.SetEntryForTest("ghost-agent", &agent.SubAgentEntry{Name: "ghost-agent", Description: "文件已被删"})
+	h := NewAgentsHandler(reg, nil, home, logger.NewNop())
+
+	rc := defRequest(h, "ghost-agent")
+	if got := rc.Response.StatusCode(); got != 404 {
+		t.Fatalf("expected 404, got %d body=%s", got, rc.Response.Body())
+	}
+
+	// 主 Agent 的 GROOT.md 缺失同样 404
+	rc2 := defRequest(h, agent.MainAgentName)
+	if got := rc2.Response.StatusCode(); got != 404 {
+		t.Fatalf("main agent expected 404, got %d body=%s", got, rc2.Response.Body())
 	}
 }

@@ -233,3 +233,12 @@ type AgentInfo struct {
 type AgentsResponse struct {
 	Agents []AgentInfo `json:"agents"`
 }
+
+// AgentDefinitionResponse 是 GET /web/agents/:name/definition 的响应体。
+// Content 为定义文件原文（含 frontmatter）；File 为文件名：
+// 主 Agent 是 GROOT.md，子 Agent 是 agent.md。
+type AgentDefinitionResponse struct {
+	Name    string `json:"name"`
+	File    string `json:"file"`
+	Content string `json:"content"`
+}

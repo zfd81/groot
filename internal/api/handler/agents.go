@@ -2,9 +2,12 @@ package handler
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
 	"github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
@@ -29,17 +32,19 @@ import (
 type AgentsHandler struct {
 	registry    *agent.SubAgentRegistry
 	mainSkillBE skill.Backend
+	homeDir     string // GROOT_HOME，Definition 接口据此定位 GROOT.md / subagents/<name>/agent.md
 	log         *logger.Logger
 }
 
 // NewAgentsHandler 构造 AgentsHandler。
 // registry 为 nil 时仅返回主 Agent；mainSkillBE 为 nil 时主 Agent 的 skills 为空数组。
+// homeDir 是 GROOT_HOME 目录，Definition 接口用于读取定义文件。
 // log 为 nil 时使用 logger.NewNop() 兜底（不应在生产路径出现 nil；测试可显式传 NewNop()）。
-func NewAgentsHandler(reg *agent.SubAgentRegistry, mainSkillBE skill.Backend, log *logger.Logger) *AgentsHandler {
+func NewAgentsHandler(reg *agent.SubAgentRegistry, mainSkillBE skill.Backend, homeDir string, log *logger.Logger) *AgentsHandler {
 	if log == nil {
 		log = logger.NewNop()
 	}
-	return &AgentsHandler{registry: reg, mainSkillBE: mainSkillBE, log: log}
+	return &AgentsHandler{registry: reg, mainSkillBE: mainSkillBE, homeDir: homeDir, log: log}
 }
 
 // Serve 输出 200 JSON：{"agents":[{name,description,skills:[{name,description}]}]}
@@ -67,6 +72,53 @@ func (h *AgentsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		}
 	}
 	rc.JSON(200, resp)
+}
+
+// Definition 处理 GET /web/agents/:name/definition，返回 Agent 定义文件原文。
+//
+// 规则：
+//   - name == 主 Agent（groot）：读 {homeDir}/GROOT.md
+//   - 其他 name：必须命中 SubAgentRegistry，读 {homeDir}/subagents/{name}/agent.md。
+//     「必须命中注册表」同时兜住了路径穿越——注册表键来自启动期目录扫描，
+//     不可能包含路径分隔符，未注册的任意 name 直接 404。
+//
+// 文件读取失败（不存在/无权限）统一 404，不向客户端暴露磁盘细节；
+// 具体原因进日志供运维排查。每次请求实时读盘，保证看到当前生效的定义。
+func (h *AgentsHandler) Definition(ctx context.Context, rc *app.RequestContext) {
+	name := rc.Param("name")
+
+	var path, file string
+	if name == agent.MainAgentName {
+		file = "GROOT.md"
+		path = filepath.Join(h.homeDir, file)
+	} else {
+		if h.registry == nil {
+			rc.JSON(404, utils.H{"status": "not_found", "message": "Agent 不存在"})
+			return
+		}
+		if _, ok := h.registry.Get(name); !ok {
+			rc.JSON(404, utils.H{"status": "not_found", "message": "Agent 不存在"})
+			return
+		}
+		file = "agent.md"
+		path = filepath.Join(h.homeDir, "subagents", name, file)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		h.log.Info("读取 Agent 定义文件失败",
+			zap.String("agent", name),
+			zap.String("path", path),
+			zap.Error(err))
+		rc.JSON(404, utils.H{"status": "not_found", "message": "Agent 定义文件不存在"})
+		return
+	}
+
+	rc.JSON(200, types.AgentDefinitionResponse{
+		Name:    name,
+		File:    file,
+		Content: string(content),
+	})
 }
 
 // listAgentSkills 把 skill.Backend.List 的结果转换成 types.SkillInfo 列表。
