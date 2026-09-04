@@ -1,4 +1,4 @@
-<img src="groot.png" alt="Groot Logo" width="108" align="left" hspace="12">
+<img src="groot.png" alt="Groot Logo" width="108" style="width:104px" align="left" hspace="12">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="groot-title-dark.png">
