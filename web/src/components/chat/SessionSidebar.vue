@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CirclePlus, Setting, Loading } from '@element-plus/icons-vue'
+import { CirclePlus, Setting, Loading, Search } from '@element-plus/icons-vue'
 import type { SessionSummary } from '../../api/types'
 
 const { t } = useI18n()
@@ -20,6 +20,7 @@ const emit = defineEmits<{
   openSettings: []
   expand: []
   collapse: []
+  openSearch: []
 }>()
 
 // 相对时间格式化
@@ -63,6 +64,9 @@ function title(s: SessionSummary): string {
         </svg>
       </el-icon>
     </button>
+    <button class="rail-btn" type="button" :title="t('sidebar.search')" @click="emit('openSearch')">
+      <el-icon :size="20"><Search /></el-icon>
+    </button>
     <button class="rail-btn" type="button" :title="t('sidebar.newChat')" @click="emit('newSession')">
       <el-icon :size="22"><CirclePlus /></el-icon>
     </button>
@@ -83,6 +87,14 @@ function title(s: SessionSummary): string {
       <img class="brand-logo" src="../../assets/groot-icon.png" alt="Groot" />
       <span class="brand-name">Groot</span>
       <span class="brand-badge">AGENT</span>
+      <button
+        class="search-btn"
+        type="button"
+        :title="t('sidebar.search')"
+        @click="emit('openSearch')"
+      >
+        <el-icon :size="20"><Search /></el-icon>
+      </button>
       <button
         class="collapse-btn"
         type="button"
@@ -236,8 +248,24 @@ function title(s: SessionSummary): string {
   background: rgba(127, 127, 127, 0.15);
   opacity: 0.75;
 }
-.collapse-btn {
+.search-btn {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.search-btn:hover {
+  background: rgba(127, 127, 127, 0.1);
+}
+.collapse-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -252,6 +280,16 @@ function title(s: SessionSummary): string {
 }
 .collapse-btn:hover {
   background: rgba(127, 127, 127, 0.1);
+}
+/* 图标按钮只在鼠标悬浮时有视觉变化：去掉浏览器默认焦点环
+   （弹窗关闭后焦点回到按钮时会出现），且不加任何焦点态底色 */
+.rail-btn:focus,
+.rail-btn:focus-visible,
+.search-btn:focus,
+.search-btn:focus-visible,
+.collapse-btn:focus,
+.collapse-btn:focus-visible {
+  outline: none;
 }
 .new-wrap {
   padding: 4px 12px 12px;

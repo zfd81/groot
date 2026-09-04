@@ -236,3 +236,19 @@ export interface ClusterMemberInfo {
 export interface ClusterResp {
   members: ClusterMemberInfo[]
 }
+
+// 会话搜索（/sess/search）：轮次级命中结果
+export interface SearchResultItem {
+  session_id: string
+  chat_id: string
+  round: number
+  title: string
+  snippet: string
+  matched_field: 'instruction' | 'result'
+  timestamp: number // 轮次开始时间（毫秒）
+}
+
+export interface SearchResp {
+  status: string
+  results: SearchResultItem[]
+}

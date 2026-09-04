@@ -42,6 +42,8 @@ export interface ChatMessage {
   // 有序时间线：流式展示思考/工具用它，历史消息为空。
   steps: ChatStep[]
   streaming: boolean
+  // 该消息所属的数据库轮次号（历史加载时透传，用于搜索结果定位）；流式新消息为空。
+  round?: number
   error?: string
 }
 
@@ -185,6 +187,7 @@ export const useChatStore = defineStore('chat', () => {
         tools: [],
         steps: [],
         streaming: false,
+        round: m.round,
       })
       messages.value.push({
         role: 'assistant',
@@ -193,6 +196,7 @@ export const useChatStore = defineStore('chat', () => {
         tools: [],
         steps: [],
         streaming: false,
+        round: m.round,
         error: m.error?.message || undefined,
       })
     }

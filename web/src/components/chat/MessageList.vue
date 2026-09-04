@@ -16,6 +16,7 @@ defineProps<{ messages: ChatMessage[] }>()
       :key="i"
       class="msg-row"
       :class="m.role"
+      :data-round="m.role === 'user' ? m.round : undefined"
     >
       <div v-if="m.role === 'user'" class="user-bubble">
         {{ m.content }}
@@ -88,5 +89,17 @@ defineProps<{ messages: ChatMessage[] }>()
 .spin-icon {
   color: var(--el-color-primary);
   font-size: 18px;
+}
+/* 搜索定位高亮：定位到目标轮次后短暂闪烁提示 */
+.msg-row.locate-highlight .user-bubble {
+  animation: locate-flash 1.5s ease-out;
+}
+@keyframes locate-flash {
+  0% {
+    box-shadow: 0 0 0 3px var(--el-color-primary-light-5);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
 }
 </style>

@@ -68,8 +68,10 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.GET("/chat/:sid/:cid", detailH.Serve) // 获取指定对话详情
 
 	// Session endpoints - 会话管理
+	// 静态路由（/sess/history、/sess/search）优先级高于命名参数路由（/sess/:sid），可共存
 	apiGroup.GET("/sess/:sid", sessionH.GetSession)
 	apiGroup.GET("/sess/history", sessionH.ListSessions)
+	apiGroup.GET("/sess/search", sessionH.SearchSessions)
 
 	// Schedule endpoints
 	if scheduleH != nil {

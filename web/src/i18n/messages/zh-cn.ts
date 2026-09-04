@@ -69,6 +69,7 @@ export default {
     collapse: '收起侧栏',
     newChat: '新建会话',
     settings: '设置',
+    search: '搜索会话',
     empty: '暂无会话',
     rounds: '{n} 轮',
     loadMore: '加载更多',
@@ -76,6 +77,15 @@ export default {
     minutesAgo: '{n} 分钟前',
     hoursAgo: '{n} 小时前',
     daysAgo: '{n} 天前',
+  },
+  search: {
+    placeholder: '搜索…',
+    clear: '清除',
+    recent: '最近会话',
+    noResults: '未找到相关话题',
+    failed: '搜索失败，请重试',
+    matchInstruction: '我的提问',
+    matchResult: 'AI 回复',
   },
   settings: {
     title: '设置',

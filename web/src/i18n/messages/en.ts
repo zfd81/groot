@@ -69,6 +69,7 @@ export default {
     collapse: 'Collapse sidebar',
     newChat: 'New chat',
     settings: 'Settings',
+    search: 'Search chats',
     empty: 'No chats yet',
     rounds: '{n} rounds',
     loadMore: 'Load more',
@@ -76,6 +77,15 @@ export default {
     minutesAgo: '{n} min ago',
     hoursAgo: '{n} h ago',
     daysAgo: '{n} d ago',
+  },
+  search: {
+    placeholder: 'Search…',
+    clear: 'Clear',
+    recent: 'Recent chats',
+    noResults: 'No matching topics',
+    failed: 'Search failed, please retry',
+    matchInstruction: 'My question',
+    matchResult: 'AI reply',
   },
   settings: {
     title: 'Settings',

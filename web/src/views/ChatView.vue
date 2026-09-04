@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useChatStore } from '../stores/chat'
@@ -10,6 +10,7 @@ import MessageList from '../components/chat/MessageList.vue'
 import ChatInput from '../components/chat/ChatInput.vue'
 import StatsBar from '../components/chat/StatsBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
+import SearchModal from '../components/chat/SearchModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -23,6 +24,7 @@ const { messages, sending, sessions, sessionId, canLoadMore, loadingSessions, la
 
 const collapsed = ref(false)
 const showSettings = ref(false)
+const showSearch = ref(false)
 const scrollArea = ref<HTMLElement | null>(null)
 
 const roundCount = computed(
@@ -62,17 +64,47 @@ function handleSend(
   void chat.send(instruction, model, agent, attachments)
 }
 
-async function handleSelect(sid: string) {
-  if (sid === sessionId.value) return
+async function handleSelect(sid: string, round?: number) {
+  if (sid === sessionId.value) {
+    // 已在目标会话：只做轮次定位（若有）
+    if (round) await locateRound(round)
+    return
+  }
   await chat.openSession(sid)
   router.replace({ name: 'chat-session', params: { sid } })
-  scrollToBottom()
+  if (round) await locateRound(round)
+  else scrollToBottom()
+}
+
+// 滚动定位到指定轮次的用户消息并短暂高亮；
+// 目标轮次不存在（会话在搜索后被删改）时静默回落到底部。
+async function locateRound(round: number) {
+  await nextTick()
+  const el = scrollArea.value?.querySelector<HTMLElement>(`[data-round="${round}"]`)
+  if (!el) {
+    scrollToBottom()
+    return
+  }
+  el.scrollIntoView({ block: 'start' })
+  el.classList.add('locate-highlight')
+  setTimeout(() => el.classList.remove('locate-highlight'), 1600)
 }
 
 function handleNew() {
   chat.newSession()
   router.replace({ name: 'chat' })
 }
+
+// Cmd（macOS）/ Ctrl（其他平台）+ K 打开搜索弹窗；Mac 上不拦截输入框原生 Ctrl+K
+const isMac = /Mac/i.test(navigator.platform)
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    showSearch.value = true
+  }
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 onMounted(async () => {
   await meta.load()
@@ -102,6 +134,7 @@ onMounted(async () => {
         @open-settings="showSettings = true"
         @expand="collapsed = false"
         @collapse="collapsed = true"
+        @open-search="showSearch = true"
       />
     </aside>
 
@@ -135,6 +168,7 @@ onMounted(async () => {
   </div>
 
   <SettingsModal v-model:show="showSettings" />
+  <SearchModal v-model:show="showSearch" @select="handleSelect" />
 </template>
 
 <style scoped>

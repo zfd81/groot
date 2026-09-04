@@ -34,16 +34,16 @@ type ChatRecord struct {
 	Result      string    `json:"result"`
 	Status      string    `json:"status"`
 	// Deprecated: use DurationMs. Duration = DurationMs/1000 for API backward compat.
-	Duration         int     `json:"duration"`
-	DurationMs       int64   `json:"duration_ms"`
-	Caller           string  `json:"caller"`
-	Steps            []Step  `json:"steps"`
-	AgentName        string  `json:"agent_name,omitempty"`
-	Model            string  `json:"model,omitempty"`
-	PromptTokens     int     `json:"prompt_tokens,omitempty"`
-	CompletionTokens int     `json:"completion_tokens,omitempty"`
-	TotalTokens      int     `json:"total_tokens,omitempty"`
-	Error            *Error  `json:"error"`
+	Duration         int    `json:"duration"`
+	DurationMs       int64  `json:"duration_ms"`
+	Caller           string `json:"caller"`
+	Steps            []Step `json:"steps"`
+	AgentName        string `json:"agent_name,omitempty"`
+	Model            string `json:"model,omitempty"`
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	TotalTokens      int    `json:"total_tokens,omitempty"`
+	Error            *Error `json:"error"`
 }
 
 // Step is a single execution step within a chat turn.
@@ -64,6 +64,18 @@ type Error struct {
 	Message string `json:"message"`
 }
 
+// SearchHit 为一条搜索命中的原始数据：命中的轮次及其全文字段。
+// 摘要（snippet）截取由上层 memory.Manager 完成，repo 只返回原文。
+type SearchHit struct {
+	SessionID   string
+	ChatID      string
+	Round       int
+	Title       string // 所属会话标题（首轮主 Agent 指令），无对话记录时为空串
+	Instruction string
+	Result      string
+	StartedAt   time.Time
+}
+
 type MemoryRepo interface {
 	CreateSession(ctx context.Context, s *Session) error
 	GetSession(ctx context.Context, sessionID string) (*Session, error)
@@ -73,4 +85,10 @@ type MemoryRepo interface {
 	GetChat(ctx context.Context, chatID string) (*ChatRecord, error)
 	LoadHistory(ctx context.Context, sessionID string) ([]*ChatRecord, error)
 	DeleteSession(ctx context.Context, sessionID string) error
+	// SearchChats 在主 Agent 的已完成轮次（agent_name='' 且 status='completed'）的
+	// instruction/result 中模糊匹配 keyword（大小写行为随数据库 collation）。
+	// userID 非空时只搜该用户的会话；为空时不按用户过滤（与 ListSessions 行为一致）。
+	// 结果按轮次开始时间倒序，最多 limit 条。keyword 原样传入，LIKE 转义由实现负责。
+	// limit 须为正数，非正数返回空结果。
+	SearchChats(ctx context.Context, userID, keyword string, limit int) ([]*SearchHit, error)
 }

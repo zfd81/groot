@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -300,4 +301,59 @@ func (r *memoryRepo) DeleteSession(ctx context.Context, sessionID string) error 
 		return err
 	}
 	return tx.Commit()
+}
+
+// --- Search ---
+
+// escapeLike 转义 LIKE 模式中的特殊字符。
+// 用 '!' 作转义符（配合 SQL 的 ESCAPE '!'）：'!' 在 SQLite/MySQL/Postgres 的
+// 字符串字面量中都无特殊含义，规避 '\' 在 MySQL 字面量解析中的兼容问题。
+func escapeLike(s string) string {
+	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
+}
+
+func (r *memoryRepo) SearchChats(ctx context.Context, userID, keyword string, limit int) ([]*repo.SearchHit, error) {
+	// 三方言对 LIMIT 0/负数行为不一致，非正数直接返回空结果。
+	if limit <= 0 {
+		return []*repo.SearchHit{}, nil
+	}
+	pattern := "%" + escapeLike(keyword) + "%"
+	var rows []struct {
+		SessionID   string `db:"session_id"`
+		ChatID      string `db:"chat_id"`
+		Round       int    `db:"round"`
+		Title       string `db:"title"`
+		Instruction string `db:"instruction"`
+		Result      string `db:"result"`
+		StartedAt   int64  `db:"started_at"`
+	}
+	// title 子查询与 ListSessions 的口径一致：首轮主 Agent 的 instruction。
+	// (? = '' OR s.user_id = ?)：userID 为空串时不按用户过滤，与 ListSessions 行为一致。
+	q := r.db.Rebind(`SELECT c.session_id, c.chat_id, c.round, c.instruction, c.result, c.started_at,
+			COALESCE((SELECT c2.instruction FROM memory_chats c2
+				WHERE c2.session_id = c.session_id AND c2.agent_name = ''
+				ORDER BY c2.round ASC LIMIT 1), '') AS title
+		 FROM memory_chats c
+		 JOIN memory_sessions s ON s.session_id = c.session_id
+		 WHERE c.agent_name = '' AND c.status = 'completed'
+		   AND (? = '' OR s.user_id = ?)
+		   AND (c.instruction LIKE ? ESCAPE '!' OR c.result LIKE ? ESCAPE '!')
+		 ORDER BY c.started_at DESC, c.round DESC
+		 LIMIT ?`)
+	if err := r.db.SelectContext(ctx, &rows, q, userID, userID, pattern, pattern, limit); err != nil {
+		return nil, err
+	}
+	hits := make([]*repo.SearchHit, len(rows))
+	for i, row := range rows {
+		hits[i] = &repo.SearchHit{
+			SessionID:   row.SessionID,
+			ChatID:      row.ChatID,
+			Round:       row.Round,
+			Title:       row.Title,
+			Instruction: row.Instruction,
+			Result:      row.Result,
+			StartedAt:   time.UnixMilli(row.StartedAt),
+		}
+	}
+	return hits, nil
 }
