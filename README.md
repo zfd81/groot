@@ -1,4 +1,4 @@
-<img src="groot.jpg" alt="Groot Logo" width="180" align="left">
+<img src="groot.png" alt="Groot Logo" width="180" align="left">
 
 <br><br>
 
