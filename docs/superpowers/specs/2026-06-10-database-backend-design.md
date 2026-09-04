@@ -34,8 +34,10 @@
     - [1.10.3 MemoryRepo](#1103-memoryrepo)
     - [1.10.4 ResourceRepo](#1104-resourcerepo)
   - [1.11 已知限制](#111-已知限制)
+  - [1.12 驱动选型与跨平台分发](#112-驱动选型与跨平台分发)
 - [二、迭代说明](#二迭代说明)
   - [2.1 与上一版差异](#21-与上一版差异)
+  - [2.2 SQLite 驱动切换为纯 Go 实现](#22-sqlite-驱动切换为纯-go-实现)
 
 ---
 
@@ -1052,6 +1054,32 @@ repo 层（`internal/repo/memorydb`、`memberdb`、`scheduledb`、`resourcedb`�
 
 如果在系统测试中发现方言差异，优先在 `internal/db/dialect.go` 的对应实现里修复，而不是在业务层 repo 中加分支。
 
+### 1.12 驱动选型与跨平台分发
+
+三种后端的数据库驱动全部采用**纯 Go 实现**，不依赖 cgo，也不依赖目标机器预装任何动态库：
+
+| 方言 | 驱动 | 实现方式 |
+|------|------|---------|
+| SQLite | [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) | SQLite C 源码转译为 Go，编译进二进制 |
+| MySQL | `github.com/go-sql-driver/mysql` | 纯 Go 实现协议层 |
+| PostgreSQL | `github.com/lib/pq` | 纯 Go 实现协议层 |
+
+**分发形态**：`cmd/groot` 编译产物为**单文件自包含可执行程序**。Web 前端产物经 [`web/embed.go`](../../../web/embed.go) 的 `//go:embed all:dist` 嵌入同一个二进制，SQLite 引擎编译进同一个二进制，因此交付物只有一个文件——目标机器无需安装 Node.js、SQLite、C 运行库或任何第三方组件即可运行。
+
+**交叉编译语义**：Go 在交叉编译时默认 `CGO_ENABLED=0`。纯 Go 驱动在这一条件下编译出的是完整实现，因此三个目标平台可在任意一台开发机上一次性构建，产物具备完整数据库能力：
+
+```bash
+make build-all   # darwin-arm64 / linux-amd64 / windows-amd64
+```
+
+**SQLite 驱动契约**（[`internal/db/db.go`](../../../internal/db/db.go) `resolveDriver`）：
+
+- 注册名为 `sqlite`
+- PRAGMA 通过 DSN 查询参数 `_pragma=name(value)` 传递，本项目设定 `journal_mode(WAL)` 与 `busy_timeout(5000)`
+
+这两项由 [`internal/db/db_test.go`](../../../internal/db/db_test.go) 的 `TestResolveDriver_SQLiteIsPureGo`、`TestResolveDriver_SQLitePragmaSyntax`、`TestOpen_SQLitePragmasApplied` 锁定：前两个在编译期钉住驱动名与 DSN 语法，后一个连库回读 `PRAGMA journal_mode` / `PRAGMA busy_timeout`，确认参数真正生效而非被驱动静默忽略。
+
+**依赖 cgo 的驱动不可用于本项目**：这类驱动在 `CGO_ENABLED=0` 下会编译出仅注册驱动名、调用即返回错误的桩实现。桩的存在使 `sql.Open` 与整个编译过程均无报错，故障要到运行时首次连库才暴露；对交叉编译产物而言，这等于 Linux 与 Windows 交付物启动到数据库初始化步骤才失败。上述三个测试即为防止这一类回归。
 
 ---
 
@@ -1115,6 +1143,30 @@ repo 层（`internal/repo/memorydb`、`memberdb`、`scheduledb`、`resourcedb`�
 
 - **移除**：`MemoryRepo.DeleteExpiredSessions` 接口及其 `memorydb` 实现
 - **说明**：会话不再做内置定时清理，长期保留在数据库中；运维侧如需按时间清理可直接对 `memory_chats` / `memory_sessions` 跑 SQL，配套 `idx_started_at` / `idx_updated_at` 索引
+
+### 2.2 SQLite 驱动切换为纯 Go 实现
+
+#### 依赖
+
+- **调整**：SQLite 驱动由 `github.com/mattn/go-sqlite3` 改为 `modernc.org/sqlite` v1.58.0
+- **说明**：`go.mod` 中 `github.com/mattn/go-sqlite3` 保留为 indirect 条目，因 `sqlx` 自身的测试包引用它；`go list -deps ./cmd/groot` 已确认它不在本项目任何构建图中
+
+#### 驱动契约
+
+- **调整**：`resolveDriver` 返回的驱动名由 `sqlite3` 改为 `sqlite`
+- **调整**：SQLite DSN 的 PRAGMA 语法由 `?_journal_mode=WAL&_busy_timeout=5000` 改为 `?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)`——两种驱动的参数语法不兼容，mattn 风格的写法在 `modernc.org/sqlite` 下会被当作未知参数报错
+- **调整**：`internal/schedule/storage_test.go` 的内存库 DSN 同步改为 `:memory:?_pragma=journal_mode(WAL)`
+
+#### 测试
+
+- **新增**：`TestResolveDriver_SQLiteIsPureGo`——覆盖 nil 配置 / 空 driver / 显式 sqlite / 未知 driver 回落四种入参，钉住驱动名为 `sqlite`
+- **新增**：`TestResolveDriver_SQLitePragmaSyntax`——钉住 DSN 使用 `_pragma=name(value)` 语法
+- **新增**：`TestOpen_SQLitePragmasApplied`——连库回读 `PRAGMA journal_mode` / `PRAGMA busy_timeout`，验证参数真正生效
+
+#### 分发能力
+
+- **调整**：`make build-all` 产出的三个平台二进制均具备完整 SQLite 能力。此前 Linux 与 Windows 产物因交叉编译默认 `CGO_ENABLED=0`，链接到的是 cgo 驱动的 `!cgo` 桩实现（`static_mock.go`），编译与启动均无报错，故障在数据库初始化时才以 `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work. This is a stub` 暴露
+- **保留**：MySQL / PostgreSQL 行为、全部 DDL、方言适配层、Repository 接口均无改动；SQLite 数据文件格式兼容，既有 `~/.groot/groot.db` 可直接沿用
 
 
 

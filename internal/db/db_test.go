@@ -1,7 +1,10 @@
 package db
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/zfd81/groot/internal/config"
 )
 
 func TestOpen_SQLite(t *testing.T) {
@@ -23,6 +26,69 @@ func TestOpen_SQLite(t *testing.T) {
 		if err != nil {
 			t.Errorf("table %s not accessible: %v", tbl, err)
 		}
+	}
+}
+
+// TestResolveDriver_SQLiteIsPureGo 锁定 SQLite 走纯 Go 驱动（driver 名 "sqlite"，
+// 由 modernc.org/sqlite 注册）。若误改回 cgo 版的 "sqlite3"，交叉编译产物会在
+// 运行时拿到 go-sqlite3 的 !cgo 桩，Open 时才报错——这里在编译期就钉住。
+func TestResolveDriver_SQLiteIsPureGo(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *config.DatabaseConfig
+	}{
+		{"nil 配置", nil},
+		{"空 driver", &config.DatabaseConfig{}},
+		{"显式 sqlite", &config.DatabaseConfig{Driver: "sqlite"}},
+		{"未知 driver 回落", &config.DatabaseConfig{Driver: "oracle"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			driver, _, dialect := resolveDriver(c.cfg, t.TempDir())
+			if driver != "sqlite" {
+				t.Errorf("driver = %q, want \"sqlite\"（纯 Go，不需要 cgo）", driver)
+			}
+			if dialect != DialectSQLite {
+				t.Errorf("dialect = %v, want DialectSQLite", dialect)
+			}
+		})
+	}
+}
+
+// TestResolveDriver_SQLitePragmaSyntax 锁定 DSN 用 modernc 的 _pragma=name(value)
+// 语法。mattn 风格的 _journal_mode=WAL 在 modernc 下会被当作未知参数报错。
+func TestResolveDriver_SQLitePragmaSyntax(t *testing.T) {
+	_, dsn, _ := resolveDriver(nil, t.TempDir())
+	for _, want := range []string{"_pragma=journal_mode(WAL)", "_pragma=busy_timeout(5000)"} {
+		if !strings.Contains(dsn, want) {
+			t.Errorf("DSN %q 缺少 %q", dsn, want)
+		}
+	}
+}
+
+// TestOpen_SQLitePragmasApplied 验证 WAL 与 busy_timeout 真正生效，
+// 而不是被驱动静默忽略。
+func TestOpen_SQLitePragmasApplied(t *testing.T) {
+	sqlxDB, _, err := Open(nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer sqlxDB.Close()
+
+	var journalMode string
+	if err := sqlxDB.Get(&journalMode, "PRAGMA journal_mode"); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		t.Errorf("journal_mode = %q, want wal", journalMode)
+	}
+
+	var busyTimeout int
+	if err := sqlxDB.Get(&busyTimeout, "PRAGMA busy_timeout"); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", busyTimeout)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/zfd81/groot/internal/config"
 )
@@ -62,7 +62,7 @@ func Open(cfg *config.DatabaseConfig, homeDir string) (*sqlx.DB, Dialect, error)
 func resolveDriver(cfg *config.DatabaseConfig, homeDir string) (driver, dsn string, dialect Dialect) {
 	if cfg == nil {
 		dbPath := filepath.Join(homeDir, "groot.db")
-		return "sqlite3", dbPath + "?_journal_mode=WAL&_busy_timeout=5000", DialectSQLite
+		return "sqlite", dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", DialectSQLite
 	}
 	d := cfg.Driver
 	dsn = os.ExpandEnv(cfg.DSN)
@@ -73,7 +73,7 @@ func resolveDriver(cfg *config.DatabaseConfig, homeDir string) (driver, dsn stri
 	case DialectPostgres:
 		driver = "postgres"
 	default:
-		driver = "sqlite3"
+		driver = "sqlite"
 	}
 	return driver, dsn, dialect
 }

@@ -168,6 +168,11 @@ make build-all        # 编译所有平台（macOS/Linux/Windows，含 Web 界�
 | `bin/linux-amd64/groot` | Linux AMD64 |
 | `bin/windows-amd64/groot.exe` | Windows AMD64 |
 
+> **关于分发：** 编译产物是**单文件自包含程序**。Web 界面与 SQLite 引擎都编译进了同一个二进制，
+> 目标机器无需安装 Node.js、SQLite、C 运行库或任何第三方组件，拷贝过去直接运行即可。
+> 全部数据库驱动（SQLite / MySQL / PostgreSQL）均为纯 Go 实现，不需要 cgo，
+> 因此 `make build-all` 可在一台开发机上一次性交叉编译出三个平台的完整可用产物。
+
 ### 2.3 工作目录结构
 
 Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~/.groot`，可通过环境变量 `GROOT_HOME` 更改。

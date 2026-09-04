@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/logger"
@@ -17,7 +17,7 @@ import (
 // newTestScheduleStorage creates a Storage backed by an in-memory SQLite DB.
 func newTestScheduleStorage(t *testing.T) *schedule.Storage {
 	t.Helper()
-	sqlxDB, err := sqlx.Open("sqlite3", ":memory:?_journal_mode=WAL")
+	sqlxDB, err := sqlx.Open("sqlite", ":memory:?_pragma=journal_mode(WAL)")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
