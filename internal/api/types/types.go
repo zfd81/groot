@@ -246,3 +246,18 @@ type AgentDefinitionResponse struct {
 	File    string `json:"file"`
 	Content string `json:"content"`
 }
+
+// ClusterMemberInfo 列出集群成员接口的单条信息（GET /web/cluster 响应元素）。
+type ClusterMemberInfo struct {
+	RegID       string `json:"reg_id"`
+	Role        string `json:"role"`
+	Address     string `json:"address"`
+	Pid         int    `json:"pid"`
+	HeartbeatAt int64  `json:"heartbeat_at"`
+	CreatedAt   int64  `json:"created_at"`
+}
+
+// ClusterResponse 是 GET /web/cluster 的完整响应体。
+type ClusterResponse struct {
+	Members []ClusterMemberInfo `json:"members"`
+}

@@ -48,6 +48,7 @@ func NewServer(
 	users repo.UserRepo,
 	models *llm.ModelService,
 	apiKeys repo.APIKeyRepo,
+	members repo.MemberRepo,
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -92,11 +93,12 @@ func NewServer(
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)
 	apiKeysH := handler.NewAPIKeysHandler(apiKeys, cfg.Security, log)
+	clusterH := handler.NewClusterHandler(members, log)
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH)
 
 	return &Server{
 		hertz:  h,

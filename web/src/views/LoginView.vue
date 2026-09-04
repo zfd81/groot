@@ -11,6 +11,11 @@ const auth = useAuthStore()
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
+const passwordInputRef = ref<{ focus: () => void }>()
+
+function focusPassword() {
+  passwordInputRef.value?.focus()
+}
 
 async function handleLogin() {
   if (!username.value || !password.value) {
@@ -38,10 +43,15 @@ async function handleLogin() {
     <el-card class="login-card" :header="t('login.header')">
       <el-form label-position="top" @submit.prevent="handleLogin">
         <el-form-item :label="t('login.username')">
-          <el-input v-model="username" :placeholder="t('login.username')" />
+          <el-input
+            v-model="username"
+            :placeholder="t('login.username')"
+            @keyup.enter="focusPassword"
+          />
         </el-form-item>
         <el-form-item :label="t('login.password')">
           <el-input
+            ref="passwordInputRef"
             v-model="password"
             type="password"
             :placeholder="t('login.password')"

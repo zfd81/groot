@@ -222,3 +222,17 @@ export interface ApiKeyCreateResp extends ApiKeyInfo {
 export interface ApiKeyTokenResp {
   token: string
 }
+
+// 集群成员（/web/cluster）：address 为 IP:PORT，时间字段为毫秒时间戳
+export interface ClusterMemberInfo {
+  reg_id: string
+  role: string
+  address: string
+  pid: number
+  heartbeat_at: number
+  created_at: number
+}
+
+export interface ClusterResp {
+  members: ClusterMemberInfo[]
+}

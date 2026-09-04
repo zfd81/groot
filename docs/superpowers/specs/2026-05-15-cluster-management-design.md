@@ -117,6 +117,11 @@ func New(host string, port int, log *logger.Logger, memberRepo repo.MemberRepo) 
 - **首次启动**：`Join` 第一次调用 `register`
 - **重新注册**：心跳中 `MemberRepo.Get` 返回 `ErrNotFound`，再次调用 `register`
 
+成员行的 `host` 字段登记本实例的对外地址，由 `ResolveAdvertiseHost(bindHost)`（`addr.go`）在构造 `Cluster` 前解析：
+
+- 配置为具体地址（IP 或主机名）→ 尊重配置原样登记；
+- 配置为通配监听地址（`0.0.0.0` / `::` / 空串）→ 探测本机对外 IP：先用 UDP 拨号让内核按默认路由选源地址（无实际网络流量），失败则遍历网卡取第一个非环回 IPv4，再失败以 `127.0.0.1` 兜底（保证单机场景可用）。
+
 `register()` 步骤：
 
 1. `MemberRepo.ListAll(ctx)` 列出现有成员
@@ -268,8 +273,10 @@ internal/cluster/
 ├── cluster.go         # Cluster 结构体、Join/Leave/SetCallbacks/run/heartbeat/register
 │                      # leaderHeartbeat/followerHeartbeat/GenerateRegID
 ├── election.go        # DetermineRole、RoleLeader/RoleFollower 常量
+├── addr.go            # ResolveAdvertiseHost：通配监听地址 → 本机对外 IP
 ├── cluster_test.go
-└── election_test.go
+├── election_test.go
+└── addr_test.go
 ```
 
 注：原 `member.go`（`WriteRegistration` / `ListMembers` / `RemoveFile`）已删除——这些动作现在直接由 `Cluster` 内部对 `MemberRepo` 接口的方法调用承担，无需 helper 中间层。
@@ -282,7 +289,7 @@ internal/cluster/
 - `cmd/groot/main.go` 负责：
   1. `db.Open(cfg.Database, homeDir)` 构造 `*sqlx.DB` + dialect
   2. `repofactory.NewRepos(sqlxDB, dialect, homeDir)` 构造 `MemberRepo`（同时构造其余 3 个 Repo）
-  3. `cluster.New(host, port, log, repos.Member)`
+  3. `cluster.New(cluster.ResolveAdvertiseHost(host), port, log, repos.Member)`
   4. 注入 `SetCallbacks`
   5. `Join(ctx)` / 进程退出时 `Leave()`
 
@@ -346,3 +353,9 @@ internal/cluster/
 - **退役**：`env.yaml` 中的 `minio` 节
 - **新增**：`env.yaml` 中的 `database` 节决定后端（详见 [数据库后端设计 §1.5](2026-06-10-database-backend-design.md#15-envyaml-配置格式)）
 - **保留**：单实例 / 单机多实例零配置（不写 `database` 节即 SQLite 单机模式）
+
+### 2.2 v2 变更：成员地址解析
+
+- **新增**：`internal/cluster/addr.go` 的 `ResolveAdvertiseHost`，`cmd/groot/main.go` 构造 `Cluster` 时经其解析 `server.host`。此前监听地址原样登记进 `cluster_members.host`，配置 `0.0.0.0` 时所有实例都登记为 `0.0.0.0`，成员列表无法区分与定位实例。
+- **调整**：通配监听地址（`0.0.0.0` / `::` / 空串）登记为探测到的本机对外 IP（UDP 路由探测 → 网卡遍历 → `127.0.0.1` 兜底）；具体地址配置行为不变（原样登记）。
+- **不变**：注册 / 心跳 / 选举流程、`cluster_members` 表结构、心跳与超时参数。

@@ -10,6 +10,7 @@ import { api, ApiError } from '../../api/client'
 import type { ToolsResp, AgentsResp, AgentInfo, AgentDefinitionResp, HealthResp } from '../../api/types'
 import ModelsPanel from './ModelsPanel.vue'
 import ApiKeysPanel from './ApiKeysPanel.vue'
+import ClusterPanel from './ClusterPanel.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ show: boolean }>()
@@ -27,6 +28,7 @@ const menuOptions = computed(() => [
   { label: t('settings.menuModels'), key: 'models' },
   { label: t('settings.menuAgents'), key: 'agents' },
   { label: t('settings.menuApiKeys'), key: 'apikeys' },
+  { label: t('settings.menuCluster'), key: 'cluster' },
   { label: t('settings.menuAccount'), key: 'account' },
 ])
 
@@ -286,6 +288,11 @@ async function openAgentTools(a: AgentInfo) {
         <!-- API Keys -->
         <div v-else-if="section === 'apikeys'">
           <ApiKeysPanel />
+        </div>
+
+        <!-- 集群管理 -->
+        <div v-else-if="section === 'cluster'">
+          <ClusterPanel />
         </div>
 
         <!-- Agents：卡片网格，每卡三个按钮分别弹窗展示定义 md 原文 / Skills / MCP 工具 -->

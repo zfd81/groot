@@ -25,6 +25,7 @@ func RegisterRoutes(h *server.Hertz,
 	scheduleH *handler.ScheduleHandler,
 	webAuthH *handler.WebAuthHandler,
 	apiKeysH *handler.APIKeysHandler,
+	clusterH *handler.ClusterHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
 	h.GET("/web/health", healthH.Serve)
@@ -50,6 +51,7 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.PUT("/models/:name", modelsH.Update)
 	webGroup.PUT("/models/:name/default", modelsH.SetDefault)
 	webGroup.DELETE("/models/:name", modelsH.Delete)
+	webGroup.GET("/cluster", clusterH.Serve)
 	webGroup.GET("/apikeys", apiKeysH.List)
 	webGroup.POST("/apikeys", apiKeysH.Create)
 	webGroup.GET("/apikeys/:id/token", apiKeysH.Token)
