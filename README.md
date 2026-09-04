@@ -1,3 +1,5 @@
+<p>&nbsp;</p>
+
 <img src="groot.png" alt="Groot Logo" width="108" style="width:104px" align="left" hspace="12">
 
 <picture>
