@@ -26,6 +26,7 @@ func RegisterRoutes(h *server.Hertz,
 	webAuthH *handler.WebAuthHandler,
 	apiKeysH *handler.APIKeysHandler,
 	clusterH *handler.ClusterHandler,
+	logsH *handler.LogsHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
 	h.GET("/web/health", healthH.Serve)
@@ -56,6 +57,7 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.POST("/apikeys", apiKeysH.Create)
 	webGroup.GET("/apikeys/:id/token", apiKeysH.Token)
 	webGroup.DELETE("/apikeys/:id", apiKeysH.Delete)
+	webGroup.GET("/logs/:sid", logsH.Serve)
 
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")

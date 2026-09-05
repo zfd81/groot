@@ -42,12 +42,15 @@ func New(cfg config.LoggingConfig) *Logger {
 	combined := zapcore.NewTee(cores...)
 
 	return &Logger{
-		zap:    zap.New(combined, zap.AddCaller()),
+		// AddCallerSkip(1) 跳过 Info/Debug/Warn/Error 等包装方法，
+		// 使 caller 字段指向真正的调用方而非本包内部
+		zap:    zap.New(combined, zap.AddCaller(), zap.AddCallerSkip(1)),
 		config: cfg,
 	}
 }
 
 // getEncoder returns JSON encoder
+// 注意这里的键名与 reader.go standardLogKeys 保持一致
 func getEncoder(cfg config.LoggingConfig) zapcore.Encoder {
 	encoderConfig := zapcore.EncoderConfig{
 		TimeKey:        "timestamp",
@@ -192,6 +195,7 @@ func (l *Logger) Error(msg string, fields ...zap.Field) {
 }
 
 // NewNop creates a no-op logger for testing
+// 无需配置 caller 选项：nop core 丢弃所有日志，caller 信息不会被编码输出
 func NewNop() *Logger {
 	return &Logger{zap: zap.NewNop()}
 }
@@ -199,4 +203,12 @@ func NewNop() *Logger {
 // Sync flushes any buffered log entries
 func (l *Logger) Sync() error {
 	return l.zap.Sync()
+}
+
+// With 派生携带固定字段的子 logger（如 session_id）
+func (l *Logger) With(fields ...zap.Field) *Logger {
+	return &Logger{
+		zap:    l.zap.With(fields...),
+		config: l.config,
+	}
 }

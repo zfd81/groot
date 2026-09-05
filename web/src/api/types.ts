@@ -252,3 +252,20 @@ export interface SearchResp {
   status: string
   results: SearchResultItem[]
 }
+
+// 会话日志条目（GET /web/logs/:sid）
+export interface SessionLogEntry {
+  timestamp: string
+  level: string
+  message: string
+  caller: string
+  fields?: Record<string, unknown>
+}
+
+export interface SessionLogsResp {
+  status: string
+  session_id: string
+  count: number
+  truncated: boolean
+  logs: SessionLogEntry[]
+}

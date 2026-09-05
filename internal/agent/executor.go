@@ -124,6 +124,12 @@ func NewExecutor(
 
 // Execute starts task execution
 func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Task, sse *SSEWriter) {
+	// 派生携带 session_id 的会话级 logger，本次执行链路统一使用。
+	// 同时放入 ctx，作为后续下游代码的取用入口（当前尚无 FromContext 消费方，
+	// 实际带上 session_id 的路径是下方 CallAgentToolConfig.Log 与 EngineConfig.Log）。
+	sessionLog := e.logger.With(zap.String("session_id", sessionID))
+	parentCtx = logger.NewContext(parentCtx, sessionLog)
+
 	// Read SESSION.md content
 	sessionMdContent := ""
 	if e.memoryManager != nil {
@@ -168,7 +174,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				} else {
 					// skill 中间件构建失败时降级为「无 skill」继续执行子 Agent，
 					// 用户能感知到 skill 未生效，所以必须明确 log。
-					e.logger.Error("子 Agent skill 中间件创建失败",
+					sessionLog.Error("子 Agent skill 中间件创建失败",
 						zap.String("agent", task.AgentName),
 						zap.Error(err))
 					middlewares = nil
@@ -195,7 +201,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				Memory:            e.memoryManager,
 				RuntimeState:      e.runtimeState,
 				TokenAccumulators: e.tokenAccumulators,
-				Log:               e.logger,
+				Log:               sessionLog,
 				ParentRound:       task.Round,
 			})
 			extraTools = append(extraTools, callAgent)
@@ -223,7 +229,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				AgentName:   task.AgentName,
 			}
 			if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
-				e.logger.Error("保存对话记录失败: " + saveErr.Error())
+				sessionLog.Error("保存对话记录失败: " + saveErr.Error())
 			}
 			msg := &memory.Message{
 				ChatID:      task.ID,
@@ -236,7 +242,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				Error:       &memory.Error{Code: "subagent_unavailable", Message: soloErr.Error()},
 			}
 			if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
-				e.logger.Error("追加历史消息失败: " + appendErr.Error())
+				sessionLog.Error("追加历史消息失败: " + appendErr.Error())
 			}
 		}
 		task.Status = StatusFailed
@@ -251,7 +257,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		MCP:                mcpMgr,
 		ExtraTools:         extraTools,
 		React:              e.config.React,
-		Log:                e.logger,
+		Log:                sessionLog,
 		AgentName:          agentName,
 		EmitInternalEvents: emitInternal,
 		TokenAccumulators:  e.tokenAccumulators,
@@ -329,14 +335,14 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 
 	// If execution failed (not cancelled), close SSE stream
 	if err != nil && !ctxCancelled {
-		e.logger.Error("Agent execution failed: " + err.Error())
+		sessionLog.Error("Agent execution failed: " + err.Error())
 		// 错误必须到达 SSE 流：否则用户界面表现为静默空回复
 		// （典型场景：模型配置不可用——尚未创建模型 / 模型被禁用）。
 		if writeErr := sse.WriteError(agentName, err.Error()); writeErr != nil {
-			e.logger.Error("Failed to write SSE error: " + writeErr.Error())
+			sessionLog.Error("Failed to write SSE error: " + writeErr.Error())
 		}
 		if writeErr := sse.WriteDone(); writeErr != nil {
-			e.logger.Error("Failed to write SSE done: " + writeErr.Error())
+			sessionLog.Error("Failed to write SSE done: " + writeErr.Error())
 		}
 	}
 
@@ -399,7 +405,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		}
 
 		if saveErr := e.memoryManager.SaveChatRecord(sessionID, record); saveErr != nil {
-			e.logger.Error("保存对话记录失败: " + saveErr.Error())
+			sessionLog.Error("保存对话记录失败: " + saveErr.Error())
 		}
 
 		// 构建 Message（status 等字段直接从 record 拷贝）
@@ -422,7 +428,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		}
 
 		if appendErr := e.memoryManager.AppendMessage(sessionID, msg); appendErr != nil {
-			e.logger.Error("追加历史消息失败: " + appendErr.Error())
+			sessionLog.Error("追加历史消息失败: " + appendErr.Error())
 		}
 
 		// 回写最终状态到 task，供调用方（chat handler）查询

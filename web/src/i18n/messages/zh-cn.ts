@@ -87,6 +87,18 @@ export default {
     matchInstruction: '我的提问',
     matchResult: 'AI 回复',
   },
+  logs: {
+    title: '会话日志',
+    viewLogs: '查看日志',
+    refresh: '刷新',
+    all: '全部',
+    empty: '暂无日志',
+    emptyLevel: '该级别暂无日志',
+    failed: '日志加载失败',
+    retry: '重试',
+    count: '共 {n} 条',
+    truncated: '仅展示最新 1000 条',
+  },
   settings: {
     title: '设置',
     menuGeneral: '通用',

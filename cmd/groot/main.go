@@ -255,6 +255,7 @@ func startServer(homeDir string, port int) {
 
 	// Initialize logger
 	log := logger.New(cfg.Logging)
+	logger.SetDefault(log)
 	defer log.Sync()
 
 	log.Info("Groot Agent 启动中...",

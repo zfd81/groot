@@ -294,11 +294,15 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		defer h.runtimeState.Delete(sessionID)
 		defer pw.Close()
 
+		// 此处 sessionID 已最终确定（新会话已生成 ID），goroutine 内的
+		// 日志属于会话内日志，派生携带 session_id 的 logger 便于按会话检索
+		sessionLog := h.log.With(zap.String("session_id", sessionID))
+
 		sseWriter := agent.NewSSEWriter(pipeFlushWriter{pw}, sessionID, chatID, round)
 
 		defer func() {
 			if r := recover(); r != nil {
-				h.log.Error(fmt.Sprintf("Agent 执行异常(panic): %v", r))
+				sessionLog.Error(fmt.Sprintf("Agent 执行异常(panic): %v", r))
 				task.Status = agent.StatusFailed
 				sseWriter.WriteDone()
 			}
@@ -314,7 +318,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		} else if task.Status == agent.StatusFailed {
 			statusText = "对话失败"
 		}
-		h.log.Info(fmt.Sprintf("%s: session=%s, chat=%s, round=%d, isNew=%v", statusText, sessionID, chatID, round, isNew))
+		sessionLog.Info(fmt.Sprintf("%s: session=%s, chat=%s, round=%d, isNew=%v", statusText, sessionID, chatID, round, isNew))
 	}()
 }
 

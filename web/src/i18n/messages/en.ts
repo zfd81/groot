@@ -87,6 +87,18 @@ export default {
     matchInstruction: 'My question',
     matchResult: 'AI reply',
   },
+  logs: {
+    title: 'Session Logs',
+    viewLogs: 'View logs',
+    refresh: 'Refresh',
+    all: 'All',
+    empty: 'No logs',
+    emptyLevel: 'No logs at this level',
+    failed: 'Failed to load logs',
+    retry: 'Retry',
+    count: '{n} entries',
+    truncated: 'Only the latest 1000 entries are shown',
+  },
   settings: {
     title: 'Settings',
     menuGeneral: 'General',

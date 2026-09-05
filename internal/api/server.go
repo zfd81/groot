@@ -94,11 +94,12 @@ func NewServer(
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)
 	apiKeysH := handler.NewAPIKeysHandler(apiKeys, cfg.Security, log)
 	clusterH := handler.NewClusterHandler(members, log)
+	logsH := handler.NewLogsHandler(cfg.Logging)
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH)
 
 	return &Server{
 		hertz:  h,

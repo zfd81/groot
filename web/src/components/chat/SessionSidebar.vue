@@ -45,8 +45,9 @@ function title(s: SessionSummary): string {
 </script>
 
 <template>
-  <!-- 收起态：窄栏，只放展开 + 新建会话两个图标 -->
-  <div v-if="props.collapsed" class="rail">
+  <!-- 收起态窄栏与展开态侧栏始终挂载、叠放，靠透明度交叉淡入淡出切换，
+       使收起与展开两个方向的观感一致，且宽度过渡期间不发生 DOM 挂载卸载。 -->
+  <div class="rail" :class="props.collapsed ? 'panel-shown' : 'panel-hidden'">
     <img class="rail-logo" src="../../assets/groot-icon.png" alt="Groot" />
     <button class="rail-btn" type="button" :title="t('sidebar.expand')" @click="emit('expand')">
       <el-icon :size="20">
@@ -81,7 +82,7 @@ function title(s: SessionSummary): string {
     </button>
   </div>
 
-  <div v-else class="sidebar">
+  <div class="sidebar" :class="props.collapsed ? 'panel-hidden' : 'panel-shown'">
     <!-- 品牌标识（图标 + 文字），高度与主区顶部栏对齐 -->
     <div class="brand">
       <img class="brand-logo" src="../../assets/groot-icon.png" alt="Groot" />
@@ -178,7 +179,35 @@ function title(s: SessionSummary): string {
 </template>
 
 <style scoped>
+/* 两个面板叠放在 .sider（定位上下文）左上角，各自写死最终宽度，
+   宽度过渡期间只被 .sider 裁切，内部不重排、图标不横向漂移。 */
+.rail,
+.sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+/* 淡出走过渡前半段，淡入走后半段，收起与展开两个方向对称。
+   visibility 在淡出结束后才置 hidden，同时把隐藏面板移出 Tab 键序与无障碍树。 */
+.panel-shown {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.1s ease 0.1s,
+    visibility 0s;
+}
+.panel-hidden {
+  opacity: 0;
+  visibility: hidden;
+  /* 淡出期间该面板仍压在上层，须立即停止接收点击 */
+  pointer-events: none;
+  transition:
+    opacity 0.1s ease,
+    visibility 0s linear 0.1s;
+}
+/* 收起态固定 52px，与 .sider 收起后的宽度一致 */
 .rail {
+  width: 52px;
   height: 100%;
   box-sizing: border-box;
   overflow: hidden;
@@ -187,7 +216,6 @@ function title(s: SessionSummary): string {
   align-items: center;
   gap: 8px;
   padding-top: 12px;
-  border-right: 1px solid rgba(127, 127, 127, 0.15);
 }
 .rail-logo {
   width: 26px;
@@ -214,11 +242,13 @@ function title(s: SessionSummary): string {
   margin-top: auto;
   margin-bottom: 12px;
 }
+/* 展开态固定 260px：与 .sider 展开后的宽度一致，宽度过渡期间内部不被挤压重排 */
 .sidebar {
+  width: 260px;
   height: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(127, 127, 127, 0.15);
 }
 .brand {
   height: 56px;

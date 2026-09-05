@@ -152,6 +152,46 @@
 | TestWebUI_AssetCacheHeader | 资源文件缓存响应头 |
 | TestWebUI_NoPathTraversal | 路径穿越载荷（`..`、`%2f` 编码、前缀混淆）均不泄漏文件 |
 
+### 1.3 会话日志查看测试
+
+**logger 会话标识** (`internal/logger/context_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestWith_SessionIDInJSONOutput | With 派生的日志含 session_id 字段，原 logger 不含 |
+| TestCaller_PointsToCallSite | caller 字段指向真实调用方而非 logger 包内部（AddCallerSkip） |
+| TestFromContext_ReturnsStoredLogger | FromContext 取回 NewContext 放入的 logger |
+| TestFromContext_FallbackToDefault | ctx 中无 logger 时回退 SetDefault 的默认 logger |
+| TestFromContext_NeverNil | 任何情况下不返回 nil |
+| TestFromContext_NilContext | nil context 防御分支返回非 nil |
+
+**执行链路注入** (`internal/agent/executor_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestExecutor_ExecuteLogsCarrySessionID | Execute 产出的每行日志都携带 session_id（真实 sqlite + file logger，走 soloErr 路径） |
+
+**日志读取** (`internal/logger/reader_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestReadSessionLogs_MatchAndSkip | 按 session_id 过滤、坏 JSON 行跳过、非标准字段进 Fields |
+| TestReadSessionLogs_MultiDayOrderAndMissingFiles | 跨天从旧到新排序、缺失文件跳过不报错 |
+| TestReadSessionLogs_Truncate | 超过 limit 时保留最新 N 条并标记 truncated |
+| TestReadSessionLogs_OversizedLineSkipped | 超过 1MB 的行只丢自身，不影响后续行扫描 |
+| TestReadSessionLogs_EmptyCases | 空目录/空 sessionID/空配置均返回空列表 |
+
+**查询端点** (`internal/api/handler/logs_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestLogsHandler_Normal | 正常查询返回 status/session_id/count/truncated/logs，跨会话隔离 |
+| TestLogsHandler_EmptySid | sid 缺失返回 400 invalid_request |
+| TestLogsHandler_NoLogs | 会话无日志返回 200 且 logs 为 `[]` 非 null |
+| TestLogsHandler_Truncated | 1001 条截断为最新 1000 条，truncated 为 true |
+
+**系统测试覆盖点（Python，用户运行）**：`GET /web/logs/:sid` 正常返回、空会话返回 count 0、未登录 401。
+
 ---
 
 ## 二、系统测试（Python）

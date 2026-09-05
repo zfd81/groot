@@ -11,6 +11,8 @@ import ChatInput from '../components/chat/ChatInput.vue'
 import StatsBar from '../components/chat/StatsBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import SearchModal from '../components/chat/SearchModal.vue'
+import LogModal from '../components/chat/LogModal.vue'
+import { Monitor } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,9 +24,14 @@ const bodyColor = 'var(--el-bg-color)'
 const { messages, sending, sessions, sessionId, canLoadMore, loadingSessions, lastRecord } =
   storeToRefs(chat)
 
-const collapsed = ref(false)
+// 侧栏收起状态持久化，刷新后保持上次的形态。
+const SIDER_COLLAPSED_KEY = 'groot-sider-collapsed'
+const collapsed = ref(localStorage.getItem(SIDER_COLLAPSED_KEY) === '1')
+watch(collapsed, (v) => localStorage.setItem(SIDER_COLLAPSED_KEY, v ? '1' : '0'))
+
 const showSettings = ref(false)
 const showSearch = ref(false)
+const showLogs = ref(false)
 const scrollArea = ref<HTMLElement | null>(null)
 
 const roundCount = computed(
@@ -139,9 +146,18 @@ onMounted(async () => {
     </aside>
 
     <div class="main">
-      <!-- 顶部栏：会话标题 -->
+      <!-- 顶部栏：会话标题 + 日志按钮 -->
       <header class="topbar">
         <h1 class="topbar-title">{{ headerTitle }}</h1>
+        <button
+          class="topbar-logs"
+          type="button"
+          :disabled="!sessionId"
+          :title="t('logs.viewLogs')"
+          @click="showLogs = true"
+        >
+          <el-icon :size="17"><Monitor /></el-icon>
+        </button>
       </header>
 
       <div v-show="!isEmpty" ref="scrollArea" class="scroll-area">
@@ -169,6 +185,7 @@ onMounted(async () => {
 
   <SettingsModal v-model:show="showSettings" />
   <SearchModal v-model:show="showSearch" @select="handleSelect" />
+  <LogModal v-model:show="showLogs" :session-id="sessionId" />
 </template>
 
 <style scoped>
@@ -176,12 +193,16 @@ onMounted(async () => {
   display: flex;
   height: 100vh;
 }
-/* 侧栏：展开 260px、收起 52px，宽度过渡与右侧边框由此处提供 */
+/* 侧栏：展开 260px、收起 52px，宽度过渡与右侧边框由此处提供。
+   两个内层面板各自写死最终宽度，过渡期间只被本元素裁切、不参与重排。 */
 .sider {
   width: 260px;
   flex-shrink: 0;
   height: 100vh;
   overflow: hidden;
+  /* 两个面板在此叠放定位，故本元素需作为定位上下文 */
+  position: relative;
+  border-right: 1px solid rgba(127, 127, 127, 0.15);
   transition: width 0.2s var(--el-transition-function-ease-in-out-bezier, ease);
 }
 .sider.collapsed {
@@ -213,6 +234,30 @@ onMounted(async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 顶栏日志按钮：无会话（未发送消息）时禁用置灰 */
+.topbar-logs {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.topbar-logs:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+  opacity: 0.95;
+}
+.topbar-logs:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 .scroll-area {
   flex: 1;
