@@ -45,6 +45,12 @@ export interface ChatMessage {
   // 该消息所属的数据库轮次号（历史加载时透传，用于搜索结果定位）；流式新消息为空。
   round?: number
   error?: string
+  // 整条回复的计时（仅助手消息）：startedAt 为流式开始的墙钟时间戳（ms），
+  // 供底部实时计时展示；流结束后结算 durationMs（总用时）与 finishedAt（完成时刻）。
+  // 历史消息由后端的 duration（秒）与 timestamp（结束时间）回填。
+  startedAt?: number
+  durationMs?: number
+  finishedAt?: number
 }
 
 const PAGE_SIZE = 20
@@ -189,6 +195,9 @@ export const useChatStore = defineStore('chat', () => {
         streaming: false,
         round: m.round,
       })
+      // 历史记录的 timestamp 是该轮结束时间、duration 是秒级总用时，
+      // 回填给底部操作栏展示「用时 + 完成时刻」。
+      const finishedAt = Date.parse(m.timestamp)
       messages.value.push({
         role: 'assistant',
         content: m.result,
@@ -198,6 +207,8 @@ export const useChatStore = defineStore('chat', () => {
         streaming: false,
         round: m.round,
         error: m.error?.message || undefined,
+        durationMs: typeof m.duration === 'number' ? m.duration * 1000 : undefined,
+        finishedAt: Number.isNaN(finishedAt) ? undefined : finishedAt,
       })
     }
   }
@@ -226,6 +237,8 @@ export const useChatStore = defineStore('chat', () => {
       tools: [],
       steps: [],
       streaming: true,
+      // 墙钟起点：底部实时计时与最终「用时」都从这里算起。
+      startedAt: Date.now(),
     }
     messages.value.push(assistant)
     // Vue 3 响应式：push 进 reactive 数组后，视图渲染的是数组元素的代理，
@@ -267,6 +280,11 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       finalizeReasoning(live)
       live.streaming = false
+      // 结算整条回复：总用时与完成时刻，供底部操作栏展示。
+      live.finishedAt = Date.now()
+      if (live.startedAt !== undefined) {
+        live.durationMs = live.finishedAt - live.startedAt
+      }
       sending.value = false
       abortCtrl = null
       // 刷新统计与会话列表

@@ -63,6 +63,13 @@ export default {
     thinking: 'Thinking',
     round: 'Round {n}',
     duration: 'Elapsed {v}',
+    thinkingLive: 'Thinking',
+    timeUsed: 'Took {v}',
+    durationSec: '{s}s',
+    durationMinSec: '{m}m {s}s',
+    copy: 'Copy',
+    copied: 'Copied',
+    copyFailed: 'Copy failed',
   },
   sidebar: {
     expand: 'Expand sidebar',

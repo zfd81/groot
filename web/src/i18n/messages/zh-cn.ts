@@ -63,6 +63,13 @@ export default {
     thinking: '思考过程',
     round: '轮次 {n}',
     duration: '耗时 {v}',
+    thinkingLive: '深度思考中',
+    timeUsed: '用时 {v}',
+    durationSec: '{s}秒',
+    durationMinSec: '{m}分{s}秒',
+    copy: '复制',
+    copied: '已复制',
+    copyFailed: '复制失败',
   },
   sidebar: {
     expand: '展开侧栏',

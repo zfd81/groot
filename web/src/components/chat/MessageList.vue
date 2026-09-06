@@ -3,7 +3,7 @@ import MarkdownView from './MarkdownView.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallPanel from './ToolCallPanel.vue'
 import TranscriptStep from './TranscriptStep.vue'
-import { Loading } from '@element-plus/icons-vue'
+import MessageFooter from './MessageFooter.vue'
 import type { ChatMessage } from '../../stores/chat'
 
 defineProps<{ messages: ChatMessage[] }>()
@@ -36,13 +36,9 @@ defineProps<{ messages: ChatMessage[] }>()
           <ToolCallPanel v-for="t in m.tools" :key="t.id" :tool="t" />
         </template>
         <MarkdownView v-if="m.content" :content="m.content" />
-        <el-icon
-          v-if="m.streaming && !m.content && m.steps.length === 0"
-          class="is-loading spin-icon"
-        >
-          <Loading />
-        </el-icon>
         <div v-if="m.error" class="msg-error">⚠️ {{ m.error }}</div>
+        <!-- 底部状态栏：流式中显示实时计时，完成后显示 复制/总用时/完成时刻 -->
+        <MessageFooter :message="m" />
       </div>
     </div>
   </div>
@@ -85,10 +81,6 @@ defineProps<{ messages: ChatMessage[] }>()
   color: #d03050;
   margin-top: 8px;
   font-size: 0.9em;
-}
-.spin-icon {
-  color: var(--el-color-primary);
-  font-size: 18px;
 }
 /* 搜索定位高亮：定位到目标轮次后短暂闪烁提示 */
 .msg-row.locate-highlight .user-bubble {
