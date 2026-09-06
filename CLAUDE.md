@@ -22,7 +22,7 @@ groot/
 │   ├── temp/               # 测试临时文件
 │   ├── reports/            # 测试报告（含测试说明 README.md）
 │   └ fixtures/             # 测试数据
-├── dist/                   # 编译输出（三平台 zip 发布产物入库，其余被 gitignore）
+├── dist/                   # 编译输出（.gitignore 忽略内容）
 ├── README.md               # 用户使用手册（GitHub 首页展示）
 ```
 
@@ -35,7 +35,7 @@ groot/
 5. **测试目录**: `tests/` - 所有测试代码和产物
    - 示例的测试代码放在 `tests/examples/<语言>/`，**不允许放在 examples/ 目录下**
    - 对于 Maven/Java 项目，需在 `pom.xml` 中配置 `<testSourceDirectory>` 指向 `tests/examples/java/`
-6. **编译输出**: `dist/` - 编译产物放在这里（单平台为 `dist/groot`，`make build-all` 产出三个平台的 zip 作为发布产物提交到仓库；`dist/groot` 及临时目录被 gitignore）
+6. **编译输出**: `dist/` - 编译产物放在这里（单平台为 `dist/groot`，`make build-all` 产出三个平台的 zip 用于上传 GitHub Release），目录保留但内容被 gitignore
 
 ### 禁止的行为
 

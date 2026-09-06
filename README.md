@@ -113,23 +113,23 @@ Session（会话）
 
 #### 方式一：直接运行（推荐）
 
-从仓库 `dist/` 目录下载对应平台的压缩包，解压即得可执行文件：
+从 [Releases](https://github.com/zfd81/groot/releases) 页面下载对应平台的压缩包（`make build-all` 产出的同名文件），解压即得可执行文件：
 
 ```bash
 # Linux
-wget https://github.com/zfd81/groot/raw/master/dist/groot-linux-amd64.zip
+wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-linux-amd64.zip
 unzip groot-linux-amd64.zip
 chmod +x groot
 mv groot /usr/local/bin/groot
 
 # macOS
-wget https://github.com/zfd81/groot/raw/master/dist/groot-darwin-arm64.zip
+wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-darwin-arm64.zip
 unzip groot-darwin-arm64.zip
 chmod +x groot
 mv groot /usr/local/bin/groot
 
 # Windows
-# 下载 https://github.com/zfd81/groot/raw/master/dist/groot-windows-amd64.zip
+# 下载 https://github.com/zfd81/groot/releases/download/v1.0.0/groot-windows-amd64.zip
 # 解压后得到 groot.exe
 ```
 
@@ -179,7 +179,7 @@ make build-all        # 编译所有平台并打包 zip（macOS/Linux/Windows，
 | `dist/groot-linux-amd64.zip` | Linux AMD64 | `groot` |
 | `dist/groot-windows-amd64.zip` | Windows AMD64 | `groot.exe` |
 
-三个 zip 同时作为发布产物提交到仓库（即「方式一」的下载来源）；开发用的单平台二进制 `dist/groot` 不入库。
+三个 zip 可直接上传 GitHub Release 作为发布产物（即「方式一」的下载来源）；整个 `dist/` 目录被 gitignore，不入库。
 
 > **关于分发：** zip 内不含目录层级，解压即得可执行文件。编译产物是**单文件自包含程序**，Web 界面与 SQLite 引擎都编译进了同一个二进制，
 > 目标机器无需安装 Node.js、SQLite、C 运行库或任何第三方组件，拷贝过去直接运行即可。
