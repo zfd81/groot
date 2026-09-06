@@ -13,8 +13,8 @@ import time
 import requests
 import signal
 
-# 获取正确的 groot 二进制路径: tests/python -> tests -> groot -> bin/groot
-GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "bin", "groot"))
+# 获取正确的 groot 二进制路径: tests/python -> tests -> groot -> dist/groot
+GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "dist", "groot"))
 
 
 def wait_health(port, timeout=15):

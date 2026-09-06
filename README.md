@@ -113,18 +113,24 @@ Session（会话）
 
 #### 方式一：直接运行（推荐）
 
-下载预编译的二进制文件：
+从仓库 `dist/` 目录下载对应平台的压缩包，解压即得可执行文件：
 
 ```bash
 # Linux
-wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-linux-amd64
-chmod +x groot-linux-amd64
-mv groot-linux-amd64 /usr/local/bin/groot
+wget https://github.com/zfd81/groot/raw/master/dist/groot-linux-amd64.zip
+unzip groot-linux-amd64.zip
+chmod +x groot
+mv groot /usr/local/bin/groot
 
 # macOS
-wget https://github.com/zfd81/groot/releases/download/v1.0.0/groot-darwin-arm64
-chmod +x groot-darwin-arm64
-mv groot-darwin-arm64 /usr/local/bin/groot
+wget https://github.com/zfd81/groot/raw/master/dist/groot-darwin-arm64.zip
+unzip groot-darwin-arm64.zip
+chmod +x groot
+mv groot /usr/local/bin/groot
+
+# Windows
+# 下载 https://github.com/zfd81/groot/raw/master/dist/groot-windows-amd64.zip
+# 解压后得到 groot.exe
 ```
 
 #### 方式二：源码编译
@@ -135,40 +141,47 @@ git clone https://github.com/zfd81/groot.git
 cd groot
 
 # 编译当前平台
-go build -o bin/groot ./cmd/groot
+go build -o dist/groot ./cmd/groot
 
 # 或使用 Makefile
 make build            # 编译当前平台（含 Web 界面）
-make build-all        # 编译所有平台（macOS/Linux/Windows，含 Web 界面）
+make build-all        # 编译所有平台并打包 zip（macOS/Linux/Windows，含 Web 界面）
 
 # 运行
-./bin/groot
+./dist/groot
 ```
 
-> **关于 Web 界面：** `make build` 与 `make build-all` 会先构建前端再编译二进制，需要 Node.js 18+。
-> 若只想编译后端，直接执行 `go build -o bin/groot ./cmd/groot`，此时访问 `/ui/` 会显示未构建提示页，
-> 其余 API 功能不受影响。也可单独执行 `make web` 只构建前端。
+> **关于 Web 界面：** Web 前端在 Go 编译时通过 `go:embed` 嵌入二进制。`make build` 与
+> `make build-all` 会先构建前端（需要 Node.js 18+）再编译，其中 `make build-all` 前端只构建一次，
+> 三个平台共享同一份产物。`make build-darwin` / `build-linux` / `build-windows` / `build-go`
+> **不会**构建前端，直接复用 `web/dist/` 中现有的产物——全新 clone 后单独执行这些命令得到的
+> 二进制不包含 Web 界面（访问 `/ui/` 显示未构建提示页，API 功能不受影响）；若之前构建过前端，
+> 则嵌入的是该版本。修改前端代码后，需重新执行 `make web`（或 `make build`）才能更新界面。
 
 **Makefile 编译命令：**
 
 | 命令 | 说明 |
 |------|------|
-| `make build` | 编译当前平台可执行文件 |
-| `make build-all` | 编译三个平台可执行文件 |
-| `make build-darwin` | 编译 macOS ARM64 |
-| `make build-linux` | 编译 Linux AMD64 |
-| `make build-windows` | 编译 Windows AMD64 |
-| `make clean` | 清理编译产物 |
+| `make build` | 构建前端 + 编译当前平台可执行文件（`dist/groot`） |
+| `make build-all` | 构建前端 + 编译三个平台并打包为 zip |
+| `make build-darwin` | 编译 macOS ARM64 并打包（复用现有前端产物） |
+| `make build-linux` | 编译 Linux AMD64 并打包（复用现有前端产物） |
+| `make build-windows` | 编译 Windows AMD64 并打包（复用现有前端产物） |
+| `make build-go` | 仅编译当前平台后端（复用现有前端产物，无需 Node.js） |
+| `make web` | 仅构建 Web 前端（输出到 `web/dist/`） |
+| `make clean` | 清理编译产物（删除 `dist/`） |
 
-**编译产物：**
+**编译产物（`make build-all`）：**
 
-| 文件 | 平台 |
-|------|------|
-| `bin/darwin-arm64/groot` | macOS ARM64 |
-| `bin/linux-amd64/groot` | Linux AMD64 |
-| `bin/windows-amd64/groot.exe` | Windows AMD64 |
+| 文件 | 平台 | 解压后 |
+|------|------|--------|
+| `dist/groot-darwin-arm64.zip` | macOS ARM64 | `groot` |
+| `dist/groot-linux-amd64.zip` | Linux AMD64 | `groot` |
+| `dist/groot-windows-amd64.zip` | Windows AMD64 | `groot.exe` |
 
-> **关于分发：** 编译产物是**单文件自包含程序**。Web 界面与 SQLite 引擎都编译进了同一个二进制，
+三个 zip 同时作为发布产物提交到仓库（即「方式一」的下载来源）；开发用的单平台二进制 `dist/groot` 不入库。
+
+> **关于分发：** zip 内不含目录层级，解压即得可执行文件。编译产物是**单文件自包含程序**，Web 界面与 SQLite 引擎都编译进了同一个二进制，
 > 目标机器无需安装 Node.js、SQLite、C 运行库或任何第三方组件，拷贝过去直接运行即可。
 > 全部数据库驱动（SQLite / MySQL / PostgreSQL）均为纯 Go 实现，不需要 cgo，
 > 因此 `make build-all` 可在一台开发机上一次性交叉编译出三个平台的完整可用产物。

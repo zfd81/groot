@@ -449,8 +449,8 @@ description: 回显测试 Agent，把用户输入原样返回
 收到任何 task 后，直接返回 task 内容。
 EOF
 
-go build -o bin/groot ./cmd/groot
-./bin/groot &
+go build -o dist/groot ./cmd/groot
+./dist/groot &
 sleep 2
 ```
 

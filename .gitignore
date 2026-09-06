@@ -2,8 +2,8 @@
 /groot
 /groot_new
 
-# Go 编译产物（bin目录 - 项目级）
-bin/
+# Go 编译产物（dist目录 - 项目级）
+/dist/
 
 # Go 测试产物
 *.test

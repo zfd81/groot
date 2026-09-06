@@ -23,8 +23,8 @@ TEST_AUTH_SECRET = os.environ.get("GROOT_TEST_AUTH_SECRET", "groot-test-secret-0
 TEST_WEB_USER = os.environ.get("GROOT_WEB_USER", "admin")
 TEST_WEB_PASS = os.environ.get("GROOT_WEB_PASS", "test-password-2026")
 TEST_HOME = os.environ.get("GROOT_TEST_HOME", "/tmp/groot_test")
-# GROOT_BIN: tests/python -> tests -> groot -> bin/groot
-GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "bin", "groot"))
+# GROOT_BIN: tests/python -> tests -> groot -> dist/groot
+GROOT_BIN = os.environ.get("GROOT_BIN", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "dist", "groot"))
 
 BASE_URL = f"http://{TEST_HOST}:{TEST_PORT}"
 
@@ -362,11 +362,11 @@ def server():
     # 检查服务器是否已运行
     if wait_for_server(timeout=5):
         # 服务器已运行，需要重启以使用新配置。
-        # 只按"bin/groot -p 测试端口"精确匹配杀进程，
+        # 只按"dist/groot -p 测试端口"精确匹配杀进程，
         # 禁止 pkill -f groot（会误杀开发环境或其他端口的实例）
         try:
             subprocess.run(
-                ["pkill", "-f", f"bin/groot -p {TEST_PORT}"],
+                ["pkill", "-f", f"dist/groot -p {TEST_PORT}"],
                 check=False, capture_output=True,
             )
             time.sleep(2)

@@ -43,7 +43,7 @@ from conftest import BASE_URL, GROOT_BIN, TEST_HOME, TEST_PORT
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(GROOT_BIN),
-    reason=f"groot 二进制不存在: {GROOT_BIN}（先执行 go build -o bin/groot ./cmd）",
+    reason=f"groot 二进制不存在: {GROOT_BIN}（先执行 go build -o dist/groot ./cmd）",
 )
 
 
