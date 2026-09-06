@@ -309,11 +309,31 @@ http://localhost:8080/ui/
 
 即可使用图形化界面聊天、查看历史会话与服务状态。界面内容随二进制一起分发，无需单独部署前端。
 
+**主要功能：**
+
+| 功能 | 说明 |
+|------|------|
+| 聊天 | 与 Agent 对话，流式输出，展示思考过程与工具调用详情；支持上传附件（含预览与删除）、切换模型与 Agent、中断执行中的对话 |
+| 会话管理 | 侧边栏查看历史会话列表、继续会话、分页加载 |
+| 会话搜索 | 侧边栏搜索图标或快捷键 `Ctrl`/`⌘` + `K`，按关键词搜索历史对话的指令与执行结果，点击结果跳转到对应会话并定位轮次 |
+| 会话日志 | 顶部栏「查看日志」按钮，查看当前会话的运行日志（扫描最近 7 天，最多 1000 条），支持按级别过滤 |
+
+**设置界面导航**（右上角进入）：
+
+| 菜单 | 说明 |
+|------|------|
+| 通用 | 界面语言（中文/English）、外观主题（浅色/深色/跟随系统）、运行环境信息（工作目录、数据库类型、日志目录） |
+| 模型 | 模型管理（创建、编辑、删除、启用/禁用、测试连接、切换默认），见 [3.4 创建模型](#34-创建模型) |
+| Agents | 以卡片展示主 Agent 与所有子 Agent，每个卡片可查看定义文件（`GROOT.md` / `agent.md`）、Skills 列表和 MCP 工具 |
+| API Keys | API Key 管理（创建、查看、复制、删除），见 [3.5 第一次调用](#35-第一次调用) |
+| 集群管理 | 查看集群成员列表（地址、角色、进程 PID、心跳时间，Leader 排首位）；MySQL/PostgreSQL 多实例模式下使用，SQLite 单机模式下为空 |
+| 修改密码 | 修改登录密码 |
+
 Web 界面登录认证始终启用：
 
 - **首次使用**：用户表为空时自动进入「创建用户」页面，输入用户名、密码（至少 8 位）和确认密码完成创建，随后跳转登录页登录。
 - **日常使用**：输入用户名和密码登录。登录会话有效期 1 小时，活跃使用时自动续期。
-- **修改密码**：在「设置 → 账户」中输入原始密码、新密码和确认新密码。修改成功后其他浏览器的登录会话立即失效。
+- **修改密码**：在「设置 → 修改密码」中输入原始密码、新密码和确认新密码。修改成功后其他浏览器的登录会话立即失效。
 - **重置用户**：忘记密码时在服务器上执行 `groot user reset`（删除用户表全部数据），重启服务后重新进入创建用户流程。
 
 > 用户名和密码保存在数据库中（密码以 bcrypt 加密存储），无需任何配置。
@@ -635,7 +655,7 @@ logging:
 | `chat` | POST /chat | 执行对话 |
 | `status` | GET /chat/status/{sid} | 查询对话状态 |
 | `detail` | GET /chat/{sid}、GET /chat/{sid}/{cid} | 查询对话详情 |
-| `session` | GET /sess/{sid} | 查询会话详情 |
+| `session` | GET /sess/{sid}、GET /sess/search | 查询会话详情、搜索历史对话 |
 | `history` | GET /sess/history | 查询会话列表 |
 | `schedule` | GET/POST/DELETE /schedule | 管理定时任务 |
 | `all` | 以上全部 | 全部权限 |
@@ -703,7 +723,7 @@ database:
 
 - `env.yaml` 中同一时间只能存在一个 `database` 节（MySQL/PostgreSQL 二选一）
 - 即使 `config.yaml` 中残留数据库相关配置也不再生效，数据库连接只认 `env.yaml`
-- MySQL/PostgreSQL 模式下，多实例共享同一数据库即组成集群，自动进行 Leader 选举（Leader 负责定时任务调度）
+- MySQL/PostgreSQL 模式下，多实例共享同一数据库即组成集群，自动进行 Leader 选举（Leader 负责定时任务调度）；成员状态可在 Web 界面 **设置 → 集群管理** 中查看
 - MySQL/PostgreSQL 模式下可使用 `groot push` / `groot pull` / `groot diff` 在本地目录与数据库之间同步 skills、subagents、mcp 等配置资源，详见 [6.9 配置同步](#69-配置同步pushpulldiff)
 
 ---
@@ -1063,7 +1083,7 @@ groot
 
 **4. 验证子 Agent 已注册**
 
-登录 Web 界面（`http://localhost:8080/ui/`），进入 **设置 → Agents** 应能看到 `weather`；在 **设置 → MCP 工具** 中可查看 weather 加载的 MCP 工具。
+登录 Web 界面（`http://localhost:8080/ui/`），进入 **设置 → Agents** 应能看到 `weather` 卡片；点击卡片上的「查看 MCP 工具」按钮可查看 weather 加载的 MCP 工具，点击「查看 Skills」按钮可查看其 Skills。
 
 **5. 调用：编排模式 vs Solo 模式**
 
@@ -1260,6 +1280,7 @@ groot user reset -y   # 跳过确认直接执行
 | `/chat/{sid}/{cid}` | GET | 查询指定对话详情 |
 | `/sess/{sid}` | GET | 查询会话详情（完整对话历史） |
 | `/sess/history` | GET | 查询会话列表 |
+| `/sess/search` | GET | 搜索历史对话（关键词匹配指令与结果） |
 | `/schedule` | GET | 列出所有定时任务 |
 | `/schedule/:id` | GET | 查询任务详情 |
 | `/schedule/:id` | DELETE | 删除定时任务 |
@@ -1292,6 +1313,7 @@ Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web �
 | `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
 | `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值为 Web 界面 设置 → 模型 中配置的模型名称）；为空则使用 Web UI 中设置的默认模型；指定不存在或已禁用的模型返回 400 |
 | `X-Agent-Name` | 否 | 直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 |
+| `X-User-ID` | 否 | 用户标识，新会话创建时记录归属用户；`GET /sess/search` 携带同一标识时只搜索该用户的会话，为空时不按用户过滤 |
 | `Content-Type` | 是 | `application/json` |
 | `X-API-Key` | 是 | API Key（在 Web 界面 设置 → API Keys 中创建） |
 
@@ -1731,7 +1753,62 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.8 GET /web/health - 健康检查
+### 7.8 GET /sess/search - 搜索历史对话
+
+按关键词在历史对话（主 Agent 已完成轮次）的指令与执行结果中模糊搜索，返回轮次级结果，按轮次开始时间倒序。
+
+**请求示例：**
+
+```http
+GET /sess/search?q=销售报表&limit=20
+X-API-Key: 在Web界面创建的APIKey
+```
+
+**Query 参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `q` | string | 是 | 搜索关键词，匹配轮次的指令（instruction）与结果（result） |
+| `limit` | int | 否 | 返回数量，默认 20，最大 50 |
+
+**请求 Header：**
+
+| Header | 必填 | 说明 |
+|--------|------|------|
+| `X-User-ID` | 否 | 用户标识；携带时只搜索该用户的会话（与 `/chat` 的 `X-User-ID` 对应），为空时搜索全部会话 |
+
+**响应示例：**
+
+```json
+{
+  "status": "success",
+  "results": [
+    {
+      "session_id": "20260419103000523_a1b2",
+      "chat_id": "20260419103000523",
+      "round": 2,
+      "title": "帮我分析这个数据文件",
+      "snippet": "…销售报表已生成完毕…",
+      "matched_field": "result",
+      "timestamp": 1776561000000
+    }
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `title` | 该会话首轮用户指令 |
+| `snippet` | 命中位置的上下文摘要（关键词前后各截取若干字符） |
+| `matched_field` | 命中字段：`instruction`（用户指令）/ `result`（执行结果） |
+| `timestamp` | 该轮开始时间（毫秒时间戳） |
+
+> `q` 为空（或全空白）时直接返回空结果，不视为错误。
+> Web 界面侧边栏的搜索入口（快捷键 `Ctrl`/`⌘` + `K`）即调用此接口，点击结果跳转到对应会话并定位轮次。
+
+---
+
+### 7.9 GET /web/health - 健康检查
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -1785,7 +1862,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.9 GET /schedule - 列出定时任务
+### 7.10 GET /schedule - 列出定时任务
 
 查询所有定时任务，支持按状态过滤。
 
@@ -1821,7 +1898,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.10 GET /schedule/:id - 查询任务详情
+### 7.11 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -1829,11 +1906,11 @@ X-API-Key: 在Web界面创建的APIKey
 |------|------|------|------|
 | `id` | string | 是 | 任务 ID（路径参数） |
 
-**响应：** 返回完整任务定义，格式同 7.9 中单条任务。
+**响应：** 返回完整任务定义，格式同 7.10 中单条任务。
 
 ---
 
-### 7.11 DELETE /schedule/:id - 删除任务
+### 7.12 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -1853,7 +1930,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.12 POST /schedule/:id/disable - 禁用任务
+### 7.13 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -1867,7 +1944,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.13 POST /schedule/:id/enable - 启用任务
+### 7.14 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -1881,7 +1958,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.14 POST /schedule/:id/archive - 归档任务
+### 7.15 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -1895,7 +1972,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.15 GET /schedule/:id/history - 执行历史
+### 7.16 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -1923,7 +2000,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.16 定时任务创建（通过对话）
+### 7.17 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
