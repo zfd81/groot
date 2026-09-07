@@ -26,6 +26,11 @@ export interface HistoryMessage {
   result: string
   status: string
   duration: number
+  // 毫秒级耗时与 token 用量；旧版后端可能缺失
+  duration_ms?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
   steps_count: number
   agent_name: string
   error: { code: string; message: string } | null

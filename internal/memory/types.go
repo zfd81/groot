@@ -31,9 +31,14 @@ type Message struct {
 	Result      string    `json:"result"`
 	Status      string    `json:"status"`   // completed/failed/cancelled
 	Duration    int       `json:"duration"` // 秒
+	DurationMs  int64     `json:"duration_ms"`
 	StepsCount  int       `json:"steps_count"`
 	AgentName   string    `json:"agent_name,omitempty"`
-	Error       *Error    `json:"error"`
+	// 本轮 LLM token 用量（输入/输出/合计），来自该轮 ChatRecord。
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	TotalTokens      int    `json:"total_tokens"`
+	Error            *Error `json:"error"`
 }
 
 // History 会话历史（从 DB 重建，保留结构兼容性）

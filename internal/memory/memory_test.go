@@ -235,6 +235,57 @@ func TestManager_GetHistory_NotExist(t *testing.T) {
 	}
 }
 
+// GetHistory 的消息应携带该轮的 token 用量与毫秒级耗时（供 Web 界面展示）。
+func TestManager_GetHistory_TokensAndDuration(t *testing.T) {
+	mgr := newTestManager(t)
+
+	sessionID := "test_session_tokens"
+	mgr.CreateSession(sessionID, "")
+
+	rec := &ChatRecord{
+		ChatID:           "chat_tok_001",
+		SessionID:        sessionID,
+		Instruction:      "问题",
+		Result:           "回答",
+		Status:           "completed",
+		StartedAt:        time.Now(),
+		EndedAt:          time.Now(),
+		Duration:         15,
+		DurationMs:       15300,
+		PromptTokens:     3588,
+		CompletionTokens: 244,
+		TotalTokens:      3832,
+	}
+	if err := mgr.SaveChatRecord(sessionID, rec); err != nil {
+		t.Fatalf("SaveChatRecord() 失败: %v", err)
+	}
+
+	history, err := mgr.GetHistory(sessionID)
+	if err != nil {
+		t.Fatalf("GetHistory() 失败: %v", err)
+	}
+	if len(history.Messages) != 1 {
+		t.Fatalf("GetHistory().Messages 长度 = %d, want 1", len(history.Messages))
+	}
+
+	msg := history.Messages[0]
+	if msg.PromptTokens != 3588 {
+		t.Errorf("PromptTokens = %d, want 3588", msg.PromptTokens)
+	}
+	if msg.CompletionTokens != 244 {
+		t.Errorf("CompletionTokens = %d, want 244", msg.CompletionTokens)
+	}
+	if msg.TotalTokens != 3832 {
+		t.Errorf("TotalTokens = %d, want 3832", msg.TotalTokens)
+	}
+	if msg.DurationMs != 15300 {
+		t.Errorf("DurationMs = %d, want 15300", msg.DurationMs)
+	}
+	if msg.Duration != 15 {
+		t.Errorf("Duration = %d, want 15", msg.Duration)
+	}
+}
+
 func TestManager_AppendMessage(t *testing.T) {
 	mgr := newTestManager(t)
 

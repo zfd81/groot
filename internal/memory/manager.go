@@ -119,16 +119,20 @@ func (m *Manager) GetHistory(sessionID string) (*History, error) {
 	messages := make([]Message, 0, len(chats))
 	for _, c := range chats {
 		msg := Message{
-			Round:       c.Round,
-			ChatID:      c.ChatID,
-			Timestamp:   c.EndedAt,
-			Instruction: c.Instruction,
-			Result:      c.Result,
-			Status:      c.Status,
-			Duration:    c.Duration,
-			StepsCount:  len(c.Steps),
-			AgentName:   c.AgentName,
-			Error:       c.Error,
+			Round:            c.Round,
+			ChatID:           c.ChatID,
+			Timestamp:        c.EndedAt,
+			Instruction:      c.Instruction,
+			Result:           c.Result,
+			Status:           c.Status,
+			Duration:         c.Duration,
+			DurationMs:       c.DurationMs,
+			StepsCount:       len(c.Steps),
+			AgentName:        c.AgentName,
+			PromptTokens:     c.PromptTokens,
+			CompletionTokens: c.CompletionTokens,
+			TotalTokens:      c.TotalTokens,
+			Error:            c.Error,
 		}
 		messages = append(messages, msg)
 	}

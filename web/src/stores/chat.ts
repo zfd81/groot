@@ -47,10 +47,14 @@ export interface ChatMessage {
   error?: string
   // 整条回复的计时（仅助手消息）：startedAt 为流式开始的墙钟时间戳（ms），
   // 供底部实时计时展示；流结束后结算 durationMs（总用时）与 finishedAt（完成时刻）。
-  // 历史消息由后端的 duration（秒）与 timestamp（结束时间）回填。
+  // 历史消息由后端的 duration_ms（毫秒）与 timestamp（结束时间）回填。
   startedAt?: number
   durationMs?: number
   finishedAt?: number
+  // 本轮 token 用量（仅助手消息）：历史消息随会话历史接口回填；
+  // 流式消息在流结束后由最近一次对话详情（/chat/:sid）回填。
+  promptTokens?: number
+  completionTokens?: number
 }
 
 const PAGE_SIZE = 20
@@ -195,8 +199,9 @@ export const useChatStore = defineStore('chat', () => {
         streaming: false,
         round: m.round,
       })
-      // 历史记录的 timestamp 是该轮结束时间、duration 是秒级总用时，
-      // 回填给底部操作栏展示「用时 + 完成时刻」。
+      // 历史记录的 timestamp 是该轮结束时间、duration_ms 是毫秒级总用时
+      //（旧版后端只有秒级 duration，退回 duration * 1000），
+      // 连同 token 用量一起回填给底部操作栏与会话统计条展示。
       const finishedAt = Date.parse(m.timestamp)
       messages.value.push({
         role: 'assistant',
@@ -207,10 +212,19 @@ export const useChatStore = defineStore('chat', () => {
         streaming: false,
         round: m.round,
         error: m.error?.message || undefined,
-        durationMs: typeof m.duration === 'number' ? m.duration * 1000 : undefined,
+        durationMs:
+          typeof m.duration_ms === 'number' && m.duration_ms > 0
+            ? m.duration_ms
+            : typeof m.duration === 'number'
+              ? m.duration * 1000
+              : undefined,
         finishedAt: Number.isNaN(finishedAt) ? undefined : finishedAt,
+        promptTokens: m.prompt_tokens,
+        completionTokens: m.completion_tokens,
       })
     }
+    // 拉取最近一轮对话详情，回填 lastRecord（统计条据此显示模型名）。
+    void fetchStats()
   }
 
   // 发送消息，流式接收回复。
@@ -287,8 +301,13 @@ export const useChatStore = defineStore('chat', () => {
       }
       sending.value = false
       abortCtrl = null
-      // 刷新统计与会话列表
-      void fetchStats()
+      // 刷新统计与会话列表；拿到本轮记录后把 token 用量回填给刚完成的消息。
+      void fetchStats().then((rec) => {
+        if (rec && (rec.prompt_tokens || rec.completion_tokens)) {
+          live.promptTokens = rec.prompt_tokens || 0
+          live.completionTokens = rec.completion_tokens || 0
+        }
+      })
       void loadSessions(true)
     }
   }
@@ -385,19 +404,36 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // 拉取当前会话最近一次对话详情，用于统计条。
-  async function fetchStats() {
-    if (!sessionId.value) return
+  // 拉取当前会话最近一次对话详情，用于统计条与流式消息的 token 回填。
+  async function fetchStats(): Promise<ChatRecord | null> {
+    if (!sessionId.value) return null
     try {
       // /chat/:sid 返回包装体 { status, session_id, chat }，无记录时 chat 为 null。
       const resp = await api.get<{ chat: ChatRecord | null }>(
         `/chat/${sessionId.value}`
       )
       lastRecord.value = resp.chat
+      return resp.chat
     } catch {
       // 统计非关键，失败忽略
+      return null
     }
   }
+
+  // 会话累计统计（底部统计条展示）：总耗时与输入/输出 token 累计，
+  // 由当前已加载的各轮助手消息求和得出。
+  const sessionStats = computed(() => {
+    let durationMs = 0
+    let promptTokens = 0
+    let completionTokens = 0
+    for (const m of messages.value) {
+      if (m.role !== 'assistant' || m.streaming) continue
+      durationMs += m.durationMs || 0
+      promptTokens += m.promptTokens || 0
+      completionTokens += m.completionTokens || 0
+    }
+    return { durationMs, promptTokens, completionTokens }
+  })
 
   return {
     sessionId,
@@ -408,6 +444,7 @@ export const useChatStore = defineStore('chat', () => {
     loadingSessions,
     canLoadMore,
     lastRecord,
+    sessionStats,
     newSession,
     loadSessions,
     openSession,

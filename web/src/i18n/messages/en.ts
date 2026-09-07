@@ -63,6 +63,8 @@ export default {
     thinking: 'Thinking',
     round: 'Round {n}',
     duration: 'Elapsed {v}',
+    tokenInputShort: 'In {n} tok',
+    tokenOutputShort: 'Out {n} tok',
     thinkingLive: 'Thinking',
     timeUsed: 'Took {v}',
     durationSec: '{s}s',

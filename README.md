@@ -1699,6 +1699,10 @@ curl -X POST http://localhost:8080/chat \
         "result": "好的，分析结果如下...",
         "status": "completed",
         "duration": 45,
+        "duration_ms": 45300,
+        "prompt_tokens": 3588,
+        "completion_tokens": 244,
+        "total_tokens": 3832,
         "steps_count": 3
       },
       {
@@ -1709,6 +1713,10 @@ curl -X POST http://localhost:8080/chat \
         "result": "图表已生成...",
         "status": "completed",
         "duration": 30,
+        "duration_ms": 30100,
+        "prompt_tokens": 4102,
+        "completion_tokens": 356,
+        "total_tokens": 4458,
         "steps_count": 2
       }
     ]
@@ -1720,6 +1728,10 @@ curl -X POST http://localhost:8080/chat \
 |------|------|
 | `messages[].status` | 该轮对话状态：`completed` / `failed` / `cancelled` |
 | `messages[].duration` | 该轮耗时（秒） |
+| `messages[].duration_ms` | 该轮耗时（毫秒） |
+| `messages[].prompt_tokens` | 该轮输入 token 数 |
+| `messages[].completion_tokens` | 该轮输出 token 数 |
+| `messages[].total_tokens` | 该轮 token 合计 |
 | `messages[].steps_count` | 该轮执行步骤数 |
 | `messages[].agent_name` | Solo 模式下实际执行的子 Agent 名称（编排模式下省略） |
 

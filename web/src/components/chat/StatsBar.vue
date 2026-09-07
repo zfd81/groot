@@ -1,46 +1,50 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatRecord } from '../../api/types'
+import { fmtTok } from '../../utils/format'
 
 const { t } = useI18n()
-const props = defineProps<{ record: ChatRecord | null; round: number }>()
 
-const tokens = computed(() => {
-  if (!props.record) return null
-  return {
-    prompt: props.record.prompt_tokens || 0,
-    completion: props.record.completion_tokens || 0,
-    total: props.record.total_tokens || 0,
-  }
-})
+// stats 为会话累计统计（各轮求和）：总耗时与输入/输出 token 累计；
+// record（最近一轮记录）仅用于展示当前模型名。
+const props = defineProps<{
+  record: ChatRecord | null
+  round: number
+  stats: { durationMs: number; promptTokens: number; completionTokens: number }
+}>()
 
+// 会话总耗时：一分钟内保留一位小数（如 15.3s），超过一分钟用「X分Y秒」。
 const duration = computed(() => {
-  if (!props.record) return ''
-  if (props.record.duration_ms) {
-    const s = props.record.duration_ms / 1000
-    return `${s.toFixed(1)}s`
-  }
-  return props.record.duration || ''
+  const ms = props.stats.durationMs
+  if (!ms) return ''
+  const s = ms / 1000
+  if (s < 60) return `${s.toFixed(1)}s`
+  const m = Math.floor(s / 60)
+  const sec = Math.round(s % 60)
+  return t('chat.durationMinSec', { m, s: sec })
 })
+
+const hasTokens = computed(
+  () => props.stats.promptTokens > 0 || props.stats.completionTokens > 0
+)
 </script>
 
 <template>
   <div class="stats-bar">
     <span class="stat">{{ t('chat.round', { n: round }) }}</span>
-    <template v-if="record">
+    <template v-if="duration">
       <span class="sep">·</span>
       <span class="stat">{{ t('chat.duration', { v: duration }) }}</span>
-      <template v-if="tokens">
-        <span class="sep">·</span>
-        <span class="stat">
-          Token {{ tokens.total }}
-          <span class="sub">({{ tokens.prompt }}+{{ tokens.completion }})</span>
-        </span>
-      </template>
-      <template v-if="record.model">
-        <span class="sep">·</span>
-        <span class="stat">{{ record.model }}</span>
-      </template>
+    </template>
+    <template v-if="hasTokens">
+      <span class="sep">·</span>
+      <span class="stat">{{ t('chat.tokenInputShort', { n: fmtTok(stats.promptTokens) }) }}</span>
+      <span class="sep">·</span>
+      <span class="stat">{{ t('chat.tokenOutputShort', { n: fmtTok(stats.completionTokens) }) }}</span>
+    </template>
+    <template v-if="record?.model">
+      <span class="sep">·</span>
+      <span class="stat">{{ record.model }}</span>
     </template>
   </div>
 </template>
@@ -53,8 +57,5 @@ const duration = computed(() => {
   font-size: 0.78em;
   opacity: 0.6;
   padding: 4px 8px;
-}
-.sub {
-  opacity: 0.7;
 }
 </style>

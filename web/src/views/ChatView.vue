@@ -21,7 +21,7 @@ const chat = useChatStore()
 const meta = useMetaStore()
 // 悬浮输入框需要与页面同色的遮罩，取 Element Plus 的背景色变量，随主题明暗切换。
 const bodyColor = 'var(--el-bg-color)'
-const { messages, sending, sessions, sessionId, canLoadMore, loadingSessions, lastRecord } =
+const { messages, sending, sessions, sessionId, canLoadMore, loadingSessions, lastRecord, sessionStats } =
   storeToRefs(chat)
 
 // 侧栏收起状态持久化，刷新后保持上次的形态。
@@ -119,7 +119,6 @@ onMounted(async () => {
   const sid = route.params.sid as string | undefined
   if (sid) {
     await chat.openSession(sid)
-    await chat.fetchStats()
     scrollToBottom()
   }
 })
@@ -177,7 +176,12 @@ onMounted(async () => {
             @send="handleSend"
             @stop="chat.stop()"
           />
-          <StatsBar v-if="!isEmpty" :record="lastRecord" :round="roundCount" />
+          <StatsBar
+            v-if="!isEmpty"
+            :record="lastRecord"
+            :round="roundCount"
+            :stats="sessionStats"
+          />
         </div>
       </div>
     </div>
@@ -265,9 +269,10 @@ onMounted(async () => {
   /* 两侧预留等宽滚动条空槽，使内容列在对称区域内居中，与浮动输入框中心对齐 */
   scrollbar-gutter: stable both-edges;
 }
-/* 占位高度略大于输入框，保证最后一条消息能滚到输入框上方 */
+/* 占位高度须大于「输入卡片 + 统计条」的悬浮区总高，
+   保证最后一条消息（含底部状态栏）能完整滚到输入框上方 */
 .scroll-spacer {
-  height: 140px;
+  height: 200px;
 }
 .input-area {
   position: absolute;

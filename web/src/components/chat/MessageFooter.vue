@@ -2,6 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { Loading, CopyDocument, Clock } from '@element-plus/icons-vue'
 import type { ChatMessage } from '../../stores/chat'
+import { fmtTok } from '../../utils/format'
 
 const { t } = useI18n()
 const props = defineProps<{ message: ChatMessage }>()
@@ -57,6 +58,11 @@ const finishTime = computed(() => {
   return `${hh}:${mm}`
 })
 
+// 本轮 token 用量（输入/输出）；无数据（旧记录或回填失败）时不展示。
+const hasTokens = computed(
+  () => !!(props.message.promptTokens || props.message.completionTokens)
+)
+
 // 完成态是否有内容可展示（复制按钮 / 用时 / 完成时刻任一存在即渲染）。
 const showDone = computed(
   () =>
@@ -96,7 +102,7 @@ async function copyContent() {
     <el-icon class="is-loading spin"><Loading /></el-icon>
     <span>{{ t('chat.thinkingLive') }} {{ liveElapsed }}</span>
   </div>
-  <!-- 完成后：复制按钮 + 总用时 + 完成时刻 -->
+  <!-- 完成后：复制按钮 + 输入/输出 Token + 总用时 + 完成时刻 -->
   <div v-else-if="showDone" class="footer done">
     <button
       v-if="message.content"
@@ -107,6 +113,12 @@ async function copyContent() {
     >
       <el-icon :size="15"><CopyDocument /></el-icon>
     </button>
+    <span v-if="hasTokens" class="stat">
+      {{ t('chat.tokenInputShort', { n: fmtTok(message.promptTokens || 0) }) }}
+    </span>
+    <span v-if="hasTokens" class="stat">
+      {{ t('chat.tokenOutputShort', { n: fmtTok(message.completionTokens || 0) }) }}
+    </span>
     <span v-if="totalDuration" class="stat">
       <el-icon :size="13"><Clock /></el-icon>
       {{ t('chat.timeUsed', { v: totalDuration }) }}

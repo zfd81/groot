@@ -63,6 +63,8 @@ export default {
     thinking: '思考过程',
     round: '轮次 {n}',
     duration: '耗时 {v}',
+    tokenInputShort: '输入 {n} tok',
+    tokenOutputShort: '输出 {n} tok',
     thinkingLive: '深度思考中',
     timeUsed: '用时 {v}',
     durationSec: '{s}秒',
