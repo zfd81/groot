@@ -27,6 +27,7 @@ func RegisterRoutes(h *server.Hertz,
 	apiKeysH *handler.APIKeysHandler,
 	clusterH *handler.ClusterHandler,
 	logsH *handler.LogsHandler,
+	filesH *handler.FilesHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
 	h.GET("/web/health", healthH.Serve)
@@ -58,6 +59,21 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.GET("/apikeys/:id/token", apiKeysH.Token)
 	webGroup.DELETE("/apikeys/:id", apiKeysH.Delete)
 	webGroup.GET("/logs/:sid", logsH.Serve)
+
+	// 文件面板端点（filesH 为 nil 表示初始化失败，跳过注册）
+	if filesH != nil {
+		filesGroup := webGroup.Group("/files")
+		filesGroup.GET("/list", filesH.List)
+		filesGroup.GET("/content", filesH.Content)
+		filesGroup.PUT("/content", filesH.Save)
+		filesGroup.POST("/mkdir", filesH.Mkdir)
+		filesGroup.POST("/create", filesH.Create)
+		filesGroup.POST("/rename", filesH.Rename)
+		filesGroup.POST("/upload", filesH.Upload)
+		filesGroup.GET("/download", filesH.Download)
+		filesGroup.POST("/scaffold", filesH.Scaffold)
+		webGroup.DELETE("/files", filesH.Delete)
+	}
 
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")

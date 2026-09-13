@@ -96,10 +96,17 @@ func NewServer(
 	clusterH := handler.NewClusterHandler(members, log)
 	logsH := handler.NewLogsHandler(cfg.Logging)
 
+	// 文件面板：home 目录解析失败时禁用该功能（不影响其他路由）
+	filesH, err := handler.NewFilesHandler(homeDir)
+	if err != nil {
+		log.Info("文件面板初始化失败，已禁用", zap.Error(err))
+		filesH = nil
+	}
+
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH)
 
 	return &Server{
 		hertz:  h,

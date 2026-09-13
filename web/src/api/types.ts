@@ -274,3 +274,32 @@ export interface SessionLogsResp {
   truncated: boolean
   logs: SessionLogEntry[]
 }
+
+// 文件面板（/web/files/*）
+export interface FileEntry {
+  name: string
+  type: 'dir' | 'file'
+  size: number
+  mtime: number // 毫秒时间戳
+  readonly: boolean
+}
+
+export interface FileListResp {
+  status: string
+  path: string
+  home: string
+  entries: FileEntry[]
+}
+
+export interface FileContentResp {
+  status: string
+  path: string
+  readonly: boolean
+  binary: boolean
+  content: string
+}
+
+export interface FileScaffoldResp {
+  status: string
+  path: string
+}

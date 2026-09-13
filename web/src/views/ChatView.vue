@@ -12,13 +12,17 @@ import StatsBar from '../components/chat/StatsBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import SearchModal from '../components/chat/SearchModal.vue'
 import LogModal from '../components/chat/LogModal.vue'
+import FilePanel from '../components/files/FilePanel.vue'
+import { useFilesStore } from '../stores/files'
 import { Monitor } from '@element-plus/icons-vue'
+import PanelIcon from '../components/files/PanelIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const chat = useChatStore()
 const meta = useMetaStore()
+const files = useFilesStore()
 // 悬浮输入框需要与页面同色的遮罩，取 Element Plus 的背景色变量，随主题明暗切换。
 const bodyColor = 'var(--el-bg-color)'
 const { messages, sending, sessions, sessionId, canLoadMore, loadingSessions, lastRecord, sessionStats } =
@@ -125,7 +129,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="chat-layout">
+  <div class="chat-layout" :class="{ 'files-full': files.open && files.fullscreen }">
     <aside class="sider" :class="{ collapsed }">
       <SessionSidebar
         :sessions="sessions"
@@ -157,6 +161,16 @@ onMounted(async () => {
         >
           <el-icon :size="17"><Monitor /></el-icon>
         </button>
+        <!-- 文件面板开关：面板已展开时隐藏（面板头部自带收起按钮） -->
+        <button
+          v-if="!files.open"
+          class="topbar-logs"
+          type="button"
+          :title="t('files.title')"
+          @click="files.toggle()"
+        >
+          <el-icon :size="17"><PanelIcon /></el-icon>
+        </button>
       </header>
 
       <div v-show="!isEmpty" ref="scrollArea" class="scroll-area">
@@ -185,6 +199,8 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <FilePanel v-if="files.open" />
   </div>
 
   <SettingsModal v-model:show="showSettings" />
@@ -332,5 +348,13 @@ onMounted(async () => {
   height: 24px;
   background: linear-gradient(to top, v-bind(bodyColor), transparent);
   pointer-events: none;
+}
+/* 文件面板全屏：隐藏对话主区（组件保持挂载，状态不丢） */
+.chat-layout.files-full .main {
+  display: none;
+}
+/* 全屏同时覆盖左侧会话栏，面板独占整个窗口 */
+.chat-layout.files-full .sider {
+  display: none;
 }
 </style>

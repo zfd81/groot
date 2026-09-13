@@ -74,3 +74,5 @@ web/*.tsbuildinfo
 # unplugin 自动生成的类型声明文件
 web/auto-imports.d.ts
 web/components.d.ts
+# 头脑风暴可视化伴侣产物
+.superpowers/

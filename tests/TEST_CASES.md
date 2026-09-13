@@ -194,6 +194,25 @@
 
 ---
 
+### 1.4 文件面板测试
+
+位于 `internal/webfiles/`（resolver_test.go / service_test.go / scaffold_test.go）
+与 `internal/api/handler/files_test.go`。
+
+覆盖点：
+
+- 路径清洗：".." 穿越折叠、反斜杠归一、NUL 拒绝、段级校验（冒号/尾点/尾空格）
+- 符号链接：逃逸链接 404、内部链接正常、指向只读/隐藏文件的别名被拦截
+- 隐藏规则：根目录 groot.db*（大小写不敏感）列表过滤 + 直接访问 404
+- 只读规则：根目录 env.yaml/config.yaml（大小写不敏感）写/改名/删除 403
+- 白名单矩阵：新建（仅 skill 目录内）/上传（skill 目录 + skills/ + mcp/ + subagents/ 及其子目录）
+- 读取：文本内容、二进制探测、2MB 超限、读目录 400
+- 保存/新建/改名/删除/上传目标的成功与错误码矩阵（404/403/409/413/400）
+- Scaffold：skill/mcp/agent 模板生成、重名 409、非法名称/类型 400、Unicode 名称
+- Handler：错误码映射、认证路由位置、上传 multipart、下载 Content-Disposition
+
+---
+
 ## 二、系统测试（Python）
 
 位于 `tests/python/` 目录，使用 pytest 框架。
@@ -621,6 +640,15 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 | TC-CLI-106 | test_cli_commands.py | `groot push`（SQLite 模式）：报「仅在 MySQL/PostgreSQL 模式下可用」，退出码 1 |
 | TC-CLI-107 | test_cli_commands.py | `groot user reset -y` 空表：提示「用户表为空」，退出码 0 |
 | TC-CLI-108 | test_cli_commands.py | 独立实例全流程：空库弱密码 setup 400 → setup 成功 → schedule 未启用时 /schedule 返回 503 schedule_unavailable → user reset -y 后 needs_setup 回到 true |
+
+### 2.25 文件面板 API 测试
+
+文件面板 `/web/files/*` 系统测试（`test_files_api.py`，登录会话 Cookie 认证）。
+
+- 认证：未登录 401
+- 安全：groot.db* 列表隐藏 + 直接访问 404；穿越归一化；config.yaml 只读 403
+- CRUD 全流程：scaffold → 新建 → 保存 → 读取 → 改名 → 删除（含非空目录 409）
+- 上传：mcp/ 允许、logs/ 403
 
 ---
 
