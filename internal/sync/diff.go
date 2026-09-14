@@ -9,16 +9,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/zfd81/groot/internal/repo"
 )
 
+// RemoteMeta 保存远端记录的元信息,供调用方区分「远端从无记录」与
+// 「远端曾有此文件但已被删除」,以及展示远端最后变更时间。
+type RemoteMeta struct {
+	Deleted   bool
+	UpdatedAt time.Time
+}
+
 // DiffResult 描述本地 HOME 与远端 DB 之间的差异,以相对路径表示。
 type DiffResult struct {
-	Added    []string // 本地有,远端没有
+	Added    []string // 本地有,远端没有有效记录
 	Modified []string // 双侧都有但 size 或 content_hash 不同
 	Removed  []string // 远端有,本地没有
 	Same     []string // 一致
+
+	// Remote 按相对路径保存远端记录元信息;仅包含远端存在记录的路径
+	// (含已删除记录)。本地新建的文件不在其中。
+	//
+	// 值是值类型,查不到时返回零值 RemoteMeta{Deleted:false},语义上恰好正确:
+	// 「本地新建」与「远端有活记录」都不属于「远端已删除」。因此调用方可直接写
+	// d.Remote[p].Deleted,不必检查 ok。不要改成 map[string]*RemoteMeta,
+	// 那会把这个安全的零值变成 nil 解引用。
+	Remote map[string]RemoteMeta
 }
 
 // IsEmpty 返回是否没有任何差异。
@@ -38,6 +55,7 @@ type localFileInfo struct {
 // 比较维度:size + content_hash(SHA-1),不再依赖 mtime。
 func ComputeDiff(r repo.ResourceRepo, localBase string, paths []string) (DiffResult, error) {
 	var result DiffResult
+	result.Remote = make(map[string]RemoteMeta)
 
 	for _, rel := range paths {
 		localPath := filepath.Join(localBase, filepath.FromSlash(rel))
@@ -47,7 +65,9 @@ func ComputeDiff(r repo.ResourceRepo, localBase string, paths []string) (DiffRes
 			return result, fmt.Errorf("sync diff: scan local %s: %w", rel, err)
 		}
 
-		remoteEntries, err := r.List(context.Background(), rel)
+		// 用 ListWithDeleted:已删除记录参与比较,才能把「他人删了、本地还留着」
+		// 判为 Added,而不是误判为本地新建。
+		remoteEntries, err := r.ListWithDeleted(context.Background(), rel)
 		if err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return result, fmt.Errorf("sync diff: list remote %s: %w", rel, err)
 		}
@@ -55,21 +75,31 @@ func ComputeDiff(r repo.ResourceRepo, localBase string, paths []string) (DiffRes
 		remoteMap := make(map[string]*repo.ResourceEntry, len(remoteEntries))
 		for _, e := range remoteEntries {
 			remoteMap[e.Path] = e
+			result.Remote[e.Path] = RemoteMeta{
+				Deleted:   e.Status == repo.ResourceStatusDeleted,
+				UpdatedAt: e.UpdatedAt,
+			}
 		}
 
 		for relPath, localInfo := range localFiles {
-			if remote, ok := remoteMap[relPath]; ok {
-				if localInfo.size != remote.Size || localInfo.hash != remote.ContentHash {
-					result.Modified = append(result.Modified, relPath)
-				} else {
-					result.Same = append(result.Same, relPath)
-				}
-				delete(remoteMap, relPath)
-			} else {
+			remote, ok := remoteMap[relPath]
+			switch {
+			case !ok || remote.Status == repo.ResourceStatusDeleted:
+				// 远端无记录,或记录已删除 → 本地独有
 				result.Added = append(result.Added, relPath)
+			case localInfo.size != remote.Size || localInfo.hash != remote.ContentHash:
+				result.Modified = append(result.Modified, relPath)
+			default:
+				result.Same = append(result.Same, relPath)
 			}
+			delete(remoteMap, relPath)
 		}
-		for relPath := range remoteMap {
+		// remoteMap 剩下的是本地不存在的路径(已配对项在上一个循环里被删掉)
+		for relPath, remote := range remoteMap {
+			// 已删除记录且本地也不存在 → 双方一致,不是差异
+			if remote.Status == repo.ResourceStatusDeleted {
+				continue
+			}
 			result.Removed = append(result.Removed, relPath)
 		}
 	}
