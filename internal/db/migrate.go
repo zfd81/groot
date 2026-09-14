@@ -18,6 +18,9 @@ func Migrate(db *sqlx.DB, dialect Dialect) error {
 	if err := dropLegacyIndices(db, dialect); err != nil {
 		return fmt.Errorf("db migrate cleanup: %w", err)
 	}
+	if err := addMissingColumns(db, dialect); err != nil {
+		return fmt.Errorf("db migrate columns: %w", err)
+	}
 	return nil
 }
 
@@ -74,6 +77,68 @@ func indexExists(db *sqlx.DB, dialect Dialect, table, indexName string) (bool, e
 	default: // SQLite
 		q = `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`
 		args = []interface{}{indexName}
+	}
+	var n int
+	if err := db.Get(&n, q, args...); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// addMissingColumns backfills columns introduced by newer versions onto tables
+// that already exist. The existing migration is a set of idempotent CREATE TABLE
+// statements with no version tracking, so an older database never picks up a new
+// column from a DDL change; it has to be added explicitly here.
+func addMissingColumns(db *sqlx.DB, dialect Dialect) error {
+	return addColumnIfMissing(db, dialect, "shared_resources", "status", statusColumnDef(dialect))
+}
+
+// statusColumnDef returns the full column definition for shared_resources.status,
+// type plus constraints, ready to append to an ALTER TABLE ADD COLUMN statement.
+func statusColumnDef(d Dialect) string {
+	switch d {
+	case DialectMySQL, DialectPostgres:
+		return "VARCHAR(16) NOT NULL DEFAULT 'active'"
+	default: // SQLite
+		return "TEXT NOT NULL DEFAULT 'active'"
+	}
+}
+
+// addColumnIfMissing adds a column only if the catalog reports it absent.
+// Probing first avoids relying on `ADD COLUMN IF NOT EXISTS` syntax variants.
+func addColumnIfMissing(db *sqlx.DB, dialect Dialect, table, column, columnDef string) error {
+	exists, err := columnExists(db, dialect, table, column)
+	if err != nil {
+		return fmt.Errorf("probe column %s.%s: %w", table, column, err)
+	}
+	if exists {
+		return nil
+	}
+	stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, columnDef)
+	if _, err := db.Exec(stmt); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+// columnExists queries the dialect-specific catalog for a column by name.
+// Mirrors indexExists: scope MySQL to DATABASE() and Postgres to current_schema()
+// so a same-named table in another schema cannot produce a false positive.
+func columnExists(db *sqlx.DB, dialect Dialect, table, column string) (bool, error) {
+	var q string
+	var args []interface{}
+	switch dialect {
+	case DialectMySQL:
+		q = `SELECT COUNT(*) FROM information_schema.columns
+		     WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`
+		args = []interface{}{table, column}
+	case DialectPostgres:
+		q = `SELECT COUNT(*) FROM information_schema.columns
+		     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`
+		args = []interface{}{table, column}
+	default: // SQLite
+		q = `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`
+		args = []interface{}{table, column}
 	}
 	var n int
 	if err := db.Get(&n, q, args...); err != nil {
@@ -172,7 +237,8 @@ func sqliteDDL() []string {
 			content_type TEXT NOT NULL DEFAULT '',
 			size         INTEGER NOT NULL,
 			content_hash TEXT NOT NULL DEFAULT '',
-			updated_at   INTEGER NOT NULL
+			updated_at   INTEGER NOT NULL,
+			status       TEXT NOT NULL DEFAULT 'active'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sr_updated_at ON shared_resources(updated_at)`,
 		`CREATE TABLE IF NOT EXISTS users (
@@ -296,6 +362,7 @@ func mysqlDDL() []string {
 			size         BIGINT       NOT NULL,
 			content_hash CHAR(40)     NOT NULL DEFAULT '',
 			updated_at   BIGINT       NOT NULL,
+			status       VARCHAR(16)  NOT NULL DEFAULT 'active',
 			KEY idx_updated_at (updated_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS users (
@@ -418,7 +485,8 @@ func postgresDDL() []string {
 			content_type VARCHAR(64)  NOT NULL DEFAULT '',
 			size         BIGINT       NOT NULL,
 			content_hash CHAR(40)     NOT NULL DEFAULT '',
-			updated_at   BIGINT       NOT NULL
+			updated_at   BIGINT       NOT NULL,
+			status       VARCHAR(16)  NOT NULL DEFAULT 'active'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sr_updated_at ON shared_resources(updated_at)`,
 		`CREATE TABLE IF NOT EXISTS users (
