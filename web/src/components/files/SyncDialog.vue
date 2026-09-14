@@ -17,6 +17,8 @@ const emit = defineEmits<{
   // pull 成功后通知父组件刷新文件树并关闭已打开的编辑器
   pulled: []
   pushed: []
+  // 后端返回 sync_disabled（非 MySQL/PostgreSQL 模式）时通知父组件隐藏同步入口
+  disabled: []
 }>()
 
 const { t } = useI18n()
@@ -59,6 +61,7 @@ async function loadDiff() {
     if (e instanceof ApiError && e.code === 'sync_disabled') {
       disabled.value = true
       entries.value = []
+      emit('disabled') // 提示 alert 保留在对话框内，由父组件隐藏后续入口
     } else {
       ElMessage.error(e instanceof ApiError ? e.message : t('files.syncFailed'))
       close()

@@ -1,14 +1,15 @@
 <!-- 右侧抽屉容器：工具栏（scaffold ×3 / 全屏 / 收起）、路径栏、树/预览切换、宽度拖动。 -->
 <script setup lang="ts">
-import { onBeforeUnmount } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  MagicStick, Connection, Avatar, FullScreen, Refresh,
+  MagicStick, Connection, Avatar, FullScreen, Refresh, Sort,
 } from '@element-plus/icons-vue'
 import PanelIcon from './PanelIcon.vue'
 import FileTree from './FileTree.vue'
 import FilePreview from './FilePreview.vue'
 import FileEditorModal from './FileEditorModal.vue'
+import SyncDialog from './SyncDialog.vue'
 import { filesApi } from '../../api/files'
 import { useFilesStore, clampWidth } from '../../stores/files'
 
@@ -68,6 +69,27 @@ async function scaffold(kind: 'skill' | 'mcp' | 'agent', title: string) {
     ElMessage.error(e?.message || t('files.opFailed'))
   }
 }
+
+// —— 配置同步 ——
+const syncOpen = ref(false)
+const syncScope = ref<string | undefined>(undefined) // undefined = 全量同步
+// 同步功能未启用（后端返回 sync_disabled）时隐藏所有同步入口（设计文档 §1.8/§1.9）。
+// 会话内记忆即可：服务端模式运行期不变，页面刷新后重新探测。
+const syncDisabled = ref(false)
+
+function openSync(scope?: string) {
+  syncScope.value = scope
+  syncOpen.value = true
+}
+
+// pull 会覆盖本地文件：刷新文件树，并关闭已打开的编辑器与预览，
+// 避免用户在陈旧内容上保存、把刚拉取的内容覆盖回去（设计文档 §1.7）。
+// push 只写数据库、本地文件不变，无需任何刷新，故不监听 @pushed。
+function onPulled() {
+  files.editorPath = ''
+  files.previewPath = ''
+  files.refresh()
+}
 </script>
 
 <template>
@@ -92,6 +114,10 @@ async function scaffold(kind: 'skill' | 'mcp' | 'agent', title: string) {
         @click="scaffold('agent', t('files.newAgent'))">
         <el-icon :size="16"><Avatar /></el-icon>
       </button>
+      <button v-if="!syncDisabled" class="head-icon" type="button" :title="t('files.sync')"
+        @click="openSync()">
+        <el-icon :size="16"><Sort /></el-icon>
+      </button>
       <span class="head-gap"></span>
       <button class="head-icon" type="button"
         :title="files.fullscreen ? t('files.exitFullscreen') : t('files.fullscreen')"
@@ -110,9 +136,11 @@ async function scaffold(kind: 'skill' | 'mcp' | 'agent', title: string) {
       </button>
     </div>
 
-    <FileTree v-show="!files.previewPath" />
+    <FileTree v-show="!files.previewPath" :sync-disabled="syncDisabled" @sync="openSync" />
     <FilePreview v-if="files.previewPath" :path="files.previewPath" />
     <FileEditorModal />
+    <SyncDialog v-model="syncOpen" :scope="syncScope" @pulled="onPulled"
+      @disabled="syncDisabled = true" />
   </aside>
 </template>
 

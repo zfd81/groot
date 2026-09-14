@@ -9,6 +9,16 @@ import { useFilesStore } from '../../stores/files'
 const { t } = useI18n()
 const files = useFilesStore()
 
+// 同步功能未启用时（FilePanel 收到 sync_disabled 后下传）隐藏「同步此项」菜单项
+const props = defineProps<{
+  syncDisabled?: boolean
+}>()
+
+// 行菜单「同步此项」→ 由 FilePanel 打开单资源同步对话框
+const emit = defineEmits<{
+  sync: [path: string]
+}>()
+
 // 树节点数据（el-tree data 项）
 interface TreeItem {
   name: string
@@ -85,6 +95,28 @@ function parentDir(p: string): string {
   return i < 0 ? '' : p.slice(0, i)
 }
 
+// —— 配置同步入口 ——
+
+// 与后端 sync.SyncableResourceRoots 对应；不在白名单内的路径不显示同步入口。
+const SYNCABLE_ROOTS = ['config.yaml', 'skills', 'subagents', 'mcp', 'GROOT.md']
+
+// 与后端 sync.isDirectSkillFile（internal/sync/resource.go）一致：
+// skill 目录内的单个文件不允许单独同步，必须操作整个 skill 目录。
+//   skills/{skill}/{file}                  → 深度 >= 3 且首段为 skills
+//   subagents/{sa}/skills/{skill}/{file}   → 深度 >= 5 且第 3 段为 skills
+function isDirectSkillFile(path: string): boolean {
+  const parts = path.split('/')
+  if (parts.length >= 3 && parts[0] === 'skills') return true
+  if (parts.length >= 5 && parts[0] === 'subagents' && parts[2] === 'skills') return true
+  return false
+}
+
+// 与后端 sync.ValidateSyncPath 保持一致，避免用户点了同步却收到 400
+function isSyncable(path: string): boolean {
+  const inWhitelist = SYNCABLE_ROOTS.some((root) => path === root || path.startsWith(root + '/'))
+  return inWhitelist && !isDirectSkillFile(path)
+}
+
 // —— 行操作 ——
 
 // 文件/目录名：以字母数字开头，不含路径分隔符，且不以点/空格结尾（与后端 validName 一致）
@@ -157,6 +189,10 @@ async function onCommand(cmd: string, data: TreeItem) {
       uploadInput.value?.click()
       break
     }
+    case 'sync': {
+      emit('sync', data.path)
+      break
+    }
   }
 }
 
@@ -211,6 +247,9 @@ async function onUploadChange(e: Event) {
                 </el-dropdown-item>
                 <el-dropdown-item v-if="!data.leaf" command="upload">
                   {{ t('files.upload') }}
+                </el-dropdown-item>
+                <el-dropdown-item v-if="!props.syncDisabled && isSyncable(data.path)" command="sync">
+                  {{ t('files.syncScopeOne') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="delete" :disabled="data.readonly || isProtected(data)" divided>
                   {{ t('files.del') }}
