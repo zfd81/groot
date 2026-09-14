@@ -249,8 +249,6 @@ export default {
     renamePrompt: 'Enter a new name',
     download: 'Download',
     del: 'Delete',
-    newFile: 'New file',
-    newDir: 'New folder',
     upload: 'Upload',
     deleteConfirm: 'Delete {name}? This cannot be undone.',
     back: 'Back',

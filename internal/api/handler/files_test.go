@@ -100,14 +100,8 @@ func TestFilesHandler_ErrorMapping(t *testing.T) {
 		t.Errorf("只读保存 status = %d, want 403", rc.Response.StatusCode())
 	}
 
-	rc = jsonCtx(consts.MethodPost, `{"path":"logs/new.txt"}`)
-	h.Create(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("白名单外新建 status = %d, want 403", rc.Response.StatusCode())
-	}
-
-	rc = jsonCtx(consts.MethodPost, `not-json`)
-	h.Create(context.Background(), rc)
+	rc = jsonCtx(consts.MethodPut, `not-json`)
+	h.Save(context.Background(), rc)
 	if rc.Response.StatusCode() != 400 {
 		t.Errorf("非法 JSON status = %d, want 400", rc.Response.StatusCode())
 	}
@@ -259,27 +253,7 @@ func TestFilesHandler_Rename(t *testing.T) {
 	}
 }
 
-// TestFilesHandler_Mkdir 验证白名单内建目录成功、白名单外拒绝。
-func TestFilesHandler_Mkdir(t *testing.T) {
-	h, home := newFilesHandlerForTest(t)
-
-	rc := jsonCtx(consts.MethodPost, `{"path":"skills/demo/sub"}`)
-	h.Mkdir(context.Background(), rc)
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("mkdir status = %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if info, err := os.Stat(filepath.Join(home, "skills", "demo", "sub")); err != nil || !info.IsDir() {
-		t.Errorf("目录未创建: %v", err)
-	}
-
-	rc = jsonCtx(consts.MethodPost, `{"path":"logs/x"}`)
-	h.Mkdir(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("白名单外 mkdir status = %d, want 403", rc.Response.StatusCode())
-	}
-}
-
-// TestFilesHandler_Upload 验证上传：缺 file 字段 400、空 path 403、成功 200。
+// TestFilesHandler_Upload 验证上传：缺 file 字段 400、home 根 200、子目录 200。
 func TestFilesHandler_Upload(t *testing.T) {
 	h, home := newFilesHandlerForTest(t)
 
@@ -289,10 +263,10 @@ func TestFilesHandler_Upload(t *testing.T) {
 		t.Errorf("缺 file 字段 status = %d, want 400", rc.Response.StatusCode())
 	}
 
-	rc = multipartCtx(t, false, "", "up.txt", "data")
+	rc = multipartCtx(t, true, "", "root.txt", "data")
 	h.Upload(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("缺 path 字段 status = %d, want 403", rc.Response.StatusCode())
+	if rc.Response.StatusCode() != 200 {
+		t.Errorf("home 根上传 status = %d, want 200", rc.Response.StatusCode())
 	}
 
 	rc = multipartCtx(t, true, "mcp", "up.txt", "data")

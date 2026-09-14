@@ -154,28 +154,17 @@ func (r *Resolver) ReadOnly(n string) bool {
 	return strings.EqualFold(n, "env.yaml") || strings.EqualFold(n, "config.yaml")
 }
 
-// CanCreate 判定能否在目录 n 内新建文件/子目录（n 必须是 Normalize/Resolve 的返回值）：
-// 仅 skills/<名称>/ 及更深；对含 "." / ".." 段的未归一化输入防御性返回 false。
-func (r *Resolver) CanCreate(n string) bool {
-	parts := strings.Split(n, "/")
-	for _, p := range parts {
+// CanUpload 判定能否向目录 n 上传（n 必须是 Normalize/Resolve 的返回值）：
+// home 内任意目录均允许，含 home 根；对含 "." / ".." 段的未归一化输入
+// 防御性返回 false。目标文件本身仍受只读与隐藏规则约束（见 UploadTarget）。
+func (r *Resolver) CanUpload(n string) bool {
+	if n == "" {
+		return true
+	}
+	for _, p := range strings.Split(n, "/") {
 		if p == "." || p == ".." {
 			return false
 		}
 	}
-	return len(parts) >= 2 && strings.EqualFold(parts[0], "skills") && parts[1] != ""
-}
-
-// CanUpload 判定能否向目录 n 上传（n 必须是 Normalize/Resolve 的返回值）：
-// CanCreate 的位置、subagents/<名称>/ 及更深，外加 skills、mcp、subagents 顶层，
-// 大小写不敏感。
-func (r *Resolver) CanUpload(n string) bool {
-	if r.CanCreate(n) ||
-		strings.EqualFold(n, "skills") ||
-		strings.EqualFold(n, "mcp") ||
-		strings.EqualFold(n, "subagents") {
-		return true
-	}
-	parts := strings.Split(n, "/")
-	return len(parts) >= 2 && strings.EqualFold(parts[0], "subagents") && parts[1] != ""
+	return true
 }

@@ -9,8 +9,6 @@ export const filesApi = {
   content: (path: string) => api.get<FileContentResp>(`/web/files/content?path=${enc(path)}`),
   save: (path: string, content: string) =>
     api.put<{ status: string }>('/web/files/content', { path, content }),
-  mkdir: (path: string) => api.post<{ status: string }>('/web/files/mkdir', { path }),
-  create: (path: string) => api.post<{ status: string }>('/web/files/create', { path }),
   rename: (from: string, to: string) =>
     api.post<{ status: string }>('/web/files/rename', { from, to }),
   remove: (path: string) => api.delete<{ status: string }>(`/web/files?path=${enc(path)}`),

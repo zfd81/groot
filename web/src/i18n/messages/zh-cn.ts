@@ -249,8 +249,6 @@ export default {
     renamePrompt: '请输入新名称',
     download: '下载',
     del: '删除',
-    newFile: '新建文件',
-    newDir: '新建子目录',
     upload: '上传',
     deleteConfirm: '确定删除 {name} 吗？此操作不可恢复。',
     back: '返回',

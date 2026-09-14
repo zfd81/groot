@@ -182,43 +182,6 @@ func TestService_Write(t *testing.T) {
 	}
 }
 
-// TestService_CreateAndMkdir 验证白名单内可新建、白名单外拒绝、重名拒绝。
-func TestService_CreateAndMkdir(t *testing.T) {
-	svc, home := newServiceForTest(t)
-
-	if err := svc.Create("skills/my-skill/notes.md"); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(home, "skills/my-skill/notes.md")); err != nil {
-		t.Errorf("文件未创建: %v", err)
-	}
-	if err := svc.Mkdir("skills/my-skill/scripts"); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
-	// 白名单外
-	if err := svc.Create("logs/hack.txt"); !errors.Is(err, ErrForbidden) {
-		t.Errorf("白名单外新建应 ErrForbidden, got %v", err)
-	}
-	if err := svc.Mkdir("subagents/x"); !errors.Is(err, ErrForbidden) {
-		t.Errorf("白名单外建目录应 ErrForbidden, got %v", err)
-	}
-	if err := svc.Create("skills/direct.md"); !errors.Is(err, ErrForbidden) {
-		t.Errorf("skills 顶层新建文件应 ErrForbidden, got %v", err)
-	}
-	// 重名
-	if err := svc.Create("skills/my-skill/SKILL.md"); !errors.Is(err, ErrExists) {
-		t.Errorf("重名新建应 ErrExists, got %v", err)
-	}
-	// 非法名称（点开头在 Normalize 已被尾点规则放过、此处由 validName 拒绝）
-	if err := svc.Create("skills/my-skill/.hidden"); !errors.Is(err, ErrInvalid) {
-		t.Errorf("点开头文件名应 ErrInvalid, got %v", err)
-	}
-	// 父目录不存在
-	if err := svc.Create("skills/nope/a.md"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("父目录不存在应 ErrNotFound, got %v", err)
-	}
-}
-
 // TestService_Rename 验证同目录改名、只读保护、结构性条目保护、重名保护。
 func TestService_Rename(t *testing.T) {
 	svc, home := newServiceForTest(t)
@@ -305,21 +268,17 @@ func TestService_Delete(t *testing.T) {
 	}
 }
 
-// TestService_UploadTarget 验证上传白名单与限制。
+// TestService_UploadTarget 验证任意目录可上传及各项限制。
 func TestService_UploadTarget(t *testing.T) {
 	svc, _ := newServiceForTest(t)
 
-	if _, err := svc.UploadTarget("mcp", "server.json", 100); err != nil {
-		t.Errorf("mcp 上传应允许, got %v", err)
+	for _, dir := range []string{"", "mcp", "skills", "skills/my-skill", "logs"} {
+		if _, err := svc.UploadTarget(dir, "server.json", 100); err != nil {
+			t.Errorf("目录 %q 上传应允许, got %v", dir, err)
+		}
 	}
-	if _, err := svc.UploadTarget("skills", "pack.md", 100); err != nil {
-		t.Errorf("skills 顶层上传应允许, got %v", err)
-	}
-	if _, err := svc.UploadTarget("skills/my-skill", "run.sh", 100); err != nil {
-		t.Errorf("skill 目录上传应允许, got %v", err)
-	}
-	if _, err := svc.UploadTarget("logs", "x.txt", 100); !errors.Is(err, ErrForbidden) {
-		t.Errorf("logs 上传应 ErrForbidden, got %v", err)
+	if _, err := svc.UploadTarget("nope", "x.txt", 100); !errors.Is(err, ErrNotFound) {
+		t.Errorf("目录不存在应 ErrNotFound, got %v", err)
 	}
 	if _, err := svc.UploadTarget("mcp", "big.bin", MaxUploadSize+1); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("超限上传应 ErrTooLarge, got %v", err)

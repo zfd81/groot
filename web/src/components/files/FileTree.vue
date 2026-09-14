@@ -1,4 +1,4 @@
-<!-- 懒加载文件树：el-tree lazy 模式，行悬停「⋯」菜单，白名单位置提供新建/上传。 -->
+<!-- 懒加载文件树：el-tree lazy 模式，行悬停「⋯」菜单，任意目录可上传。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -63,22 +63,11 @@ function onNodeClick(data: TreeItem) {
 function onExpand(data: TreeItem) {
   if (!files.expandedKeys.includes(data.path)) files.expandedKeys.push(data.path)
 }
+// 必须连同子树的展开记录一起清掉：default-expanded-keys 是响应式绑定，
+// 残留的子孙 key 会被 el-tree 以 autoExpandParent 重新展开，
+// 把刚收起的父节点又拉开（表现为只能从最深一层逐层收起）。
 function onCollapse(data: TreeItem) {
-  files.expandedKeys = files.expandedKeys.filter((k) => k !== data.path)
-}
-
-// 白名单（与后端规则一致，仅控制菜单可见性；后端仍强制校验）
-function canCreate(dir: string): boolean {
-  return /^skills\/[^/]+(\/|$)/.test(dir + '/')
-}
-function canUpload(dir: string): boolean {
-  return (
-    canCreate(dir) ||
-    dir === 'skills' ||
-    dir === 'mcp' ||
-    dir === 'subagents' ||
-    /^subagents\/[^/]+(\/|$)/.test(dir + '/')
-  )
+  dropExpandedUnder(data.path)
 }
 
 // home 下的一级目录是运行时结构性目录，不允许删除（与后端规则一致）
@@ -163,21 +152,6 @@ async function onCommand(cmd: string, data: TreeItem) {
       a.click()
       break
     }
-    case 'newFile': {
-      const name = await promptName(t('files.newFile'))
-      if (!name) return
-      await run(async () => {
-        await filesApi.create(`${data.path}/${name}`)
-        files.editorPath = `${data.path}/${name}` // 新文件直接进编辑
-      })
-      break
-    }
-    case 'newDir': {
-      const name = await promptName(t('files.newDir'))
-      if (!name) return
-      await run(() => filesApi.mkdir(`${data.path}/${name}`))
-      break
-    }
     case 'upload': {
       uploadDir.value = data.path
       uploadInput.value?.click()
@@ -235,13 +209,7 @@ async function onUploadChange(e: Event) {
                 <el-dropdown-item v-if="data.leaf" command="download">
                   {{ t('files.download') }}
                 </el-dropdown-item>
-                <el-dropdown-item v-if="!data.leaf && canCreate(data.path)" command="newFile">
-                  {{ t('files.newFile') }}
-                </el-dropdown-item>
-                <el-dropdown-item v-if="!data.leaf && canCreate(data.path)" command="newDir">
-                  {{ t('files.newDir') }}
-                </el-dropdown-item>
-                <el-dropdown-item v-if="!data.leaf && canUpload(data.path)" command="upload">
+                <el-dropdown-item v-if="!data.leaf" command="upload">
                   {{ t('files.upload') }}
                 </el-dropdown-item>
                 <el-dropdown-item command="delete" :disabled="data.readonly || isProtected(data)" divided>

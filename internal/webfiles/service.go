@@ -189,50 +189,6 @@ func (s *Service) Write(rel, content string) error {
 	return os.WriteFile(abs, []byte(content), 0o644)
 }
 
-// Mkdir 在白名单目录内新建子目录。
-func (s *Service) Mkdir(rel string) error { return s.createEntry(rel, true) }
-
-// Create 在白名单目录内新建空文件。
-func (s *Service) Create(rel string) error { return s.createEntry(rel, false) }
-
-func (s *Service) createEntry(rel string, isDir bool) error {
-	abs, n, err := s.res.Resolve(rel)
-	if err != nil {
-		return err
-	}
-	parent := path.Dir(n)
-	if parent == "." {
-		parent = ""
-	}
-	if !s.res.CanCreate(parent) {
-		return ErrForbidden
-	}
-	if !validName(path.Base(n)) {
-		return ErrInvalid
-	}
-	if info, err := os.Stat(filepath.Dir(abs)); err != nil || !info.IsDir() {
-		return ErrNotFound // 父目录必须已存在
-	}
-	if isDir {
-		if err := os.Mkdir(abs, 0o755); err != nil {
-			if os.IsExist(err) {
-				return ErrExists
-			}
-			return err
-		}
-		return nil
-	}
-	// O_EXCL 原子化"不存在才创建"，避免 Lstat 与创建之间的竞态。
-	f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
-			return ErrExists
-		}
-		return err
-	}
-	return f.Close()
-}
-
 // Rename 同目录改名；只读文件（或改名为只读文件名）拒绝。
 func (s *Service) Rename(fromRel, toRel string) error {
 	fromAbs, fromN, err := s.res.Resolve(fromRel)

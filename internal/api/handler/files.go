@@ -89,39 +89,6 @@ func (h *FilesHandler) Save(ctx context.Context, rc *app.RequestContext) {
 	rc.JSON(200, utils.H{"status": "success"})
 }
 
-// pathReq 只含 path 字段的请求体。
-type pathReq struct {
-	Path string `json:"path"`
-}
-
-// Mkdir 处理 POST /web/files/mkdir
-func (h *FilesHandler) Mkdir(ctx context.Context, rc *app.RequestContext) {
-	var req pathReq
-	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
-		return
-	}
-	if err := h.svc.Mkdir(req.Path); err != nil {
-		writeFilesError(rc, err)
-		return
-	}
-	rc.JSON(200, utils.H{"status": "success"})
-}
-
-// Create 处理 POST /web/files/create
-func (h *FilesHandler) Create(ctx context.Context, rc *app.RequestContext) {
-	var req pathReq
-	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
-		return
-	}
-	if err := h.svc.Create(req.Path); err != nil {
-		writeFilesError(rc, err)
-		return
-	}
-	rc.JSON(200, utils.H{"status": "success"})
-}
-
 // Rename 处理 POST /web/files/rename
 func (h *FilesHandler) Rename(ctx context.Context, rc *app.RequestContext) {
 	var req struct {

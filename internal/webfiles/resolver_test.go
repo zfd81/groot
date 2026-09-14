@@ -99,30 +99,16 @@ func TestResolver_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestResolver_Whitelist 验证新建与上传白名单矩阵。
-func TestResolver_Whitelist(t *testing.T) {
+// TestResolver_CanUpload 验证 home 内任意目录（含根）均允许上传。
+func TestResolver_CanUpload(t *testing.T) {
 	r, _ := newResolverForTest(t)
-	cases := []struct {
-		dir       string
-		canCreate bool
-		canUpload bool
-	}{
-		{"skills/my-skill", true, true},
-		{"skills/my-skill/scripts", true, true},
-		{"skills", false, true},
-		{"mcp", false, true},
-		{"", false, false},
-		{"subagents", false, true},
-		{"subagents/weather", false, true},
-		{"subagents/weather/skills", false, true},
-		{"logs", false, false},
-	}
-	for _, c := range cases {
-		if got := r.CanCreate(c.dir); got != c.canCreate {
-			t.Errorf("CanCreate(%q) = %v, want %v", c.dir, got, c.canCreate)
-		}
-		if got := r.CanUpload(c.dir); got != c.canUpload {
-			t.Errorf("CanUpload(%q) = %v, want %v", c.dir, got, c.canUpload)
+	for _, dir := range []string{
+		"", "skills", "mcp", "subagents", "logs", "api", "exports",
+		"skills/my-skill", "skills/my-skill/scripts",
+		"subagents/weather", "subagents/weather/skills/get-weather",
+	} {
+		if !r.CanUpload(dir) {
+			t.Errorf("CanUpload(%q) = false, want true", dir)
 		}
 	}
 }
@@ -162,11 +148,13 @@ func TestResolver_Normalize_SpecialNames(t *testing.T) {
 	}
 }
 
-// TestResolver_CanCreate_Defensive 验证未归一化输入被防御性拒绝。
-func TestResolver_CanCreate_Defensive(t *testing.T) {
+// TestResolver_CanUpload_Defensive 验证未归一化输入被防御性拒绝。
+func TestResolver_CanUpload_Defensive(t *testing.T) {
 	r, _ := newResolverForTest(t)
-	if r.CanCreate("skills/../mcp") {
-		t.Error(`CanCreate("skills/../mcp") 应为 false`)
+	for _, dir := range []string{"skills/../mcp", "./skills"} {
+		if r.CanUpload(dir) {
+			t.Errorf("CanUpload(%q) 应为 false", dir)
+		}
 	}
 }
 
