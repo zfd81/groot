@@ -12,8 +12,12 @@ import (
 
 const testSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// testKey 的时间取相对当前时刻,不能用固定日期——固定的 ExpiresAt 一旦成为
+// 过去时,TestVerify_RoundTrip 就会开始失败(时间炸弹)。
+// TestSign_Deterministic 不受影响:它对同一个 key 结构体签两次,
+// 确定性来自入参相同,与时间是否固定无关。
 func testKey() *repo.APIKey {
-	created := time.Date(2026, 9, 2, 12, 0, 0, 0, time.Local)
+	created := time.Now()
 	return &repo.APIKey{
 		ID:          "20260902120000",
 		Name:        "svc-a",
