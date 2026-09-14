@@ -166,6 +166,129 @@ func TestSyncManager_Push_IdempotentAfterPush(t *testing.T) {
 	}
 }
 
+// TestPull_RemovesEmptyParentDirsButKeepsWhitelistRoot 验证 pull 镜像删除本地文件后,
+// 变空的中间目录被一并清理(否则工作空间面板会显示空壳目录),
+// 但白名单根目录本身必须保留。
+func TestPull_RemovesEmptyParentDirsButKeepsWhitelistRoot(t *testing.T) {
+	home := t.TempDir()
+	r := newDiffTestRepo(t)
+
+	// 本地独有 → pull 时应删除;删完后 weather/ 变空也应清理
+	makeFile(t, home, "skills/weather/SKILL.md", "local only")
+
+	m := NewSyncManager(home, r)
+	if err := m.Pull(nil); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, "skills", "weather", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("file should be deleted, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "skills", "weather")); !os.IsNotExist(err) {
+		t.Fatalf("empty dir skills/weather should be cleaned, stat err = %v", err)
+	}
+	// 白名单根目录必须保留
+	if _, err := os.Stat(filepath.Join(home, "skills")); err != nil {
+		t.Fatalf("whitelist root skills/ must be kept: %v", err)
+	}
+}
+
+// TestPull_KeepsNonEmptyParentDir 验证目录内还有同步范围外的文件时不清理该目录。
+//
+// 用 subagents/ 下的具体文件而非 skills/ 下的:ValidateSyncPath 禁止直接指定
+// skill 目录内的单个文件(必须整目录操作),所以 skills/weather/SKILL.md
+// 作为 Pull 参数会直接被校验拦下,测不到清理逻辑。
+func TestPull_KeepsNonEmptyParentDir(t *testing.T) {
+	home := t.TempDir()
+	r := newDiffTestRepo(t)
+
+	makeFile(t, home, "subagents/db-agent/agent.md", "local only")
+	makeFile(t, home, "subagents/db-agent/keep.md", "sibling")
+
+	// 只拉取被删的那个文件,兄弟文件不在同步范围内时目录应保留
+	m := NewSyncManager(home, r)
+	if err := m.Pull([]string{"subagents/db-agent/agent.md"}); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, "subagents", "db-agent", "agent.md")); !os.IsNotExist(err) {
+		t.Fatalf("file should be deleted, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "subagents", "db-agent")); err != nil {
+		t.Fatalf("dir with remaining sibling must be kept: %v", err)
+	}
+}
+
+// TestPull_NeverRemovesHomeDir 是最坏情况的防线:直接位于 HOME 根下的白名单文件
+// 被镜像删除后,HOME 目录自身绝不能被清理掉(清理逻辑写错会删掉整个 ~/.groot)。
+func TestPull_NeverRemovesHomeDir(t *testing.T) {
+	home := t.TempDir()
+	r := newDiffTestRepo(t)
+
+	// GROOT.md 位于 HOME 根下,删除后 HOME 变空
+	makeFile(t, home, "GROOT.md", "local only")
+
+	m := NewSyncManager(home, r)
+	if err := m.Pull(nil); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, "GROOT.md")); !os.IsNotExist(err) {
+		t.Fatalf("file should be deleted, stat err = %v", err)
+	}
+	info, err := os.Stat(home)
+	if err != nil {
+		t.Fatalf("HOME dir must never be removed: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("HOME must remain a directory")
+	}
+}
+
+// TestPull_RemovesNestedEmptyDirsUpToWhitelistRoot 验证清理是逐级向上进行的,
+// 而不是只删一层:subagents/db-agent/skills/sql/ 下的文件被镜像删除后,
+// sql/、skills/、db-agent/ 三级空目录都应清理,白名单根 subagents/ 保留。
+//
+// 这条路径同时是「清理到 HOME 边界」的场景,所以末尾也断言 HOME 仍存在:
+// 逐级向上时 HOME 是靠白名单根判据保住的,与 TestPull_NeverRemovesHomeDir
+// 覆盖的「首轮即到 HOME」短路径不是同一条防线。
+func TestPull_RemovesNestedEmptyDirsUpToWhitelistRoot(t *testing.T) {
+	home := t.TempDir()
+	r := newDiffTestRepo(t)
+
+	makeFile(t, home, "subagents/db-agent/skills/sql/SKILL.md", "local only")
+
+	// Pull(nil) 走全白名单,绕过显式路径校验
+	m := NewSyncManager(home, r)
+	if err := m.Pull(nil); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	for _, rel := range []string{
+		"subagents/db-agent/skills/sql/SKILL.md",
+		"subagents/db-agent/skills/sql",
+		"subagents/db-agent/skills",
+		"subagents/db-agent",
+	} {
+		p := filepath.Join(home, filepath.FromSlash(rel))
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s should be cleaned, stat err = %v", rel, err)
+		}
+	}
+	// 白名单根目录必须保留
+	if _, err := os.Stat(filepath.Join(home, "subagents")); err != nil {
+		t.Fatalf("whitelist root subagents/ must be kept: %v", err)
+	}
+	// HOME 永不删除
+	info, err := os.Stat(home)
+	if err != nil {
+		t.Fatalf("HOME dir must never be removed: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("HOME must remain a directory")
+	}
+}
+
 // TestSyncManager_Pull_IdempotentAfterPull 验证 pull 后 diff 也 IsEmpty。
 func TestSyncManager_Pull_IdempotentAfterPull(t *testing.T) {
 	mgr, homeDir, remoteDir := newTestManager(t)

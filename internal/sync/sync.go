@@ -183,8 +183,44 @@ func (m *localSyncManager) Pull(paths []string) error {
 		if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("sync pull delete %s: %w", rel, err)
 		}
+		pruneEmptyDirs(m.homeDir, filepath.Dir(localPath))
 	}
 	return nil
+}
+
+// underSyncRoot 判断 rel 是否严格位于某个白名单根之下。
+// 白名单根自身、HOME 自身、以及 HOME 之外的路径都返回 false,
+// 因此这三类目录永不被清理。
+func underSyncRoot(rel string) bool {
+	for _, root := range SyncableResourceRoots {
+		if strings.HasPrefix(rel, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneEmptyDirs 从 dir 起向上逐级删除变空的目录,只清理严格位于白名单根之下的
+// 空目录:白名单根自身、homeDir 自身、以及 homeDir 之外的目录永不删除。
+// 目录非空或删除失败即停止,不返回错误:清理失败不应让 pull 整体失败。
+func pruneEmptyDirs(homeDir, dir string) {
+	for {
+		rel, err := filepath.Rel(homeDir, dir)
+		if err != nil {
+			return
+		}
+		if !underSyncRoot(filepath.ToSlash(rel)) {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 func (m *localSyncManager) pullOne(ctx context.Context, rel string) error {
