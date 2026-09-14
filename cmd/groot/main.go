@@ -469,7 +469,7 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource)
 
 	// Setup graceful shutdown
 	sigCh := make(chan os.Signal, 1)

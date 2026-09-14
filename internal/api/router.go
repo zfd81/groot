@@ -28,6 +28,7 @@ func RegisterRoutes(h *server.Hertz,
 	clusterH *handler.ClusterHandler,
 	logsH *handler.LogsHandler,
 	filesH *handler.FilesHandler,
+	syncH *handler.SyncHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
 	h.GET("/web/health", healthH.Serve)
@@ -72,6 +73,13 @@ func RegisterRoutes(h *server.Hertz,
 		filesGroup.POST("/scaffold", filesH.Scaffold)
 		webGroup.DELETE("/files", filesH.Delete)
 	}
+
+	// 配置同步端点：SQLite 模式下 handler 统一返回 409 sync_disabled，
+	// 由前端据此隐藏入口，因此这里无条件注册。
+	syncGroup := webGroup.Group("/sync")
+	syncGroup.POST("/diff", syncH.Diff)
+	syncGroup.POST("/push", syncH.Push)
+	syncGroup.POST("/pull", syncH.Pull)
 
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")

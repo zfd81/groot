@@ -49,6 +49,7 @@ func NewServer(
 	models *llm.ModelService,
 	apiKeys repo.APIKeyRepo,
 	members repo.MemberRepo,
+	syncResources repo.ResourceRepo, // 配置同步的远端仓储；SQLite 单机模式下为 nil（同步禁用）
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -103,10 +104,13 @@ func NewServer(
 		filesH = nil
 	}
 
+	// 配置同步：syncResources 为 nil 时端点统一返回 409 sync_disabled
+	syncH := handler.NewSyncHandler(homeDir, syncResources)
+
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH)
 
 	return &Server{
 		hertz:  h,
