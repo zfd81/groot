@@ -57,6 +57,7 @@ func (r *localRepo) Get(ctx context.Context, path string) (*repo.Resource, error
 		Size:        int64(len(content)),
 		ContentHash: sha1Hex(content),
 		UpdatedAt:   info.ModTime(),
+		Status:      repo.ResourceStatusActive,
 	}, nil
 }
 
@@ -75,6 +76,7 @@ func (r *localRepo) Stat(ctx context.Context, path string) (*repo.ResourceEntry,
 		Size:        int64(len(content)),
 		ContentHash: sha1Hex(content),
 		UpdatedAt:   info.ModTime(),
+		Status:      repo.ResourceStatusActive,
 	}, nil
 }
 
@@ -99,6 +101,7 @@ func (r *localRepo) List(ctx context.Context, prefix string) ([]*repo.ResourceEn
 			Size:        int64(len(content)),
 			ContentHash: sha1Hex(content),
 			UpdatedAt:   info.ModTime(),
+			Status:      repo.ResourceStatusActive,
 		})
 		return nil
 	})
@@ -111,4 +114,11 @@ func (r *localRepo) Delete(ctx context.Context, path string) error {
 		return nil
 	}
 	return err
+}
+
+// ListWithDeleted 等同于 List。本实现以文件系统为存储，删除即真实删除文件，
+// 不存在可标记的记录，因此没有「已删除」状态。仅在 SQLite 单机模式下构造，
+// 该模式下同步功能整体不启用。
+func (r *localRepo) ListWithDeleted(ctx context.Context, prefix string) ([]*repo.ResourceEntry, error) {
+	return r.List(ctx, prefix)
 }

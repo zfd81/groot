@@ -116,3 +116,11 @@ func (r *resourceRepo) Delete(ctx context.Context, path string) error {
 	_, err := r.db.ExecContext(ctx, q, path)
 	return err
 }
+
+// ListWithDeleted 目前直接委托 List，尚未实现软删除语义：
+// 本实现的 Delete 是物理删除，且 Put/Get/Stat/List 都不读写 status 列，
+// 因此返回的 Status 恒为空串，同步差异比较拿不到已删除记录，
+// 「他人已删除」会被误判为「从无此记录」。软删除实现补齐前不要用于差异计算。
+func (r *resourceRepo) ListWithDeleted(ctx context.Context, prefix string) ([]*repo.ResourceEntry, error) {
+	return r.List(ctx, prefix)
+}
