@@ -303,3 +303,21 @@ export interface FileScaffoldResp {
   status: string
   path: string
 }
+
+// 配置同步（/web/sync/*）
+export type SyncEntryStatus = 'A' | 'M' | 'D'
+
+export interface SyncDiffEntry {
+  path: string
+  status: SyncEntryStatus
+  remoteDeleted: boolean
+  needsRestart: boolean
+  remoteUpdatedAt?: number // 毫秒时间戳；远端无记录时后端省略该字段
+}
+
+export interface SyncDiffResp {
+  status: string
+  inSync: boolean
+  needsRestart: boolean
+  entries: SyncDiffEntry[]
+}
