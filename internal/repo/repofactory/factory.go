@@ -24,17 +24,25 @@ type Repos struct {
 	User     repo.UserRepo
 	Model    repo.ModelRepo
 	APIKey   repo.APIKeyRepo
+
+	// SyncResource 是配置同步(push/pull/diff)要比较的远端仓储。
+	// SQLite 单机模式下没有可比较的远端(Resource 指向本地文件系统,
+	// 与同步源是同一份文件),此时为 nil,交由 sync.NewSyncManager 返回
+	// disabledSyncManager。
+	SyncResource repo.ResourceRepo
 }
 
 // NewRepos constructs all Repository implementations.
-// For SQLite dialect, Resource uses the local-fs implementation (sync disabled).
-// For MySQL/PG, Resource uses the DB implementation (sync enabled).
+// For SQLite dialect, Resource uses the local-fs implementation and SyncResource
+// is nil (sync disabled). For MySQL/PG, both use the DB implementation
+// (sync enabled).
 func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
-	var resourceRepo repo.ResourceRepo
+	var resourceRepo, syncResourceRepo repo.ResourceRepo
 	if dialect == db.DialectSQLite {
 		resourceRepo = resourcelocal.New(homeDir)
 	} else {
 		resourceRepo = resourcedb.New(sqlxDB, dialect)
+		syncResourceRepo = resourceRepo
 	}
 	return &Repos{
 		Member:   memberdb.New(sqlxDB, dialect),
@@ -44,5 +52,7 @@ func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
 		User:     userdb.New(sqlxDB, dialect),
 		Model:    modeldb.New(sqlxDB, dialect),
 		APIKey:   apikeydb.New(sqlxDB, dialect),
+
+		SyncResource: syncResourceRepo,
 	}
 }

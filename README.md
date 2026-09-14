@@ -1269,7 +1269,7 @@ groot diff skills/weather        # 只比较指定路径
 | `pull [path...] [-y]` | 数据库 → 本地 | 将数据库的配置镜像拉取到本地 HOME，执行前列出差异并要求确认（`-y` 跳过） |
 | `diff [path...]` | 只读比较 | 显示本地与数据库之间的配置差异，不做任何修改 |
 
-> **说明：** SQLite 模式（单机）下配置直接读取本地文件，这三个命令不可用，会提示同步功能未启用。
+> **说明：** SQLite 模式（单机）下配置直接读取本地文件，这三个命令不可用，会提示 `sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 env.yaml 中配置 database 节`。
 
 ### 6.7 重置 Web 登录用户（groot user reset）
 

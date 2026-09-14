@@ -149,11 +149,11 @@ func openRepos(homeDir string) *repofactory.Repos {
 	return repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 }
 
-// openSyncRepo 为 push/pull/diff 子命令加载配置并打开数据库,返回 ResourceRepo。
-// SQLite 模式下 ResourceRepo 使用本地文件系统实现,此时 sync 命令会因
-// NewSyncManager 内的 disabledSyncManager 返回 ErrSyncDisabled。
+// openSyncRepo 为 push/pull/diff 子命令加载配置并打开数据库,返回同步要比较的
+// 远端 ResourceRepo。SQLite 模式下没有可比较的远端,SyncResource 为 nil,
+// 因此 sync 子命令返回 ErrSyncDisabled。
 func openSyncRepo(homeDir string) repo.ResourceRepo {
-	return openRepos(homeDir).Resource
+	return openRepos(homeDir).SyncResource
 }
 
 func handleUserCommand(args []string) {
