@@ -284,5 +284,6 @@ export default {
     syncPullDone: 'Pulled from database',
     syncRestartHint: 'Some changes require a service restart to take effect.',
     syncFailed: 'Sync failed',
+    syncFileCount: '{count} file(s) changed',
   },
 }

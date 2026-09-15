@@ -284,5 +284,6 @@ export default {
     syncPullDone: '已从数据库拉取',
     syncRestartHint: '部分变更需重启服务后生效。',
     syncFailed: '同步失败',
+    syncFileCount: '{count} 个文件变更',
   },
 }

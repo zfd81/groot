@@ -1,10 +1,12 @@
-<!-- 配置同步差异对话框：展示本地与数据库的差异清单，支持推送/拉取。 -->
+<!-- 配置同步差异对话框：以树形勾选表格展示本地与数据库的差异，支持推送/拉取。 -->
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { syncApi } from '../../api/sync'
 import { ApiError } from '../../api/client'
 import type { SyncDiffEntry } from '../../api/types'
+import { buildSyncTree, type SyncTree, type SyncTreeNode } from './syncTree'
+import { iconForName } from './fileIcon'
 
 const props = defineProps<{
   modelValue: boolean
@@ -28,15 +30,68 @@ const applying = ref(false)
 const inSync = ref(false)
 const needsRestart = ref(false)
 const disabled = ref(false)
-const entries = ref<SyncDiffEntry[]>([])
+const tree = ref<SyncTree>({ nodes: [], terminals: new Map() })
+// 已勾选的终端行路径集合。默认全选在 loadDiff 里初始化。
+const checked = ref(new Set<string>())
 
-const paths = computed(() => (props.scope ? [props.scope] : []))
+const totalTerminals = computed(() => tree.value.terminals.size)
+const allChecked = computed(
+  () => totalTerminals.value > 0 && checked.value.size === totalTerminals.value,
+)
 
-// 各方向会导致删除的条目数：推送会从数据库删除 D，拉取会删除本地的 A
-const deleteCount = computed(() => ({
-  push: entries.value.filter((e) => e.status === 'D').length,
-  pull: entries.value.filter((e) => e.status === 'A').length,
-}))
+// 提交范围：全选时退化为原有的整体语义（scope 或全量），部分勾选时提交勾中的终端路径。
+// 终端路径就是 ValidateSyncPath 的合法取值，无需第二套参数（设计文档 §1.6）。
+const submitPaths = computed(() => {
+  if (allChecked.value) return props.scope ? [props.scope] : []
+  return Array.from(checked.value).sort()
+})
+
+// 各方向会导致删除的条目数，只统计勾中的终端：推送删数据库的 D，拉取删本地的 A
+const deleteCount = computed(() => {
+  let push = 0
+  let pull = 0
+  for (const p of checked.value) {
+    for (const e of tree.value.terminals.get(p) ?? []) {
+      if (e.status === 'D') push++
+      if (e.status === 'A') pull++
+    }
+  }
+  return { push, pull }
+})
+
+// —— 三态勾选 ——
+
+type CheckState = 'all' | 'partial' | 'none'
+
+function stateOf(paths: string[]): CheckState {
+  let n = 0
+  for (const p of paths) if (checked.value.has(p)) n++
+  if (n === 0) return 'none'
+  return n === paths.length ? 'all' : 'partial'
+}
+
+// el-table 作用域插槽把 row 类型标成宽松的 DefaultRow，模板里收窄回树节点
+const asNode = (row: unknown) => row as SyncTreeNode
+
+const nodeState = (node: SyncTreeNode) => stateOf(node.terminalPaths)
+const headerState = computed<CheckState>(() => stateOf(Array.from(tree.value.terminals.keys())))
+
+// 点聚合行：非全选 → 全勾；全选 → 全去。终端行只有二态。
+// 注意对 Set 重新赋值而非原地改，保证 computed 依赖可靠触发。
+function toggle(paths: string[]) {
+  const next = new Set(checked.value)
+  const anyMissing = paths.some((p) => !next.has(p))
+  for (const p of paths) {
+    if (anyMissing) next.add(p)
+    else next.delete(p)
+  }
+  checked.value = next
+}
+
+const toggleNode = (node: SyncTreeNode) => toggle(node.terminalPaths)
+const toggleAll = () => toggle(Array.from(tree.value.terminals.keys()))
+
+// —— 展示辅助 ——
 
 const statusLabel = (s: SyncDiffEntry['status']) =>
   s === 'A' ? t('files.syncStatusA') : s === 'M' ? t('files.syncStatusM') : t('files.syncStatusD')
@@ -47,20 +102,21 @@ const statusType = (s: SyncDiffEntry['status']) =>
 
 // 远端更新时间（毫秒时间戳）；本地新建（远端无记录）时后端省略该字段，不显示
 const formatTime = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '')
-
 async function loadDiff() {
   loading.value = true
   disabled.value = false
   try {
-    const resp = await syncApi.diff(paths.value)
-    entries.value = resp.entries ?? []
+    const resp = await syncApi.diff(props.scope ? [props.scope] : [])
+    tree.value = buildSyncTree(resp.entries ?? [])
+    checked.value = new Set(tree.value.terminals.keys()) // 默认全选
     inSync.value = resp.inSync
     needsRestart.value = resp.needsRestart
   } catch (e) {
     // ApiError.status 是 HTTP 数字码，业务 status 值在 code 字段（见 api/client.ts）
     if (e instanceof ApiError && e.code === 'sync_disabled') {
       disabled.value = true
-      entries.value = []
+      tree.value = { nodes: [], terminals: new Map() }
+      checked.value = new Set()
       emit('disabled') // 提示 alert 保留在对话框内，由父组件隐藏后续入口
     } else {
       ElMessage.error(e instanceof ApiError ? e.message : t('files.syncFailed'))
@@ -72,7 +128,8 @@ async function loadDiff() {
 }
 
 async function apply(direction: 'push' | 'pull') {
-  // 仅当操作会导致删除时二次确认（推送含 D / 拉取含 A）；纯 M 或纯单向新增直接执行
+  // 仅当操作会导致删除时二次确认（推送含 D / 拉取含 A），数量按勾选集合统计；
+  // 纯 M 或纯单向新增直接执行
   const delCount = deleteCount.value[direction]
   if (delCount > 0) {
     const hint = direction === 'push'
@@ -88,11 +145,11 @@ async function apply(direction: 'push' | 'pull') {
   applying.value = true
   try {
     if (direction === 'push') {
-      await syncApi.push(paths.value)
+      await syncApi.push(submitPaths.value)
       ElMessage.success(t('files.syncPushDone'))
       emit('pushed')
     } else {
-      await syncApi.pull(paths.value)
+      await syncApi.pull(submitPaths.value)
       ElMessage.success(t('files.syncPullDone'))
       emit('pulled')
       // 重启提示只对拉取有意义：push 只写数据库，不影响本地运行时
@@ -141,24 +198,68 @@ watch(
         :closable="false"
         :title="t('files.syncInSync')"
       />
-      <el-table v-else-if="entries.length" :data="entries" max-height="380" size="small">
-        <el-table-column :label="t('files.syncColStatus')" width="120">
+      <el-table
+        v-else-if="tree.nodes.length"
+        :data="tree.nodes"
+        row-key="key"
+        :tree-props="{ children: 'children' }"
+        max-height="380"
+        size="small"
+        class="sync-table"
+      >
+        <!-- 复选框列：树形缩进与展开箭头由 el-table 渲染在第一个普通列，
+             即本列——这是 Element Plus 的固定行为，复选框随层级缩进。 -->
+        <el-table-column min-width="150">
+          <template #header>
+            <el-checkbox
+              :model-value="headerState === 'all'"
+              :indeterminate="headerState === 'partial'"
+              :disabled="!totalTerminals"
+              @change="toggleAll"
+            />
+          </template>
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small" disable-transitions>
-              {{ statusLabel(row.status) }}
-            </el-tag>
+            <el-checkbox
+              v-if="row.role !== 'detail'"
+              :model-value="nodeState(asNode(row)) === 'all'"
+              :indeterminate="nodeState(asNode(row)) === 'partial'"
+              @change="toggleNode(asNode(row))"
+            />
           </template>
         </el-table-column>
         <el-table-column :label="t('files.syncColPath')">
           <template #default="{ row }">
-            <span class="sync-path">{{ row.path }}</span>
+            <el-icon :size="14" class="sync-icon">
+              <component :is="iconForName(row.name, row.isDir)" />
+            </el-icon>
+            <span class="sync-path">{{ row.name }}</span>
             <span v-if="row.remoteUpdatedAt" class="sync-time">
               {{ formatTime(row.remoteUpdatedAt) }}
             </span>
             <el-tag v-if="row.remoteDeleted" type="danger" size="small" effect="plain">
               {{ t('files.syncRemoteDeleted') }}
             </el-tag>
-            <el-tag v-if="row.needsRestart" type="warning" size="small" effect="plain">
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('files.syncColStatus')" width="150">
+          <template #default="{ row }">
+            <el-tag
+              v-if="row.status"
+              :type="statusType(row.status)"
+              size="small"
+              disable-transitions
+            >
+              {{ statusLabel(row.status) }}
+            </el-tag>
+            <span v-else class="sync-count">
+              {{ t('files.syncFileCount', { count: row.fileCount }) }}
+            </span>
+            <el-tag
+              v-if="row.needsRestart && row.role !== 'aggregate'"
+              type="warning"
+              size="small"
+              effect="plain"
+            >
               {{ t('files.syncNeedsRestart') }}
             </el-tag>
           </template>
@@ -170,7 +271,7 @@ watch(
       <el-button @click="close">{{ t('common.cancel') }}</el-button>
       <el-button
         type="primary"
-        :disabled="disabled || inSync || !entries.length"
+        :disabled="disabled || inSync || !checked.size"
         :loading="applying"
         @click="apply('push')"
       >
@@ -178,7 +279,7 @@ watch(
       </el-button>
       <el-button
         type="warning"
-        :disabled="disabled || inSync || !entries.length"
+        :disabled="disabled || inSync || !checked.size"
         :loading="applying"
         @click="apply('pull')"
       >
@@ -203,4 +304,15 @@ watch(
   font-size: 11px;
   color: var(--el-text-color-secondary);
 }
+.sync-icon {
+  vertical-align: -2px;
+  margin-right: 5px;
+  color: var(--el-text-color-secondary);
+}
+.sync-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-right: 6px;
+}
 </style>
+
