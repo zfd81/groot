@@ -2,8 +2,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Folder, Document, Picture, Memo, Tickets, Lock, MoreFilled } from '@element-plus/icons-vue'
+import { Lock, MoreFilled } from '@element-plus/icons-vue'
 import { filesApi } from '../../api/files'
+import { iconForName } from './fileIcon'
 import { useFilesStore } from '../../stores/files'
 
 const { t } = useI18n()
@@ -30,14 +31,8 @@ interface TreeItem {
 const treeProps = { label: 'name', isLeaf: 'leaf' }
 
 // 文件图标按扩展名区分：图片 / Markdown / 配置数据 / 其他
-const IMG_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico']
 function iconFor(data: TreeItem) {
-  if (!data.leaf) return Folder
-  const ext = data.name.includes('.') ? data.name.split('.').pop()!.toLowerCase() : ''
-  if (IMG_EXTS.includes(ext)) return Picture
-  if (ext === 'md') return Memo
-  if (ext === 'json' || ext === 'yaml' || ext === 'yml') return Tickets
-  return Document
+  return iconForName(data.name, !data.leaf)
 }
 
 // el-tree lazy load：level 0 加载 home 根，其余按节点路径加载
