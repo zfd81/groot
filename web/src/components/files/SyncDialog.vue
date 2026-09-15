@@ -108,7 +108,13 @@ async function loadDiff() {
   try {
     const resp = await syncApi.diff(props.scope ? [props.scope] : [])
     tree.value = buildSyncTree(resp.entries ?? [])
-    checked.value = new Set(tree.value.terminals.keys()) // 默认全选
+    // 保留原勾选与新终端集合的交集，而非无条件全选：apply 失败后会重新比较，
+    // 若此时重置为全选，用户先前缩小的范围会被静默放大回全量。
+    // 打开对话框时 checked 已被清空（见 watch），因此首次进入仍是默认全选。
+    const terminals = new Set(tree.value.terminals.keys())
+    checked.value = checked.value.size
+      ? new Set([...checked.value].filter((p) => terminals.has(p)))
+      : terminals
     inSync.value = resp.inSync
     needsRestart.value = resp.needsRestart
   } catch (e) {
@@ -174,7 +180,11 @@ function close() {
 watch(
   () => props.modelValue,
   (open) => {
-    if (open) loadDiff()
+    if (open) {
+      // 每次打开都从空集开始，让 loadDiff 走默认全选分支，不继承上次关闭时的勾选
+      checked.value = new Set()
+      loadDiff()
+    }
   },
 )
 </script>
@@ -183,10 +193,12 @@ watch(
   <el-dialog
     :model-value="modelValue"
     :title="t('files.syncTitle')"
-    width="640px"
+    width="750px"
+    align-center
+    class="sync-dialog"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div v-loading="loading">
+    <div v-loading="loading" class="sync-body">
       <p class="sync-scope">
         {{ scope ? scope : t('files.syncScopeAll') }}
       </p>
@@ -198,73 +210,87 @@ watch(
         :closable="false"
         :title="t('files.syncInSync')"
       />
-      <el-table
-        v-else-if="tree.nodes.length"
-        :data="tree.nodes"
-        row-key="key"
-        :tree-props="{ children: 'children' }"
-        max-height="380"
-        size="small"
-        class="sync-table"
-      >
-        <!-- 复选框列：树形缩进与展开箭头由 el-table 渲染在第一个普通列，
-             即本列——这是 Element Plus 的固定行为，复选框随层级缩进。 -->
-        <el-table-column min-width="150">
-          <template #header>
-            <el-checkbox
-              :model-value="headerState === 'all'"
-              :indeterminate="headerState === 'partial'"
-              :disabled="!totalTerminals"
-              @change="toggleAll"
-            />
-          </template>
-          <template #default="{ row }">
-            <el-checkbox
-              v-if="row.role !== 'detail'"
-              :model-value="nodeState(asNode(row)) === 'all'"
-              :indeterminate="nodeState(asNode(row)) === 'partial'"
-              @change="toggleNode(asNode(row))"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('files.syncColPath')">
-          <template #default="{ row }">
-            <el-icon :size="14" class="sync-icon">
-              <component :is="iconForName(row.name, row.isDir)" />
-            </el-icon>
-            <span class="sync-path">{{ row.name }}</span>
-            <span v-if="row.remoteUpdatedAt" class="sync-time">
-              {{ formatTime(row.remoteUpdatedAt) }}
-            </span>
-            <el-tag v-if="row.remoteDeleted" type="danger" size="small" effect="plain">
-              {{ t('files.syncRemoteDeleted') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('files.syncColStatus')" width="150">
-          <template #default="{ row }">
-            <el-tag
-              v-if="row.status"
-              :type="statusType(row.status)"
-              size="small"
-              disable-transitions
-            >
-              {{ statusLabel(row.status) }}
-            </el-tag>
-            <span v-else class="sync-count">
-              {{ t('files.syncFileCount', { count: row.fileCount }) }}
-            </span>
-            <el-tag
-              v-if="row.needsRestart && row.role !== 'aggregate'"
-              type="warning"
-              size="small"
-              effect="plain"
-            >
-              {{ t('files.syncNeedsRestart') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
+      <!-- 条件放在 wrap 上而非 el-table 上：wrap 是撑高表格的 flex 项，
+           条件留在内层会让空状态残留一个占满高度的空白框，也会打断
+           与上面两个 alert 的 v-if / v-else-if 互斥链。 -->
+      <div v-else-if="tree.nodes.length" class="sync-table-wrap">
+        <el-table
+          :data="tree.nodes"
+          row-key="key"
+          :tree-props="{ children: 'children' }"
+          height="100%"
+          size="small"
+          class="sync-table"
+        >
+          <!-- 复选框列：树形缩进与展开箭头由 el-table 渲染在第一个普通列，
+               即本列——这是 Element Plus 的固定行为，复选框随层级缩进。 -->
+          <el-table-column min-width="150">
+            <template #header>
+              <el-checkbox
+                :model-value="headerState === 'all'"
+                :indeterminate="headerState === 'partial'"
+                :disabled="!totalTerminals"
+                @change="toggleAll"
+              />
+            </template>
+            <template #default="{ row }">
+              <el-checkbox
+                v-if="row.role !== 'detail'"
+                :model-value="nodeState(asNode(row)) === 'all'"
+                :indeterminate="nodeState(asNode(row)) === 'partial'"
+                @change="toggleNode(asNode(row))"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('files.syncColPath')">
+            <template #default="{ row }">
+              <el-icon :size="14" class="sync-icon">
+                <component :is="iconForName(row.name, row.isDir)" />
+              </el-icon>
+              <span class="sync-path">{{ row.name }}</span>
+              <span v-if="row.remoteUpdatedAt" class="sync-time">
+                {{ formatTime(row.remoteUpdatedAt) }}
+              </span>
+              <el-tag v-if="row.remoteDeleted" type="danger" size="small" effect="plain">
+                {{ t('files.syncRemoteDeleted') }}
+              </el-tag>
+              <!-- 本地独有且远端从无记录：与「已被他人删除」区分开，
+                   后者远端曾有记录（设计文档 §1.8）。 -->
+              <el-tag
+                v-else-if="row.status === 'A' && !row.remoteUpdatedAt"
+                type="info"
+                size="small"
+                effect="plain"
+              >
+                {{ t('files.syncRemoteMissing') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('files.syncColStatus')" width="150">
+            <template #default="{ row }">
+              <el-tag
+                v-if="row.status"
+                :type="statusType(row.status)"
+                size="small"
+                disable-transitions
+              >
+                {{ statusLabel(row.status) }}
+              </el-tag>
+              <span v-else class="sync-count">
+                {{ t('files.syncFileCount', { count: row.fileCount }) }}
+              </span>
+              <el-tag
+                v-if="row.needsRestart && row.role !== 'aggregate'"
+                type="warning"
+                size="small"
+                effect="plain"
+              >
+                {{ t('files.syncNeedsRestart') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
 
     <template #footer>
@@ -290,6 +316,16 @@ watch(
 </template>
 
 <style scoped>
+.sync-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sync-table-wrap {
+  flex: 1;
+  min-height: 0;
+}
 .sync-scope {
   margin: 0 0 12px;
   font-size: 12px;
@@ -313,6 +349,30 @@ watch(
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-right: 6px;
+}
+</style>
+
+<!-- 弹窗根元素在 scoped 作用域外，用非 scoped 规则控制尺寸与圆角，
+     模式与 SettingsModal 的 settings-dialog 一致。 -->
+<style>
+.sync-dialog {
+  /* 高度恒为视口高度减去上下各 50px，随窗口尺寸实时变化 */
+  height: calc(100vh - 100px);
+  margin-top: 0;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 圆角外框；overflow: hidden 保证内部内容不溢出直角 */
+  border-radius: 16px;
+}
+
+.sync-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 </style>
 
