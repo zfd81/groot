@@ -177,6 +177,56 @@ func TestComputeDiff_SkipsTmpFiles(t *testing.T) {
 	}
 }
 
+// TestComputeDiff_SkipsSystemFiles 验证系统生成的文件(.DS_Store 等)不进入 diff。
+// 它们由 macOS/Windows 自动生成,不属于用户配置,若列入差异会污染同步清单
+// 并被 push 推到数据库,再由其他机器 pull 下来。
+func TestComputeDiff_SkipsSystemFiles(t *testing.T) {
+	localDir := t.TempDir()
+	remoteDir := t.TempDir()
+
+	makeFile(t, localDir, "subagents/weather/agent.md", "weather\n")
+	makeFile(t, localDir, "subagents/.DS_Store", "\x00finder\n")
+	makeFile(t, localDir, "subagents/weather/.DS_Store", "\x00finder\n")
+	makeFile(t, localDir, "subagents/weather/skills/.DS_Store", "\x00finder\n")
+	makeFile(t, localDir, "subagents/weather/._agent.md", "\x00appledouble\n")
+
+	r := resourcelocal.New(remoteDir)
+	result, err := ComputeDiff(r, localDir, []string{"subagents"})
+	if err != nil {
+		t.Fatalf("ComputeDiff: %v", err)
+	}
+	if len(result.Added) != 1 || result.Added[0] != "subagents/weather/agent.md" {
+		t.Errorf("expected Added=[subagents/weather/agent.md] only, got %+v", result.Added)
+	}
+}
+
+// TestComputeDiff_SkipsSystemFilesOnRemote 验证远端已有的系统文件记录
+// (早先版本推上去的脏数据)也被忽略,不判为 Removed。
+// 若只过滤本地侧,这些记录会显示为「数据库独有」并被 pull 写回本地。
+func TestComputeDiff_SkipsSystemFilesOnRemote(t *testing.T) {
+	home := t.TempDir()
+	r := newDiffTestRepo(t)
+	ctx := context.Background()
+
+	// 远端有一条正常记录和两条系统文件脏记录,本地目录为空。
+	for _, p := range []string{"subagents/weather/agent.md", "subagents/.DS_Store", "subagents/weather/.DS_Store"} {
+		if err := r.Put(ctx, &repo.Resource{Path: p, Content: []byte("x"), Size: 1}); err != nil {
+			t.Fatalf("Put %s: %v", p, err)
+		}
+	}
+
+	result, err := ComputeDiff(r, home, []string{"subagents"})
+	if err != nil {
+		t.Fatalf("ComputeDiff: %v", err)
+	}
+	if len(result.Removed) != 1 || result.Removed[0] != "subagents/weather/agent.md" {
+		t.Errorf("expected Removed=[subagents/weather/agent.md] only, got %+v", result.Removed)
+	}
+	if _, ok := result.Remote["subagents/.DS_Store"]; ok {
+		t.Error("被忽略的远端路径不应出现在 result.Remote 中")
+	}
+}
+
 // TestComputeDiff_RemoteDeletedLocalPresentIsAdded 验证远端记录已被标记删除、
 // 本地文件仍存在时判为 Added(他人删除了这个文件,本地还留着),
 // 且差异项附带的远端元信息标明该记录已删除。

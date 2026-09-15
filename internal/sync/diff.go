@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/zfd81/groot/internal/repo"
@@ -74,6 +73,11 @@ func ComputeDiff(r repo.ResourceRepo, localBase string, paths []string) (DiffRes
 
 		remoteMap := make(map[string]*repo.ResourceEntry, len(remoteEntries))
 		for _, e := range remoteEntries {
+			// 远端也要过滤:数据库里可能有早先版本推上去的 .DS_Store 等记录,
+			// 若只过滤本地侧,它们会被判成「数据库独有」并由 pull 写回本地。
+			if IsIgnoredPath(e.Path) {
+				continue
+			}
 			remoteMap[e.Path] = e
 			result.Remote[e.Path] = RemoteMeta{
 				Deleted:   e.Status == repo.ResourceStatusDeleted,
@@ -121,7 +125,7 @@ func walkLocalFiles(localPath, localBase string) (map[string]localFileInfo, erro
 		return nil, err
 	}
 	if !info.IsDir() {
-		if strings.HasSuffix(localPath, ".tmp") {
+		if IsIgnoredPath(localPath) {
 			return files, nil
 		}
 		content, err := os.ReadFile(localPath)
@@ -137,7 +141,7 @@ func walkLocalFiles(localPath, localBase string) (map[string]localFileInfo, erro
 		return files, nil
 	}
 	return files, filepath.WalkDir(localPath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || strings.HasSuffix(path, ".tmp") {
+		if err != nil || d.IsDir() || IsIgnoredPath(path) {
 			return nil
 		}
 		content, e := os.ReadFile(path)
