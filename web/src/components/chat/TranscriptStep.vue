@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { ChatStep } from '../../stores/chat'
+import BoltIcon from '../files/BoltIcon.vue'
+import WrenchIcon from '../files/WrenchIcon.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ step: ChatStep }>()
@@ -65,12 +67,15 @@ const state = computed<'thinking' | 'running' | 'done' | 'error'>(() => {
   return 'running'
 })
 
-// 行首图标：思考💭、子 Agent🤖、技能⚡，普通工具🔧。
-const icon = computed(() => {
-  if (props.step.kind === 'reasoning') return '💭'
-  if (isSubAgent.value) return '🤖'
-  if (isSkill.value) return '⚡'
-  return '🔧'
+// 行首图标类别：思考 / 子 Agent / 技能 / 普通工具。
+// 思考与子 Agent 用 emoji（💭 / 🤖）；技能与工具用实心 SVG（BoltIcon / WrenchIcon），
+// 与工作空间头部的新建技能 / MCP 按钮共用同一套图标——⚡ / 🔧 emoji 在系统字体下
+// 笔画偏细，和 🤖 放在一起显得单薄。
+const iconKind = computed<'thinking' | 'agent' | 'skill' | 'tool'>(() => {
+  if (props.step.kind === 'reasoning') return 'thinking'
+  if (isSubAgent.value) return 'agent'
+  if (isSkill.value) return 'skill'
+  return 'tool'
 })
 
 // 折叠成一行的摘要文本。
@@ -136,7 +141,11 @@ function toggle() {
 <template>
   <div class="step" :class="{ clickable: hasDetail }">
     <div class="step-head" @click="toggle">
-      <span class="icon">{{ icon }}</span>
+      <span class="icon">
+        <el-icon v-if="iconKind === 'skill'" class="icon-svg"><BoltIcon /></el-icon>
+        <el-icon v-else-if="iconKind === 'tool'" class="icon-svg wrench"><WrenchIcon /></el-icon>
+        <template v-else>{{ iconKind === 'agent' ? '🤖' : '💭' }}</template>
+      </span>
       <span class="label">{{ label }}</span>
       <span v-if="state === 'running'" class="dot-loading">·</span>
       <span v-else class="sep">·</span>
@@ -187,8 +196,18 @@ function toggle() {
 }
 .icon {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
   opacity: 0.8;
   font-size: 0.9em;
+}
+/* SVG 图标按 1em 继承字号，视觉上比同字号 emoji 略小，放大一档与 🤖 / 💭 等大 */
+.icon-svg {
+  font-size: 1.1em;
+}
+/* 扳手轮廓比闪电更撑满画布，同字号下显得偏大，再收一档 */
+.icon-svg.wrench {
+  font-size: 1em;
 }
 .label {
   flex-shrink: 0;

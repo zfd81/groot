@@ -2,10 +2,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  MagicStick, Connection, Avatar, FullScreen, Refresh, Sort,
-} from '@element-plus/icons-vue'
+import { FullScreen, Refresh, Sort } from '@element-plus/icons-vue'
 import PanelIcon from './PanelIcon.vue'
+import BoltIcon from './BoltIcon.vue'
+import WrenchIcon from './WrenchIcon.vue'
 import FileTree from './FileTree.vue'
 import FilePreview from './FilePreview.vue'
 import FileEditorModal from './FileEditorModal.vue'
@@ -102,31 +102,43 @@ function onPulled() {
 
     <header class="panel-head">
       <span class="panel-title">{{ t('files.title') }}</span>
-      <button class="head-icon" type="button" :title="t('files.newSkill')"
-        @click="scaffold('skill', t('files.newSkill'))">
-        <el-icon :size="16"><MagicStick /></el-icon>
-      </button>
-      <button class="head-icon" type="button" :title="t('files.newMcp')"
-        @click="scaffold('mcp', t('files.newMcp'))">
-        <el-icon :size="16"><Connection /></el-icon>
-      </button>
-      <button class="head-icon" type="button" :title="t('files.newAgent')"
-        @click="scaffold('agent', t('files.newAgent'))">
-        <el-icon :size="16"><Avatar /></el-icon>
-      </button>
-      <button v-if="!syncDisabled" class="head-icon" type="button" :title="t('files.sync')"
-        @click="openSync()">
-        <el-icon :size="16"><Sort /></el-icon>
-      </button>
+      <!-- 原生 title 提示的出现延迟由浏览器固定（约 1s），改用 el-tooltip 缩短到 200ms，
+           与 SettingsModal 中 Agent 卡片按钮的做法一致。 -->
+      <el-tooltip :content="t('files.newSkill')" :show-after="200" placement="bottom">
+        <button class="head-icon" type="button" @click="scaffold('skill', t('files.newSkill'))">
+          <el-icon :size="17"><BoltIcon /></el-icon>
+        </button>
+      </el-tooltip>
+      <el-tooltip :content="t('files.newMcp')" :show-after="200" placement="bottom">
+        <button class="head-icon" type="button" @click="scaffold('mcp', t('files.newMcp'))">
+          <el-icon :size="17"><WrenchIcon /></el-icon>
+        </button>
+      </el-tooltip>
+      <el-tooltip :content="t('files.newAgent')" :show-after="200" placement="bottom">
+        <button class="head-icon" type="button" @click="scaffold('agent', t('files.newAgent'))">
+          <span class="head-emoji" aria-hidden="true">🤖</span>
+        </button>
+      </el-tooltip>
+      <el-tooltip v-if="!syncDisabled" :content="t('files.sync')" :show-after="200" placement="bottom">
+        <button class="head-icon" type="button" @click="openSync()">
+          <el-icon :size="16"><Sort /></el-icon>
+        </button>
+      </el-tooltip>
       <span class="head-gap"></span>
-      <button class="head-icon" type="button"
-        :title="files.fullscreen ? t('files.exitFullscreen') : t('files.fullscreen')"
-        @click="files.fullscreen = !files.fullscreen">
-        <el-icon :size="15"><FullScreen /></el-icon>
-      </button>
-      <button class="head-icon" type="button" :title="t('files.collapse')" @click="files.toggle()">
-        <el-icon :size="16"><PanelIcon /></el-icon>
-      </button>
+      <el-tooltip
+        :content="files.fullscreen ? t('files.exitFullscreen') : t('files.fullscreen')"
+        :show-after="200"
+        placement="bottom"
+      >
+        <button class="head-icon" type="button" @click="files.fullscreen = !files.fullscreen">
+          <el-icon :size="15"><FullScreen /></el-icon>
+        </button>
+      </el-tooltip>
+      <el-tooltip :content="t('files.collapse')" :show-after="200" placement="bottom">
+        <button class="head-icon" type="button" @click="files.toggle()">
+          <el-icon :size="16"><PanelIcon /></el-icon>
+        </button>
+      </el-tooltip>
     </header>
 
     <div class="path-bar">
@@ -196,6 +208,13 @@ function onPulled() {
   opacity: 0.65;
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s;
+}
+/* 技能 / MCP 工具 / Agent 三个新建按钮沿用对话区 TranscriptStep 行首的 ⚡ / 🔧 / 🤖
+   语义。前两者 emoji 在系统字体下笔画偏细，改为实心 SVG（BoltIcon / WrenchIcon，17px）；
+   🤖 保留 emoji，字号按 28px 按钮位取 15px，与相邻线性图标视觉等大。 */
+.head-emoji {
+  font-size: 15px;
+  line-height: 1;
 }
 .head-icon:hover {
   background: rgba(127, 127, 127, 0.12);
