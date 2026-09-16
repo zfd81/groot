@@ -212,6 +212,7 @@ async function onUploadChange(e: Event) {
   const file = input.files?.[0]
   input.value = '' // 允许连续上传同一个文件
   if (!file) return
+  if (uploading.value) return // 目录上传进行中，不混入单文件上传
   await run(() => filesApi.upload(uploadDir.value, file))
 }
 
@@ -240,6 +241,10 @@ async function onDirChange(e: Event) {
   const picked = Array.from(input.files ?? [])
   input.value = '' // 允许连续选择同一目录
   if (!picked.length) return
+  // 重入守卫：v-loading 遮罩是树容器内随内容滚动的绝对定位子元素，
+  // 树高于视口时向下滚动会让遮罩滚出视口、下方行菜单裸露可点，
+  // 不拦的话第二个编排会与进行中的批次互踩 uploading/progress/uploadDir。
+  if (uploading.value) return
 
   // 相对路径任一段以 "." 开头的文件（.DS_Store、.git/ 内容）一律跳过，
   // 与后端列表接口过滤隐藏项的行为一致；后端也会拒绝这类段，前端过滤
@@ -265,11 +270,11 @@ async function onDirChange(e: Event) {
   try {
     try {
       await filesApi.uploadPrepare(dir, rootName)
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
         ElMessage.error(t('files.uploadDirExists', { name: rootName }))
       } else {
-        ElMessage.error(e instanceof ApiError ? e.message : t('files.opFailed'))
+        ElMessage.error(err instanceof ApiError ? err.message : t('files.opFailed'))
       }
       return
     }
