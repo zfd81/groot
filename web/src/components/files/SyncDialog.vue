@@ -224,7 +224,9 @@ watch(
         >
           <!-- 复选框列：树形缩进与展开箭头由 el-table 渲染在第一个普通列，
                即本列——这是 Element Plus 的固定行为，复选框随层级缩进。 -->
-          <el-table-column min-width="150">
+          <!-- 固定宽而非 min-width：min-width 列会参与剩余空间分配，把路径列挤窄。
+               120px 容得下最深层级（skill 明细行 4 级缩进 64px + 箭头 + 复选框）。 -->
+          <el-table-column width="120">
             <template #header>
               <el-checkbox
                 :model-value="headerState === 'all'"
@@ -251,22 +253,25 @@ watch(
               <span v-if="row.remoteUpdatedAt" class="sync-time">
                 {{ formatTime(row.remoteUpdatedAt) }}
               </span>
+              <!-- 远端曾有记录但已被删除。「远端从无记录」不标，那与状态列的
+                   「本地独有」是同一件事，标了是重复描述。 -->
               <el-tag v-if="row.remoteDeleted" type="danger" size="small" effect="plain">
                 {{ t('files.syncRemoteDeleted') }}
               </el-tag>
-              <!-- 本地独有且远端从无记录：与「已被他人删除」区分开，
-                   后者远端曾有记录（设计文档 §1.8）。 -->
+              <!-- 重启只与拉取有关：推送只写数据库，本地运行时配置不变。
+                   对话框两个方向共用一份清单，无法按方向切换显隐，故文案自带
+                   「拉取后」限定，避免被读成对推送也适用。聚合行不标。 -->
               <el-tag
-                v-else-if="row.status === 'A' && !row.remoteUpdatedAt"
-                type="info"
+                v-if="row.needsRestart && row.role !== 'aggregate'"
+                type="danger"
                 size="small"
                 effect="plain"
               >
-                {{ t('files.syncRemoteMissing') }}
+                {{ t('files.syncNeedsRestart') }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column :label="t('files.syncColStatus')" width="150">
+          <el-table-column :label="t('files.syncColStatus')" width="110">
             <template #default="{ row }">
               <el-tag
                 v-if="row.status"
@@ -279,14 +284,6 @@ watch(
               <span v-else class="sync-count">
                 {{ t('files.syncFileCount', { count: row.fileCount }) }}
               </span>
-              <el-tag
-                v-if="row.needsRestart && row.role !== 'aggregate'"
-                type="warning"
-                size="small"
-                effect="plain"
-              >
-                {{ t('files.syncNeedsRestart') }}
-              </el-tag>
             </template>
           </el-table-column>
         </el-table>
@@ -304,7 +301,7 @@ watch(
         {{ t('files.syncPush') }}
       </el-button>
       <el-button
-        type="warning"
+        type="success"
         :disabled="disabled || inSync || !checked.size"
         :loading="applying"
         @click="apply('pull')"

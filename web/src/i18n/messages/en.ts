@@ -256,7 +256,7 @@ export default {
     uploadDirTooMany: 'The selected folder has {count} files, over the per-batch limit of {limit}',
     uploadDirEmpty: 'The selected folder has no uploadable files',
     uploadDirExists: 'A folder named {name} already exists at the target; delete it and retry',
-    uploadDirFailed: 'Upload stopped at {path} ({done}/{total} succeeded); uploaded files are kept — delete the target folder and retry',
+    uploadDirFailed: 'Upload stopped at {path} ({done}/{total} succeeded): {reason}',
     deleteConfirm: 'Delete {name}? This cannot be undone.',
     back: 'Back',
     edit: 'Edit',

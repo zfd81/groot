@@ -1,6 +1,27 @@
 package sync
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
+
+// needsRestartPaths 列出拉取后需要重启服务才生效的路径前缀。
+// 参考 spec §1.10.1。
+var needsRestartPaths = []string{
+	"config.yaml",
+	"mcp/",
+	"subagents/",
+}
+
+// needsRestart 判断单个路径是否属于需重启的资源。
+func needsRestart(p string) bool {
+	for _, prefix := range needsRestartPaths {
+		if p == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // WebDiffEntry 是一条差异记录,面向 Web 面板展示。
 // Status 取值以本地为基准:
@@ -34,7 +55,6 @@ func BuildWebDiff(d DiffResult) WebDiffView {
 	}
 	add := func(paths []string, status string) {
 		for _, p := range paths {
-			// 复用 CLI 渲染的同一个谓词,避免 CLI 与 Web 的重启规则漂移。
 			restart := needsRestart(p)
 			e := WebDiffEntry{
 				Path:         p,

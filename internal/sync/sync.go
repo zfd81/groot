@@ -1,16 +1,14 @@
 package sync
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/zfd81/groot/internal/repo"
 )
@@ -127,10 +125,16 @@ func (m *localSyncManager) pushOne(ctx context.Context, rel string) error {
 	if err != nil {
 		return fmt.Errorf("sync push read %s: %w", rel, err)
 	}
+	// ContentHash 必须由调用方算好：resourcedb.Put 原样存储该字段，不会自行补算。
+	// 留空会让下一次 ComputeDiff 拿本地 SHA-1 与空串比较，把刚推上去的文件判为
+	// Modified，陷入「推送后仍显示内容不同」的死循环。哈希算法须与 ComputeDiff
+	// 的本地侧一致（SHA-1 hex）。
 	if err := m.repo.Put(ctx, &repo.Resource{
-		Path:    rel,
-		Content: content,
-		Size:    int64(len(content)),
+		Path:        rel,
+		Content:     content,
+		Size:        int64(len(content)),
+		ContentHash: sha1Hex(content),
+		UpdatedAt:   time.Now(),
 	}); err != nil {
 		return fmt.Errorf("sync push %s: %w", rel, err)
 	}
@@ -288,25 +292,4 @@ func cleanTmpFiles(homeDir string, resolved []string) error {
 		})
 	}
 	return nil
-}
-
-// --- 交互确认 ---
-
-// ConfirmContinue 在 stdout 显示提示并等待用户输入 y/Y/yes 后返回 true。
-// 若 stdin 不是 tty 或用户输入其他内容,返回 false(取消)。
-func ConfirmContinue(r io.Reader, w io.Writer) bool {
-	fmt.Fprintf(w, "Continue? (y/n): ")
-	scanner := bufio.NewScanner(r)
-	if scanner.Scan() {
-		ans := strings.TrimSpace(strings.ToLower(scanner.Text()))
-		return ans == "y" || ans == "yes"
-	}
-	return false
-}
-
-// FormatDiff 把 DiffResult 以 string 返回(用于命令输出)。
-func FormatDiff(d DiffResult, direction string) string {
-	var buf bytes.Buffer
-	RenderDiff(&buf, d, direction)
-	return buf.String()
 }

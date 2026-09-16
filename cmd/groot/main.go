@@ -33,7 +33,6 @@ import (
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/message/senders"
-	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/repo/repofactory"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
@@ -82,15 +81,6 @@ func main() {
 			return
 		case "tail":
 			handleTailCommand(args[1:])
-			return
-		case "push":
-			handlePushCommand(args[1:])
-			return
-		case "pull":
-			handlePullCommand(args[1:])
-			return
-		case "diff":
-			handleDiffCommand(args[1:])
 			return
 		case "user":
 			handleUserCommand(args[1:])
@@ -149,13 +139,6 @@ func openRepos(homeDir string) *repofactory.Repos {
 	return repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 }
 
-// openSyncRepo 为 push/pull/diff 子命令加载配置并打开数据库,返回同步要比较的
-// 远端 ResourceRepo。SQLite 模式下没有可比较的远端,SyncResource 为 nil,
-// 因此 sync 子命令返回 ErrSyncDisabled。
-func openSyncRepo(homeDir string) repo.ResourceRepo {
-	return openRepos(homeDir).SyncResource
-}
-
 func handleUserCommand(args []string) {
 	flags, err := cmd.ParseUserFlags(args)
 	if err != nil {
@@ -165,48 +148,6 @@ func handleUserCommand(args []string) {
 	homeDir := cmd.GetDefaultHome()
 	repos := openRepos(homeDir)
 	if err := cmd.RunUserReset(flags, repos.User, os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-}
-
-func handlePushCommand(args []string) {
-	flags, err := cmd.ParsePushFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-	homeDir := cmd.GetDefaultHome()
-	r := openSyncRepo(homeDir)
-	if err := cmd.RunPush(flags, r); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-}
-
-func handlePullCommand(args []string) {
-	flags, err := cmd.ParsePullFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-	homeDir := cmd.GetDefaultHome()
-	r := openSyncRepo(homeDir)
-	if err := cmd.RunPull(flags, r); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-}
-
-func handleDiffCommand(args []string) {
-	flags, err := cmd.ParseDiffFlags(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
-		os.Exit(1)
-	}
-	homeDir := cmd.GetDefaultHome()
-	r := openSyncRepo(homeDir)
-	if err := cmd.RunDiff(flags, r); err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 		os.Exit(1)
 	}
@@ -520,9 +461,6 @@ func printHelp() {
 	fmt.Println("  init              初始化工作目录")
 	fmt.Println("  status            查看运行中实例的状态")
 	fmt.Println("  tail              实时日志查看")
-	fmt.Println("  push              将本地配置推送到数据库（MySQL/PG 模式）")
-	fmt.Println("  pull              从数据库拉取配置到本地（MySQL/PG 模式）")
-	fmt.Println("  diff              显示本地与数据库的配置差异（MySQL/PG 模式）")
 	fmt.Println("  user              管理 Web 登录用户（reset）")
 	fmt.Println()
 	fmt.Println("选项:")

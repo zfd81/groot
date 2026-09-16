@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/zfd81/groot/internal/repo"
-	isync "github.com/zfd81/groot/internal/sync"
 )
 
 // UserFlags holds parsed flags for the user command.
@@ -63,6 +63,18 @@ func printUserHelp() {
 	fmt.Println("  groot user reset -y   # 跳过确认直接删除")
 }
 
+// confirmContinue 在 out 显示提示并等待用户输入 y/Y/yes 后返回 true。
+// 若输入其他内容或读取失败（含 EOF / 非 tty），返回 false（取消）。
+func confirmContinue(r io.Reader, w io.Writer) bool {
+	fmt.Fprintf(w, "Continue? (y/n): ")
+	scanner := bufio.NewScanner(r)
+	if scanner.Scan() {
+		ans := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		return ans == "y" || ans == "yes"
+	}
+	return false
+}
+
 // RunUserReset 执行 groot user reset。users 由 main.go 注入，
 // in/out 为交互确认的输入输出（便于测试注入）。
 func RunUserReset(flags *UserFlags, users repo.UserRepo, in io.Reader, out io.Writer) error {
@@ -79,7 +91,7 @@ func RunUserReset(flags *UserFlags, users repo.UserRepo, in io.Reader, out io.Wr
 
 	fmt.Fprintf(out, "警告: 将删除全部 %d 个用户，重置后 Web 界面需重新创建用户。\n", n)
 	if !flags.Yes {
-		if !isync.ConfirmContinue(in, out) {
+		if !confirmContinue(in, out) {
 			fmt.Fprintln(out, "已取消。")
 			return nil
 		}

@@ -1,17 +1,17 @@
 # sync 模块设计文档
 
-**日期**：2026-06-08（初版）/ 2026-06-10（迁移到数据库后端后重写）
+**日期**：2026-06-08（初版）/ 2026-06-10（迁移到数据库后端后重写）/ 2026-09-16（同步入口收敛到 Web）
 **状态**：实现稿
 
 ## 一、功能设计
 
 ### 1.1 功能概述
 
-sync 模块负责本地 HOME 目录（`~/.groot/`）与数据库 `shared_resources` 表之间的"集群共享配置"双向镜像同步，并通过 `groot push` / `groot pull` / `groot diff` 三个子命令暴露给用户。
+sync 模块负责本地 HOME 目录（`~/.groot/`）与数据库 `shared_resources` 表之间的"集群共享配置"双向镜像同步，通过 Web 工作空间面板的同步对话框暴露给用户（HTTP 端点 `/web/sync/diff`、`/web/sync/push`、`/web/sync/pull`，Web 侧设计详见 [web-sync 设计文档](2026-09-14-web-sync-design.md)）。
 
-它的存在是为了在多实例集群部署下（MySQL / PostgreSQL 模式），让所有节点共享同一份"配置 / 技能 / 子 Agent / MCP / GROOT.md"等可同步资源——本地编辑后通过 push 推到数据库，新节点或落后节点通过 pull 把远端最新版镜像到本地。
+它的存在是为了在多实例集群部署下（MySQL / PostgreSQL 模式），让所有节点共享同一份"配置 / 技能 / 子 Agent / MCP / GROOT.md"等可同步资源——本地编辑后推送到数据库，新节点或落后节点从数据库拉取远端最新版镜像到本地。
 
-仅在 MySQL / PostgreSQL 模式下可用；SQLite 模式下三个命令统一返回 `ErrSyncDisabled`。
+仅在 MySQL / PostgreSQL 模式下可用；SQLite 模式下所有同步操作统一返回 `ErrSyncDisabled`。
 
 ### 1.2 同步资源白名单
 
@@ -68,7 +68,7 @@ func NewSyncManager(homeDir string, r repo.ResourceRepo) SyncManager
 - `r == nil` → 返回 `disabledSyncManager`，所有方法返回 `ErrSyncDisabled`
 - `r != nil` → 返回可用的 `localSyncManager`
 
-[`repofactory.NewRepos`](../../../internal/repo/repofactory) 在 SQLite dialect 下把 `Resource` 字段绑定到 [`resourcelocal.New(homeDir)`](../../../internal/repo/resourcelocal/resource.go)（落本地文件系统的实现），在 MySQL/PostgreSQL dialect 下绑定到 [`resourcedb.New(...)`](../../../internal/repo/resourcedb/resource.go)。两种情况下 `r` 都是非 nil 的，因此 `disabledSyncManager` 实际不会被构造出来——SQLite 模式下 sync 命令也会执行流程，只是它做的是 local-vs-local 镜像。
+[`repofactory.NewRepos`](../../../internal/repo/repofactory) 在 SQLite dialect 下把 `Resource` 字段绑定到 [`resourcelocal.New(homeDir)`](../../../internal/repo/resourcelocal/resource.go)（落本地文件系统的实现），在 MySQL/PostgreSQL dialect 下绑定到 [`resourcedb.New(...)`](../../../internal/repo/resourcedb/resource.go)。同步入口使用 `Repos.SyncResource`：SQLite 模式下它为 nil，`NewSyncManager` 返回 `disabledSyncManager`，Web 端点统一回 409 `sync_disabled`。
 
 #### 1.4.2 ErrSyncDisabled
 
@@ -93,7 +93,7 @@ type DiffResult struct {
 }
 ```
 
-**语义恒定**：`Added` / `Removed` 始终以"本地 vs 远端"为锚，与命令方向无关。push / pull / diff 三个命令在渲染层根据自己的语义重新解释这四组（见 §1.10）。
+**语义恒定**：`Added` / `Removed` 始终以"本地 vs 远端"为锚，与操作方向无关。展示层（`BuildWebDiff`）据此把差异折成面向 Web 面板的扁平清单（见 §1.10）。
 
 `IsEmpty()` 仅看 `Added + Modified + Removed`，`Same` 不参与判断。
 
@@ -205,181 +205,79 @@ os.Rename(tmp, localPath)
 | push | 同上，`*.tmp` 永远不会被推到远端 |
 | pull 写入 | tmp 仅作为单文件 rename 中转，rename 后立即消失 |
 
-### 1.10 输出格式（`RenderDiff` / `FormatDiff`）
+### 1.10 展示层（`BuildWebDiff`）
 
-`RenderDiff(w, d, direction)` 按 `direction` 选三种渲染分支：
+`BuildWebDiff(d DiffResult) WebDiffView` 把 `DiffResult` 折成按路径升序的扁平清单，面向 Web 同步对话框展示：
 
-#### 1.10.1 push（`direction == "push"`，默认分支）
+- `Added` → 状态 `"A"`（本地有，远端无有效记录）
+- `Modified` → 状态 `"M"`（双侧都有但内容不同）
+- `Removed` → 状态 `"D"`（远端有，本地无）
+- `Same` 不进入结果——面板只展示需要决策的条目
 
-```
-Changes to push (HOME → MinIO):
-  Added:
-    <files...>
-  Modified:
-    <files...>
-  Removed:
-    <files...>
-```
+每条记录附带 `RemoteDeleted`（远端存在删除标记，说明该文件是被他人删除的而非本地新建）、`RemoteUpdatedAt`（远端记录更新时间，毫秒）与 `NeedsRestart` 标记。
 
-#### 1.10.2 pull（`direction == "pull"`）
+#### 1.10.1 重启提示判定
 
-按 pull 视角反向措辞：
-
-```
-Changes to pull (MinIO → HOME):
-  Removed locally:                                   # ← 来自 d.Added
-    <files...>
-  Modified locally (overwritten by remote):          # ← 来自 d.Modified
-    <files...>
-  Added locally:                                     # ← 来自 d.Removed
-    <files...>
-```
-
-#### 1.10.3 diff（`direction == "diff"`，中性措辞）
-
-```
-Differences (HOME ↔ MinIO):
-  Local only:                                        # ← 来自 d.Added
-    <files...>
-  Modified (size or mtime differs):
-    <files...>
-  Remote only:                                       # ← 来自 d.Removed
-    <files...>
-```
-
-#### 1.10.4 无差异
-
-无论 direction，输出一行：`No differences found — already in sync.`
-
-#### 1.10.5 重启提示（仅 pull）
-
-`anyNeedsRestart(allChanged)` 返回 true 时，pull 输出末尾追加：
-
-```
-⚠  Some resources require a service restart to take effect:
-   config.yaml, mcp configs, subagent entry files (agent.md).
-   Please restart groot after pull completes.
-```
-
-判定算法：变更路径满足以下条件之一即为"需重启"：
+变更路径满足以下条件之一即为"需重启"（`needsRestart`）：
 
 - `path == "config.yaml"`
 - `path` 以 `mcp/` 或 `subagents/` 前缀开始
 
-push 与 diff 不输出重启提示。
+任意条目命中时 `WebDiffView.NeedsRestart` 为 true，由前端在拉取完成后提示用户重启服务。
 
-### 1.11 ConfirmContinue 交互
-
-`ConfirmContinue(r io.Reader, w io.Writer) bool`：
-
-- 在 `w` 写 `Continue? (y/n): `
-- 从 `r` 读一行
-- 转小写并 trim 后，仅 `y` 或 `yes` 返回 true，其余（含 EOF / 非 tty）返回 false
-
-### 1.12 命令行接口
-
-#### 1.12.1 通用前置流程
-
-三个命令的入口（`cmd/groot/main.go::openSyncRepo`）按相同顺序：
-
-1. `homeDir := cmd.GetDefaultHome()`
-2. `cfg := config.Load(homeDir)`
-3. `db.Open(cfg.Database, homeDir)` 初始化数据库连接（SQLite / MySQL / PostgreSQL 任意一种均可）
-4. `repofactory.NewRepos(sqlxDB, dialect, homeDir)` 构造 `ResourceRepo`：SQLite dialect 下绑定到 `resourcelocal`，MySQL/PG dialect 下绑定到 `resourcedb`
-5. `mgr := sync.NewSyncManager(homeDir, repos.Resource)`
-
-SQLite 模式下 `repos.Resource` 仍是非 nil 的 `resourcelocal` 实例，sync 命令会执行 local-vs-local 镜像；MySQL/PG 模式下走 `resourcedb` 实现，与 `shared_resources` 表交互。
-
-#### 1.12.2 `groot push [path...] [-y]`
-
-参数：
-- `path...`：要推送的资源路径（可多个），省略时推送全部白名单资源
-- `-y, --yes`：跳过交互确认（适用于脚本化部署）
-- `-h, --help`：显示帮助
-
-执行：
-1. `mgr.Diff(paths)` 扫描差异
-2. `FormatDiff(diff, "push")` 输出
-3. `IsEmpty()` 直接返回（无差异）
-4. 非 `-y` 模式 → `ConfirmContinue`，用户取消则输出 `Cancelled.` 并返回 nil
-5. `mgr.Push(paths)` 执行
-6. 输出 `Push complete.`
-
-push 链路扫描两次差异（确认前 `Diff` 一次 + `Push` 内部 `ComputeDiff` 一次），确认期间发生的内容漂移以执行时点的扫描为准。
-
-#### 1.12.3 `groot pull [path...] [-y]`
-
-参数与 push 相同。
-
-执行：
-1. `mgr.CleanTmpResidue(paths)`（best-effort，错误吞掉）
-2. `mgr.Diff(paths)` 扫描
-3. `FormatDiff(diff, "pull")` 输出（含重启提示）
-4. `IsEmpty()` 直接返回
-5. 非 `-y` 模式 → `ConfirmContinue`
-6. `mgr.Pull(paths)` 执行（Phase A → Phase B）
-7. 输出 `Pull complete.`
-
-#### 1.12.4 `groot diff [path...]`
-
-参数：
-- `path...`：要比较的资源路径（可多个），省略时比较全部白名单资源
-- `-h, --help`：显示帮助
-
-只读，不修改任何文件，不做交互确认。
-
-执行：
-1. `mgr.Diff(paths)` 扫描
-2. `FormatDiff(diff, "diff")` 输出（中性措辞，不含重启提示）
-
-### 1.13 错误约定
+### 1.11 错误约定
 
 | 错误 | 来源 | 处理 |
 |---|---|---|
-| `ErrSyncDisabled` | `r == nil` 时调用 `disabledSyncManager` 任意方法 | 透传到 main.go 由用户看到 |
-| `sync: empty path` / `path traversal` / `not in whitelist` | `ValidateSyncPath` | 直接返回给用户，提示路径非法 |
+| `ErrSyncDisabled` | `r == nil` 时调用 `disabledSyncManager` 任意方法 | HTTP 层统一映射为 409 `sync_disabled` |
+| `sync: empty path` / `path traversal` / `not in whitelist` | `ValidateSyncPath` | HTTP 层映射为 400 `invalid_request`，提示路径非法 |
 | `sync: path %q is inside a skill directory` | 同上 | 提示用户改用整个 skill 目录 |
 | `sync push %s: ...` / `sync pull %s: ...` | pushOne/pullOne 包装 | 透传底层 `repo.Put/Get/Delete` 错误 |
-| `repo.ErrNotFound`（push 删远端、pull 删本地） | 幂等场景 | 视为成功，不返回错误 |
+| `repo.ErrNotFound`（推送删远端、拉取删本地） | 幂等场景 | 视为成功，不返回错误 |
 
-### 1.14 安全约束
+### 1.12 安全约束
 
 - 路径遍历：拒绝任何含 `..` 的输入
 - 白名单：只接受 `SyncableResourceRoots` 范围内的路径
 - skill 目录原子性：拒绝直接操作 `skills/<skill>/<file>` 与 `subagents/<name>/skills/<skill>/<file>`
-- 权限：sync 操作不修改文件 mode，pull 写入新文件统一为 `0644`，新建目录 `0755`
+- 权限：sync 操作不修改文件 mode，拉取写入新文件统一为 `0644`，新建目录 `0755`
 - 凭据隔离：数据库凭据从 env.yaml 加载，sync 模块不直接读 env
 
-### 1.15 文件结构
+### 1.13 文件结构
 
 ```
 internal/sync/
 ├── sync.go         SyncManager 接口、disabledSyncManager、localSyncManager、push/pull 流程
 ├── diff.go         DiffResult、ComputeDiff、walkLocalFiles
-├── render.go       RenderDiff、FormatDiff、重启提示判定
+├── webview.go      WebDiffEntry/WebDiffView、BuildWebDiff、重启提示判定
 ├── resource.go     SyncableResourceRoots、ValidateSyncPath、isDirectSkillFile
-├── resolver.go     ResolveLocalPaths（辅助函数，当前 cmd 链路未直接使用）
+├── resolver.go     ResolveLocalPaths（辅助函数，当前主链路未直接使用）
 └── *_test.go       单元测试
 
-internal/cmd/
-├── push.go         PushFlags、ParsePushFlags、RunPush
-├── pull.go         PullFlags、ParsePullFlags、RunPull
-└── diff_cmd.go     DiffFlags、ParseDiffFlags、RunDiff
+internal/api/handler/
+└── sync.go         SyncHandler：/web/sync/diff|push|pull 三个端点的 HTTP 绑定层
 ```
 
-#### 1.15.1 resolver.go 的当前定位
+#### 1.13.1 resolver.go 的当前定位
 
 `ResolveLocalPaths` 提供"类别目录展开为子项列表"的能力（`skills` → `skills/weather`、`skills/translator`...），是一个独立的辅助函数。`Push/Pull/Diff` 链路调用的是 `resolveSyncPaths`（仅校验，不展开），递归展开交给 `ComputeDiff` 内部的 walker（`walkLocalFiles` + `ResourceRepo.List`）处理。`ResolveLocalPaths` 不参与主 sync 流程，仅自带单元测试覆盖。
 
-### 1.16 可观测性
+### 1.14 可观测性
 
-- 命令行直接 `fmt.Println` 输出关键状态（"Scanning differences..."、"Push complete."、"Cancelled."）
 - 不写日志文件、不接入 message 模块
-- 错误通过 `error` 链路向上层传递，由 `main.go` 统一打印并返回非零退出码
+- 错误通过 `error` 链路向上层传递，由 HTTP 绑定层（`internal/api/handler/sync.go`）统一映射为状态码与业务 status 值
 
 ## 二、迭代说明
 
-### 2.1 与上一版差异
+### 2.1 2026-09-16：同步入口收敛到 Web
+
+- **移除**：`groot push` / `groot pull` / `groot diff` 三个 CLI 子命令（`internal/cmd/push.go`、`pull.go`、`diff_cmd.go` 及 `cmd/groot/main.go` 中的注册与 `openSyncRepo`）
+- **移除**：CLI 渲染层 `RenderDiff` / `FormatDiff`（`internal/sync/render.go`）
+- **移除**：`sync.ConfirmContinue` 交互确认（`groot user reset` 的确认逻辑改为 `internal/cmd` 包内实现）
+- **调整**：重启提示判定 `needsRestart` 迁移到 `webview.go`，语义不变
+- **保留**：`SyncManager` 接口与全部同步语义（白名单、diff 算法、Phase A→B、`*.tmp` 过滤等），Web 端点 `/web/sync/*` 是唯一入口
+
+### 2.2 2026-06-10：迁移到数据库后端
 
 历史版本基于 MinIO 对象存储 + size+mtime 容差实现，文档详见 [`archive/2026-06-08-sync-design.md`](archive/2026-06-08-sync-design.md)。本版相对上一版的差异：
 

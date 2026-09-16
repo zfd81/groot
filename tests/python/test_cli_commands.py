@@ -1,4 +1,4 @@
-"""CLI 命令系统测试（groot init / user reset / status / push / --help）。
+"""CLI 命令系统测试（groot init / user reset / status / --help）。
 
 所有会写配置或删用户的用例均使用独立临时 GROOT_HOME（tempfile.mkdtemp），
 不碰共享 TEST_HOME：user reset 会清空用户表、init 会写配置文件。
@@ -12,16 +12,13 @@
   实时反映用户表计数。
 - status（internal/cmd/status.go）：GET /web/health；服务未运行时打印
   「未检测到运行中的 Groot 实例」并以退出码 0 结束。
-- push（internal/cmd/push.go + internal/sync/sync.go）：SQLite 模式下
-  ResourceRepo 为 nil → disabledSyncManager → 报 ErrSyncDisabled，退出码 1。
 
 用例点：
 - TC-CLI-101 groot init 生成 config.yaml（含非空 secret、0600）/env.yaml/GROOT.md/子目录
 - TC-CLI-102 重复 init 跳过已有文件，secret 不被覆盖
-- TC-CLI-103 groot --help 含 init/status/tail/push/pull/diff/user，不含 chat/schedule 子命令
+- TC-CLI-103 groot --help 含 init/status/tail/user，不含已移除的 chat/schedule/push/pull/diff 子命令
 - TC-CLI-104 groot status 未运行实例：提示未检测到，退出码 0
 - TC-CLI-105 groot status 运行中实例（共享服务）：输出健康信息
-- TC-CLI-106 groot push（SQLite 模式）：报「仅在 MySQL/PostgreSQL 模式下可用」，退出码 1
 - TC-CLI-107 user reset 空表：提示「用户表为空」，退出码 0
 - TC-CLI-108 独立实例全流程：空库 setup 弱密码 400 → setup 成功 →
   schedule 未启用时 /schedule 返回 503 schedule_unavailable →
@@ -140,15 +137,15 @@ class TestGrootHelp:
     """groot --help 子命令清单"""
 
     def test_help_lists_subcommands(self, temp_home):
-        """TC-CLI-103: 帮助含全部子命令，不含已移除的 chat/schedule"""
+        """TC-CLI-103: 帮助含全部子命令，不含已移除的 chat/schedule/push/pull/diff"""
         result = _run_groot(["--help"], temp_home)
         assert result.returncode == 0
         out = result.stdout
-        for sub in ("init", "status", "tail", "push", "pull", "diff", "user"):
+        for sub in ("init", "status", "tail", "user"):
             assert sub in out, f"帮助应包含子命令 {sub}"
-        # Chat TUI 与调度 CLI 已移除，帮助不应再出现
-        assert "chat" not in out, "帮助不应包含已移除的 chat 子命令"
-        assert "schedule" not in out, "帮助不应包含已移除的 schedule 子命令"
+        # Chat TUI、调度 CLI 与配置同步 CLI（同步已移至 Web 工作空间）均已移除
+        for sub in ("chat", "schedule", "push", "pull", "diff"):
+            assert sub not in out, f"帮助不应包含已移除的 {sub} 子命令"
 
 
 class TestGrootStatus:
@@ -168,19 +165,6 @@ class TestGrootStatus:
         assert "Groot 实例状态" in result.stdout
         assert "状态:" in result.stdout
         assert f"端口:      {TEST_PORT}" in result.stdout
-
-
-class TestGrootPush:
-    """groot push 在 SQLite 模式下不可用"""
-
-    def test_push_sqlite_local_noop(self, temp_home):
-        """TC-CLI-106: SQLite 模式下 push 走本地文件系统实现（空跑），
-        扫描后报告无差异、退出码 0（见 repofactory：SQLite 用 resourcelocal，
-        MySQL/PG 才用数据库实现做真正同步）"""
-        assert _run_groot(["init"], temp_home).returncode == 0
-        result = _run_groot(["push", "-y"], temp_home)
-        assert result.returncode == 0, result.stderr
-        assert "No differences" in result.stdout
 
 
 class TestGrootUserReset:

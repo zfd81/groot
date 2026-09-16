@@ -256,7 +256,7 @@ export default {
     uploadDirTooMany: '所选目录包含 {count} 个文件，超出单批 {limit} 个的上限',
     uploadDirEmpty: '所选目录没有可上传的文件',
     uploadDirExists: '目标位置已存在同名目录 {name}，请先删除后重试',
-    uploadDirFailed: '上传中断于 {path}（已成功 {done}/{total}）；已上传的部分保留，请删除目标目录后重试',
+    uploadDirFailed: '上传中断于 {path}（已成功 {done}/{total}）：{reason}',
     deleteConfirm: '确定删除 {name} 吗？此操作不可恢复。',
     back: '返回',
     edit: '编辑',

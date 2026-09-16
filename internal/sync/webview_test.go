@@ -131,3 +131,38 @@ func TestBuildWebDiff_EmptyDiffIsInSync(t *testing.T) {
 		t.Fatal("NeedsRestart = true, want false for empty diff")
 	}
 }
+
+// TestNeedsRestart 覆盖 needsRestartPaths 三个前缀的正例、精确匹配分支和反例。
+func TestNeedsRestart(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// 三个前缀各自的正例
+		{"config.yaml", true},
+		{"mcp/db/config.json", true},
+		{"subagents/x/agent.md", true},
+
+		// 精确匹配分支:不带斜杠、不带后续内容,走 strings.TrimSuffix 那条
+		{"mcp", true},
+		{"subagents", true},
+
+		// 反例
+		{"skills/w/SKILL.md", false},
+		{"mcpfoo/bar.json", false},
+		{"subagentsfoo/a.md", false},
+		{"a/config.yaml", false},
+
+		// config.yaml 是唯一不带斜杠的前缀,所以 HasPrefix 会让 config.yaml.bak 命中。
+		// 这是宽松前缀匹配的已知副作用,但在 sync 里不可达:ValidateSyncPath 拒绝
+		// "config.yaml.bak" 进入 sync,且全量遍历时它不在任何白名单根之下。
+		// 此处断言现状仅为锁定行为——将来若要收紧匹配,应能看到这条用例和它的理由。
+		{"config.yaml.bak", true},
+	}
+
+	for _, tt := range tests {
+		if got := needsRestart(tt.path); got != tt.want {
+			t.Errorf("needsRestart(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}

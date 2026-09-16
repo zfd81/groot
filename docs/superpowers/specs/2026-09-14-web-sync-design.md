@@ -114,20 +114,21 @@ SQLite 模式下 `NewSyncManager` 返回禁用实现，所有方法回 `ErrSyncD
 
 ```json
 {
+  "status": "success",
+  "inSync": false,
+  "needsRestart": true,
   "entries": [
-    {"path": "skills/weather/SKILL.md", "status": "A", "remote_deleted": true, "remote_updated_at": 1757745000000},
-    {"path": "subagents/db-agent/agent.md", "status": "A", "remote_deleted": false, "remote_updated_at": null},
-    {"path": "config.yaml", "status": "M", "remote_deleted": false, "remote_updated_at": 1757734800000},
-    {"path": "mcp/github/config.json", "status": "D", "remote_deleted": false, "remote_updated_at": 1757808300000}
-  ],
-  "in_sync": 12,
-  "needs_restart": true
+    {"path": "skills/weather/SKILL.md", "status": "A", "remoteDeleted": true, "needsRestart": false, "remoteUpdatedAt": 1757745000000},
+    {"path": "subagents/db-agent/agent.md", "status": "A", "remoteDeleted": false, "needsRestart": true},
+    {"path": "config.yaml", "status": "M", "remoteDeleted": false, "needsRestart": true, "remoteUpdatedAt": 1757734800000},
+    {"path": "mcp/github/config.json", "status": "D", "remoteDeleted": false, "needsRestart": true, "remoteUpdatedAt": 1757808300000}
+  ]
 }
 ```
 
-`status` 使用单字母，与界面显示一致。`remote_deleted` 区分两种 `A`。`remote_updated_at` 为毫秒时间戳，无记录时为 null。`in_sync` 只给出一致文件的数量，不列出清单。`needs_restart` 由服务端根据路径前缀判定。
+`status` 使用单字母，与界面显示一致。`remoteDeleted` 区分两种 `A`。`remoteUpdatedAt` 为毫秒时间戳，远端无记录时整个字段省略。`inSync` 表示是否无任何差异。`needsRestart` 由服务端根据路径前缀判定，条目级与整体级各一份。
 
-推送与拉取执行完成后返回重新计算的差异，正常情况下 `entries` 为空且 `in_sync` 等于总数。
+推送与拉取执行成功后返回 `{"status": "success"}`；界面关闭对话框并提示结果，无需再次展示差异。
 
 ### 1.7 拉取的本地副作用
 
@@ -145,11 +146,15 @@ SQLite 模式下 `NewSyncManager` 返回禁用实现，所有方法回 `ErrSyncD
 
 | 列 | 内容 |
 |---|---|
-| 复选框 | 勾选同步范围，表头为全局全选框 |
-| 路径 | 类型图标加当前层级的名称，等宽字体，缩进表达层级；终端行后附远端记录时间或"远端已删除"、"远端无记录" |
-| 状态 | 单文件显示状态标识，聚合行显示变更文件数量；需重启生效的条目在此并列标注 |
+| 复选框 | 勾选同步范围，表头为全局全选框；列宽固定，树形缩进与展开箭头占用其中空间 |
+| 路径 | 类型图标加当前层级的名称，等宽字体，缩进表达层级；终端行后依次附远端记录时间、"已被他人删除"标签、"需重启"标签 |
+| 状态 | 单文件显示状态标识，聚合行显示变更文件数量 |
 
-状态标识配色沿用版本控制惯例：`A` 绿色、`M` 橙色、`D` 红色。重启标注与状态同列，两者都是条目属性，置于最右可避免长路径被挤压换行。
+路径列不设固定宽度，占据复选框列与状态列之外的全部剩余空间，长路径优先获得展示空间。
+
+状态标识配色沿用版本控制惯例：`A` 绿色、`M` 橙色、`D` 红色。"需重启"标签用红色描边，与路径同列——它是资源自身的属性，紧跟资源名比放在最右更易关联。
+
+"已被他人删除"只在远端曾有记录而被删除时标注。远端从无记录的情形不标注，那与状态列的 `A`（本地独有）是同一事实，重复标注不增加信息。
 
 **类型图标。** 复用文件树的 `iconFor` 规则，两处保持一致的视觉语言：目录为 `Folder`，`.md` 为 `Memo`，`.json` 与 `.yaml` 为 `Tickets`，图片扩展名为 `Picture`，其余为 `Document`。
 
@@ -177,7 +182,7 @@ skill 目录行可展开查看内部变更的文件及其状态，这些子行�
 
 提交时收集勾中的终端行路径。全部勾中时省略 `paths` 走全量路径。
 
-表格下方给出一致文件数量与重启提示。底部三个按钮为取消、推送、拉取。
+底部三个按钮为取消、推送、拉取。
 
 **表格实现约束。** 树形结构使用 `el-table` 的 `row-key` 与 `tree-props`，数据为前端将扁平差异条目聚合成的嵌套结构。不使用磁盘懒加载，因为 `D` 状态的文件在本地并不存在，读不到。
 
@@ -245,6 +250,9 @@ Go 单元测试覆盖：
 - 调整：对话框主体由扁平清单改为树形表格，列序为复选框、路径、状态，默认全部勾选且目录默认折叠
 - 调整：路径列增加类型图标，复用文件树的 `iconFor` 规则
 - 调整：复选框列自行渲染以支持三态级联，不使用 `el-table` 内置选择列
+- 调整：复选框列改为固定宽度，剩余空间归路径列
+- 调整："需重启"标签由状态列移入路径列，配色由橙色改为红色，文案由"需重启生效"缩短为"需重启"
+- 移除："远端无记录"标签，其含义与状态列的 `A` 重复
 - 调整：对话框尺寸与圆角对齐设置弹窗（750px 宽、`calc(100vh - 100px)` 高、16px 圆角）
 - 调整：操作按钮文案为推送与拉取
 - 调整：工作空间面板工具栏增加同步入口，文件树行菜单增加同步项

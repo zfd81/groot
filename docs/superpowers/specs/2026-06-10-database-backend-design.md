@@ -47,7 +47,7 @@
 
 数据库后端为 Groot 引入第三种持久化形态：**关系数据库**（MySQL / PostgreSQL）。它替代 MinIO 模式承担"运行时数据 + 集群共享资源"的远端存储职责，让多主机多实例部署下所有节点实时共享同一份权威数据。
 
-后端选型在 `~/.groot/env.yaml` 中通过 `database` 节启用；启用时所有运行时数据（cluster 成员、schedule 任务、memory 会话/对话）走数据库读写，集群共享资源（skills / subagents / mcp / GROOT.md / config.yaml）通过 `groot push/pull/diff` 命令在本地 HOME 与数据库之间显式同步——本地 HOME 仍是业务运行时读取入口。
+后端选型在 `~/.groot/env.yaml` 中通过 `database` 节启用；启用时所有运行时数据（cluster 成员、schedule 任务、memory 会话/对话）走数据库读写，集群共享资源（skills / subagents / mcp / GROOT.md / config.yaml）通过 Web 工作空间面板的同步功能在本地 HOME 与数据库之间显式同步——本地 HOME 仍是业务运行时读取入口。
 
 数据库后端严格按"模型一致、方言可切换"原则设计：MySQL 与 PostgreSQL 共用同一份逻辑表结构、同一份索引、同一份 Go 接口，差异仅在方言适配层吸收。运行期可通过仅改 `env.yaml` 的 driver 配置在两种数据库间切换。
 
@@ -72,7 +72,7 @@ GROOT_HOME/
 ├── env.yaml          ② 节点本地配置 — 数据库连接配置，每节点独立，不参与同步
 │
 ├── config.yaml       ③ 集群共享配置 — 本地 HOME 是运行时读取入口
-├── GROOT.md          ③   MySQL/PG 模式：HOME ⇄ shared_resources 表（groot push/pull/diff）
+├── GROOT.md          ③   MySQL/PG 模式：HOME ⇄ shared_resources 表（Web 同步）
 ├── skills/           ③   SQLite 模式：文件就在本机，无需同步
 ├── subagents/        ③
 └── mcp/              ③
@@ -89,7 +89,7 @@ GROOT_HOME/
 #   memory_chats       — 每次对话的完整记录
 ```
 
-| 类别 | 代表内容 | SQLite 模式 | MySQL/PG 模式 | 参与 push/pull/diff |
+| 类别 | 代表内容 | SQLite 模式 | MySQL/PG 模式 | 参与配置同步 |
 |---|---|---|---|---|
 | ① 运行日志 | `logs/` | 本地文件 | 本地文件 | ❌ |
 | ② 节点本地配置 | `env.yaml` | 本地文件 | 本地文件 | ❌ |
@@ -113,9 +113,9 @@ GROOT_HOME/
 
 **特点**：
 - 以**本地 HOME 文件**为运行时读取入口——业务代码运行时直接读本地文件，不走数据库
-- 本地 HOME 与数据库之间通过 `groot push/pull/diff` 命令**显式同步**（不自动同步）
+- 本地 HOME 与数据库之间通过 Web 工作空间面板的同步功能**显式同步**（不自动同步）
 - 部分资源支持热加载（skills / GROOT.md），部分需重启（config.yaml / mcp 配置 / subagent 入口）
-- **热加载仅对已执行 `groot pull` 的节点生效**——Node A `push` 新内容到数据库后，Node B 必须手动执行 `groot pull` 才能感知更新；push 到数据库不等于所有节点立即更新
+- **热加载仅对已执行拉取的节点生效**——Node A 推送新内容到数据库后，Node B 必须在 Web 面板执行拉取才能感知更新；推送到数据库不等于所有节点立即更新
 - 变更频率低（运维操作）
 
 **内容**：
@@ -127,7 +127,7 @@ GROOT_HOME/
 | `subagents/<name>/` | ❌ 需重启（agent.md / mcp 配置）；skills 子目录 ✅ |
 | `mcp/<server>.json` | ❌ 需重启 |
 
-**SQLite 模式**：配置文件就在本机，无需 `shared_resources` 表，`groot push/pull/diff` 不可用。
+**SQLite 模式**：配置文件就在本机，无需 `shared_resources` 表，同步功能不可用。
 
 **MySQL/PG 模式**：数据库中的 `shared_resources` 表是权威副本，本地 HOME 是工作副本。
 
@@ -289,7 +289,7 @@ internal/schedule/
 `MemoryRepo` 的 `ChatRecord` / `Step` / `Error` 三个数据类型定义在 [`internal/repo/memory.go`](../../../internal/repo/memory.go) 内（`internal/memory/types.go` 通过 `type ChatRecord = repo.ChatRecord` 提供别名），让 `memorydb` 实现层和 `memory` 业务层共用同一份结构体而无导入循环。
 
 `ResourceRepo` 有两套实现：
-- [`resourcelocal`](../../../internal/repo/resourcelocal/)：直接调用 `os.*` 透传本地文件系统。SQLite 模式下 `groot push/pull/diff` 命令统一返回 `ErrSyncDisabled`，因此 `resourcelocal` 无实际业务调用路径，其存在仅为满足工厂模式接口一致性，使 `internal/sync/` 无需做 nil 判断
+- [`resourcelocal`](../../../internal/repo/resourcelocal/)：直接调用 `os.*` 透传本地文件系统。SQLite 模式下同步操作统一返回 `ErrSyncDisabled`，因此 `resourcelocal` 无实际业务调用路径，其存在仅为满足工厂模式接口一致性，使 `internal/sync/` 无需做 nil 判断
 - [`resourcedb`](../../../internal/repo/resourcedb/)：读写 `shared_resources` 表——MySQL/PG 模式下的远端权威副本
 
 其余三个 Repo（[`memberdb`](../../../internal/repo/memberdb/) / [`scheduledb`](../../../internal/repo/scheduledb/) / [`memorydb`](../../../internal/repo/memorydb/)）只有一套 `db` 实现，三种 driver（sqlite / mysql / postgres）共用相同 SQL，差异由方言层（[`internal/db/dialect.go`](../../../internal/db/dialect.go)）吸收。
@@ -646,7 +646,7 @@ ORDER BY round ASC
 
 #### 1.9.8 shared_resources
 
-**职责**：集群共享资源的远端权威副本，是 `groot push/pull/diff` 的远端侧。
+**职责**：集群共享资源的远端权威副本，是配置同步（Web 面板推送/拉取）的远端侧。
 
 ```sql
 CREATE TABLE shared_resources (

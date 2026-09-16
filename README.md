@@ -738,7 +738,22 @@ database:
 - `env.yaml` 中同一时间只能存在一个 `database` 节（MySQL/PostgreSQL 二选一）
 - 即使 `config.yaml` 中残留数据库相关配置也不再生效，数据库连接只认 `env.yaml`
 - MySQL/PostgreSQL 模式下，多实例共享同一数据库即组成集群，自动进行 Leader 选举（Leader 负责定时任务调度）；成员状态可在 Web 界面 **设置 → 集群管理** 中查看
-- MySQL/PostgreSQL 模式下可使用 `groot push` / `groot pull` / `groot diff` 在本地目录与数据库之间同步 skills、subagents、mcp 等配置资源，详见 [6.9 配置同步](#69-配置同步pushpulldiff)
+- MySQL/PostgreSQL 模式下可在 Web 工作空间面板中将 skills、subagents、mcp 等配置资源在本地目录与数据库之间同步，详见 [4.7.1 配置同步](#471-配置同步web-工作空间)
+
+#### 4.7.1 配置同步（Web 工作空间）
+
+在 MySQL/PostgreSQL 模式下（需配置 `~/.groot/env.yaml` 中的 `database` 节），集群共享的配置资源（`config.yaml`、skills、subagents、mcp、GROOT.md）以数据库中的镜像为准，通过 Web 工作空间面板在本地工作目录与数据库之间同步：面板工具栏的同步按钮比较全部白名单资源，文件树的行菜单可只比较单个资源。对话框列出差异清单后，由使用者选择推送方向：
+
+| 状态 | 含义 |
+|---|---|
+| 本地独有 | 本地有此文件，数据库没有有效记录 |
+| 内容不同 | 两侧都有，但内容不一致 |
+| 数据库独有 | 数据库有此文件，本地没有 |
+
+- **推送**：将勾选的本地文件写入数据库（本地独有 → 新增记录；内容不同 → 覆盖远端；数据库独有 → 删除远端记录）
+- **拉取**：将勾选的数据库记录写入本地（数据库独有 → 新增本地文件；内容不同 → 覆盖本地；本地独有 → 删除本地文件）
+
+数据库中被删除的资源保留删除标记，因此「本地独有」会进一步标注是否为他人删除。操作将删除文件时（推送删除数据库记录、拉取删除本地文件）对话框会二次确认并告知数量。变更 `config.yaml`、`mcp/`、`subagents/` 下的内容需重启服务才生效，拉取后对话框会提示。从数据库拉取会覆盖本地文件并关闭面板中已打开的文件。SQLite 模式（单机）下配置直接读取本地文件，面板中不提供同步入口。
 
 ---
 
@@ -1141,9 +1156,6 @@ Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
 | `groot init` | 初始化工作目录 |
 | `groot status` | 查看运行中实例的状态 |
 | `groot tail` | 实时日志查看 |
-| `groot push` | 将本地配置推送到数据库（MySQL/PG 模式） |
-| `groot pull` | 从数据库拉取配置到本地（MySQL/PG 模式） |
-| `groot diff` | 显示本地与数据库的配置差异（MySQL/PG 模式） |
 | `groot user reset` | 重置 Web 登录用户（删除用户表全部数据） |
 
 **全局选项：**
@@ -1245,43 +1257,7 @@ groot tail -k "api_request" # 过滤包含关键词的日志
 
 退出方式：按 `Ctrl+C`。
 
-### 6.6 配置同步（push/pull/diff）
-
-在 MySQL/PostgreSQL 模式下（需配置 `~/.groot/env.yaml` 中的 `database` 节），集群共享的配置资源（`config.yaml`、skills、subagents、mcp 等）以数据库中的镜像为准。三个子命令用于在本地工作目录与数据库之间同步：
-
-```bash
-groot push                       # 将本地全部白名单资源推送到数据库
-groot push config.yaml           # 只推送主配置
-groot push skills/weather        # 只推送单个 skill
-groot push skills subagents mcp  # 推送多个类别
-groot push -y skills             # 跳过交互确认直接推送
-
-groot pull                       # 从数据库拉取全部白名单资源到本地
-groot pull skills -y             # 拉取指定资源并跳过确认
-
-groot diff                       # 显示本地与数据库的差异（只读，不修改）
-groot diff skills/weather        # 只比较指定路径
-```
-
-| 命令 | 方向 | 说明 |
-|------|------|------|
-| `push [path...] [-y]` | 本地 → 数据库 | 将本地 HOME 的配置镜像推送到数据库，执行前列出差异并要求确认（`-y` 跳过） |
-| `pull [path...] [-y]` | 数据库 → 本地 | 将数据库的配置镜像拉取到本地 HOME，执行前列出差异并要求确认（`-y` 跳过） |
-| `diff [path...]` | 只读比较 | 显示本地与数据库之间的配置差异，不做任何修改 |
-
-> **说明：** SQLite 模式（单机）下配置直接读取本地文件，这三个命令不可用，会提示 `sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 env.yaml 中配置 database 节`。
-
-除命令行外，Web 工作空间面板也提供配置同步：面板工具栏的同步按钮比较全部白名单资源，文件树的行菜单可只比较单个资源。对话框列出差异清单后，由使用者选择推送方向：
-
-| 状态 | 含义 |
-|---|---|
-| 本地独有 | 本地有此文件，数据库没有有效记录 |
-| 内容不同 | 两侧都有，但内容不一致 |
-| 数据库独有 | 数据库有此文件，本地没有 |
-
-数据库中被删除的资源保留删除标记，因此「本地独有」会进一步标注是否为他人删除。操作将删除文件时（推送删除数据库记录、拉取删除本地文件）对话框会二次确认并告知数量。变更 `config.yaml`、`mcp/`、`subagents/` 下的内容需重启服务才生效，拉取后对话框会提示。从数据库拉取会覆盖本地文件并关闭面板中已打开的文件。SQLite 模式下面板中不提供同步入口。
-
-### 6.7 重置 Web 登录用户（groot user reset）
+### 6.6 重置 Web 登录用户（groot user reset）
 
 删除数据库用户表中的全部数据。重置后再次访问 Web 界面将重新进入创建用户流程，适用于忘记密码等场景。
 

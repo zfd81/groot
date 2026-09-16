@@ -46,6 +46,16 @@ export function atomicUnitOf(path: string): string {
   return path
 }
 
+// 每层内目录在前、文件在后，同类按名称排序，与文件树的呈现顺序一致。
+// 排序在回填之后进行：回填依赖父子关系，与兄弟次序无关。
+function sortTree(nodes: SyncTreeNode[]): void {
+  nodes.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  for (const n of nodes) if (n.children) sortTree(n.children)
+}
+
 export function buildSyncTree(entries: SyncDiffEntry[]): SyncTree {
   const terminals = new Map<string, SyncDiffEntry[]>()
   for (const e of entries) {
@@ -142,5 +152,6 @@ export function buildSyncTree(entries: SyncDiffEntry[]): SyncTree {
   }
   for (const r of roots) fill(r)
 
+  sortTree(roots)
   return { nodes: roots, terminals }
 }

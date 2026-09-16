@@ -281,12 +281,14 @@ async function onDirChange(e: Event) {
     for (const f of items) {
       try {
         await filesApi.upload(dir, f, f.webkitRelativePath)
-      } catch {
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.message : t('files.opFailed')
         ElMessage.error(
           t('files.uploadDirFailed', {
             path: f.webkitRelativePath,
             done: progress.value.done,
             total: items.length,
+            reason: msg,
           }),
         )
         return
@@ -395,6 +397,7 @@ async function onDirChange(e: Event) {
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.15s;
+  margin-right: 8px;
 }
 .tree-row:hover .tree-more {
   opacity: 0.7;

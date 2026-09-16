@@ -634,10 +634,9 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 |---------|---------|---------|
 | TC-CLI-101 | test_cli_commands.py | `groot init` 生成 config.yaml（非空 security.auth.secret、权限 0600）、env.yaml（0600）、GROOT.md 与 skills/mcp/subagents/logs 目录 |
 | TC-CLI-102 | test_cli_commands.py | 重复 init 跳过已有文件，secret 不被覆盖；未知 flag 报错退出 |
-| TC-CLI-103 | test_cli_commands.py | `groot --help` 含 init/status/tail/push/pull/diff/user，不含已移除的 chat/schedule 子命令 |
+| TC-CLI-103 | test_cli_commands.py | `groot --help` 含 init/status/tail/user，不含已移除的 chat/schedule/push/pull/diff 子命令 |
 | TC-CLI-104 | test_cli_commands.py | `groot status` 目标端口无实例：打印「未检测到运行中的 Groot 实例」，退出码 0 |
 | TC-CLI-105 | test_cli_commands.py | `groot status` 对运行中共享服务输出健康信息（状态/端口） |
-| TC-CLI-106 | test_cli_commands.py | `groot push`（SQLite 模式）：报「仅在 MySQL/PostgreSQL 模式下可用」，退出码 1 |
 | TC-CLI-107 | test_cli_commands.py | `groot user reset -y` 空表：提示「用户表为空」，退出码 0 |
 | TC-CLI-108 | test_cli_commands.py | 独立实例全流程：空库弱密码 setup 400 → setup 成功 → schedule 未启用时 /schedule 返回 503 schedule_unavailable → user reset -y 后 needs_setup 回到 true |
 

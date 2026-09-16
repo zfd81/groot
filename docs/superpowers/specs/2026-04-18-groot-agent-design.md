@@ -264,7 +264,7 @@ llm:
   - SQLite 模式（默认）：`~/.groot/groot.db`
   - MySQL/PG 模式：远端数据库的 `cluster_members` / `schedule_tasks` / `schedule_executions` / `memory_sessions` / `memory_chats` 五张表
   详见 [数据库后端设计](2026-06-10-database-backend-design.md)
-- 集群共享配置（`config.yaml` / `skills/` / `subagents/` / `mcp/` / `GROOT.md`）：本地 HOME 是运行时读取入口；MySQL/PG 模式下通过 `groot push/pull/diff` 同步到 `shared_resources` 表，详见 [sync 模块设计](2026-06-08-sync-design.md)
+- 集群共享配置（`config.yaml` / `skills/` / `subagents/` / `mcp/` / `GROOT.md`）：本地 HOME 是运行时读取入口；MySQL/PG 模式下通过 Web 工作空间面板的同步功能同步到 `shared_resources` 表，详见 [sync 模块设计](2026-06-08-sync-design.md)
 - `logs` 目录可通过 `logging.file.directory` 配置，支持相对/绝对路径，永远落本地磁盘（不参与同步）
 - `env.yaml` 是节点本地配置（含数据库连接凭据），不参与集群同步；详见 [数据库后端设计 §1.5](2026-06-10-database-backend-design.md#15-envyaml-配置格式)
 - 会话规则以 `//go:embed session_rules.md` 形式嵌入二进制（[internal/memory/session_rules.md](internal/memory/session_rules.md)），不落盘

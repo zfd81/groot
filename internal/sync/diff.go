@@ -42,6 +42,14 @@ func (d DiffResult) IsEmpty() bool {
 	return len(d.Added)+len(d.Modified)+len(d.Removed) == 0
 }
 
+// sha1Hex 计算内容的 SHA-1 十六进制摘要。
+// 这是 sync 模块的内容指纹算法：ComputeDiff 用它算本地侧指纹，pushOne 用它填
+// Resource.ContentHash，两处必须同源，否则推送后的比较会永远判为 Modified。
+func sha1Hex(content []byte) string {
+	h := sha1.Sum(content)
+	return fmt.Sprintf("%x", h)
+}
+
 // localFileInfo 保存本地文件的元数据用于 diff 比较。
 type localFileInfo struct {
 	size int64
@@ -133,10 +141,9 @@ func walkLocalFiles(localPath, localBase string) (map[string]localFileInfo, erro
 			return nil, err
 		}
 		rel, _ := filepath.Rel(localBase, localPath)
-		h := sha1.Sum(content)
 		files[filepath.ToSlash(rel)] = localFileInfo{
 			size: int64(len(content)),
-			hash: fmt.Sprintf("%x", h),
+			hash: sha1Hex(content),
 		}
 		return files, nil
 	}
@@ -149,10 +156,9 @@ func walkLocalFiles(localPath, localBase string) (map[string]localFileInfo, erro
 			return nil
 		}
 		rel, _ := filepath.Rel(localBase, path)
-		h := sha1.Sum(content)
 		files[filepath.ToSlash(rel)] = localFileInfo{
 			size: int64(len(content)),
-			hash: fmt.Sprintf("%x", h),
+			hash: sha1Hex(content),
 		}
 		return nil
 	})
