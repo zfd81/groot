@@ -224,6 +224,50 @@ func TestService_Rename(t *testing.T) {
 	}
 }
 
+// TestService_StructuralDirsInSubagent 验证 subagent 内的 mcp/skills 目录同样受
+// 结构性保护：加载器按固定名称查找它们，改名或删除会让其中资源静默失效。
+// 同层的其他目录（如 subagents/{name}/notes）与 skill 目录本身不受此限制。
+func TestService_StructuralDirsInSubagent(t *testing.T) {
+	svc, home := newServiceForTest(t)
+
+	saDir := filepath.Join(home, "subagents", "weather")
+	for _, d := range []string{"mcp", "skills", "notes"} {
+		if err := os.MkdirAll(filepath.Join(saDir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 改名：mcp 与 skills 拒绝，同层普通目录放行
+	if err := svc.Rename("subagents/weather/mcp", "subagents/weather/mcp2"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("改名 subagent mcp 应 ErrForbidden, got %v", err)
+	}
+	if err := svc.Rename("subagents/weather/skills", "subagents/weather/skills2"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("改名 subagent skills 应 ErrForbidden, got %v", err)
+	}
+	if err := svc.Rename("subagents/weather/notes", "subagents/weather/notes2"); err != nil {
+		t.Errorf("改名 subagent 内普通目录应成功, got %v", err)
+	}
+
+	// 删除：空的 mcp/skills 也拒绝（与一级目录同理）
+	if err := svc.Delete("subagents/weather/mcp"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("删除 subagent mcp 应 ErrForbidden, got %v", err)
+	}
+	if err := svc.Delete("subagents/weather/skills"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("删除 subagent skills 应 ErrForbidden, got %v", err)
+	}
+
+	// subagent 目录本身与其下的 skill 目录不是结构性目录，可改名
+	if err := os.MkdirAll(filepath.Join(saDir, "skills", "get-weather"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Rename("subagents/weather/skills/get-weather", "subagents/weather/skills/get-forecast"); err != nil {
+		t.Errorf("改名 skill 目录应成功, got %v", err)
+	}
+	if err := svc.Rename("subagents/weather", "subagents/weather2"); err != nil {
+		t.Errorf("改名 subagent 目录应成功, got %v", err)
+	}
+}
+
 // TestService_Delete 验证删除文件、空子目录、一级目录拒绝、非空目录拒绝、只读拒绝。
 func TestService_Delete(t *testing.T) {
 	svc, home := newServiceForTest(t)
@@ -340,5 +384,81 @@ func TestService_SymlinkAlias(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "GROOT.md")); err != nil {
 		t.Errorf("链接目标不应被删除: %v", err)
+	}
+}
+
+// TestService_Mkdir 验证单层建目录：成功、重名、父目录缺失、非法名与只读名。
+func TestService_Mkdir(t *testing.T) {
+	svc, home := newServiceForTest(t)
+
+	if err := svc.Mkdir("mcp", "bundle"); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(home, "mcp", "bundle"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("mcp/bundle 应是目录, got %+v, %v", info, err)
+	}
+
+	if err := svc.Mkdir("mcp", "bundle"); !errors.Is(err, ErrExists) {
+		t.Errorf("重复建目录应 ErrExists, got %v", err)
+	}
+	if err := svc.Mkdir("nope", "bundle"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("父目录不存在应 ErrNotFound, got %v", err)
+	}
+	for _, name := range []string{"../evil", ".hidden", "", strings.Repeat("a", 65)} {
+		if err := svc.Mkdir("mcp", name); !errors.Is(err, ErrInvalid) {
+			t.Errorf("非法名 %q 应 ErrInvalid, got %v", name, err)
+		}
+	}
+	// 只读判定先于重名判定，只读文件名不能被目录占位。
+	if err := svc.Mkdir("", "config.yaml"); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("只读名应 ErrReadOnly, got %v", err)
+	}
+}
+
+// TestService_UploadTarget_RelPath 验证上传路径可含多段：中间目录按需创建，
+// 但基准目录不存在时不得被顺带造出。
+func TestService_UploadTarget_RelPath(t *testing.T) {
+	svc, _ := newServiceForTest(t)
+	home := svc.Home() // 已解析符号链接，与 UploadTarget 返回的绝对路径同源
+
+	got, err := svc.UploadTarget("mcp", "note.md", 1)
+	if err != nil || got != filepath.Join(home, "mcp", "note.md") {
+		t.Fatalf("单段上传 = %q, %v", got, err)
+	}
+
+	got, err = svc.UploadTarget("mcp", "A/sub/note.md", 1)
+	if err != nil || got != filepath.Join(home, "mcp", "A", "sub", "note.md") {
+		t.Fatalf("多段上传 = %q, %v", got, err)
+	}
+	if info, err := os.Stat(filepath.Join(home, "mcp", "A", "sub")); err != nil || !info.IsDir() {
+		t.Errorf("中间目录 mcp/A/sub 应已创建, got %+v, %v", info, err)
+	}
+
+	for _, rel := range []string{"A/../x.md", "A/.hidden/x.md", "../x.md", ""} {
+		if _, err := svc.UploadTarget("mcp", rel, 1); !errors.Is(err, ErrInvalid) {
+			t.Errorf("非法 relpath %q 应 ErrInvalid, got %v", rel, err)
+		}
+	}
+
+	if _, err := svc.UploadTarget("nope", "A/x.md", 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("基准目录不存在应 ErrNotFound, got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "nope")); !os.IsNotExist(err) {
+		t.Errorf("不存在的基准目录不应被创建, got %v", err)
+	}
+
+	if _, err := svc.UploadTarget("skills/my-skill", "SKILL.md", 1); !errors.Is(err, ErrExists) {
+		t.Errorf("目标已存在应 ErrExists, got %v", err)
+	}
+	if _, err := svc.UploadTarget("mcp", "A/big.bin", MaxUploadSize+1); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("超限应 ErrTooLarge, got %v", err)
+	}
+
+	// 中间段命中已存在的普通文件：Resolve 的 fail-closed 逻辑先拦下（EvalSymlinks
+	// 报 ENOTDIR 而非 NotExist），返回 ErrNotFound —— 语义上"该目录不存在"，
+	// 且不会走到 MkdirAll。
+	if _, err := svc.UploadTarget("", "GROOT.md/x.md", 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("中间段是文件应 ErrNotFound, got %v", err)
 	}
 }

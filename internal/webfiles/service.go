@@ -205,8 +205,11 @@ func (s *Service) Rename(fromRel, toRel string) error {
 	if err != nil {
 		return ErrNotFound
 	}
-	// 一级目录与 GROOT.md 是运行时结构性条目，禁止改名（与 Delete 规则一致）
-	if !strings.Contains(fromN, "/") && (info.IsDir() || strings.EqualFold(fromN, "GROOT.md")) {
+	// 结构性目录与 GROOT.md 是运行时按固定名称查找的条目，禁止改名（与 Delete 规则一致）
+	if info.IsDir() && isStructuralDir(fromN) {
+		return ErrForbidden
+	}
+	if !strings.Contains(fromN, "/") && strings.EqualFold(fromN, "GROOT.md") {
 		return ErrForbidden
 	}
 	toAbs, toN, err := s.res.Resolve(toRel)
@@ -226,6 +229,24 @@ func (s *Service) Rename(fromRel, toRel string) error {
 		return ErrExists
 	}
 	return os.Rename(fromAbs, toAbs)
+}
+
+// isStructuralDir 判断相对路径是否是运行时依赖名称的结构性目录：
+//   - home 下的一级目录（skills、mcp、subagents、logs 等）
+//   - subagent 内的 mcp 与 skills 目录（subagents/{name}/mcp、subagents/{name}/skills）
+//
+// 这些目录由加载器按固定名称查找，改名或删除会让其中的资源静默失效。
+// 调用方需自行确认路径确实是目录。
+func isStructuralDir(n string) bool {
+	segs := strings.Split(n, "/")
+	switch len(segs) {
+	case 1:
+		return true
+	case 3:
+		return segs[0] == "subagents" && (segs[2] == "mcp" || segs[2] == "skills")
+	default:
+		return false
+	}
 }
 
 // Delete 删除文件或空目录；home 根、只读、隐藏、非空目录均拒绝。
@@ -249,9 +270,8 @@ func (s *Service) Delete(rel string) error {
 		return ErrForbidden
 	}
 	if info.IsDir() {
-		// home 下的一级目录（skills/mcp/logs/subagents 等）是运行时的
-		// 结构性目录，即使为空也不允许通过 Web 面板删除。
-		if !strings.Contains(n, "/") {
+		// 结构性目录即使为空也不允许通过 Web 面板删除。
+		if isStructuralDir(n) {
 			return ErrForbidden
 		}
 		des, err := os.ReadDir(abs)
@@ -269,31 +289,80 @@ func (s *Service) Delete(rel string) error {
 	return os.Remove(abs)
 }
 
-// UploadTarget 校验上传请求（白名单、大小、文件名、重名），
+// Mkdir 在 dirRel 下创建单层目录 name。它是目录上传流程的占位原语：
+// 先建出目标根目录以探测冲突，再逐个上传文件。已存在时返回 ErrExists。
+func (s *Service) Mkdir(dirRel, name string) error {
+	if !validName(name) {
+		return ErrInvalid
+	}
+	_, dirN, err := s.res.Resolve(dirRel)
+	if err != nil {
+		return err
+	}
+	if !s.res.CanUpload(dirN) {
+		return ErrForbidden
+	}
+	abs, n, err := s.res.Resolve(joinRel(dirN, name))
+	if err != nil {
+		return err
+	}
+	// 只读判定先于重名判定：只读文件名不允许被目录占位。
+	if s.res.ReadOnly(n) {
+		return ErrReadOnly
+	}
+	if info, err := os.Stat(filepath.Dir(abs)); err != nil || !info.IsDir() {
+		return ErrNotFound
+	}
+	if _, err := os.Lstat(abs); err == nil {
+		return ErrExists
+	}
+	if err := os.Mkdir(abs, 0o755); err != nil {
+		if os.IsExist(err) {
+			return ErrExists
+		}
+		return ErrInvalid
+	}
+	return nil
+}
+
+// UploadTarget 校验上传请求（白名单、大小、路径合法性、重名），
 // 返回可直接写入的目标绝对路径；实际落盘由 handler 完成。
-func (s *Service) UploadTarget(dirRel, filename string, size int64) (string, error) {
+// relpath 是相对基准目录 dirRel 的路径，可含 "/" 以支持目录上传，
+// 每一段都须是合法名称；不存在的中间目录会按需创建。
+func (s *Service) UploadTarget(dirRel, relpath string, size int64) (string, error) {
 	if size > MaxUploadSize {
 		return "", ErrTooLarge
 	}
-	if !validName(filename) {
-		return "", ErrInvalid // 含路径分隔符或非法字符的文件名直接拒绝
+	if relpath == "" {
+		return "", ErrInvalid
 	}
-	_, dirN, err := s.res.Resolve(dirRel)
+	for _, seg := range strings.Split(relpath, "/") {
+		if !validName(seg) {
+			return "", ErrInvalid // 任一段含非法字符或为 "." / ".." 即拒绝
+		}
+	}
+	dirAbs, dirN, err := s.res.Resolve(dirRel)
 	if err != nil {
 		return "", err
 	}
 	if !s.res.CanUpload(dirN) {
 		return "", ErrForbidden
 	}
-	abs, n, err := s.res.Resolve(joinRel(dirN, filename))
+	// 基准目录的存在性必须在 MkdirAll 之前单独确认：多段 relpath 下
+	// filepath.Dir(abs) 指向的是中间目录，若顺序颠倒，MkdirAll 会把不存在的
+	// 基准目录一并造出来，404 就丢了。
+	if info, err := os.Stat(dirAbs); err != nil || !info.IsDir() {
+		return "", ErrNotFound
+	}
+	abs, n, err := s.res.Resolve(joinRel(dirN, relpath))
 	if err != nil {
 		return "", err
 	}
 	if s.res.ReadOnly(n) {
 		return "", ErrReadOnly
 	}
-	if info, err := os.Stat(filepath.Dir(abs)); err != nil || !info.IsDir() {
-		return "", ErrNotFound
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return "", ErrInvalid // 中间段与已存在文件同名等情况
 	}
 	if _, err := os.Lstat(abs); err == nil {
 		return "", ErrExists
