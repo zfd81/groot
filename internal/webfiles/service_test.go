@@ -316,7 +316,8 @@ func TestService_Delete(t *testing.T) {
 func TestService_UploadTarget(t *testing.T) {
 	svc, _ := newServiceForTest(t)
 
-	for _, dir := range []string{"", "mcp", "skills", "skills/my-skill", "logs"} {
+	// home 根不在列表里：根目录不接受上传（见 TestService_UploadRootForbidden）。
+	for _, dir := range []string{"mcp", "skills", "skills/my-skill", "logs"} {
 		if _, err := svc.UploadTarget(dir, "server.json", 100); err != nil {
 			t.Errorf("目录 %q 上传应允许, got %v", dir, err)
 		}
@@ -410,9 +411,23 @@ func TestService_Mkdir(t *testing.T) {
 			t.Errorf("非法名 %q 应 ErrInvalid, got %v", name, err)
 		}
 	}
-	// 只读判定先于重名判定，只读文件名不能被目录占位。
-	if err := svc.Mkdir("", "config.yaml"); !errors.Is(err, ErrReadOnly) {
-		t.Errorf("只读名应 ErrReadOnly, got %v", err)
+}
+
+// TestService_UploadRootForbidden 验证工作空间根目录不接受任何上传：
+// 根下的一级目录是结构性目录，面板删不掉也改不了名。
+func TestService_UploadRootForbidden(t *testing.T) {
+	svc, home := newServiceForTest(t)
+
+	if err := svc.Mkdir("", "anything"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("根目录建目录应 ErrForbidden, got %v", err)
+	}
+	if _, err := svc.UploadTarget("", "x.md", 1); !errors.Is(err, ErrForbidden) {
+		t.Errorf("根目录上传文件应 ErrForbidden, got %v", err)
+	}
+	for _, name := range []string{"anything", "x.md"} {
+		if _, err := os.Lstat(filepath.Join(home, name)); !os.IsNotExist(err) {
+			t.Errorf("根目录不应残留 %q, got %v", name, err)
+		}
 	}
 }
 
@@ -458,7 +473,10 @@ func TestService_UploadTarget_RelPath(t *testing.T) {
 	// 中间段命中已存在的普通文件：Resolve 的 fail-closed 逻辑先拦下（EvalSymlinks
 	// 报 ENOTDIR 而非 NotExist），返回 ErrNotFound —— 语义上"该目录不存在"，
 	// 且不会走到 MkdirAll。
-	if _, err := svc.UploadTarget("", "GROOT.md/x.md", 1); !errors.Is(err, ErrNotFound) {
+	if err := os.WriteFile(filepath.Join(home, "mcp", "afile.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := svc.UploadTarget("mcp", "afile.md/x.md", 1); !errors.Is(err, ErrNotFound) {
 		t.Errorf("中间段是文件应 ErrNotFound, got %v", err)
 	}
 }

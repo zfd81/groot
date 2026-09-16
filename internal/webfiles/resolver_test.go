@@ -99,17 +99,20 @@ func TestResolver_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestResolver_CanUpload 验证 home 内任意目录（含根）均允许上传。
+// TestResolver_CanUpload 验证 home 内的子目录允许上传，home 根不允许。
 func TestResolver_CanUpload(t *testing.T) {
 	r, _ := newResolverForTest(t)
 	for _, dir := range []string{
-		"", "skills", "mcp", "subagents", "logs", "api", "exports",
+		"skills", "mcp", "subagents", "logs", "api", "exports",
 		"skills/my-skill", "skills/my-skill/scripts",
 		"subagents/weather", "subagents/weather/skills/get-weather",
 	} {
 		if !r.CanUpload(dir) {
 			t.Errorf("CanUpload(%q) = false, want true", dir)
 		}
+	}
+	if r.CanUpload("") {
+		t.Error(`CanUpload("") = true, want false（根下条目面板删不掉）`)
 	}
 }
 

@@ -155,11 +155,14 @@ func (r *Resolver) ReadOnly(n string) bool {
 }
 
 // CanUpload 判定能否向目录 n 上传（n 必须是 Normalize/Resolve 的返回值）：
-// home 内任意目录均允许，含 home 根；对含 "." / ".." 段的未归一化输入
-// 防御性返回 false。目标文件本身仍受只读与隐藏规则约束（见 UploadTarget）。
+// home 内除根以外的任意目录均允许，上传目标必须是某个已存在的子目录。
+// home 根不接受上传：根下的一级目录被 isStructuralDir 视为结构性目录，
+// 面板既不能删除也不能改名，允许在根上传会造出用户自己清理不掉的条目。
+// 对含 "." / ".." 段的未归一化输入防御性返回 false。
+// 目标文件本身仍受只读与隐藏规则约束（见 UploadTarget）。
 func (r *Resolver) CanUpload(n string) bool {
 	if n == "" {
-		return true
+		return false
 	}
 	for _, p := range strings.Split(n, "/") {
 		if p == "." || p == ".." {

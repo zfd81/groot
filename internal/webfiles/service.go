@@ -291,6 +291,9 @@ func (s *Service) Delete(rel string) error {
 
 // Mkdir 在 dirRel 下创建单层目录 name。它是目录上传流程的占位原语：
 // 先建出目标根目录以探测冲突，再逐个上传文件。已存在时返回 ErrExists。
+//
+// 不要用它实现通用的"新建目录"功能：Web 面板按设计不提供该入口，
+// 本方法只服务于目录上传时的冲突探测。
 func (s *Service) Mkdir(dirRel, name string) error {
 	if !validName(name) {
 		return ErrInvalid
@@ -307,6 +310,9 @@ func (s *Service) Mkdir(dirRel, name string) error {
 		return err
 	}
 	// 只读判定先于重名判定：只读文件名不允许被目录占位。
+	// 只读规则只命中 home 根下的 env.yaml/config.yaml，而根已被上面的
+	// CanUpload 挡掉，因此这里目前不可达，仅作防御——只读名单若日后扩展到
+	// 子目录，顺序仍然正确。
 	if s.res.ReadOnly(n) {
 		return ErrReadOnly
 	}
@@ -329,6 +335,10 @@ func (s *Service) Mkdir(dirRel, name string) error {
 // 返回可直接写入的目标绝对路径；实际落盘由 handler 完成。
 // relpath 是相对基准目录 dirRel 的路径，可含 "/" 以支持目录上传，
 // 每一段都须是合法名称；不存在的中间目录会按需创建。
+//
+// 创建中间目录是不可回滚的副作用：调用方拿到路径后落盘失败（handler 返回 500），
+// 或者只调用本函数取路径而根本没写文件，已建出的中间目录都会留在磁盘上，
+// 没有任何清理逻辑。这是有意为之——同一目录树并发上传时清理反而危险。
 func (s *Service) UploadTarget(dirRel, relpath string, size int64) (string, error) {
 	if size > MaxUploadSize {
 		return "", ErrTooLarge
@@ -362,7 +372,9 @@ func (s *Service) UploadTarget(dirRel, relpath string, size int64) (string, erro
 		return "", ErrReadOnly
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return "", ErrInvalid // 中间段与已存在文件同名等情况
+		// 权限不足、磁盘写满、路径过长等系统层原因；中间段与已存在文件同名
+		// 的情况走不到这里，Resolve 的 verifyReal 会先按 ErrNotFound 拦下。
+		return "", ErrInvalid
 	}
 	if _, err := os.Lstat(abs); err == nil {
 		return "", ErrExists
