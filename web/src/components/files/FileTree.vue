@@ -1,4 +1,4 @@
-<!-- 懒加载文件树：el-tree lazy 模式，行悬停「⋯」菜单，任意目录可上传。 -->
+<!-- 懒加载文件树：el-tree lazy 模式，行悬停「⋯」菜单，根以外的目录可上传文件或整个目录。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
