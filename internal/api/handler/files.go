@@ -142,10 +142,10 @@ func (h *FilesHandler) Upload(ctx context.Context, rc *app.RequestContext) {
 		rc.JSON(400, utils.H{"status": "invalid_request", "message": "缺少 file 字段"})
 		return
 	}
-	// relpath 承载目录上传时文件在所选目录内的相对路径（如 "A/sub/note.md"）。
-	// 普通单文件上传不带这个字段，此时只取 multipart 文件名的最后一段：
-	// mime/multipart 不剥离目录部分，直接用 fh.Filename 会让普通上传也能
-	// 建目录，把目录上传的能力意外扩散到不该有它的入口。
+	// relpath 承载目录上传时文件在所选目录内的相对路径（如 "A/sub/note.md"），
+	// 建目录的能力只挂在这个字段上。普通单文件上传不带它，此时只取文件名：
+	// 标准库 Part.FileName 自 Go 1.17 起已对文件名施加 filepath.Base，这里的
+	// path.Base 是不依赖该实现细节、且不随操作系统变化的显式兜底。
 	relpath := rc.PostForm("relpath")
 	if relpath == "" {
 		relpath = path.Base(fh.Filename)

@@ -283,8 +283,10 @@ func TestFilesHandler_Upload(t *testing.T) {
 		t.Errorf("上传内容不对: %q err=%v", data, err)
 	}
 
-	// 普通上传只认文件名：mime/multipart 不剥离 Content-Disposition 里的目录
-	// 部分，带路径的文件名必须落成目标目录下的 c.txt，且不得建出 a/b。
+	// 普通上传不会建目录：带路径的文件名必须落成目标目录下的 c.txt，且不得
+	// 建出 a/b。该行为主要由标准库保证（Part.FileName 已施加 filepath.Base，
+	// 目录部分在到达 handler 前就被剥掉），代码里的 path.Base 是额外兜底，
+	// 无法通过 HTTP 层单独观测——这条用例锁的是端到端行为本身。
 	rc = multipartCtx(t, true, "mcp", "a/b/c.txt", "data")
 	h.Upload(context.Background(), rc)
 	if rc.Response.StatusCode() != 200 {
