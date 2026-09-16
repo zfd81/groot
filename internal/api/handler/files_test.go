@@ -253,7 +253,7 @@ func TestFilesHandler_Rename(t *testing.T) {
 	}
 }
 
-// TestFilesHandler_Upload 验证上传：缺 file 字段 400、home 根 200、子目录 200。
+// TestFilesHandler_Upload 验证上传：缺 file 字段 400、home 根 403、子目录 200。
 func TestFilesHandler_Upload(t *testing.T) {
 	h, home := newFilesHandlerForTest(t)
 
@@ -263,10 +263,14 @@ func TestFilesHandler_Upload(t *testing.T) {
 		t.Errorf("缺 file 字段 status = %d, want 400", rc.Response.StatusCode())
 	}
 
+	// 工作空间根目录不接受上传：根下的一级目录是结构性目录，面板删不掉也改不了名。
 	rc = multipartCtx(t, true, "", "root.txt", "data")
 	h.Upload(context.Background(), rc)
-	if rc.Response.StatusCode() != 200 {
-		t.Errorf("home 根上传 status = %d, want 200", rc.Response.StatusCode())
+	if rc.Response.StatusCode() != 403 {
+		t.Errorf("home 根上传 status = %d, want 403", rc.Response.StatusCode())
+	}
+	if _, err := os.Lstat(filepath.Join(home, "root.txt")); !os.IsNotExist(err) {
+		t.Errorf("根目录不应残留 root.txt, got %v", err)
 	}
 
 	rc = multipartCtx(t, true, "mcp", "up.txt", "data")
@@ -277,6 +281,20 @@ func TestFilesHandler_Upload(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(home, "mcp", "up.txt"))
 	if err != nil || string(data) != "data" {
 		t.Errorf("上传内容不对: %q err=%v", data, err)
+	}
+
+	// 普通上传只认文件名：mime/multipart 不剥离 Content-Disposition 里的目录
+	// 部分，带路径的文件名必须落成目标目录下的 c.txt，且不得建出 a/b。
+	rc = multipartCtx(t, true, "mcp", "a/b/c.txt", "data")
+	h.Upload(context.Background(), rc)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("带路径文件名上传 status = %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if _, err := os.Stat(filepath.Join(home, "mcp", "c.txt")); err != nil {
+		t.Errorf("未落到 mcp/c.txt: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "mcp", "a")); !os.IsNotExist(err) {
+		t.Errorf("普通上传不应建出目录 mcp/a, got %v", err)
 	}
 }
 
@@ -300,5 +318,61 @@ func TestFilesHandler_Download(t *testing.T) {
 	h.Download(context.Background(), rc)
 	if rc.Response.StatusCode() != 404 {
 		t.Errorf("目录下载 status = %d, want 404", rc.Response.StatusCode())
+	}
+}
+
+// TestFilesHandler_UploadPrepare 验证目录上传占位端点：成功、重名 409、
+// 父目录不存在 404、home 根 403、非法名 400、非法 JSON 400。
+func TestFilesHandler_UploadPrepare(t *testing.T) {
+	h, home := newFilesHandlerForTest(t)
+
+	rc := jsonCtx(consts.MethodPost, `{"path":"skills","name":"uploaded-dir"}`)
+	h.UploadPrepare(context.Background(), rc)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("prepare status = %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if info, err := os.Stat(filepath.Join(home, "skills", "uploaded-dir")); err != nil || !info.IsDir() {
+		t.Fatalf("目录未被创建: err=%v", err)
+	}
+
+	// 重名 → 409，前端据此终止整批上传
+	rc = jsonCtx(consts.MethodPost, `{"path":"skills","name":"uploaded-dir"}`)
+	h.UploadPrepare(context.Background(), rc)
+	if rc.Response.StatusCode() != 409 {
+		t.Errorf("重名 status = %d, want 409", rc.Response.StatusCode())
+	}
+	if !strings.Contains(string(rc.Response.Body()), "exists") {
+		t.Errorf("响应体缺少 exists: %s", rc.Response.Body())
+	}
+
+	rc = jsonCtx(consts.MethodPost, `{"path":"nope","name":"x"}`)
+	h.UploadPrepare(context.Background(), rc)
+	if rc.Response.StatusCode() != 404 {
+		t.Errorf("父目录不存在 status = %d, want 404", rc.Response.StatusCode())
+	}
+
+	// 工作空间根目录不接受上传，占位同样被拒
+	rc = jsonCtx(consts.MethodPost, `{"path":"","name":"x"}`)
+	h.UploadPrepare(context.Background(), rc)
+	if rc.Response.StatusCode() != 403 {
+		t.Errorf("home 根 status = %d, want 403", rc.Response.StatusCode())
+	}
+	if _, err := os.Lstat(filepath.Join(home, "x")); !os.IsNotExist(err) {
+		t.Errorf("根目录不应残留 x, got %v", err)
+	}
+
+	for _, name := range []string{"../evil", ".hidden", ""} {
+		body, _ := json.Marshal(map[string]string{"path": "skills", "name": name})
+		rc = jsonCtx(consts.MethodPost, string(body))
+		h.UploadPrepare(context.Background(), rc)
+		if rc.Response.StatusCode() != 400 {
+			t.Errorf("非法名 %q status = %d, want 400", name, rc.Response.StatusCode())
+		}
+	}
+
+	rc = jsonCtx(consts.MethodPost, `{"path":`)
+	h.UploadPrepare(context.Background(), rc)
+	if rc.Response.StatusCode() != 400 {
+		t.Errorf("非法 JSON status = %d, want 400", rc.Response.StatusCode())
 	}
 }

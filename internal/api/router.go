@@ -69,6 +69,7 @@ func RegisterRoutes(h *server.Hertz,
 		filesGroup.PUT("/content", filesH.Save)
 		filesGroup.POST("/rename", filesH.Rename)
 		filesGroup.POST("/upload", filesH.Upload)
+		filesGroup.POST("/upload/prepare", filesH.UploadPrepare)
 		filesGroup.GET("/download", filesH.Download)
 		filesGroup.POST("/scaffold", filesH.Scaffold)
 		webGroup.DELETE("/files", filesH.Delete)

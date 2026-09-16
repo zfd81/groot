@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
@@ -115,6 +116,25 @@ func (h *FilesHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 	rc.JSON(200, utils.H{"status": "success"})
 }
 
+// UploadPrepare 处理 POST /web/files/upload/prepare：为目录上传创建目标根目录。
+// 目录已存在时返回 409，前端据此终止整批上传。它是上传流程的内部原语，
+// 界面上不提供通用「新建目录」入口。
+func (h *FilesHandler) UploadPrepare(ctx context.Context, rc *app.RequestContext) {
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := rc.BindJSON(&req); err != nil {
+		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
+		return
+	}
+	if err := h.svc.Mkdir(req.Path, req.Name); err != nil {
+		writeFilesError(rc, err)
+		return
+	}
+	rc.JSON(200, utils.H{"status": "success"})
+}
+
 // Upload 处理 POST /web/files/upload（multipart：path=目标目录, file=文件）
 func (h *FilesHandler) Upload(ctx context.Context, rc *app.RequestContext) {
 	fh, err := rc.FormFile("file")
@@ -122,7 +142,15 @@ func (h *FilesHandler) Upload(ctx context.Context, rc *app.RequestContext) {
 		rc.JSON(400, utils.H{"status": "invalid_request", "message": "缺少 file 字段"})
 		return
 	}
-	dst, err := h.svc.UploadTarget(rc.PostForm("path"), fh.Filename, fh.Size)
+	// relpath 承载目录上传时文件在所选目录内的相对路径（如 "A/sub/note.md"）。
+	// 普通单文件上传不带这个字段，此时只取 multipart 文件名的最后一段：
+	// mime/multipart 不剥离目录部分，直接用 fh.Filename 会让普通上传也能
+	// 建目录，把目录上传的能力意外扩散到不该有它的入口。
+	relpath := rc.PostForm("relpath")
+	if relpath == "" {
+		relpath = path.Base(fh.Filename)
+	}
+	dst, err := h.svc.UploadTarget(rc.PostForm("path"), relpath, fh.Size)
 	if err != nil {
 		writeFilesError(rc, err)
 		return
