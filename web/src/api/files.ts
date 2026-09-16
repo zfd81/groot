@@ -16,10 +16,19 @@ export const filesApi = {
     api.post<FileScaffoldResp>('/web/files/scaffold', { kind, name }),
   downloadUrl: (path: string) => `/web/files/download?path=${enc(path)}`,
 
-  async upload(dir: string, file: File): Promise<void> {
+  // 目录上传第一步：在 dir 下创建单层目录 name，用于落任何文件之前探测目标目录是否已存在。
+  // 目录已存在时后端返回 409（ApiError.status === 409，code 为 'exists'），
+  // 调用方应捕获该状态并终止整批上传，而不是继续 POST 文件。
+  uploadPrepare: (dir: string, name: string) =>
+    api.post<{ status: string }>('/web/files/upload/prepare', { path: dir, name }),
+
+  // relpath 承载文件在所选目录内的相对路径（如 `A/sub/note.md`），仅目录上传时传入；
+  // 普通单文件上传不传，后端只取文件名最后一段。
+  async upload(dir: string, file: File, relpath?: string): Promise<void> {
     const fd = new FormData()
     fd.append('path', dir)
     fd.append('file', file)
+    if (relpath) fd.append('relpath', relpath)
     const resp = await fetch('/web/files/upload', {
       method: 'POST',
       body: fd,
