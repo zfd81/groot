@@ -1,6 +1,9 @@
 // 文件面板 API 封装。上传走原生 fetch（multipart 与 client.ts 的 JSON 封装不兼容）。
+import i18n from '../i18n'
 import { api, ApiError, notifyUnauthorized } from './client'
 import type { FileListResp, FileContentResp, FileScaffoldResp } from './types'
+
+const t = i18n.global.t
 
 const enc = encodeURIComponent
 
@@ -36,11 +39,15 @@ export const filesApi = {
     })
     if (resp.status === 401) {
       notifyUnauthorized()
-      throw new ApiError(401, 'unauthorized')
+      throw new ApiError(401, t('error.unauthorized'))
     }
     if (!resp.ok) {
       const data = await resp.json().catch(() => null)
-      throw new ApiError(resp.status, data?.message || `upload failed: ${resp.status}`, data?.status)
+      throw new ApiError(
+        resp.status,
+        data?.message || `upload failed: ${resp.status}`,
+        data?.code || data?.status
+      )
     }
   },
 }
