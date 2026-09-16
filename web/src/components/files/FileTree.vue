@@ -1,8 +1,9 @@
 <!-- 懒加载文件树：el-tree lazy 模式，行悬停「⋯」菜单，任意目录可上传。 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock, MoreFilled } from '@element-plus/icons-vue'
+import { ApiError } from '../../api/client'
 import { filesApi } from '../../api/files'
 import { iconForName } from './fileIcon'
 import { useFilesStore } from '../../stores/files'
@@ -75,14 +76,21 @@ function onCollapse(data: TreeItem) {
   dropExpandedUnder(data.path)
 }
 
-// home 下的一级目录是运行时结构性目录，不允许删除（与后端规则一致）
-function isTopDir(data: TreeItem): boolean {
-  return !data.leaf && !data.path.includes('/')
+// 结构性目录是运行时按固定名称查找的目录，不允许改名或删除（与后端
+// webfiles.isStructuralDir 一致）：home 下的一级目录，以及 subagent 内的
+// mcp 与 skills 目录（subagents/{name}/mcp、subagents/{name}/skills）。
+function isStructuralDir(data: TreeItem): boolean {
+  if (data.leaf) return false
+  const segs = data.path.split('/')
+  if (segs.length === 1) return true
+  return segs.length === 3 && segs[0] === 'subagents' && (segs[2] === 'mcp' || segs[2] === 'skills')
 }
 
 // 结构性条目：一级目录与 GROOT.md，禁止重命名与删除（与后端规则一致）
 function isProtected(data: TreeItem): boolean {
-  return isTopDir(data) || (!data.path.includes('/') && data.path.toLowerCase() === 'groot.md')
+  return (
+    isStructuralDir(data) || (!data.path.includes('/') && data.path.toLowerCase() === 'groot.md')
+  )
 }
 
 function parentDir(p: string): string {
@@ -179,9 +187,14 @@ async function onCommand(cmd: string, data: TreeItem) {
       a.click()
       break
     }
-    case 'upload': {
+    case 'uploadFile': {
       uploadDir.value = data.path
       uploadInput.value?.click()
+      break
+    }
+    case 'uploadDir': {
+      uploadDir.value = data.path
+      dirInput.value?.click()
       break
     }
     case 'sync': {
@@ -201,10 +214,90 @@ async function onUploadChange(e: Event) {
   if (!file) return
   await run(() => filesApi.upload(uploadDir.value, file))
 }
+
+const dirInput = ref<HTMLInputElement | null>(null)
+
+// 目录上传单批上限（设计文档 §1.4.5）。服务端逐文件受理、看不到整批，
+// 这是前端兜底，防止误选巨大目录把浏览器与服务端拖住。
+const MAX_DIR_FILES = 500
+
+// 目录上传进度，非空时树区域显示 v-loading 遮罩
+const uploading = ref(false)
+const progress = ref({ done: 0, total: 0 })
+const progressText = computed(() =>
+  t('files.uploadDirProgress', { done: progress.value.done, total: progress.value.total }),
+)
+
+// 浏览器不支持目录选择（主要是移动端）时隐藏「上传目录」菜单项
+const dirUploadSupported = 'webkitdirectory' in HTMLInputElement.prototype
+
+// 目录上传编排：占位建目标根目录（探测冲突）→ 逐文件上传。
+// 首个失败立即中断：已传部分保留（不自动清理，删一半比留一半更难解释），
+// 401 时若不中断，剩余每个文件都会再触发一次未登录跳转与错误弹窗。
+// 不套 run()——它每个文件刷一次树、弹一条错，批量场景由这里统一收尾。
+async function onDirChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const picked = Array.from(input.files ?? [])
+  input.value = '' // 允许连续选择同一目录
+  if (!picked.length) return
+
+  // 相对路径任一段以 "." 开头的文件（.DS_Store、.git/ 内容）一律跳过，
+  // 与后端列表接口过滤隐藏项的行为一致；后端也会拒绝这类段，前端过滤
+  // 是为了不让它们计入进度与失败统计。
+  const items = picked.filter((f) => {
+    const rel = f.webkitRelativePath
+    return rel !== '' && !rel.split('/').some((seg) => seg.startsWith('.'))
+  })
+  if (!items.length) {
+    ElMessage.warning(t('files.uploadDirEmpty'))
+    return
+  }
+  if (items.length > MAX_DIR_FILES) {
+    ElMessage.error(t('files.uploadDirTooMany', { count: items.length, limit: MAX_DIR_FILES }))
+    return
+  }
+
+  const dir = uploadDir.value
+  // webkitRelativePath 首段即所选目录名，占位建出它以探测同名冲突
+  const rootName = items[0].webkitRelativePath.split('/')[0]
+  uploading.value = true
+  progress.value = { done: 0, total: items.length }
+  try {
+    try {
+      await filesApi.uploadPrepare(dir, rootName)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        ElMessage.error(t('files.uploadDirExists', { name: rootName }))
+      } else {
+        ElMessage.error(e instanceof ApiError ? e.message : t('files.opFailed'))
+      }
+      return
+    }
+    for (const f of items) {
+      try {
+        await filesApi.upload(dir, f, f.webkitRelativePath)
+      } catch {
+        ElMessage.error(
+          t('files.uploadDirFailed', {
+            path: f.webkitRelativePath,
+            done: progress.value.done,
+            total: items.length,
+          }),
+        )
+        return
+      }
+      progress.value.done++
+    }
+    ElMessage.success(t('files.uploadDirDone', { total: items.length }))
+  } finally {
+    uploading.value = false
+    files.refresh() // 无论成败都刷新一次，让已传部分立即可见
+  }
+}
 </script>
 
 <template>
-  <div class="file-tree">
+  <div class="file-tree" v-loading="uploading" :element-loading-text="progressText">
     <el-tree
       :key="files.treeVersion"
       lazy
@@ -240,8 +333,11 @@ async function onUploadChange(e: Event) {
                 <el-dropdown-item v-if="data.leaf" command="download">
                   {{ t('files.download') }}
                 </el-dropdown-item>
-                <el-dropdown-item v-if="!data.leaf" command="upload">
-                  {{ t('files.upload') }}
+                <el-dropdown-item v-if="!data.leaf" command="uploadFile">
+                  {{ t('files.uploadFile') }}
+                </el-dropdown-item>
+                <el-dropdown-item v-if="!data.leaf && dirUploadSupported" command="uploadDir">
+                  {{ t('files.uploadDir') }}
                 </el-dropdown-item>
                 <el-dropdown-item v-if="!props.syncDisabled && isSyncable(data.path)" command="sync">
                   {{ t('files.syncScopeOne') }}
@@ -256,6 +352,7 @@ async function onUploadChange(e: Event) {
       </template>
     </el-tree>
     <input ref="uploadInput" type="file" hidden @change="onUploadChange" />
+    <input ref="dirInput" type="file" webkitdirectory multiple hidden @change="onDirChange" />
   </div>
 </template>
 
