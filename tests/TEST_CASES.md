@@ -48,6 +48,15 @@
 | TestCluster_MultipleInstances_SingleLeader | 多实例共享数据库，恰好 1 个 leader |
 | TestCluster_Heartbeat_RecordLost_Reregisters | 注册记录丢失后重新注册（新 ID） |
 
+**心跳路径** (`heartbeat_test.go`，手动驱动 `heartbeat()`，计数包装 MemberRepo)
+
+| 测试用例 | 说明 |
+|---------|------|
+| TestLeaderHeartbeat_SkipsUpdateRoleWhenUnchanged | 表中角色已是 leader 时多轮心跳不调用 UpdateRole，heartbeat_at 持续刷新 |
+| TestLeaderHeartbeat_RepairsRoleWhenDrifted | 表中角色与内存不一致时恰好写回一次，修复后不再写 |
+| TestHeartbeat_RecordLost_ReregistersWithoutUpdateRole | 记录丢失走重注册路径，不调用 UpdateRole，单实例重选为 leader |
+| TestFollowerPromotion_WritesRoleOnce | follower 提升为 leader 仅写一次角色，之后作为 leader 心跳不再写 |
+
 ---
 
 ### 1.2 Web 界面测试

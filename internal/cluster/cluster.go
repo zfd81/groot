@@ -111,9 +111,12 @@ func (c *Cluster) heartbeat() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	_, err := c.repo.Get(c.ctx, c.regID)
+	self, err := c.repo.Get(c.ctx, c.regID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
+			// 自己的记录已不存在（被 leader 清理或从未写入成功）：
+			// 以新 reg_id 重新注册。Register 本身会把角色写入表中，
+			// 因此这条路径不需要、也不会再执行 UpdateRole。
 			if c.role == RoleLeader && c.onLoseLeader != nil {
 				c.onLoseLeader()
 			}
@@ -125,7 +128,7 @@ func (c *Cluster) heartbeat() {
 	}
 
 	if c.role == RoleLeader {
-		c.leaderHeartbeat()
+		c.leaderHeartbeat(self)
 	} else {
 		c.followerHeartbeat()
 	}
@@ -160,13 +163,21 @@ func (c *Cluster) register() {
 	}
 }
 
-func (c *Cluster) leaderHeartbeat() {
+// leaderHeartbeat 刷新 leader 自己的心跳并清理超时成员。
+// self 是本轮心跳开头从表中读到的自身记录。
+func (c *Cluster) leaderHeartbeat(self *repo.Member) {
 	if err := c.repo.Heartbeat(c.ctx, c.regID); err != nil {
 		c.log.Error("心跳写入失败", zap.Error(err))
 		return
 	}
-	if err := c.repo.UpdateRole(c.ctx, c.regID, RoleLeader); err != nil {
-		c.log.Error("角色更新失败", zap.Error(err))
+	// 只在表中角色与内存角色不一致时才写回。leader 稳定运行时表中已是
+	// leader，每轮再执行一条无变化的 UPDATE 毫无意义；且 MySQL 默认对无变化
+	// 的 UPDATE 返回影响行数 0，会被 UpdateRole 误判为 not found 而刷错误日志。
+	// 不一致（例如提升时 UpdateRole 写入失败）仍会在这里自动修复。
+	if self.Role != RoleLeader {
+		if err := c.repo.UpdateRole(c.ctx, c.regID, RoleLeader); err != nil {
+			c.log.Error("角色更新失败", zap.Error(err))
+		}
 	}
 	n, err := c.repo.RemoveExpired(c.ctx, time.Now().Add(-heartbeatTimeout))
 	if err != nil {

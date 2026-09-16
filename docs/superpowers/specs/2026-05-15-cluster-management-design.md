@@ -144,15 +144,15 @@ func New(host string, port int, log *logger.Logger, memberRepo repo.MemberRepo) 
 #### 1.6.1 心跳起点：自检
 
 ```go
-_, err := c.repo.Get(c.ctx, c.regID)
+self, err := c.repo.Get(c.ctx, c.regID)
 ```
 
 三个分支：
 
 | 分支 | 行为 |
 |---|---|
-| 成功 | 进入 leader/follower 分支 |
-| `errors.Is(err, repo.ErrNotFound)` | 成员行已被清理：原 leader 触发 `onLoseLeader`，重新走 `register` 流程，本轮结束 |
+| 成功 | 读到的自身记录 `self` 传给 leader 分支（用于比对表中角色）；follower 分支不需要 |
+| `errors.Is(err, repo.ErrNotFound)` | 成员行已被清理：原 leader 触发 `onLoseLeader`，重新走 `register` 流程，本轮结束。`Register` 的 INSERT 自带 role 列，此路径不执行任何 `UpdateRole` |
 | 其他错误（DB 不可用、网络抖动） | 记 WARN（`自检失败,跳过本轮心跳`），跳过本轮，**不乐观写**（避免在不确定状态下产生重复注册或脑裂） |
 
 第三个分支是关键防御：当 DB 返回非 `ErrNotFound` 错误时，必须保守跳过，让下一轮心跳重试。
@@ -161,8 +161,11 @@ _, err := c.repo.Get(c.ctx, c.regID)
 
 1. `MemberRepo.Heartbeat(regID)` 更新自己的 `heartbeat_at`
    - 失败 → 记 ERROR 直接返回
-2. `MemberRepo.UpdateRole(regID, RoleLeader)` 维持 role 列为 leader
+2. 仅当 `self.Role != RoleLeader` 时调用 `MemberRepo.UpdateRole(regID, RoleLeader)` 写回角色
+   - 表中已是 leader（稳定运行的常态）→ 跳过，不发出 UPDATE
+   - 不一致（例如提升时 `UpdateRole` 写入失败）→ 写回，实现自修复
    - 失败 → 记 ERROR 但不返回（不阻塞下一步）
+   - 这样设计的原因：role 列只有实例自己会写，自检已经读到了它，无需每轮盲写；同时 MySQL 默认对"值未变化"的 UPDATE 返回影响行数 0，`UpdateRole` 会把它误判为 `ErrNotFound`，盲写会在 leader 上每 3 秒刷一条误报的 ERROR
 3. `MemberRepo.RemoveExpired(ctx, now - heartbeatTimeout)` 一条 SQL 删除所有 `heartbeat_at < cutoff` 的成员行
    - 成功且删除 N > 0 → 记 INFO（`清理超时成员 count=N`）
    - 失败 → 记 WARN（`清理超时成员失败`）
@@ -317,6 +320,7 @@ internal/cluster/
 |---|---|
 | 单元测试 | `election.go::DetermineRole`：排序、超时、空集合 |
 | 单元测试 | `cluster.go`：Join/Leave/heartbeat 各分支（mock MemberRepo） |
+| 单元测试 | `heartbeat_test.go`：手动驱动 `heartbeat()`，用计数包装的 MemberRepo 断言 leader 稳态不调用 `UpdateRole`、角色漂移时恰好写回一次、记录丢失走重注册不调用 `UpdateRole`、follower 提升仅写一次角色 |
 | 系统测试 | 单实例 → 自己是 leader |
 | 系统测试 | 第 2 个实例启动 → follower |
 | 系统测试 | 杀掉 leader → follower 提升为 leader |
@@ -359,3 +363,10 @@ internal/cluster/
 - **新增**：`internal/cluster/addr.go` 的 `ResolveAdvertiseHost`，`cmd/groot/main.go` 构造 `Cluster` 时经其解析 `server.host`。此前监听地址原样登记进 `cluster_members.host`，配置 `0.0.0.0` 时所有实例都登记为 `0.0.0.0`，成员列表无法区分与定位实例。
 - **调整**：通配监听地址（`0.0.0.0` / `::` / 空串）登记为探测到的本机对外 IP（UDP 路由探测 → 网卡遍历 → `127.0.0.1` 兜底）；具体地址配置行为不变（原样登记）。
 - **不变**：注册 / 心跳 / 选举流程、`cluster_members` 表结构、心跳与超时参数。
+
+### 2.3 v3 变更：Leader 心跳去掉无条件角色写回
+
+- **背景**：MySQL 后端下 leader 每 3 秒打一条 `角色更新失败 repo: not found`。原因是 `leaderHeartbeat` 每轮无条件执行 `UpdateRole(regID, leader)`，而表中角色本就是 leader；MySQL 默认对无变化的 UPDATE 返回影响行数 0，`memberdb.UpdateRole` 据此返回 `ErrNotFound`。SQLite / PostgreSQL 返回匹配行数，因此单测环境不会暴露。
+- **调整**：自检 `Get` 的返回值不再丢弃，作为 `self` 传入 `leaderHeartbeat`；仅在 `self.Role != RoleLeader` 时调用 `UpdateRole`。
+- **不变**：注册流程、`ErrNotFound` → 重注册路径、follower 心跳与提升逻辑、`DetermineRole`、心跳与超时参数、表结构、`MemberRepo` 接口。
+- **未处理**：`userdb` / `modeldb` / `apikeydb` 中同样以 `RowsAffected == 0` 判定 `ErrNotFound` 的 UPDATE 在 MySQL 上写入相同值时仍会误报，属独立问题，待后续统一处理（候选方案：MySQL DSN 追加 `clientFoundRows=true`）。
