@@ -118,7 +118,11 @@ func (h *FilesHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 
 // UploadPrepare 处理 POST /web/files/upload/prepare：为目录上传创建目标根目录。
 // 目录已存在时返回 409，前端据此终止整批上传。它是上传流程的内部原语，
-// 界面上不提供通用「新建目录」入口。
+// 不要把它当通用建目录 API 复用，详见 webfiles.Service.Mkdir 的说明。
+//
+// 前端仅凭 409 状态码判定「目录已存在」。这个推理成立的前提是 Mkdir 的
+// 错误集只有 ErrExists 会映射到 409；若日后 Mkdir 引入其他映射为 409 的
+// 错误（如 ErrNotEmpty），前端判定需同步改为检查响应体的 status 字段。
 func (h *FilesHandler) UploadPrepare(ctx context.Context, rc *app.RequestContext) {
 	var req struct {
 		Path string `json:"path"`

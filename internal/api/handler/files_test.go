@@ -146,10 +146,22 @@ func deleteCtx(query string) *app.RequestContext {
 // multipartCtx 构造 multipart 上传上下文；withPath 为 false 时不写 path 字段。
 func multipartCtx(t *testing.T, withPath bool, dir, filename, content string) *app.RequestContext {
 	t.Helper()
+	return multipartRelpathCtx(t, withPath, dir, "", filename, content)
+}
+
+// multipartRelpathCtx 在 multipartCtx 基础上附带 relpath 表单字段（空串则不带），
+// 供目录上传的接线用例使用。
+func multipartRelpathCtx(t *testing.T, withPath bool, dir, relpath, filename, content string) *app.RequestContext {
+	t.Helper()
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	if withPath {
 		if err := w.WriteField("path", dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if relpath != "" {
+		if err := w.WriteField("relpath", relpath); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -297,6 +309,29 @@ func TestFilesHandler_Upload(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(home, "mcp", "a")); !os.IsNotExist(err) {
 		t.Errorf("普通上传不应建出目录 mcp/a, got %v", err)
+	}
+
+	// relpath 接线：这是目录上传在 Upload 端的唯一新逻辑（表单字段透传给
+	// UploadTarget）。键名打错时回退分支会静默接管、退化成平铺文件名，
+	// 所以这条用例必须走真实的 multipart 字段，锁住键名与透传两件事。
+	rc = multipartRelpathCtx(t, true, "mcp", "A/sub/note.md", "note.md", "nested")
+	h.Upload(context.Background(), rc)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("relpath 上传 status = %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	data, err = os.ReadFile(filepath.Join(home, "mcp", "A", "sub", "note.md"))
+	if err != nil || string(data) != "nested" {
+		t.Errorf("relpath 内容未落到 mcp/A/sub/note.md: %q err=%v", data, err)
+	}
+
+	// relpath 带绝对路径：首段空串不过 validName，整体 400 且不建目录
+	rc = multipartRelpathCtx(t, true, "mcp", "/etc/passwd", "passwd", "x")
+	h.Upload(context.Background(), rc)
+	if rc.Response.StatusCode() != 400 {
+		t.Errorf("绝对路径 relpath status = %d, want 400", rc.Response.StatusCode())
+	}
+	if _, err := os.Lstat(filepath.Join(home, "mcp", "etc")); !os.IsNotExist(err) {
+		t.Errorf("非法 relpath 不应建出 mcp/etc, got %v", err)
 	}
 }
 
