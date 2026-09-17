@@ -5,7 +5,7 @@
 覆盖：认证要求、路径安全、隐藏/只读规则、白名单 CRUD、scaffold。
 运行方式（用户执行）：cd tests/python && pytest test_files_api.py -v
 
-注意：scaffoldNameRe 与 validName 均要求名称首字符为字母/数字
+注意：scaffoldNameRe 要求名称以 ASCII 字母开头（validName 允许字母/数字开头）
 （internal/webfiles/scaffold.go、service.go），因此测试沙箱名称
 不能以下划线开头，统一使用 pytest- 前缀。
 """

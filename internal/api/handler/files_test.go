@@ -413,3 +413,43 @@ func TestFilesHandler_UploadPrepare(t *testing.T) {
 		t.Errorf("非法 JSON status = %d, want 400", rc.Response.StatusCode())
 	}
 }
+
+// TestFilesHandler_ScaffoldForAgent 验证 agent 字段透传：
+// 子 Agent 存在时 skill/mcp 落到 subagents/<agent>/ 下，子 Agent 不存在返回 404。
+func TestFilesHandler_ScaffoldForAgent(t *testing.T) {
+	h, home := newFilesHandlerForTest(t)
+
+	rc := jsonCtx(consts.MethodPost, `{"kind":"agent","name":"bot"}`)
+	h.Scaffold(context.Background(), rc)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("scaffold agent status = %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+
+	rc = jsonCtx(consts.MethodPost, `{"kind":"mcp","name":"px","agent":"bot"}`)
+	h.Scaffold(context.Background(), rc)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("scaffold mcp for agent status = %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	var resp struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(rc.Response.Body(), &resp)
+	if resp.Path != "subagents/bot/mcp/px.json" {
+		t.Errorf("scaffold path = %q", resp.Path)
+	}
+	if _, err := os.Stat(filepath.Join(home, "subagents/bot/mcp/px.json")); err != nil {
+		t.Errorf("子 Agent mcp 未生成: %v", err)
+	}
+
+	rc = jsonCtx(consts.MethodPost, `{"kind":"skill","name":"s","agent":"ghost"}`)
+	h.Scaffold(context.Background(), rc)
+	if rc.Response.StatusCode() != 404 {
+		t.Errorf("子 Agent 不存在应 404, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+
+	rc = jsonCtx(consts.MethodPost, `{"kind":"agent","name":"n","agent":"bot"}`)
+	h.Scaffold(context.Background(), rc)
+	if rc.Response.StatusCode() != 400 {
+		t.Errorf("kind=agent 携带 agent 应 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+}

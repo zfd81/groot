@@ -217,7 +217,7 @@
 - 白名单矩阵：新建（仅 skill 目录内）/上传（skill 目录 + skills/ + mcp/ + subagents/ 及其子目录）
 - 读取：文本内容、二进制探测、2MB 超限、读目录 400
 - 保存/新建/改名/删除/上传目标的成功与错误码矩阵（404/403/409/413/400）
-- Scaffold：skill/mcp/agent 模板生成、重名 409、非法名称/类型 400、Unicode 名称
+- Scaffold：skill/mcp/agent 模板生成、重名 409、非法名称/类型 400、名称规则（字母开头、拒绝数字开头与 Unicode 字母）；指定所属子 Agent（生成到 subagents/<agent>/ 下、与主 Agent 同名互不冲突、子 Agent 不存在或不是目录 404、agent 类型携带 agent 参数 400、agent 名非法 400）
 - Handler：错误码映射、认证路由位置、上传 multipart、下载 Content-Disposition
 
 ---

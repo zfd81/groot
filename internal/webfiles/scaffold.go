@@ -8,9 +8,9 @@ import (
 	"regexp"
 )
 
-// scaffoldNameRe 创建名称：字母/数字开头，仅字母数字、下划线、连字符，≤64 字符。
-// 比 validName 更严——名称会成为 skill/agent 的标识符。
-var scaffoldNameRe = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}_-]{0,63}$`)
+// scaffoldNameRe 创建名称：ASCII 字母开头（不能以数字开头），之后仅字母、数字、下划线、连字符，≤64 字符。
+// 比 validName 更严——名称会成为 skill/mcp/agent 的标识符。
+var scaffoldNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 
 const skillTemplate = `---
 name: %q
@@ -37,14 +37,26 @@ description: ""
 `
 
 // Scaffold 按模板创建 skill / mcp / agent，返回主文件的相对路径。
-// 目标已存在返回 ErrExists；名称或类型非法返回 ErrInvalid。
-func (s *Service) Scaffold(kind, name string) (string, error) {
+//
+// agent 为空时资源归主 Agent：skills/<name>、mcp/<name>.json、subagents/<name>。
+// agent 非空时 skill / mcp 创建到该子 Agent 目录下：
+// subagents/<agent>/skills/<name>、subagents/<agent>/mcp/<name>.json，
+// 与子 Agent 加载器（internal/agent/subagent_registry.go）按固定名称查找的目录一致。
+//
+// 目标已存在返回 ErrExists；名称或类型非法返回 ErrInvalid；
+// kind 为 agent 时不接受 agent 参数（子 Agent 不能嵌套）返回 ErrInvalid；
+// 指定的子 Agent 目录不存在返回 ErrNotFound。
+func (s *Service) Scaffold(kind, name, agent string) (string, error) {
 	if !scaffoldNameRe.MatchString(name) {
 		return "", ErrInvalid
 	}
+	base, err := s.scaffoldBase(kind, agent)
+	if err != nil {
+		return "", err
+	}
 	switch kind {
 	case "skill":
-		dir := "skills/" + name
+		dir := base + "skills/" + name
 		abs, _, err := s.res.Resolve(dir)
 		if err != nil {
 			return "", err
@@ -55,7 +67,7 @@ func (s *Service) Scaffold(kind, name string) (string, error) {
 		}
 		return dir + "/SKILL.md", nil
 	case "mcp":
-		rel := "mcp/" + name + ".json"
+		rel := base + "mcp/" + name + ".json"
 		abs, _, err := s.res.Resolve(rel)
 		if err != nil {
 			return "", err
@@ -94,6 +106,27 @@ func (s *Service) Scaffold(kind, name string) (string, error) {
 	default:
 		return "", ErrInvalid
 	}
+}
+
+// scaffoldBase 返回资源目录的相对前缀："" 表示主 Agent（home 根），
+// 非空形如 "subagents/<agent>/"。子 Agent 名称沿用 scaffoldNameRe 校验，
+// 天然排除路径分隔符与 ".."；子 Agent 目录必须已存在且是目录。
+func (s *Service) scaffoldBase(kind, agent string) (string, error) {
+	if agent == "" {
+		return "", nil
+	}
+	if kind == "agent" || !scaffoldNameRe.MatchString(agent) {
+		return "", ErrInvalid
+	}
+	abs, _, err := s.res.Resolve("subagents/" + agent)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		return "", ErrNotFound
+	}
+	return "subagents/" + agent + "/", nil
 }
 
 // scaffoldDir 原子认领目录 abs（os.Mkdir，已存在 → ErrExists），

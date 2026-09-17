@@ -192,17 +192,18 @@ func (h *FilesHandler) Download(ctx context.Context, rc *app.RequestContext) {
 	rc.SetBodyStream(f, int(info.Size()))
 }
 
-// Scaffold 处理 POST /web/files/scaffold
+// Scaffold 处理 POST /web/files/scaffold：{kind, name, agent?}
 func (h *FilesHandler) Scaffold(ctx context.Context, rc *app.RequestContext) {
 	var req struct {
-		Kind string `json:"kind"`
-		Name string `json:"name"`
+		Kind  string `json:"kind"`
+		Name  string `json:"name"`
+		Agent string `json:"agent"` // 可选：非空时 skill/mcp 创建到 subagents/<agent>/ 下
 	}
 	if err := rc.BindJSON(&req); err != nil {
 		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
 		return
 	}
-	rel, err := h.svc.Scaffold(req.Kind, req.Name)
+	rel, err := h.svc.Scaffold(req.Kind, req.Name, req.Agent)
 	if err != nil {
 		writeFilesError(rc, err)
 		return

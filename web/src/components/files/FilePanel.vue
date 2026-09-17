@@ -1,7 +1,6 @@
-<!-- 右侧抽屉容器：工具栏（scaffold ×3 / 全屏 / 收起）、路径栏、树/预览切换、宽度拖动。 -->
+<!-- 右侧抽屉容器：工具栏（scaffold ×3，创建对话框见 ScaffoldDialog / 全屏 / 收起）、路径栏、树/预览切换、宽度拖动。 -->
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { FullScreen, Refresh, Sort } from '@element-plus/icons-vue'
 import PanelIcon from './PanelIcon.vue'
 import BoltIcon from './BoltIcon.vue'
@@ -10,7 +9,7 @@ import FileTree from './FileTree.vue'
 import FilePreview from './FilePreview.vue'
 import FileEditorModal from './FileEditorModal.vue'
 import SyncDialog from './SyncDialog.vue'
-import { filesApi } from '../../api/files'
+import ScaffoldDialog from './ScaffoldDialog.vue'
 import { useFilesStore, clampWidth } from '../../stores/files'
 
 const { t } = useI18n()
@@ -38,36 +37,43 @@ function onDragEnd() {
 onBeforeUnmount(onDragEnd)
 
 // —— scaffold 创建 ——
-const SCAFFOLD_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,63}$/u
+type ScaffoldKind = 'skill' | 'mcp' | 'agent'
 
-// scaffold 类型 → 顶层目录（成功后先展开该目录再刷新树，便于定位新条目）
-const SCAFFOLD_DIR: Record<'skill' | 'mcp' | 'agent', string> = {
+// scaffold 类型 → 资源目录名（成功后先展开相关目录再刷新树，便于定位新条目）
+const SCAFFOLD_DIR: Record<ScaffoldKind, string> = {
   skill: 'skills',
   mcp: 'mcp',
   agent: 'subagents',
 }
 
-async function scaffold(kind: 'skill' | 'mcp' | 'agent', title: string) {
-  let name: string
-  try {
-    const { value } = await ElMessageBox.prompt(t('files.namePrompt'), title, {
-      inputPattern: SCAFFOLD_NAME_RE,
-      inputErrorMessage: t('files.nameInvalid'),
-    })
-    name = value.trim()
-  } catch {
-    return // 取消
-  }
-  try {
-    const resp = await filesApi.scaffold(kind, name)
-    const dir = SCAFFOLD_DIR[kind]
-    if (!files.expandedKeys.includes(dir)) files.expandedKeys.push(dir)
-    files.refresh()
-    files.previewPath = ''
-    files.editorPath = resp.path // 直接进编辑
-  } catch (e: any) {
-    ElMessage.error(e?.message || t('files.opFailed'))
-  }
+const scaffoldOpen = ref(false)
+const scaffoldKind = ref<ScaffoldKind>('skill')
+const scaffoldTitle = ref('')
+const scaffoldDefaultAgent = ref('')
+
+// 路径位于某子 Agent 内（subagents/<name>/...）时返回该子 Agent 名，否则 ''。
+function agentOfPath(p: string): string {
+  const m = /^subagents\/([^/]+)\//.exec(p)
+  return m ? m[1] : ''
+}
+
+// 打开创建对话框；skill / mcp 按当前预览或编辑中的文件所在子 Agent 预选「所属 Agent」。
+function scaffold(kind: ScaffoldKind, title: string) {
+  scaffoldKind.value = kind
+  scaffoldTitle.value = title
+  scaffoldDefaultAgent.value =
+    kind === 'agent' ? '' : agentOfPath(files.previewPath || files.editorPath)
+  scaffoldOpen.value = true
+}
+
+// 创建成功：展开新条目所在目录链（子 Agent 资源在 subagents/<agent>/<dir> 下），刷新树并直接进编辑。
+function onScaffolded(path: string, agent: string) {
+  const dir = SCAFFOLD_DIR[scaffoldKind.value]
+  const keys = agent ? ['subagents', `subagents/${agent}`, `subagents/${agent}/${dir}`] : [dir]
+  for (const k of keys) if (!files.expandedKeys.includes(k)) files.expandedKeys.push(k)
+  files.refresh()
+  files.previewPath = ''
+  files.editorPath = path
 }
 
 // —— 配置同步 ——
@@ -151,6 +157,13 @@ function onPulled() {
     <FileTree v-show="!files.previewPath" :sync-disabled="syncDisabled" @sync="openSync" />
     <FilePreview v-if="files.previewPath" :path="files.previewPath" />
     <FileEditorModal />
+    <ScaffoldDialog
+      v-model="scaffoldOpen"
+      :kind="scaffoldKind"
+      :title="scaffoldTitle"
+      :default-agent="scaffoldDefaultAgent"
+      @created="onScaffolded"
+    />
     <SyncDialog v-model="syncOpen" :scope="syncScope" @pulled="onPulled"
       @disabled="syncDisabled = true" />
   </aside>

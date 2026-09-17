@@ -75,14 +75,24 @@
 
 #### 1.3.6 语义化创建
 
-三个创建按钮的交互一致：点击 → 小对话框输入名称（前端校验：非空、无路径分隔符、不与现有同名冲突）→ 后端按模板生成 → 树刷新并定位到新条目 → 自动打开编辑弹窗。
+三个创建按钮的交互一致：点击 → 创建对话框（`ScaffoldDialog.vue`）填写 → 后端按模板生成 → 树展开并定位到新条目 → 自动打开编辑弹窗。
+
+对话框内容：
+
+- **所属 Agent**（仅 skill / mcp）：下拉选择，首项为主 Agent「groot（主 Agent）」，其余为 `subagents/` 下每个一级目录（即已存在的子 Agent）。默认选主 Agent；若打开对话框时正在预览或编辑某子 Agent 目录内的文件，则默认选中该子 Agent。`subagents/` 目录不存在时下拉只有主 Agent 一项
+- **名称**：前端校验与后端 `scaffoldNameRe` 一致（ASCII 字母开头，不能以数字开头，之后仅字母、数字、下划线、连字符，≤64 字符），非法时按钮禁用并显示提示；回车即提交
+- 创建 agent 没有「所属 Agent」字段：子 Agent 不能嵌套
+
+Skill 与 MCP 的归属决定生成位置：主 Agent 的资源在 home 根下的 `skills/`、`mcp/`，子 Agent 的资源在 `subagents/<agent>/skills/`、`subagents/<agent>/mcp/`，与子 Agent 加载器按固定名称查找的目录一致，创建后重载即可被对应 Agent 使用。
 
 生成模板：
 
 | 按钮 | 生成内容 |
 |---|---|
-| 创建 skill | `skills/<名称>/SKILL.md`，frontmatter 含 `name`、`description` 占位 |
-| 创建 mcp | `mcp/<名称>.json`，含 `name`/`type`/`description`/`isActive`/`command`/`args` 骨架 |
+| 创建 skill（主 Agent） | `skills/<名称>/SKILL.md`，frontmatter 含 `name`、`description` 占位 |
+| 创建 skill（子 Agent） | `subagents/<agent>/skills/<名称>/SKILL.md`，模板同上 |
+| 创建 mcp（主 Agent） | `mcp/<名称>.json`，含 `name`/`type`/`description`/`isActive`/`command`/`args` 骨架 |
+| 创建 mcp（子 Agent） | `subagents/<agent>/mcp/<名称>.json`，模板同上 |
 | 创建 agent | `subagents/<名称>/agent.md`（frontmatter 含 `description` 占位）+ 空目录 `mcp/`、`skills/` |
 
 ### 1.4 后端设计
@@ -100,10 +110,12 @@ DELETE /web/files?path=            删除文件或空目录（一级目录除外
 POST   /web/files/upload           上传（multipart：目标目录 + 文件 + 可选相对路径）
 POST   /web/files/upload/prepare   目录上传占位 {path, name}：创建目标根目录
 GET    /web/files/download?path=   下载（attachment 流式输出）
-POST   /web/files/scaffold         语义化创建 {kind: skill|mcp|agent, name}
+POST   /web/files/scaffold         语义化创建 {kind: skill|mcp|agent, name, agent?}
 ```
 
 `list` 返回条目结构：`{name, type: dir|file, size, mtime, readonly}`。
+
+`scaffold` 的 `agent` 字段可选：为空或缺省时 skill / mcp 创建到主 Agent 目录；非空时创建到 `subagents/<agent>/` 下，要求该目录已存在且是目录（否则 404），`agent` 名称与 `name` 同规则校验（否则 400）；`kind` 为 agent 时不接受 `agent` 字段（400）。
 
 #### 1.4.2 路径安全（所有端点共用）
 
@@ -204,7 +216,7 @@ Go 单元测试（`internal/api/handler/files_test.go`，必要时抽 `internal/
 - 目录上传占位：`Mkdir` 正常创建、目标已存在 409、父目录不存在 404、只读区域 403、非法名字 400
 - 嵌套路径上传：`relpath` 正常建出中间目录、`..` 段被拒、以 `.` 开头的段被拒、含非法字符的段被拒、目标文件已存在被拒、缺省 `relpath` 时与单文件上传行为一致
 - 删除：空的二级目录成功、一级目录 403、非空 409、文件成功
-- scaffold：三种模板生成正确、重名冲突报错
+- scaffold：三种模板生成正确、重名冲突报错；指定子 Agent 时生成到 `subagents/<agent>/` 下，子 Agent 不存在 404、agent 类型携带 agent 字段 400
 - 大小限制：超限读取/保存/上传被拒
 
 系统测试（Python，用户自行运行）：`tests/python/` 下补充文件面板 API 的端到端用例。
@@ -220,13 +232,13 @@ Go 单元测试（`internal/api/handler/files_test.go`，必要时抽 `internal/
 - 调整：`ChatView.vue` 顶栏与主区布局（加图标、右侧挂面板）；`RegisterRoutes` 与 `NewServer` 增加 files 处理器装配
 - 新依赖：CodeMirror 6（动态加载）
 
-### 2.2 上一次迭代
+### 2.2 更早迭代
 
 - 移除：行菜单中的「新建文件」与「新建子目录」两项；`/web/files/mkdir`、`/web/files/create` 两个端点及其服务层与前端 API 封装；`newFile`/`newDir` 两条 i18n 词条。创建资源统一走面板头部的 Skill / MCP / Agent 入口
 - 调整：上传范围从白名单目录（`skills/` 及其子目录、`mcp/`、`subagents/` 及其子目录）放开为 home 内任意已存在目录，含 home 根目录；目标不存在或不是目录时返回 404
 - 调整：目录折叠改为对任意层级直接生效——折叠一个目录时同步清理其整棵子树的展开状态，重新展开时子目录一律为收起态
 
-### 2.3 本次迭代
+### 2.3 上一次迭代
 
 - 新增：目录上传能力（1.4.4），行菜单「上传」拆分为「上传文件」与「上传目录」两项
 - 新增：`POST /web/files/upload/prepare` 端点与服务层 `Mkdir`——目录上传流程的占位原语，不是上一次迭代移除的「新建子目录」功能的回归：不在行菜单提供入口，仅服务于上传流程的冲突检测
@@ -235,3 +247,11 @@ Go 单元测试（`internal/api/handler/files_test.go`，必要时抽 `internal/
 - 新增：目录上传的批量上限（500 文件）、隐藏项过滤、中途失败保留已传部分等约束（1.4.5）
 - 调整：头部工具栏「创建 skill / mcp / agent」三个按钮的图标由 Element Plus 的 MagicStick / Connection / Avatar 线性图标改为与对话区技能 ⚡ / 工具 🔧 / 子 Agent 🤖 同语义的图标，使工作空间入口与对话中的标识一致；其中闪电与扳手以实心 SVG（`BoltIcon.vue` / `WrenchIcon.vue`）绘制而非 emoji，避免系统字体下笔画过细、不如 🤖 饱满；按钮尺寸与位置不变。对话区 `TranscriptStep.vue` 步骤行首的技能 / 工具图标同步改用这两个 SVG 组件，两处共用一套图标
 - 调整：头部工具栏按钮的悬浮提示由原生 `title` 改为 `el-tooltip`，出现延迟从浏览器固定的约 1 秒缩短到 200ms，写法与设置弹窗中 Agent 卡片按钮一致
+
+### 2.4 本次迭代
+
+- 新增：创建 Skill / MCP 时可选择「所属 Agent」，资源可直接生成到子 Agent 的 `subagents/<agent>/skills/`、`subagents/<agent>/mcp/` 目录下；此前面板只能创建主 Agent 的 skill / mcp，子 Agent 的资源需要在终端手工建目录
+- 调整：`POST /web/files/scaffold` 请求体增加可选 `agent` 字段，服务层 `Scaffold(kind, name, agent)` 增加第三个参数；`agent` 缺省时行为不变
+- 调整：创建对话框由 `ElMessageBox.prompt` 单输入框改为独立组件 `ScaffoldDialog.vue`（名称 + 所属 Agent 下拉），以承载第二个字段；预览或编辑子 Agent 内文件时默认选中该子 Agent
+- 调整：创建成功后展开目录链从单个一级目录扩展为 `subagents/<agent>/<skills|mcp>` 整条路径，保证新条目可见
+- 调整：创建名称规则收紧为 ASCII 字母开头（不能以数字开头），之后仅字母、数字、下划线、连字符；不再接受 Unicode 字母与数字开头的名称，前后端校验与提示语同步

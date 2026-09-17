@@ -15,8 +15,9 @@ export const filesApi = {
   rename: (from: string, to: string) =>
     api.post<{ status: string }>('/web/files/rename', { from, to }),
   remove: (path: string) => api.delete<{ status: string }>(`/web/files?path=${enc(path)}`),
-  scaffold: (kind: 'skill' | 'mcp' | 'agent', name: string) =>
-    api.post<FileScaffoldResp>('/web/files/scaffold', { kind, name }),
+  // agent 非空时 skill/mcp 创建到 subagents/<agent>/ 下；缺省或为空创建到主 Agent 目录。
+  scaffold: (kind: 'skill' | 'mcp' | 'agent', name: string, agent?: string) =>
+    api.post<FileScaffoldResp>('/web/files/scaffold', agent ? { kind, name, agent } : { kind, name }),
   downloadUrl: (path: string) => `/web/files/download?path=${enc(path)}`,
 
   // 目录上传第一步：在 dir 下创建单层目录 name，用于落任何文件之前探测目标目录是否已存在。
