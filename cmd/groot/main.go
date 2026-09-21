@@ -324,6 +324,8 @@ func startServer(homeDir string, port int) {
 	var scheduleEngine *schedule.Engine
 	var scheduleStorage *schedule.Storage
 	var scheduleRunner *schedule.Runner
+	// 集群消息服务：在 clusterInst 创建后赋值，startLeaderTasks 闭包中引用
+	var clusterMsg *cluster.MessageService
 
 	// Initialize schedule module (storage and runner needed regardless of leader status)
 	scheduleStorage = schedule.NewStorage(repos.Schedule, log)
@@ -354,6 +356,15 @@ func startServer(homeDir string, port int) {
 			syncInterval = 30 * time.Second
 		}
 		sched.AddDuration(syncInterval, gocron.NewTask(schedule.NewSyncTask(scheduleEngine, scheduleStorage, log)), "system-sync", "sync")
+
+		// Register cluster message cleanup (daily 03:00, leader only; retention 见 cluster.messageRetention)
+		if clusterMsg != nil {
+			sched.AddDaily(3, 0, gocron.NewTask(cluster.NewMessageCleanupTask(clusterMsg, log)),
+				"system-cluster-message-cleanup", "cleanup")
+		} else {
+			// 正常接线下不可达：clusterMsg 必须在 clusterInst.Join 之前赋值
+			log.Error("集群消息服务未挂接,跳过清理任务注册")
+		}
 
 		// Register schedule tools if enabled
 		if cfg.Schedule.Enabled {
@@ -399,6 +410,12 @@ func startServer(homeDir string, port int) {
 	// server.host 是监听地址，0.0.0.0/:: 不可作为成员地址登记，需解析为本机真实 IP
 	clusterInst := cluster.New(cluster.ResolveAdvertiseHost(cfg.Server.Host), cfg.Server.Port, log, repos.Member)
 	clusterInst.SetCallbacks(startLeaderTasks, stopLeaderTasks)
+
+	// 集群消息服务必须在 Join 之前挂接：Join 会同步触发 register → onBecomeLeader，
+	// 且心跳 goroutine 启动后不再允许修改 Cluster 的挂接字段。
+	clusterMsg = cluster.NewMessageService(repos.Message, log, clusterInst.RegID)
+	clusterInst.SetMessageService(clusterMsg)
+	// 具体业务处理器在有场景时通过 clusterMsg.RegisterHandler(module, handler) 注册。
 
 	if err := clusterInst.Join(context.Background()); err != nil {
 		log.Error("加入集群失败", zap.Error(err))

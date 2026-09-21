@@ -157,3 +157,56 @@ func TestDDLStatements_SharedResourcesHasStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestMigrate_CreatesClusterMessageTables 新库执行 Migrate 后应存在集群消息两张表
+// 及其关键列；重复执行不报错（幂等）。
+func TestMigrate_CreatesClusterMessageTables(t *testing.T) {
+	sqlxDB := openLegacyDB(t)
+
+	if err := Migrate(sqlxDB, DialectSQLite); err != nil {
+		t.Fatalf("first Migrate: %v", err)
+	}
+	if err := Migrate(sqlxDB, DialectSQLite); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+
+	checks := []struct{ table, column string }{
+		{"cluster_messages", "id"},
+		{"cluster_messages", "message_type"},
+		{"cluster_messages", "payload"},
+		{"cluster_messages", "target_instance"},
+		{"cluster_messages", "target_module"},
+		{"cluster_messages", "priority"},
+		{"cluster_messages", "created_at"},
+		{"cluster_messages", "expires_at"},
+		{"cluster_messages", "source_instance"},
+		{"cluster_message_consumers", "message_id"},
+		{"cluster_message_consumers", "instance_id"},
+		{"cluster_message_consumers", "consumed_at"},
+		{"cluster_message_consumers", "status"},
+		{"cluster_message_consumers", "error_message"},
+	}
+	for _, c := range checks {
+		exists, err := columnExists(sqlxDB, DialectSQLite, c.table, c.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s): %v", c.table, c.column, err)
+		}
+		if !exists {
+			t.Errorf("column %s.%s missing after Migrate", c.table, c.column)
+		}
+	}
+
+	for _, idx := range []struct{ table, name string }{
+		{"cluster_messages", "idx_cm_target_expires"},
+		{"cluster_messages", "idx_cm_priority_created"},
+		{"cluster_message_consumers", "idx_cmc_instance_consumed"},
+	} {
+		exists, err := indexExists(sqlxDB, DialectSQLite, idx.table, idx.name)
+		if err != nil {
+			t.Fatalf("indexExists(%s): %v", idx.name, err)
+		}
+		if !exists {
+			t.Errorf("index %s missing after Migrate", idx.name)
+		}
+	}
+}

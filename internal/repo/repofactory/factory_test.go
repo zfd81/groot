@@ -72,3 +72,17 @@ func TestNewRepos_SQLite_SyncManagerDisabled(t *testing.T) {
 		t.Errorf("Pull err = %v, want ErrSyncDisabled", err)
 	}
 }
+
+func TestNewRepos_MessageRepoWired(t *testing.T) {
+	homeDir := t.TempDir()
+	sqlxDB, dialect, err := db.Open(nil, homeDir)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer sqlxDB.Close()
+
+	repos := NewRepos(sqlxDB, dialect, homeDir)
+	if repos.Message == nil {
+		t.Fatal("Message repo 不应为 nil")
+	}
+}

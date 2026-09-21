@@ -57,6 +57,53 @@
 | TestHeartbeat_RecordLost_ReregistersWithoutUpdateRole | 记录丢失走重注册路径，不调用 UpdateRole，单实例重选为 leader |
 | TestFollowerPromotion_WritesRoleOnce | follower 提升为 leader 仅写一次角色，之后作为 leader 心跳不再写 |
 
+**集群消息存储** (`internal/repo/messagedb/message_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestInsertAndListPending_Broadcast | 广播消息所有实例可见，字段往返一致 |
+| TestListPending_PointToPointOnlyTarget | 点对点消息只有目标实例可见 |
+| TestListPending_ExcludesExpired | 过期消息不返回 |
+| TestListPending_ExcludesConsumedBySelfOnly | 已消费的只对本实例隐藏，其他实例仍可见 |
+| TestListPending_OrderByPriorityThenCreated | 按优先级、创建时间排序 |
+| TestListPending_Limit | 单次返回条数受 limit 限制 |
+| TestListPending_NonPositiveLimitReturnsEmpty | limit 为 0 或负数时返回空结果 |
+| TestRecordConsumption_DuplicateFails | 同一实例重复记录同一消息报错 |
+| TestListConsumers | 列出某条消息的全部消费记录 |
+| TestDeleteBefore | 删除过期消息及孤立消费记录并返回计数 |
+
+**集群消息服务** (`internal/cluster/message_test.go`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestSendMessage_PersistsWithDefaults | 发送落库，默认优先级 5 / TTL 1h / 来源实例 |
+| TestSendMessage_NilPayloadStoredAsEmptyObject | nil payload 存为 `{}` |
+| TestSendMessage_Validation | type/module 必填、expires 不能为过去、payload ≤ 64KB |
+| TestSendMessage_RetriesOnceThenSucceeds | 首次写入失败立即重试一次成功 |
+| TestSendMessage_FailsAfterSecondError | 两次失败后返回错误，不做第三次 |
+| TestFromRepoMessage_InvalidJSONReturnsError | payload 非法 JSON 报错，空 payload 转为空 map |
+| TestRegisterHandler_LookupAndOverwrite | 处理器注册与同名覆盖 |
+| TestPoll_DeliversToHandlerAndRecordsSuccess | 轮询路由到处理器并记录 success |
+| TestPoll_DoesNotRedeliverConsumedMessage | 已消费消息不重复投递 |
+| TestPoll_HandlerErrorRecordedAsFailedNoRetry | 处理失败记录 failed 与错误信息，不重试 |
+| TestPoll_HandlerPanicRecordedAsFailed | 处理器 panic 被捕获并记录 failed |
+| TestPoll_UnknownModuleRecordedAsFailed | 未注册模块记录 failed |
+| TestPoll_BroadcastReachesEveryInstance | 广播消息每个实例各处理一次 |
+| TestPoll_PointToPointReachesOnlyTarget | 点对点消息只有目标实例处理 |
+| TestPoll_SkipsWhenInstanceIDEmpty | 未注册集群的实例不消费 |
+| TestPoll_RespectsPriorityOrder | 高优先级先处理 |
+| TestCleanup_RemovesMessagesOlderThan30Days | 清理 30 天前消息 |
+| TestNewMessageCleanupTask_RunsCleanup | gocron 任务包装可执行清理 |
+| TestCluster_TriggerPoll_DeliversMessage | Cluster 挂接后 triggerPoll 投递消息 |
+| TestCluster_TriggerPoll_SkipsWhilePreviousRoundInProgress | 上一轮未结束时跳过本轮 |
+| TestCluster_TriggerPoll_NoServiceIsNoop | 未挂接消息服务时不报错 |
+
+**数据库迁移** (`internal/db/migrate_test.go`) 追加：
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestMigrate_CreatesClusterMessageTables | 建 cluster_messages / cluster_message_consumers 两表及索引，重复执行幂等 |
+
 ---
 
 ### 1.2 Web 界面测试

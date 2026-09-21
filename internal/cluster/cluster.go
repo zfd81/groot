@@ -33,6 +33,8 @@ type Cluster struct {
 
 	onBecomeLeader func()
 	onLoseLeader   func()
+	msg            *MessageService // 挂接的集群消息服务，可为 nil
+	polling        int32           // 1 表示有一轮消息轮询正在进行
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -103,6 +105,10 @@ func (c *Cluster) run() {
 			return
 		case <-ticker.C:
 			c.heartbeat()
+			// 与心跳同一 tick 触发消息轮询，避免多一个定时器增加数据库并发。
+			// 放在 heartbeat() 之后而非其内部：heartbeat 全程持有 c.mu 写锁，
+			// 处理器若在锁内运行会与 IsLeader() 等读锁死锁并拖慢心跳。
+			c.triggerPoll()
 		}
 	}
 }

@@ -279,6 +279,28 @@ func sqliteDDL() []string {
 			created_at  INTEGER NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_api_keys_name ON api_keys(name)`,
+		`CREATE TABLE IF NOT EXISTS cluster_messages (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_type    TEXT    NOT NULL,
+			payload         TEXT    NOT NULL,
+			target_instance TEXT    NOT NULL DEFAULT '',
+			target_module   TEXT    NOT NULL DEFAULT '',
+			priority        INTEGER NOT NULL DEFAULT 5,
+			created_at      INTEGER NOT NULL,
+			expires_at      INTEGER NOT NULL,
+			source_instance TEXT    NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cm_target_expires ON cluster_messages(target_instance, expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_cm_priority_created ON cluster_messages(priority, created_at)`,
+		`CREATE TABLE IF NOT EXISTS cluster_message_consumers (
+			message_id    INTEGER NOT NULL,
+			instance_id   TEXT    NOT NULL,
+			consumed_at   INTEGER NOT NULL,
+			status        TEXT    NOT NULL,
+			error_message TEXT    NOT NULL DEFAULT '',
+			PRIMARY KEY (message_id, instance_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cmc_instance_consumed ON cluster_message_consumers(instance_id, consumed_at)`,
 	}
 }
 
@@ -402,6 +424,28 @@ func mysqlDDL() []string {
 			expires_at  BIGINT       NOT NULL,
 			created_at  BIGINT       NOT NULL,
 			UNIQUE KEY uk_api_keys_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS cluster_messages (
+			id              BIGINT       PRIMARY KEY AUTO_INCREMENT,
+			message_type    VARCHAR(64)  NOT NULL,
+			payload         LONGTEXT     NOT NULL,
+			target_instance VARCHAR(32)  NOT NULL DEFAULT '',
+			target_module   VARCHAR(64)  NOT NULL DEFAULT '',
+			priority        INT          NOT NULL DEFAULT 5,
+			created_at      BIGINT       NOT NULL,
+			expires_at      BIGINT       NOT NULL,
+			source_instance VARCHAR(32)  NOT NULL DEFAULT '',
+			KEY idx_cm_target_expires (target_instance, expires_at),
+			KEY idx_cm_priority_created (priority, created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS cluster_message_consumers (
+			message_id    BIGINT       NOT NULL,
+			instance_id   VARCHAR(32)  NOT NULL,
+			consumed_at   BIGINT       NOT NULL,
+			status        VARCHAR(16)  NOT NULL,
+			error_message TEXT         NOT NULL,
+			PRIMARY KEY (message_id, instance_id),
+			KEY idx_cmc_instance_consumed (instance_id, consumed_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
@@ -527,5 +571,27 @@ func postgresDDL() []string {
 			created_at  BIGINT       NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_api_keys_name ON api_keys(name)`,
+		`CREATE TABLE IF NOT EXISTS cluster_messages (
+			id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			message_type    VARCHAR(64)  NOT NULL,
+			payload         TEXT         NOT NULL,
+			target_instance VARCHAR(32)  NOT NULL DEFAULT '',
+			target_module   VARCHAR(64)  NOT NULL DEFAULT '',
+			priority        INTEGER      NOT NULL DEFAULT 5,
+			created_at      BIGINT       NOT NULL,
+			expires_at      BIGINT       NOT NULL,
+			source_instance VARCHAR(32)  NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cm_target_expires ON cluster_messages(target_instance, expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_cm_priority_created ON cluster_messages(priority, created_at)`,
+		`CREATE TABLE IF NOT EXISTS cluster_message_consumers (
+			message_id    BIGINT       NOT NULL,
+			instance_id   VARCHAR(32)  NOT NULL,
+			consumed_at   BIGINT       NOT NULL,
+			status        VARCHAR(16)  NOT NULL,
+			error_message TEXT         NOT NULL DEFAULT '',
+			PRIMARY KEY (message_id, instance_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cmc_instance_consumed ON cluster_message_consumers(instance_id, consumed_at)`,
 	}
 }
