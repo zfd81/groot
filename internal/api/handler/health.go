@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/cloudwego/eino/adk/middlewares/skill"
@@ -28,6 +30,7 @@ type HealthHandler struct {
 	memoryManager *memory.Manager
 	runtimeState  *agent.RuntimeState
 	models        *llm.ModelService
+	processMode   string
 	startTime     time.Time
 	logger        *logger.Logger
 }
@@ -42,6 +45,7 @@ func NewHealthHandler(
 	runtime *agent.RuntimeState,
 	models *llm.ModelService,
 	log *logger.Logger,
+	processMode string,
 ) *HealthHandler {
 	return &HealthHandler{
 		config:        cfg,
@@ -51,6 +55,7 @@ func NewHealthHandler(
 		memoryManager: memMgr,
 		runtimeState:  runtime,
 		models:        models,
+		processMode:   processMode,
 		startTime:     time.Now(),
 		logger:        log,
 	}
@@ -69,6 +74,20 @@ func databaseType(cfg *config.DatabaseConfig) string {
 		return "postgres"
 	default:
 		return "sqlite"
+	}
+}
+
+// environmentInfo 返回运行环境信息（供设置界面与 groot status 展示）：
+// 工作目录、数据库类型、日志目录、进程 PID、进程模式。
+// 日志目录在 main.go 中已解析为绝对路径后才构建 handler。
+// pid 是本进程 PID；受监督模式下即工作进程 PID，与集群成员表中登记的一致。
+func (h *HealthHandler) environmentInfo() map[string]string {
+	return map[string]string{
+		"home_dir":     h.homeDir,
+		"database":     databaseType(h.config.Database),
+		"log_dir":      h.config.Logging.File.Directory,
+		"pid":          strconv.Itoa(os.Getpid()),
+		"process_mode": h.processMode,
 	}
 }
 
@@ -147,15 +166,9 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 				Status: "healthy",
 				Info:   map[string]int{"sessions": sessionCount},
 			},
-			// 运行环境信息：工作目录、数据库类型、日志目录（供设置界面展示）。
-			// 日志目录在 main.go 中已解析为绝对路径后才构建 handler。
 			"environment": {
 				Status: "healthy",
-				Info: map[string]string{
-					"home_dir": h.homeDir,
-					"database": databaseType(h.config.Database),
-					"log_dir":  h.config.Logging.File.Directory,
-				},
+				Info:   h.environmentInfo(),
 			},
 		},
 		Metrics: map[string]interface{}{

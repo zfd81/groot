@@ -409,3 +409,48 @@ func TestRunStatus_NoInstance(t *testing.T) {
 		t.Error("output should contain '未检测到'")
 	}
 }
+
+func TestPrintStatusOutput_ProcessInfo(t *testing.T) {
+	health := &types.HealthResponse{
+		Status:  "healthy",
+		Version: "1.0.0",
+		Uptime:  "1m",
+		Checks: map[string]types.CheckInfo{
+			"environment": {
+				Status: "healthy",
+				Info:   map[string]interface{}{"pid": "4242", "process_mode": "supervised"},
+			},
+		},
+		Metrics: map[string]interface{}{},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	printStatusOutput(health, 8080)
+	w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	out := buf.String()
+
+	for _, want := range []string{"进程模式:", "监督进程 + 工作进程", "PID:", "4242"} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("output should contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestProcessModeLabel(t *testing.T) {
+	cases := map[string]string{
+		"supervised": "监督进程 + 工作进程（支持重启）",
+		"single":     "单进程（不支持重启）",
+		"":           "",
+		"weird":      "weird",
+	}
+	for in, want := range cases {
+		if got := processModeLabel(in); got != want {
+			t.Errorf("processModeLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"os"
+	"strconv"
 	"testing"
 
 	"github.com/zfd81/groot/internal/config"
@@ -25,5 +27,29 @@ func TestDatabaseType(t *testing.T) {
 				t.Errorf("databaseType(%+v) = %q, want %q", c.cfg, got, c.want)
 			}
 		})
+	}
+}
+
+func TestEnvironmentInfo(t *testing.T) {
+	h := &HealthHandler{
+		config:      config.Config{Logging: config.LoggingConfig{File: config.LogFileConfig{Directory: "/var/log/groot"}}},
+		homeDir:     "/home/x/.groot",
+		processMode: "supervised",
+	}
+	info := h.environmentInfo()
+	if info["home_dir"] != "/home/x/.groot" {
+		t.Errorf("home_dir = %q", info["home_dir"])
+	}
+	if info["log_dir"] != "/var/log/groot" {
+		t.Errorf("log_dir = %q", info["log_dir"])
+	}
+	if info["database"] != "sqlite" {
+		t.Errorf("database = %q, want sqlite（配置缺省）", info["database"])
+	}
+	if info["process_mode"] != "supervised" {
+		t.Errorf("process_mode = %q", info["process_mode"])
+	}
+	if info["pid"] != strconv.Itoa(os.Getpid()) {
+		t.Errorf("pid = %q, want %d", info["pid"], os.Getpid())
 	}
 }

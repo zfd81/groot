@@ -15,7 +15,9 @@ import (
 	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/attachment"
+	"github.com/zfd81/groot/internal/cluster"
 	"github.com/zfd81/groot/internal/config"
+	"github.com/zfd81/groot/internal/lifecycle"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -50,6 +52,8 @@ func NewServer(
 	apiKeys repo.APIKeyRepo,
 	members repo.MemberRepo,
 	syncResources repo.ResourceRepo, // 配置同步的远端仓储；SQLite 单机模式下为 nil（同步禁用）
+	clusterInst *cluster.Cluster, // 集群实例：提供本机 reg_id 与消息发送能力
+	role lifecycle.Role, // 进程角色：决定健康检查的 process_mode 与是否支持重启
 ) *Server {
 	// Set a large max request body size to allow attachment handler to validate sizes
 	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
@@ -86,7 +90,7 @@ func NewServer(
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
-	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log)
+	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log, role.ProcessMode())
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
@@ -94,7 +98,12 @@ func NewServer(
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)
 	apiKeysH := handler.NewAPIKeysHandler(apiKeys, cfg.Security, log)
-	clusterH := handler.NewClusterHandler(members, log)
+	// 集群消息服务未挂接时 sender 必须是 nil 接口，而不是包着 nil 指针的非空接口
+	var restartSender handler.RestartSender
+	if ms := clusterInst.MessageService(); ms != nil {
+		restartSender = ms
+	}
+	clusterH := handler.NewClusterHandler(members, clusterInst.RegID, restartSender, role.RestartSupported(), log)
 	logsH := handler.NewLogsHandler(cfg.Logging)
 
 	// 文件面板：home 目录解析失败时禁用该功能（不影响其他路由）
@@ -120,16 +129,18 @@ func NewServer(
 }
 
 // Start starts the server with graceful error handling
-func (s *Server) Start() error {
+func (s *Server) Start() (err error) {
 	s.logger.Info("Starting API server",
 		zap.String("host", s.config.Server.Host),
 		zap.Int("port", s.config.Server.Port),
 	)
 
-	// Recover from panic (e.g., port already in use)
+	// Recover from panic (e.g., port already in use) and surface it as an error:
+	// 静默吞掉会让工作进程以退出码 0 结束，监督进程随之停止看护。
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("Server startup failed", zap.Any("error", r))
+			err = fmt.Errorf("server panic: %v", r)
 		}
 	}()
 

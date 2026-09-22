@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/filesystem"
+	"github.com/zfd81/groot/internal/lifecycle"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -39,9 +41,10 @@ import (
 )
 
 var (
-	port        int
-	showHelp    bool
-	showVersion bool
+	port          int
+	showHelp      bool
+	showVersion   bool
+	singleProcess bool
 )
 
 func init() {
@@ -51,6 +54,7 @@ func init() {
 	flag.BoolVar(&showHelp, "help", false, "显示帮助")
 	flag.BoolVar(&showVersion, "v", false, "显示版本")
 	flag.BoolVar(&showVersion, "version", false, "显示版本")
+	flag.BoolVar(&singleProcess, "single-process", false, "单进程运行（无监督进程，不支持重启）")
 }
 
 func main() {
@@ -93,8 +97,29 @@ func main() {
 		return
 	}
 
-	// No subcommand, start server
-	startServer(cmd.GetDefaultHome(), port)
+	// No subcommand: 按角色启动
+	role := lifecycle.DetectRole(os.Getenv(lifecycle.EnvSupervised), singleProcess)
+	if role == lifecycle.RoleSupervisor {
+		os.Exit(runSupervisor())
+	}
+	startServer(cmd.GetDefaultHome(), port, role)
+}
+
+// runSupervisor 以监督进程身份运行：拉起同一二进制作为工作进程，并把关闭信号转交给它。
+// 工作进程通过环境变量 GROOT_SUPERVISED=1 识别身份，命令行参数原样传递。
+func runSupervisor() int {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "无法确定可执行文件路径: %s\n", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	sup := lifecycle.NewSupervisor(lifecycle.Options{
+		Exe:  exe,
+		Args: os.Args[1:],
+	})
+	return sup.Run(ctx)
 }
 
 func handleStatusCommand(args []string) {
@@ -166,7 +191,7 @@ func handleInitCommand(args []string) {
 	}
 }
 
-func startServer(homeDir string, port int) {
+func startServer(homeDir string, port int, role lifecycle.Role) {
 	// Ensure home directory exists
 	if err := os.MkdirAll(homeDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "无法创建工作目录: %s\n", err)
@@ -203,6 +228,9 @@ func startServer(homeDir string, port int) {
 		zap.String("home", homeDir),
 		zap.String("config", filepath.Join(homeDir, "config.yaml")),
 	)
+	log.Info("进程模式", zap.String("mode", role.ProcessMode()), zap.Int("pid", os.Getpid()))
+	startedAt := time.Now()
+	ctrl := lifecycle.NewController(role)
 
 	// Initialize skills via eino skill middleware
 	skillsDir := filepath.Join(homeDir, "skills")
@@ -394,7 +422,7 @@ func startServer(homeDir string, port int) {
 	}
 
 	// Check if port is available before starting
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	addr := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 	conn, err := net.Dial("tcp", addr)
 	if err == nil {
 		conn.Close()
@@ -415,7 +443,8 @@ func startServer(homeDir string, port int) {
 	// 且心跳 goroutine 启动后不再允许修改 Cluster 的挂接字段。
 	clusterMsg = cluster.NewMessageService(repos.Message, log, clusterInst.RegID)
 	clusterInst.SetMessageService(clusterMsg)
-	// 具体业务处理器在有场景时通过 clusterMsg.RegisterHandler(module, handler) 注册。
+	// 生命周期指令处理器（重启）：模块名 lifecycle，早于 startedAt 的指令被忽略
+	clusterMsg.RegisterHandler(lifecycle.ModuleName, lifecycle.NewClusterHandler(ctrl, startedAt, log))
 
 	if err := clusterInst.Join(context.Background()); err != nil {
 		log.Error("加入集群失败", zap.Error(err))
@@ -427,15 +456,44 @@ func startServer(homeDir string, port int) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, clusterInst, role)
 
-	// Setup graceful shutdown
+	// 停止来源 1：操作系统信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
-		sig := <-sigCh
-		log.Info("收到信号，准备关闭", zap.String("signal", sig.String()))
+		// 按信号计数而不是查 ctrl.Stopping()：受监督模式下 Ctrl+C 会同时打到两个进程，
+		// 工作进程可能先经管道 EOF 进入停止态，此时它收到的第一个信号不应被当作"再次收到"。
+		n := 0
+		for sig := range sigCh {
+			n++
+			if n > 1 {
+				// 优雅关闭进行中再次收到信号：视为使用者要求立刻退出，不再等待
+				log.Warn("关闭过程中再次收到信号，强制退出", zap.String("signal", sig.String()))
+				log.Sync()
+				os.Exit(1)
+			}
+			log.Info("收到信号，准备关闭", zap.String("signal", sig.String()))
+			ctrl.RequestStop(lifecycle.ReasonSignal) // 已在停止中则为 no-op
+		}
+	}()
+
+	// 停止来源 2：监督进程关闭了 stdin 管道（仅受监督模式；单进程的 stdin 可能是终端或 /dev/null）
+	if role == lifecycle.RoleWorker {
+		lifecycle.WatchStdin(os.Stdin, func() {
+			log.Info("监督进程已关闭管道，准备关闭")
+			ctrl.RequestStop(lifecycle.ReasonSupervisorClosed)
+		})
+	}
+
+	// 停止来源 3：重启指令，由 lifecycle.ClusterHandler 调用 ctrl.RequestRestart()
+
+	// 唯一的关闭流程：等第一个停止原因，然后按固定顺序释放资源
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		reason := <-ctrl.Done()
+		log.Info("开始关闭", zap.String("reason", reason.String()), zap.Int("exit_code", reason.ExitCode()))
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -443,7 +501,7 @@ func startServer(homeDir string, port int) {
 		// Leave cluster before shutting down
 		clusterInst.Leave()
 
-		// Stop server
+		// Stop server（使 srv.Start() 返回）
 		srv.Stop(ctx)
 
 		// Stop message layer
@@ -465,7 +523,19 @@ func startServer(homeDir string, port int) {
 		zap.String("host", cfg.Server.Host),
 		zap.Int("port", cfg.Server.Port),
 	)
-	if err := srv.Start(); err != nil {
+	err = srv.Start()
+
+	// 已有停止原因：Start 的返回值是关闭的副产物，不作为错误处理；
+	// 等关闭流程跑完，显式刷新日志、关库，再以该原因的退出码退出（os.Exit 不执行 defer）。
+	if ctrl.Stopping() {
+		<-shutdownDone
+		code := ctrl.Reason().ExitCode()
+		log.Info("进程退出", zap.Int("exit_code", code))
+		log.Sync()
+		sqlxDB.Close()
+		os.Exit(code)
+	}
+	if err != nil {
 		log.Error("服务启动失败", zap.Error(err))
 		os.Exit(1)
 	}
@@ -482,6 +552,7 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("选项:")
 	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
+	fmt.Println("  --single-process  单进程运行（无监督进程，不支持 Web 重启；调试或容器托管场景使用）")
 	fmt.Println("  -h, --help        显示帮助")
 	fmt.Println("  -v, --version     显示版本")
 	fmt.Println()
@@ -512,4 +583,5 @@ func printHelp() {
 	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
 	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")
+	fmt.Println("  groot --single-process        # 单进程运行，不启动监督进程")
 }

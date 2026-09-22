@@ -104,6 +104,63 @@
 |---------|---------|
 | TestMigrate_CreatesClusterMessageTables | 建 cluster_messages / cluster_message_consumers 两表及索引，重复执行幂等 |
 
+**进程生命周期与实例重启** (`internal/lifecycle/`)
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestDetectRole | 环境变量 / --single-process / 默认 → Worker / Single / Supervisor |
+| TestRole_ProcessMode | 角色到 supervised / single / supervisor 字符串 |
+| TestRole_RestartSupported | 只有 Worker 支持重启 |
+| TestController_FirstReasonWins | 第一个停止原因生效，后续忽略 |
+| TestController_RestartReason | RequestRestart → ReasonRestart |
+| TestController_NotStoppingInitially | 初始无停止原因 |
+| TestController_SingleRejectsRestart | 单进程模式拒绝重启且不改变状态 |
+| TestController_RequestStopNoneIsIgnored | RequestStop(ReasonNone) 被忽略，不消耗 Once |
+| TestReason_ExitCode | signal / supervisor_closed → 0，restart → 3 |
+| TestReason_String | 原因字符串 |
+| TestWatchStdin_TriggersOnEOF | 写端关闭触发回调，写入数据不触发 |
+| TestWatchStdin_TriggersOnReadError | 读错误（非 EOF）同样触发回调 |
+| TestSupervisor_RestartsOnExitRestart | 子进程 exit 3 后被重新拉起 |
+| TestSupervisor_ExitOKStopsLoop | exit 0 后监督循环结束 |
+| TestSupervisor_GivesUpAfterMaxFastFails | 连续快速失败达上限放弃并返回 1 |
+| TestSupervisor_LongRunResetsFastFailCounter | 存活超过窗口后计数归零 |
+| TestSupervisor_CancelClosesPipeAndChildExits | 取消后关闭管道，子进程优雅退出，不再拉起 |
+| TestSupervisor_KillsHungChildAfterStopTimeout | 超时后强制 Kill，视为异常 |
+| TestSupervisor_SetsSupervisedEnv | 子进程能看到 GROOT_SUPERVISED=1 |
+| TestSupervisor_SpawnFailureCountsAsFastFail | 可执行文件不存在按快速失败退避后放弃 |
+| TestNewSupervisor_PartialBackoffDefaults | 部分填充的 Backoff 按字段补默认值；空 Delays 时加最小节流 |
+| TestBackoff_Delay | 默认退避序列 1/2/4/8/16/30 |
+| TestExitCodeOf | Wait 错误到退出码 |
+| TestClusterHandler_FreshMessageTriggersRestart | 先返回成功，延迟后触发重启 |
+| TestClusterHandler_IgnoresMessageOlderThanStart | 早于进程启动的指令被忽略 |
+| TestClusterHandler_SingleModeRejects | 单进程模式返回 ErrRestartUnsupported |
+| TestClusterHandler_DuplicateTriggersOnce | 重复指令只触发一次 |
+| TestClusterHandler_UnknownTypeIsError | 未知类型报错 |
+| TestClusterHandler_NilLoggerDoesNotPanic | nil logger 兜底 |
+
+**集群 API：Self 字段与重启端点** (`internal/api/handler/cluster_test.go`) 追加：
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestClusterHandler_SelfField | 响应含本机 reg_id，未注册时为空串 |
+| TestRestart_UnknownMember404 | 未知 reg_id → 404 member_not_found，不发消息 |
+| TestRestart_SelfUnsupported409 | 本机单进程模式 → 409 restart_unsupported |
+| TestRestart_OtherMemberSendsPointToPoint | 202；消息类型 / 模块 / 目标 / 优先级 / Payload / 有效期正确 |
+| TestRestart_SelfSupported202 | 本机重启同样走消息投递，self=true |
+| TestRestart_SenderError500 | 发送失败 → 500，不泄漏底层错误 |
+| TestRestart_NoSender500 | 未挂接消息服务 → 500 |
+| TestRestart_NilRepo404 | 未启用集群 → 404 |
+| TestRestart_RepoError500 | 成员查询出错 → 500，不泄漏底层错误，不发消息 |
+| TestRestart_NoWebUserIDYieldsEmptyRequestedBy | 未注入 web_user_id 时 requested_by 为空串 |
+
+**健康检查与 status 命令** 追加：
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestEnvironmentInfo（`internal/api/handler/health_test.go`） | environment 含 pid / process_mode |
+| TestPrintStatusOutput_ProcessInfo（`internal/cmd/status_test.go`） | status 输出进程模式与 PID |
+| TestProcessModeLabel（`internal/cmd/status_test.go`） | 模式字符串到中文说明 |
+
 ---
 
 ### 1.2 Web 界面测试

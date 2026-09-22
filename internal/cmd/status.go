@@ -132,6 +132,17 @@ func printStatusOutput(health *types.HealthResponse, port int) {
 	fmt.Printf("版本:      %s\n", health.Version)
 	fmt.Printf("运行时间:  %s\n", health.Uptime)
 	fmt.Printf("端口:      %d\n", port)
+	// 进程模式与 PID（environment 检查项；旧版后端缺失时跳过）
+	if env, ok := health.Checks["environment"]; ok {
+		if info, ok := env.Info.(map[string]interface{}); ok {
+			if mode, ok := info["process_mode"].(string); ok && mode != "" {
+				fmt.Printf("进程模式:  %s\n", processModeLabel(mode))
+			}
+			if pid, ok := info["pid"].(string); ok && pid != "" {
+				fmt.Printf("PID:       %s\n", pid)
+			}
+		}
+	}
 	fmt.Println()
 	fmt.Println("组件状态:")
 
@@ -203,4 +214,16 @@ func printStatusOutput(health *types.HealthResponse, port int) {
 		running = int(chatsRunning)
 	}
 	fmt.Printf("活跃对话:  %d\n", running)
+}
+
+// processModeLabel 把健康检查的 process_mode 换成中文说明；未知值原样返回。
+func processModeLabel(mode string) string {
+	switch mode {
+	case "supervised":
+		return "监督进程 + 工作进程（支持重启）"
+	case "single":
+		return "单进程（不支持重启）"
+	default:
+		return mode
+	}
 }

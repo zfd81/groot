@@ -258,6 +258,16 @@ type ClusterMemberInfo struct {
 }
 
 // ClusterResponse 是 GET /web/cluster 的完整响应体。
+// Self 是处理本次请求的实例的 reg_id；未注册集群时为空串。
 type ClusterResponse struct {
 	Members []ClusterMemberInfo `json:"members"`
+	Self    string              `json:"self"`
+}
+
+// RestartResponse 是 POST /web/cluster/:reg_id/restart 的 202 响应体。
+// Self 为 true 表示被重启的就是处理本次请求的实例，前端据此等待恢复并引导重新登录。
+type RestartResponse struct {
+	Status string `json:"status"`
+	RegID  string `json:"reg_id"`
+	Self   bool   `json:"self"`
 }

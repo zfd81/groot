@@ -150,7 +150,7 @@ export interface HealthResp {
     // 运行环境信息（设置-通用面板展示）；旧版后端可能缺失
     environment?: {
       status: string
-      info: { home_dir: string; database: string; log_dir: string }
+      info: { home_dir: string; database: string; log_dir: string; pid?: string; process_mode?: string }
     }
   }
 }
@@ -240,6 +240,16 @@ export interface ClusterMemberInfo {
 
 export interface ClusterResp {
   members: ClusterMemberInfo[]
+  // 处理本次请求的实例的 reg_id；未注册集群时为空串
+  self: string
+}
+
+// POST /web/cluster/:reg_id/restart 的 202 响应
+export interface RestartResp {
+  status: 'accepted'
+  reg_id: string
+  // 被重启的就是当前为浏览器服务的实例：需等待恢复并重新登录
+  self: boolean
 }
 
 // 会话搜索（/sess/search）：轮次级命中结果
