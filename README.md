@@ -12,7 +12,7 @@
 通过 REST API 接入，让你的系统立刻拥有智能任务执行能力  
 理解指令 · 调用工具 · 自主完成任务
 
-<img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue"> <img alt="License" src="https://img.shields.io/badge/license-MIT-green"> <img alt="Go" src="https://img.shields.io/badge/Go-1.21+-00ADD8">
+<img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue"> <img alt="License" src="https://img.shields.io/badge/license-MIT-green"> <img alt="Go" src="https://img.shields.io/badge/Go-1.26+-00ADD8">
 
 <br clear="left">
 
@@ -38,8 +38,9 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **消息通知** | 支持 webhook / email / stdout 多渠道通知，任务完成/失败自动推送 |
 | **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
 | **数据库后端** | 运行数据统一存储在数据库中，默认 SQLite 零配置，可切换 MySQL/PostgreSQL 支持多实例集群部署 |
+| **集群管理** | 多实例共享数据库自动组成集群并选举 Leader；Web 界面查看成员状态、远程重启任意实例，MySQL/PostgreSQL 模式下可在实例间同步配置资源 |
 | **速率限制** | 支持按 API Key 的 QPS 和并发数限制，防止滥用 |
-| **Web 界面** | 内置图形化界面，浏览器访问 `/ui` 即可聊天、查看会话与服务状态，无需额外部署 |
+| **Web 界面** | 内置图形化界面，浏览器访问 `/ui` 即可聊天、搜索会话、查看日志、管理模型与 API Key、在线编辑工作目录文件，无需额外部署 |
 
 ### 1.3 会话与对话
 
@@ -105,7 +106,7 @@ Session（会话）
 | 要求 | 说明 |
 |------|------|
 | 操作系统 | Linux / macOS / Windows |
-| Go 版本 | Go 1.21+（仅源码编译需要） |
+| Go 版本 | Go 1.26+（仅源码编译需要） |
 | 内存 | 建议 512MB+ |
 | 磁盘 | 建议 1GB+（用于附件存储和会话数据） |
 
@@ -332,7 +333,7 @@ http://localhost:8080/ui/
 | 会话管理 | 侧边栏查看历史会话列表、继续会话、分页加载 |
 | 会话搜索 | 侧边栏搜索图标或快捷键 `Ctrl`/`⌘` + `K`，按关键词搜索历史对话的指令与执行结果，点击结果跳转到对应会话并定位轮次 |
 | 会话日志 | 顶部栏「查看日志」按钮，查看当前会话的运行日志（扫描最近 7 天，最多 1000 条），支持按级别过滤 |
-| 文件面板 | 顶部栏文件夹图标打开右侧面板，浏览 Groot home 目录（`~/.groot`）：树形导航、文件预览（Markdown 渲染/代码高亮/图片）、在线编辑（Markdown 支持分屏实时预览）、一键创建 Skill/MCP/Agent、上传下载；`config.yaml`、`env.yaml` 为只读 |
+| 文件面板 | 顶部栏文件夹图标打开右侧面板，浏览 Groot home 目录（`~/.groot`）：树形导航、文件预览（Markdown 渲染/代码高亮/图片）、在线编辑（Markdown 支持分屏实时预览）、一键创建 Skill/MCP/Agent、上传文件或整个目录、下载；`config.yaml`、`env.yaml` 为只读，`groot.db` 不显示。MySQL/PostgreSQL 模式下还提供配置同步入口，见 [4.7.1](#471-配置同步web-工作空间) |
 
 **设置界面导航**（右上角进入）：
 
@@ -558,14 +559,14 @@ logging:
 |------|------|------|
 | `enabled` | 否 | 是否允许在对话中创建定时任务，默认 `false`。关闭时对话中无法创建/管理任务（系统级清理和同步不受影响） |
 | `max_concurrent_tasks` | 否 | 最大并发执行任务数，超出的任务跳过当次执行，默认 `3` |
-| `sync_interval` | 否 | 定期同步间隔（Go duration 格式，如 `30s`/`1m`），对比 active/ 目录与调度器状态，自动修复不一致，默认 `30s` |
+| `sync_interval` | 否 | 定期同步间隔（Go duration 格式，如 `30s`/`1m`），对比数据库中的任务与调度器状态，自动修复不一致，默认 `30s` |
 
 #### Message 配置
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `100` |
-| `workers` | 否 | 消息发送 worker 数量，默认 `3` |
+| `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `256` |
+| `workers` | 否 | 消息发送 worker 数量，默认 `2` |
 | `senders.webhook.enabled` | 否 | 是否启用 webhook 通知，默认 `false` |
 | `senders.webhook.url` | 否 | Webhook URL，任务完成/失败时 POST JSON 到该地址 |
 | `senders.email.enabled` | 否 | 是否启用邮件通知，默认 `false` |
@@ -677,17 +678,23 @@ logging:
 | `all` | 以上全部 | 全部权限 |
 
 > `GET /web/health` 不需要认证和权限，可直接访问（`groot status` 也使用该端点）。
+> 权限点只作用于本章的对外 API；通过 Web 界面登录的用户即管理员，不受权限点限制。
 
 ### 4.6 配置热更新
 
 **支持热更新的配置：**
+- 模型配置：存储在数据库中，Web 界面（设置 → 模型）增删改立即生效
 - Skills 配置：修改 SKILL.md 文件自动生效
 - GROOT.md：每次对话按需读取，修改后下次对话自动生效
+- API Key：创建后立即可用，删除后立即失效
 
 **不支持热更新的配置：**
-- LLM 配置、Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置、Schedule 配置、Message 配置需重启服务
+- Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置、Schedule 配置、Message 配置需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
+- 子 Agent 定义（`subagents/<name>/agent.md`）及其专属 MCP 需重启服务
 - 数据库配置（`env.yaml`）需重启服务
+
+> 重启可在 Web 界面 **设置 → 集群管理** 中完成，无需登录服务器，见 [Q12](#q12-配置修改后需要重启吗)。
 
 ---
 
@@ -1148,7 +1155,7 @@ curl -X POST http://localhost:8080/chat \
 
 ## 六、CLI 命令参考
 
-Groot 提供一套命令行工具用于管理服务实例、Skills 和日志。
+Groot 提供一套命令行工具用于初始化工作目录、查看实例状态、查看日志和重置 Web 用户。
 
 ### 6.1 命令总览
 
@@ -1287,23 +1294,23 @@ groot user reset -y   # 跳过确认直接执行
 
 ### 7.1 API 列表
 
-| API | 方法 | 用途 |
-|-----|------|------|
-| `/chat` | POST | 执行对话，SSE 流式返回（支持多轮对话） |
-| `/chat/status/{sid}` | GET | 查询最近一次对话状态 |
-| `/chat/{sid}` | GET | 查询最近一次对话详情（完整步骤记录） |
-| `/chat/{sid}/{cid}` | GET | 查询指定对话详情 |
-| `/sess/{sid}` | GET | 查询会话详情（完整对话历史） |
-| `/sess/history` | GET | 查询会话列表 |
-| `/sess/search` | GET | 搜索历史对话（关键词匹配指令与结果） |
-| `/schedule` | GET | 列出所有定时任务 |
-| `/schedule/:id` | GET | 查询任务详情 |
-| `/schedule/:id` | DELETE | 删除定时任务 |
-| `/schedule/:id/disable` | POST | 禁用定时任务 |
-| `/schedule/:id/enable` | POST | 启用定时任务 |
-| `/schedule/:id/archive` | POST | 归档定时任务 |
-| `/schedule/:id/history` | GET | 查询任务执行历史 |
-| `/web/health` | GET | 健康检查（无需认证） |
+| API | 方法 | 权限点 | 用途 |
+|-----|------|--------|------|
+| `/chat` | POST | `chat` | 执行对话，SSE 流式返回（支持多轮对话） |
+| `/chat/status/{sid}` | GET | `status` | 查询最近一次对话状态 |
+| `/chat/{sid}` | GET | `detail` | 查询最近一次对话详情（完整步骤记录） |
+| `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
+| `/sess/{sid}` | GET | `session` | 查询会话详情（完整对话历史） |
+| `/sess/history` | GET | `history` | 查询会话列表 |
+| `/sess/search` | GET | `session` | 搜索历史对话（关键词匹配指令与结果） |
+| `/schedule` | GET | `schedule` | 列出所有定时任务 |
+| `/schedule/:id` | GET | `schedule` | 查询任务详情 |
+| `/schedule/:id` | DELETE | `schedule` | 删除定时任务 |
+| `/schedule/:id/disable` | POST | `schedule` | 禁用定时任务 |
+| `/schedule/:id/enable` | POST | `schedule` | 启用定时任务 |
+| `/schedule/:id/archive` | POST | `schedule` | 归档定时任务 |
+| `/schedule/:id/history` | GET | `schedule` | 查询任务执行历史 |
+| `/web/health` | GET | 无（免认证） | 健康检查 |
 
 ### 7.2 认证方式
 
@@ -1847,7 +1854,7 @@ X-API-Key: 在Web界面创建的APIKey
 | `mcp_servers` | MCP 工具 | 各 MCP 服务状态和工具数量 |
 | `skills` | Skills | 已加载 Skills 数量 |
 | `memory` | 会话存储 | 当前会话数量 |
-| `environment` | 运行环境 | 工作目录、数据库类型（sqlite/mysql/postgres）、日志目录 |
+| `environment` | 运行环境 | 工作目录、数据库类型（sqlite/mysql/postgres）、日志目录、进程 PID、进程模式（`supervised` 监督进程 + 工作进程 / `single` 单进程） |
 
 **响应示例（健康）：**
 ```json
@@ -1860,7 +1867,7 @@ X-API-Key: 在Web界面创建的APIKey
     "mcp_servers": {"status": "healthy", "info": [{"name": "file_operations", "type": "stdio", "description": "文件操作", "tools_count": 7, "isActive": true}]},
     "skills": {"status": "healthy", "info": {"count": 4}},
     "memory": {"status": "healthy", "info": {"sessions": 10}},
-    "environment": {"status": "healthy", "info": {"home_dir": "/home/user/.groot", "database": "sqlite", "log_dir": "/home/user/.groot/logs"}}
+    "environment": {"status": "healthy", "info": {"home_dir": "/home/user/.groot", "database": "sqlite", "log_dir": "/home/user/.groot/logs", "pid": "12345", "process_mode": "supervised"}}
   },
   "metrics": {
     "chats_running": 2
@@ -1879,7 +1886,7 @@ X-API-Key: 在Web界面创建的APIKey
     "mcp_servers": {"status": "healthy", "info": [...]},
     "skills": {"status": "healthy", "info": {"count": 4}},
     "memory": {"status": "healthy", "info": {"sessions": 10}},
-    "environment": {"status": "healthy", "info": {"home_dir": "/home/user/.groot", "database": "sqlite", "log_dir": "/home/user/.groot/logs"}}
+    "environment": {"status": "healthy", "info": {"home_dir": "/home/user/.groot", "database": "sqlite", "log_dir": "/home/user/.groot/logs", "pid": "12345", "process_mode": "supervised"}}
   },
   "metrics": {
     "chats_running": 0
@@ -1892,6 +1899,8 @@ X-API-Key: 在Web界面创建的APIKey
 ### 7.10 GET /schedule - 列出定时任务
 
 查询所有定时任务，支持按状态过滤。
+
+> **可用性说明：** 7.10 ~ 7.16 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
 
 **Query 参数：**
 
@@ -2288,6 +2297,14 @@ export OPENAI_API_KEY="your-api-key"
 
 ---
 
+### Q13: 调度接口返回 503 schedule_unavailable
+
+**原因：** 调度接口只在 Leader 实例且 `schedule.enabled: true` 时可用；当前实例是 Follower，或配置中未开启调度。
+
+**解决：** 在 `config.yaml` 中开启 `schedule.enabled: true` 并重启；集群部署时在 Web 界面 **设置 → 集群管理** 中确认 Leader 地址，把调度管理请求发往 Leader。
+
+---
+
 ## 附录
 
 ### A. 环境变量
@@ -2350,9 +2367,13 @@ export OPENAI_API_KEY="your-api-key"
 
 ### D. 错误码速查表
 
+错误响应统一为 `{"status": "<错误码>", "message": "<说明>"}`。
+
 | HTTP 状态码 | 错误码 | 说明 |
 |------------|--------|------|
-| 400 | `invalid_request` | 请求参数错误 |
+| 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失） |
+| 400 | `invalid_model` | `X-Model-Name` 指定的模型不存在或已禁用，或未配置默认模型 |
+| 400 | `unknown_agent` | `X-Agent-Name` 指定的子 Agent 未注册 |
 | 400 | `attachment_count_exceeded` | 附件数量超限 |
 | 400 | `attachment_type_not_allowed` | 附件类型不允许 |
 | 400 | `attachment_size_exceeded` | 单个附件大小超限 |
@@ -2361,15 +2382,20 @@ export OPENAI_API_KEY="your-api-key"
 | 400 | `attachment_missing_name` | 附件缺少文件名 |
 | 400 | `attachment_missing_content` | 附件缺少内容 |
 | 400 | `attachment_decode_error` | 附件 Base64 解码失败 |
-| 401 | `unauthorized` | API Key 无效或缺失 |
-| 403 | `forbidden` | 权限不足 |
+| 400 | `attachment_validation_error` | 其他附件校验失败 |
+| 401 | `unauthorized` | API Key 无效、过期、已删除或缺失 |
+| 403 | `forbidden` | API Key 权限不足 |
+| 404 | `session_not_found` | 会话不存在 |
+| 404 | `chat_not_found` | 对话记录不存在 |
 | 404 | `task_not_found` | 定时任务不存在 |
 | 409 | `chat_limit_exceeded` | 会话已有对话执行中 |
 | 429 | `rate_limited` | 请求频率超过限制（QPS 或并发超限），稍后重试 |
+| 500 | `error` | 服务器内部错误 |
 | 500 | `config_error` | 配置错误 |
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
 | 500 | `schedule_error` | 定时任务操作失败 |
+| 503 | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或 `schedule.enabled` 未开启） |
 
 ### E. 联系与支持
 
