@@ -11,11 +11,15 @@ package com.groot.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.*;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -245,5 +249,58 @@ class GrootClientTest {
                 GrootClient.classifyEvent(mapper.readTree("{\"role\":\"tool\",\"content\":\"x\"}")));
         assertEquals("completed",
                 GrootClient.classifyEvent(mapper.readTree("{\"status\":\"success\"}")));
+    }
+
+    /**
+     * 其他用例只 enqueue 响应、不取走 RecordedRequest，共享的 MockWebServer 会积压请求；
+     * 需要断言请求体的用例先把积压清空，保证 takeRequest() 拿到的是本用例的请求。
+     */
+    private static void drainRequests() throws InterruptedException {
+        while (server.takeRequest(0, TimeUnit.MILLISECONDS) != null) {
+            // 丢弃
+        }
+    }
+
+    @Test
+    void testTranscribe() throws Exception {
+        drainRequests();
+        server.enqueue(new MockResponse()
+                .setBody("{\"text\":\"你好，世界\",\"model\":\"my-asr\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        File audio = Files.createTempFile("rec", ".webm").toFile();
+        audio.deleteOnExit();
+        Files.write(audio.toPath(), "FAKE-AUDIO".getBytes());
+
+        JsonNode resp = client.transcribe(audio, "my-asr", "zh");
+        assertEquals("你好，世界", resp.get("text").asText());
+        assertEquals("my-asr", resp.get("model").asText());
+
+        RecordedRequest req = server.takeRequest();
+        assertEquals("/audio/transcriptions", req.getPath());
+        assertTrue(req.getHeader("Content-Type").startsWith("multipart/form-data"));
+        String body = req.getBody().readUtf8();
+        assertTrue(body.contains("name=\"file\""));
+        assertTrue(body.contains("name=\"model\""));
+        assertTrue(body.contains("name=\"language\""));
+    }
+
+    @Test
+    void testTranscribeWithoutModel() throws Exception {
+        drainRequests();
+        server.enqueue(new MockResponse()
+                .setBody("{\"text\":\"ok\",\"model\":\"whisper-1\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        File audio = Files.createTempFile("rec", ".webm").toFile();
+        audio.deleteOnExit();
+        Files.write(audio.toPath(), "x".getBytes());
+
+        client.transcribe(audio, null, null);
+
+        // 不传 model / language 时表单里不应出现这两个字段，交由服务端回落
+        String body = server.takeRequest().getBody().readUtf8();
+        assertFalse(body.contains("name=\"model\""));
+        assertFalse(body.contains("name=\"language\""));
     }
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/zfd81/groot/internal/repo/repofactory"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 var (
@@ -150,12 +151,12 @@ func handleTailCommand(args []string) {
 
 // openRepos 为需要访问数据库的子命令加载配置并打开数据库，返回全部 Repos。
 func openRepos(homeDir string) *repofactory.Repos {
-	cfg, err := config.Load(homeDir)
+	boot, err := config.LoadBootstrap(homeDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "加载配置失败: %s\n", err)
 		os.Exit(1)
 	}
-	sqlxDB, dbDialect, err := db.Open(cfg.Database, homeDir)
+	sqlxDB, dbDialect, err := db.Open(boot.Database, homeDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化数据库失败: %s\n", err)
 		os.Exit(1)
@@ -198,8 +199,13 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 		os.Exit(1)
 	}
 
-	// Load configuration
-	cfg, err := config.Load(homeDir)
+	// 读取 bootstrap 配置；老部署首次启动时先做文件侧迁移
+	legacy, err := config.MigrateLegacy(homeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "迁移老配置文件失败: %s\n", err)
+		os.Exit(1)
+	}
+	boot, err := config.LoadBootstrap(homeDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "无法加载配置: %s\n", err)
 		os.Exit(1)
@@ -207,27 +213,24 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 
 	// Override port if specified
 	if port > 0 {
-		cfg.Server.Port = port
-	}
-
-	// 认证始终开启：secret 缺失（老版本升级）时自动生成并回写 config.yaml
-	if err := config.EnsureAuthSecret(homeDir, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "初始化认证密钥失败: %s\n", err)
-		os.Exit(1)
+		boot.Server.Port = port
 	}
 
 	// Resolve log directory path (before logger initialization)
-	cfg.Logging.File.Directory = config.ResolvePath(cfg.Logging.File.Directory, homeDir)
+	boot.Logging.File.Directory = config.ResolvePath(boot.Logging.File.Directory, homeDir)
 
 	// Initialize logger
-	log := logger.New(cfg.Logging)
+	log := logger.New(boot.Logging)
 	logger.SetDefault(log)
 	defer log.Sync()
 
 	log.Info("Groot Agent 启动中...",
 		zap.String("home", homeDir),
-		zap.String("config", filepath.Join(homeDir, "config.yaml")),
+		zap.String("config", filepath.Join(homeDir, config.BootstrapFileName)),
 	)
+	if legacy != nil {
+		log.Info("已从 config.yaml/env.yaml 迁移到 bootstrap.yaml，老文件保留原地，确认后可删除")
+	}
 	log.Info("进程模式", zap.String("mode", role.ProcessMode()), zap.Int("pid", os.Getpid()))
 	startedAt := time.Now()
 	ctrl := lifecycle.NewController(role)
@@ -305,7 +308,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	log.Info("MCP 加载完成", zap.Int("count", mcpMgr.Count()), zap.String("dir", mcpDir))
 
 	// Initialize database and repositories
-	sqlxDB, dbDialect, err := db.Open(cfg.Database, homeDir)
+	sqlxDB, dbDialect, err := db.Open(boot.Database, homeDir)
 	if err != nil {
 		log.Error("无法初始化数据库", zap.Error(err))
 		os.Exit(1)
@@ -313,6 +316,35 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	defer sqlxDB.Close()
 	repos := repofactory.NewRepos(sqlxDB, dbDialect, homeDir)
 	log.Info("数据库初始化完成", zap.Int("dialect", int(dbDialect)))
+
+	// 配置读取入口：静态层与配置表的差异由它屏蔽，全进程共用一个实例。
+	// 在 repos 之后构造，因为运行时配置的读取依赖配置表仓储。
+	settings := setting.New(*boot, repos.Setting)
+
+	// 老部署首次启动：把老 config.yaml 的业务项写入配置表（只写表内没有的键）
+	if legacy != nil {
+		if err := settings.ImportLegacy(context.Background(), legacy); err != nil {
+			// 文件侧迁移已完成（bootstrap.yaml 已生成），重启不会自动重试表侧迁移；
+			// 老文件仍在原地，删除 bootstrap.yaml 后重启即可重新触发完整迁移
+			log.Error("迁移业务配置到配置表失败；重启不会自动重试，请删除 bootstrap.yaml 后重新启动以重新迁移", zap.Error(err))
+			fmt.Fprintf(os.Stderr, "迁移业务配置到配置表失败；重启不会自动重试，请删除 bootstrap.yaml 后重新启动以重新迁移: %s\n", err)
+			os.Exit(1)
+		}
+		log.Info("业务配置已迁入配置表")
+	}
+
+	// JWT 签名密钥存于配置表：缺失时生成（首启或老版本升级），幂等
+	if _, err := settings.EnsureAuthSecret(context.Background()); err != nil {
+		log.Error("初始化认证密钥失败", zap.Error(err))
+		os.Exit(1)
+	}
+
+	// 组装完整配置视图：bootstrap 静态项 + 配置表业务项（启动时快照）
+	cfg, err := settings.AssembleConfig(context.Background())
+	if err != nil {
+		log.Error("组装配置失败", zap.Error(err))
+		os.Exit(1)
+	}
 
 	// 模型配置业务层：模型配置唯一存储于数据库，每次使用实时读取
 	modelService := llm.NewModelService(repos.Model)
@@ -325,15 +357,21 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	runtimeState := agent.NewRuntimeState()
 
 	// Initialize message layer
-	msgLayer := message.NewLayer(cfg.Message, log)
-	// Register all senders
-	if cfg.Message.Senders["webhook"].Enabled {
-		msgLayer.Register("webhook", senders.NewWebhook(cfg.Message.Senders["webhook"].URL), cfg.Message.Senders["webhook"])
+	// 队列容量与协程数来自 bootstrap.yaml（改动需重启）；发送器参数来自配置对象，
+	// 保存即生效。两个可配置渠道无条件注册，是否投递由 Enabled 决定——
+	// 启动时按 enabled 决定注册与否的话，在界面上打开渠道就得重启。
+	msgCfg, err := settings.Message(context.Background())
+	if err != nil {
+		// 配置表读取失败时回退到代码默认值：bootstrap 队列参数 + 空渠道
+		log.Error("读取发送器配置失败，改用代码默认值", zap.Error(err))
+		msgCfg = config.MessageConfig{QueueSize: boot.Message.QueueSize, Workers: boot.Message.Workers, Senders: map[string]config.SenderConf{}}
 	}
-	if cfg.Message.Senders["email"].Enabled {
-		sc := cfg.Message.Senders["email"]
-		msgLayer.Register("email", senders.NewEmail(sc.SMTPHost, sc.SMTPPort, sc.Username, sc.Password, sc.From), sc)
-	}
+	msgLayer := message.NewLayer(msgCfg, log)
+	webhookConf := msgCfg.Senders["webhook"]
+	msgLayer.Register("webhook", senders.NewWebhook(webhookConf.URL), webhookConf)
+	emailConf := msgCfg.Senders["email"]
+	msgLayer.Register("email", senders.NewEmail(emailConf.SMTPHost, emailConf.SMTPPort,
+		emailConf.Username, emailConf.Password, emailConf.From), emailConf)
 	msgLayer.Register("stdout", senders.NewStdout(), config.SenderConf{Enabled: true})
 	msgLayer.Start()
 	log.Info("消息层已启动")
@@ -344,7 +382,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
 	// Create executor (used by both API server and schedule runner)
-	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, modelService, *cfg, log)
+	exec := agent.NewExecutor(homeDir, memMgr, []adk.ChatModelAgentMiddleware{skillMiddleware}, mcpMgr, subAgentReg, runtimeState, modelService, settings, log)
 
 	// Declare schedule module variables (used by leader callbacks and API server)
 	var sched *scheduler.Scheduler
@@ -394,13 +432,25 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 			log.Error("集群消息服务未挂接,跳过清理任务注册")
 		}
 
-		// Register schedule tools if enabled
-		if cfg.Schedule.Enabled {
-			scheduleMgr = schedule.NewManager(scheduleStorage, scheduleEngine, scheduleRunner, log)
-			scheduleTools := schedule.NewScheduleTools(scheduleMgr)
-			mcpMgr.RegisterBuiltinTools(scheduleTools)
-			log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
-		}
+		// 调度工具一律注册，可见性交给门控每次求值：
+		// 开关是「是否允许在对话中创建定时任务」的策略判断，改完下一次对话即生效，
+		// 不必重启。注册与否若跟着开关走，就又变成了启动期决定。
+		scheduleMgr = schedule.NewManager(scheduleStorage, scheduleEngine, scheduleRunner, log)
+		mcpMgr.SetBuiltinGate(mcp.BuiltinGroupSchedule, func() bool {
+			// 读表加超时：DB 挂起时不能让取工具无限等待，超时同样走默认值回退
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			sc, err := settings.Schedule(ctx)
+			if err != nil {
+				// 配置表读取失败时按代码默认值（关闭）判定，一次查询失败不应打开本应关闭的功能
+				log.Warn("读取调度开关失败,按代码默认值处理", zap.Error(err))
+				return false
+			}
+			return sc.Enabled
+		})
+		scheduleTools := schedule.NewScheduleTools(scheduleMgr)
+		mcpMgr.RegisterBuiltinTools(scheduleTools)
+		log.Info("调度工具已注册", zap.Int("count", len(scheduleTools)))
 
 		sched.Start()
 		log.Info("统一调度器已启动 (Leader)",
@@ -456,7 +506,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, clusterInst, role)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, settings, msgLayer, clusterInst, role)
 
 	// 停止来源 1：操作系统信号
 	sigCh := make(chan os.Signal, 1)

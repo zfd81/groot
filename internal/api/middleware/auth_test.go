@@ -193,3 +193,28 @@ func TestAuth_EmptyPermissionsDenied(t *testing.T) {
 		t.Fatalf("empty permissions should 403, got %d", rc.Response.StatusCode())
 	}
 }
+
+// TestGetRequiredPermission 路径与方法到权限点的映射表；/audio/transcriptions 与 /chat 共用 chat 权限。
+func TestGetRequiredPermission(t *testing.T) {
+	tests := []struct {
+		path   string
+		method string
+		want   string
+	}{
+		{"/chat", consts.MethodPost, "chat"},
+		{"/audio/transcriptions", consts.MethodPost, "chat"},
+		{"/audio/transcriptions", consts.MethodGet, "all"},
+		{"/chat/status/x", consts.MethodGet, "status"},
+		{"/chat/x", consts.MethodGet, "detail"},
+		{"/chat/x/y", consts.MethodGet, "detail"},
+		{"/sess/history", consts.MethodGet, "history"},
+		{"/sess/x", consts.MethodGet, "session"},
+		{"/schedule/1", consts.MethodDelete, "schedule"},
+		{"/unknown", consts.MethodGet, "all"},
+	}
+	for _, tt := range tests {
+		if got := getRequiredPermission(tt.path, tt.method); got != tt.want {
+			t.Errorf("getRequiredPermission(%q, %q) = %q, want %q", tt.path, tt.method, got, tt.want)
+		}
+	}
+}

@@ -271,6 +271,14 @@ func sqliteDDL() []string {
 			updated_at            INTEGER NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_models_name ON models(name)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			scope      TEXT    NOT NULL DEFAULT 'global',
+			scope_id   TEXT    NOT NULL DEFAULT '',
+			name       TEXT    NOT NULL,
+			value      TEXT    NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (scope, scope_id, name)
+		)`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id          TEXT NOT NULL PRIMARY KEY,
 			name        TEXT NOT NULL,
@@ -416,6 +424,14 @@ func mysqlDDL() []string {
 			created_at            BIGINT NOT NULL,
 			updated_at            BIGINT NOT NULL,
 			UNIQUE KEY uk_models_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			scope      VARCHAR(32)  NOT NULL DEFAULT 'global',
+			scope_id   VARCHAR(128) NOT NULL DEFAULT '',
+			name       VARCHAR(128) NOT NULL,
+			value      TEXT         NOT NULL,
+			updated_at BIGINT       NOT NULL,
+			PRIMARY KEY (scope, scope_id, name)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id          VARCHAR(14)  NOT NULL PRIMARY KEY,
@@ -563,6 +579,14 @@ func postgresDDL() []string {
 			updated_at            BIGINT NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_models_name ON models(name)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			scope      VARCHAR(32)  NOT NULL DEFAULT 'global',
+			scope_id   VARCHAR(128) NOT NULL DEFAULT '',
+			name       VARCHAR(128) NOT NULL,
+			value      TEXT         NOT NULL DEFAULT '',
+			updated_at BIGINT       NOT NULL,
+			PRIMARY KEY (scope, scope_id, name)
+		)`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id          VARCHAR(14)  NOT NULL PRIMARY KEY,
 			name        VARCHAR(64)  NOT NULL,

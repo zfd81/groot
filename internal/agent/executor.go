@@ -10,11 +10,11 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
 
-	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 // TaskStatus represents task status (temporary definition until memory module)
@@ -92,7 +92,7 @@ type Executor struct {
 	tokenAccumulators *TokenAccumulators
 	runtimeState      *RuntimeState
 	models            *llm.ModelService
-	config            config.Config
+	settings          *setting.Settings
 	logger            *logger.Logger
 }
 
@@ -105,7 +105,7 @@ func NewExecutor(
 	subAgentReg *SubAgentRegistry,
 	runtime *RuntimeState,
 	models *llm.ModelService,
-	cfg config.Config,
+	settings *setting.Settings,
 	log *logger.Logger,
 ) *Executor {
 	return &Executor{
@@ -117,7 +117,7 @@ func NewExecutor(
 		tokenAccumulators: NewTokenAccumulators(),
 		runtimeState:      runtime,
 		models:            models,
-		config:            cfg,
+		settings:          settings,
 		logger:            log,
 	}
 }
@@ -128,6 +128,15 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 	// 同时放入 ctx，作为后续下游代码的取用入口（当前尚无 FromContext 消费方，
 	// 实际带上 session_id 的路径是下方 CallAgentToolConfig.Log 与 EngineConfig.Log）。
 	sessionLog := e.logger.With(zap.String("session_id", sessionID))
+
+	// 运行时配置在每次执行开始时读一次，本次执行内保持一致：
+	// 中途被改动不影响正在跑的对话，下一次对话即用新值。
+	// 读取失败退回 YAML 值，配置表故障不该让对话无法执行。
+	rt, err := e.settings.Runtime(parentCtx)
+	if err != nil {
+		sessionLog.Error("读取运行时配置失败，本次执行使用 YAML 默认值", zap.Error(err))
+		rt = e.settings.RuntimeStatic()
+	}
 	parentCtx = logger.NewContext(parentCtx, sessionLog)
 
 	// Read SESSION.md content
@@ -187,7 +196,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 	} else {
 		// 编排模式 - 主 Agent；当 registry 不为 nil 时才挂 call_agent
 		if e.subAgentRegistry != nil {
-			execTimeout, _ := time.ParseDuration(e.config.SubAgent.ExecTimeout)
+			execTimeout, _ := time.ParseDuration(rt.SubAgent.ExecTimeout)
 			if execTimeout <= 0 {
 				execTimeout = 5 * time.Minute
 			}
@@ -195,8 +204,8 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				Registry:          e.subAgentRegistry,
 				ParentChatID:      task.ID,
 				SessionID:         sessionID,
-				MaxTaskLen:        e.config.SubAgent.MaxTaskLength,
-				MaxResultLen:      e.config.SubAgent.MaxResultLength,
+				MaxTaskLen:        rt.SubAgent.MaxTaskLength,
+				MaxResultLen:      rt.SubAgent.MaxResultLength,
 				ExecTimeout:       execTimeout,
 				Memory:            e.memoryManager,
 				RuntimeState:      e.runtimeState,
@@ -256,7 +265,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		Middlewares:        middlewares,
 		MCP:                mcpMgr,
 		ExtraTools:         extraTools,
-		React:              e.config.React,
+		React:              rt.React,
 		Log:                sessionLog,
 		AgentName:          agentName,
 		EmitInternalEvents: emitInternal,

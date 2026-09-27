@@ -11,7 +11,7 @@ import (
 //   - paths 为 nil 时默认展开白名单内所有已存在的资源对象
 //   - "skills" → 展开为 ["skills/weather", "skills/translator", ...]
 //   - "skills/weather" → 直接返回 ["skills/weather"](目录资源对象)
-//   - "config.yaml" → 直接返回 ["config.yaml"](文件资源对象)
+//   - "GROOT.md" → 直接返回 ["GROOT.md"](文件资源对象)
 //   - "subagents/db-agent" → 直接返回 ["subagents/db-agent"](递归目录)
 //   - "subagents/db-agent/agent.md" → 直接返回 ["subagents/db-agent/agent.md"](文件)
 //   - 直接操作 skill 目录内单文件 → 返回错误(如 "skills/weather/SKILL.md")

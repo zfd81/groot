@@ -101,7 +101,7 @@ function parentDir(p: string): string {
 // —— 配置同步入口 ——
 
 // 与后端 sync.SyncableResourceRoots 对应；不在白名单内的路径不显示同步入口。
-const SYNCABLE_ROOTS = ['config.yaml', 'skills', 'subagents', 'mcp', 'GROOT.md']
+const SYNCABLE_ROOTS = ['skills', 'subagents', 'mcp', 'GROOT.md']
 
 // 与后端 sync.isDirectSkillFile（internal/sync/resource.go）一致：
 // skill 目录内的单个文件不允许单独同步，必须操作整个 skill 目录。

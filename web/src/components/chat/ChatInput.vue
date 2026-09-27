@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { UploadRequestOptions, InputInstance } from 'element-plus'
-import { Plus, Close, Document, Top, VideoPause } from '@element-plus/icons-vue'
+import { Plus, Close, Document, Top, VideoPause, Microphone, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useMetaStore } from '../../stores/meta'
 import { storeToRefs } from 'pinia'
 import type { ChatAttachment } from '../../api/sse'
+import { useRecorder, isRecordingSupported, type RecorderError } from '../../composables/useRecorder'
+import { voiceApi } from '../../api/voice'
+import { useVoiceStore } from '../../stores/voice'
 
 // hero: 空会话居中形态。此形态下文本框默认更高，视觉上更接近一个「起始卡片」。
 const props = defineProps<{ sending: boolean; hero?: boolean }>()
@@ -24,6 +28,100 @@ const MAIN_AGENT = 'groot'
 
 const text = ref('')
 const selectedModel = ref('')
+
+// 语音输入状态。配置在组件挂载时读一次；未启用则不渲染话筒按钮。
+// 语音配置来自 store，与设置面板共享。设置里改动后这里立即跟随，无需刷新页面。
+const voiceStore = useVoiceStore()
+const voice = computed(() => voiceStore.settings)
+const transcribing = ref(false)
+const { recording, duration, start, stop, cancel } = useRecorder()
+const recordSupported = isRecordingSupported()
+
+// 话筒按钮的显示条件：后端启用 + 浏览器支持。
+// 两者缺一就不渲染，而不是渲染成禁用态，避免留下一个永远点不动的按钮。
+const showMic = computed(() => voice.value.enabled && recordSupported)
+
+// 开关已开但没选模型：话筒显示警告态，点击只提示、不录音。
+// 这种状态只有管理员改了设置才会出现，提示里直接指向设置页。
+const micWarn = computed(() => voice.value.enabled && !voice.value.model)
+
+// 麦克风权限被拒后置灰。浏览器会记住拒绝结果，再点也只会立刻失败，
+// 置灰比反复弹同一条提示更明确。
+const micDenied = ref(false)
+
+// 录音计时的 mm:ss 展示
+const durationText = computed(() => {
+  const m = Math.floor(duration.value / 60)
+  const s = duration.value % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+})
+
+// 话筒按钮的提示文案：警告态 > 识别中 > 常态
+const micTitle = computed(() =>
+  micWarn.value ? t('chat.recordNoModel') : transcribing.value ? t('chat.transcribing') : t('chat.recordStart')
+)
+
+const recorderErrorKey: Record<RecorderError, string> = {
+  permission_denied: 'chat.recordNoPermission',
+  no_device: 'chat.recordNoDevice',
+  unsupported: 'chat.recordUnsupported',
+  failed: 'chat.recordFailed',
+}
+
+async function startRecording() {
+  if (micWarn.value) {
+    ElMessage.warning(t('chat.recordNoModel'))
+    return
+  }
+  try {
+    await start()
+  } catch (e) {
+    const err = e as RecorderError
+    if (err === 'permission_denied') micDenied.value = true
+    ElMessage.warning(t(recorderErrorKey[err] || 'chat.recordFailed'))
+  }
+}
+
+// stopRecording 停止录音并转录。识别结果追加到已有文本尾部，
+// 不覆盖使用者先前手打的内容。
+async function stopRecording() {
+  // 点停止即进入识别态，让话筒立刻显示 loading，而不是等 stop() 返回
+  transcribing.value = true
+  try {
+    const rec = await stop()
+    // 麦克风全程没拾到声音时就近提示，不向上游发这次必然识别为空的请求
+    if (rec.kind === 'silent') {
+      ElMessage.warning(t('chat.recordSilent'))
+      return
+    }
+    if (rec.kind === 'empty') {
+      ElMessage.info(t('chat.recordEmpty'))
+      return
+    }
+    // 不传 model，由服务端回落到当前配置的语音模型，避免页面缓存的旧模型名失效
+    const res = await voiceApi.transcribe(rec.blob, rec.filename)
+    const piece = res.text.trim()
+    if (!piece) {
+      ElMessage.info(t('chat.recordEmpty'))
+      return
+    }
+    text.value = text.value ? `${text.value} ${piece}` : piece
+    await syncScrollable()
+    if (voice.value.auto_send && !props.sending) {
+      handleSend()
+    }
+  } catch (e: any) {
+    ElMessage.error(t('chat.transcribeFailed', { msg: e?.message || '' }))
+  } finally {
+    transcribing.value = false
+    // 识别期间文本框被禁用会丢失焦点，结束后交还给文本框
+    void nextTick(() => inputRef.value?.textarea?.focus())
+  }
+}
+
+function cancelRecording() {
+  cancel()
+}
 
 // 文本框滚动条控制：未达到 maxRows 时随内容增高、隐藏滚动条；
 // 只有高度被 maxRows 封顶（内容真正溢出一行以上）后才允许滚动。
@@ -46,6 +144,8 @@ onMounted(async () => {
     resizeOb.observe(ta)
   }
   void syncScrollable()
+  // store 内部已兜住读取失败（按未启用处理）：语音是增强功能，不该阻塞输入框
+  void voiceStore.load()
 })
 onBeforeUnmount(() => resizeOb?.disconnect())
 
@@ -185,6 +285,7 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
         resize="none"
         class="composer-input"
         :class="{ scrollable }"
+        :disabled="transcribing"
         @keydown.enter.exact.prevent="handleSend"
       />
       <div class="toolbar">
@@ -237,6 +338,42 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
               </el-tag>
             </el-option>
           </el-select>
+          <!-- 录音中：左侧计时 + 取消，右侧停止并识别 -->
+          <span v-if="recording" class="rec-timer">{{ t('chat.recording', { v: durationText }) }}</span>
+          <el-button
+            v-if="recording"
+            circle
+            class="action-btn"
+            :title="t('chat.recordCancel')"
+            :aria-label="t('chat.recordCancel')"
+            @click="cancelRecording"
+          >
+            <el-icon :size="16"><Close /></el-icon>
+          </el-button>
+          <el-button
+            v-if="recording"
+            type="danger"
+            circle
+            class="action-btn"
+            :title="t('chat.recordStop')"
+            :aria-label="t('chat.recordStop')"
+            @click="stopRecording"
+          >
+            <el-icon :size="16"><VideoPlay /></el-icon>
+          </el-button>
+          <el-button
+            v-else-if="showMic"
+            circle
+            class="action-btn"
+            :class="{ 'mic-warn': micWarn }"
+            :loading="transcribing"
+            :disabled="transcribing || props.sending || micDenied"
+            :title="micTitle"
+            :aria-label="micTitle"
+            @click="startRecording"
+          >
+            <el-icon :size="16"><Microphone /></el-icon>
+          </el-button>
           <!-- 圆形图标按钮：文字改为 title/aria-label，保证读屏与悬浮提示仍可读 -->
           <el-button
             v-if="props.sending"
@@ -406,5 +543,16 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
 .opt-tag {
   float: right;
   margin-top: 6px;
+}
+.rec-timer {
+  font-size: 12px;
+  color: var(--el-color-danger);
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+/* 开关已开但未选模型：话筒按警告色显示，提醒去设置页补配置 */
+.mic-warn {
+  color: var(--el-color-warning);
+  border-color: var(--el-color-warning);
 }
 </style>

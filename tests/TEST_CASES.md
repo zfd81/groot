@@ -317,12 +317,59 @@
 - 路径清洗：".." 穿越折叠、反斜杠归一、NUL 拒绝、段级校验（冒号/尾点/尾空格）
 - 符号链接：逃逸链接 404、内部链接正常、指向只读/隐藏文件的别名被拦截
 - 隐藏规则：根目录 groot.db*（大小写不敏感）列表过滤 + 直接访问 404
-- 只读规则：根目录 env.yaml/config.yaml（大小写不敏感）写/改名/删除 403
+- 只读规则：根目录 bootstrap.yaml/config.yaml/env.yaml（大小写不敏感）写/改名/删除 403（后两者为老部署迁移遗留文件）
 - 白名单矩阵：新建（仅 skill 目录内）/上传（skill 目录 + skills/ + mcp/ + subagents/ 及其子目录）
 - 读取：文本内容、二进制探测、2MB 超限、读目录 400
 - 保存/新建/改名/删除/上传目标的成功与错误码矩阵（404/403/409/413/400）
 - Scaffold：skill/mcp/agent 模板生成、重名 409、非法名称/类型 400、名称规则（字母开头、拒绝数字开头与 Unicode 字母）；指定所属子 Agent（生成到 subagents/<agent>/ 下、与主 Agent 同名互不冲突、子 Agent 不存在或不是目录 404、agent 类型携带 agent 参数 400、agent 名非法 400）
 - Handler：错误码映射、认证路由位置、上传 multipart、下载 Content-Disposition
+
+---
+
+### 1.5 语音输入与配置表测试
+
+位于 `internal/db/migrate_test.go`、`internal/repo/settingdb/setting_test.go`、`internal/repo/repofactory/factory_test.go`、
+`internal/setting/settings_test.go`、`internal/llm/transcription_test.go`、
+`internal/api/handler/transcription_test.go` 与 `internal/api/handler/setting_test.go`。
+
+覆盖点：
+
+- 建表：settings 表可读写、复合主键 (scope, scope_id, name) 生效、三方言 DDL 字符串检查
+- 配置表仓库：写入回读、主键冲突覆盖、未找到返回 ErrNotFound、非法输入表驱动（name 为空 / 未知作用域 / global 带 scope_id / user 缺 scope_id）、多条 Upsert 原子性、按作用域批量查询与排序、删除幂等；工厂装配 Setting 仓库
+- 配置对象：表为空回落代码默认值、部分键覆盖、布尔解析（含 parseBool 回落表）、SetVoice 回写、YAML 分类透传、仓库为 nil 时读用默认值 / 写返回 ErrNoSettingStore、仓库错误透传
+- 转录客户端：multipart 字段与文件名、`/v1` 补齐表驱动、language 为空不下发、上游错误透传原文与 upstreamMessage 表驱动、空 / 空白文本判错、200 非 JSON 判错、ctx 取消
+- 转录 handler：成功响应含 text 与 model、缺 file、模型未配置、模型不存在、表单 model / 请求头 X-Model-Name / 配置表三级优先级、扩展名白名单与无扩展名、上游 502 透传、空文本 400、按 MB 换算的大小上限
+- 设置 handler：默认值读取、整组保存回读、model 为空允许、模型不存在或已禁用拒绝且消息含模型名、非法 JSON、model 裁剪空白、关闭开关时不校验失效模型
+
+---
+
+### 1.6 运行时配置迁移测试
+
+位于 `internal/ratelimit/limiter_test.go`、`internal/message/layer_test.go`、`internal/mcp/manager_builtin_test.go`、
+`internal/setting/runtime_test.go`、`internal/setting/message_test.go` 与 `internal/api/handler/setting_test.go`。
+
+覆盖点：
+
+- 限流器：重建后新调用方按新上限、已建桶保留旧容量（取与还落在同一桶）、开关在线关停与恢复、全局桶重建、重建与请求并发（-race）、关停期间在途请求归还不泄漏名额、全局参数未变时桶实例不换、参数归零后全局桶为空、重建与清理协程并发
+- 消息层：替换发送器后新消息走新实例且旧实例不再收到、注销后无可用渠道、禁用渠道不投递且重新启用无需重注册、替换与投递并发（-race）
+- 内置工具门控：门控关闭时 GetTools 与 ListTools 均不含该组、ToolCount 同口径、未挂门控的组一律可见、GetTool 尊重门控、同名 MCP 的工具不被挡且同组内置工具仍被挡、一次 GetTools/ListTools 门控各求值一次
+- 配置对象（限流）：五项边界表驱动（0 表示不限制、负数与超上限拒绝）、表内缺键保持 YAML、脏数据回落、rows 含五键且不含 cleanup_interval、NaN 拒绝且表内 "NaN" 退回基准值、限流五键经假仓库往返
+- 配置对象（发送渠道）：表为空回落 YAML、往返一致且队列参数不受影响、空密码保留原值、未知渠道 / 启用但地址空 / 非 http 地址 / 启用但主机空 / 端口越界表驱动拒绝、关闭渠道免校验、无仓库时读 YAML、启用邮件缺发件人拒绝、脏 smtp_port 回退、无仓库时 SetMessage 返回 ErrNoSettingStore、只提交 email 时不写 webhook 行、空 map 不写入
+- 配置对象（调度）：开关往返，尤其 false 能写进表而非回落 YAML 的 true、schedule.enabled 脏值回落与空表回落
+- 设置 handler：限流保存后限流器 Config 即刻更新且 CleanupInterval 保持、越界 400 且限流器不变、回读含限流分区、缺 rate_limit 分区 400（消息含 rate_limit）、缺 schedule 分区 400、限流保存后 GET 回读 7/3/true；发送渠道回读脱敏且响应体不含原文、保存后 ChannelEnabled 为真、关闭后为假、校验失败 400 且消息层不变、空密码保留、非法 JSON 400、只提交 webhook 后 email 在消息层仍启用；调度开关经接口往返、调度接口在开关关闭时 503
+
+---
+
+### 1.7 认证配置面板测试
+
+位于 `internal/setting/auth_test.go` 与 `internal/api/handler/auth_setting_test.go`。
+
+覆盖点（`/web/settings/auth` 三接口）：
+
+- `GET /web/settings/auth`：密钥脱敏返回（`secret_masked` 为 `****` 加尾 4 位，响应不含明文）、`header_name_default` 恒为 `X-API-Key`、密钥未设置时 `secret_masked` 为空串且 `secret_set` 为 false
+- `PUT /web/settings/auth`：合法请求头名保存后回读生效值；非法值（不匹配 `^[A-Za-z0-9-]{1,64}$`）返回 400 `invalid_request` 且不写表；空串（含纯空白）删除配置行、回读恢复默认 `X-API-Key`
+- `POST /web/settings/auth/secret`：重新生成后 `secret_masked` 与旧值不同、`secret_set` 为 true，响应与 GET 同构且不含新密钥明文
+- 配置对象层：`SetAuthHeaderName` 的空串恢复默认与格式校验（非法返回包装 `ErrInvalidSetting` 的错误）、`RegenerateAuthSecret` 无条件生成新密钥并写表、无仓库时写操作返回 `ErrNoSettingStore`
 
 ---
 
@@ -478,7 +525,14 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 | TestRuntimeStateRunningCount | test_runtime_state.py | 运行计数 |
 | TestRuntimeStateActiveChatFields | test_runtime_state.py | 活动聊天字段 |
 
-### 2.14 安全测试
+### 2.14 语音转录测试
+
+| 测试类 | 测试文件 | 测试内容 |
+|-------|---------|---------|
+| TestTranscriptionErrors | test_transcription.py | 缺文件、扩展名、模型不存在、超大文件、未鉴权 |
+| TestTranscriptionSuccess | test_transcription.py | 真实模型转录（需 GROOT_VOICE_MODEL） |
+
+### 2.15 安全测试
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
@@ -489,7 +543,7 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 | TestAuthenticationSecurity | test_security.py | 认证安全 |
 | TestInputValidation | test_security.py | 输入验证 |
 
-### 2.15 SSE 流测试
+### 2.16 SSE 流测试
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
@@ -499,7 +553,7 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 | TestSSEMultipleRounds | test_sse_events.py | SSE 多轮 |
 | TestSSEFlowIntegrity | test_sse_events.py | SSE 流完整性 |
 
-### 2.16 SSE 流程测试
+### 2.17 SSE 流程测试
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
@@ -507,7 +561,7 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 | TestSSEStreamingOutput | test_sse_flow.py | SSE 流式输出 |
 | TestSSEPrintDebug | test_sse_flow.py | SSE 调试输出 |
 
-### 2.17 调度 API 测试
+### 2.18 调度 API 测试
 
 任务与执行记录已入库（`schedule_tasks` / `schedule_executions` 表）；用例通过
 Python sqlite3 直插数据库预置数据，List/Get/History API 直接读库，无需等待
@@ -527,7 +581,7 @@ sync_interval 同步周期。非 Leader 或 `schedule.enabled=false` 时端点�
 | TestScheduleAPIResponseFormat | test_schedule_api.py | 调度 API 响应格式验证 |
 | TestScheduleToolsVisible | test_schedule_api.py | 调度工具在 /web/tools 中可见（Leader + schedule.enabled=true） |
 
-### 2.18 补充测试
+### 2.19 补充测试
 
 （LLM 错误、MCP 工具错误、技能错误、优雅关闭、配置热更新边界、多模型配置、
 权限边界、取消机制等历史用例已随对应功能裁剪/迁移删除，现存清单如下。）
@@ -543,7 +597,7 @@ sync_interval 同步周期。非 Leader 或 `schedule.enabled=false` 时端点�
 | TestSessionHandlingDetails | test_supplementary.py | 会话处理详细 |
 | TestMetricsInHealth | test_supplementary.py | 健康检查指标 |
 
-### 2.19 集群管理系统测试
+### 2.20 集群管理系统测试
 
 位于 `tests/python/test_cluster.py`。成员注册已入库：多实例共享同一
 GROOT_HOME 的 `{GROOT_HOME}/groot.db` 的 `cluster_members` 表
@@ -563,7 +617,7 @@ GROOT_HOME 的 `{GROOT_HOME}/groot.db` 的 `cluster_members` 表
 
 ---
 
-### 2.20 多 Agent 系统测试（v3.8 后）
+### 2.21 多 Agent 系统测试（v3.8 后）
 
 设计 `docs/superpowers/specs/2026-05-24-multi-agent-design.md`、计划 `docs/superpowers/plans/2026-05-28-multi-agent-implementation.md`。Python 系统测试由用户后续落地；以下为人工烟囱测试与覆盖范围清单。
 
@@ -586,7 +640,7 @@ go build -o dist/groot ./cmd/groot
 sleep 2
 ```
 
-#### 2.20.1 子 Agent 注册（启动期扫描）
+#### 2.21.1 子 Agent 注册（启动期扫描）
 
 | 场景 | 期望 |
 |------|------|
@@ -596,7 +650,7 @@ sleep 2
 | 子目录名 == `groot`（与主 Agent 同名） | 启动跳过，日志 ERROR |
 | `subagents/<name>` 是符号链接到目录 | 正常识别为子 Agent |
 
-#### 2.20.2 Solo 模式（X-Agent-Name header）
+#### 2.21.2 Solo 模式（X-Agent-Name header）
 
 ```bash
 # 已注册 → 用子 Agent 执行
@@ -623,7 +677,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 | `X-Agent-Name: groot` | 等价于不传 header，走主 Agent 编排模式 |
 | Solo 模式 ChatRecord.AgentName | 持久化到 memory 的字段含子 Agent 名 |
 
-#### 2.20.3 编排模式（call_agent 工具）
+#### 2.21.3 编排模式（call_agent 工具）
 
 要求 GROOT.md 含调度引导段（`groot init` 已自动写入）。
 
@@ -644,7 +698,7 @@ curl -X POST http://localhost:8080/chat \
 | 并发超 `sub_agent.max_concurrency` | FIFO 排队（`semaphore.Weighted`） |
 | Token 累加 | 子 Agent token 累计回到父 chat 的 ChatRecord |
 
-#### 2.20.4 API 行为
+#### 2.21.4 API 行为
 
 | 接口 | 验证内容 |
 |-----|---------|
@@ -656,7 +710,7 @@ curl -X POST http://localhost:8080/chat \
 | `GET /tools` + `X-Agent-Name: db-agent` | 子 Agent MCP 工具 |
 | `GET /chat/status/:sid` | 活跃 chat 时 `progress.sub_agents` 含当前运行的子 Agent 数组 |
 
-#### 2.20.5 Skills 热插拔（subagents/*/skills/）
+#### 2.21.5 Skills 热插拔（subagents/*/skills/）
 
 | 操作 | 期望 |
 |------|------|
@@ -664,7 +718,7 @@ curl -X POST http://localhost:8080/chat \
 | 在 `subagents/<name>/agent.md` 修改 | watcher 不响应（仅监听 skills 子目录变更） |
 | 在 `subagents/<name>/mcp/` 修改 | watcher 不响应 |
 
-#### 2.20.6 init 行为
+#### 2.21.6 init 行为
 
 | 操作 | 期望 |
 |------|------|
@@ -672,7 +726,7 @@ curl -X POST http://localhost:8080/chat \
 | `groot init` 全新目录 | 写入 `GROOT.md`，含「子 Agent 调度」段（`call_agent` / 按需调用 / 逐个调用 / 明确传参 / 附件引用 关键词） |
 | `groot init` 已有 `GROOT.md` | 跳过不覆盖用户内容 |
 
-### 2.21 Web 认证测试
+### 2.22 Web 认证测试
 
 | 用例编号 | 测试文件 | 测试内容 |
 |---------|---------|---------|
@@ -693,7 +747,7 @@ curl -X POST http://localhost:8080/chat \
 登录类用例：Web 登录认证始终启用，用户保存在数据库中；测试前需通过 `POST /web/setup`（或 Web 界面）创建用户，重置用 `groot user reset`。
 `/web/setup` 的弱密码校验（<8 位 → 400）在已有用户时不可达（先返回 409），该场景在 CLI 命令组的独立空库实例用例（TC-CLI-108）上覆盖。
 
-### 2.22 模型管理测试
+### 2.23 模型管理测试
 
 模型配置唯一存储于数据库，通过 `/web/models` 系列端点（WebSession Cookie 认证）管理。
 
@@ -716,7 +770,7 @@ curl -X POST http://localhost:8080/chat \
 
 模型管理用例前置：groot 服务已启动且已创建 Web 登录用户；环境变量 `GROOT_TEST_HOST` / `GROOT_TEST_PORT`（默认 `localhost:8080`）定位服务，`GROOT_WEB_USER` / `GROOT_WEB_PASS` 提供登录凭据（未设置有效凭据时登录类用例自动跳过）。
 
-### 2.23 API Key 管理专项测试
+### 2.24 API Key 管理专项测试
 
 API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token 由 secret +
 元数据确定性签发，可通过 `GET /web/apikeys/:id/token` 任意次重取（结果与创建时
@@ -737,7 +791,7 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 说明：系统测试无法预置已过期的 Key，expired=true 分支由 Go 单元测试
 （TestAPIKeys_ListAndExpired）覆盖。
 
-### 2.24 CLI 命令组测试
+### 2.25 CLI 命令组测试
 
 会写配置或删用户的用例使用独立临时 GROOT_HOME（tempfile.mkdtemp），不碰共享
 测试目录。CLI 子命令直接读写数据库（SQLite WAL 支持多进程），`user reset`
@@ -745,20 +799,20 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 
 | 用例编号 | 测试文件 | 测试内容 |
 |---------|---------|---------|
-| TC-CLI-101 | test_cli_commands.py | `groot init` 生成 config.yaml（非空 security.auth.secret、权限 0600）、env.yaml（0600）、GROOT.md 与 skills/mcp/subagents/logs 目录 |
-| TC-CLI-102 | test_cli_commands.py | 重复 init 跳过已有文件，secret 不被覆盖；未知 flag 报错退出 |
+| TC-CLI-101 | test_cli_commands.py | `groot init` 生成 bootstrap.yaml（权限 0600、全注释模板、不含密钥）、GROOT.md 与 skills/mcp/subagents/logs 目录，不生成 config.yaml/env.yaml |
+| TC-CLI-102 | test_cli_commands.py | 重复 init 跳过已有文件，bootstrap.yaml 内容不被覆盖；未知 flag 报错退出 |
 | TC-CLI-103 | test_cli_commands.py | `groot --help` 含 init/status/tail/user，不含已移除的 chat/schedule/push/pull/diff 子命令 |
 | TC-CLI-104 | test_cli_commands.py | `groot status` 目标端口无实例：打印「未检测到运行中的 Groot 实例」，退出码 0 |
 | TC-CLI-105 | test_cli_commands.py | `groot status` 对运行中共享服务输出健康信息（状态/端口） |
 | TC-CLI-107 | test_cli_commands.py | `groot user reset -y` 空表：提示「用户表为空」，退出码 0 |
 | TC-CLI-108 | test_cli_commands.py | 独立实例全流程：空库弱密码 setup 400 → setup 成功 → schedule 未启用时 /schedule 返回 503 schedule_unavailable → user reset -y 后 needs_setup 回到 true |
 
-### 2.25 文件面板 API 测试
+### 2.26 文件面板 API 测试
 
 文件面板 `/web/files/*` 系统测试（`test_files_api.py`，登录会话 Cookie 认证）。
 
 - 认证：未登录 401
-- 安全：groot.db* 列表隐藏 + 直接访问 404；穿越归一化；config.yaml 只读 403
+- 安全：groot.db* 列表隐藏 + 直接访问 404；穿越归一化；config.yaml（迁移遗留文件）只读 403
 - CRUD 全流程：scaffold → 新建 → 保存 → 读取 → 改名 → 删除（含非空目录 409）
 - 上传：mcp/ 允许、logs/ 403
 

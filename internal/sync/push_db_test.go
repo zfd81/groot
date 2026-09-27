@@ -65,7 +65,6 @@ func TestPush_ThenDiffIsClean(t *testing.T) {
 
 	files := map[string]string{
 		"GROOT.md":                              "# Groot\n",
-		"config.yaml":                           "agent: groot\n",
 		"skills/weather/SKILL.md":               "# Weather\n",
 		"subagents/weather/agent.md":            "# Agent\n",
 		"subagents/weather/mcp/api-proxy.json":  "{}\n",

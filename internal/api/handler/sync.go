@@ -62,7 +62,7 @@ func writeSyncError(rc *app.RequestContext, err error) {
 	message := "内部错误"
 	switch status {
 	case "sync_disabled":
-		// 不直接用 err.Error()：ErrSyncDisabled 的消息带"请在 env.yaml 中配置
+		// 不直接用 err.Error()：ErrSyncDisabled 的消息带"请在 bootstrap.yaml 中配置
 		// database 节"的 CLI 提示，对浏览器用户无意义，Web 场景只说结论。
 		message = "配置同步仅在 MySQL/PostgreSQL 模式下可用"
 	case "invalid_request":

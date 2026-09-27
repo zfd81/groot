@@ -92,8 +92,13 @@ class TestEnvironmentVariables:
             [GROOT_BIN, "init"], env=env, capture_output=True, text=True
         )
         assert init_result.returncode == 0, init_result.stderr
-        assert os.path.exists(f"{test_home}/config.yaml"), \
-            "GROOT_HOME 指定的目录下未生成 config.yaml"
+        assert os.path.exists(f"{test_home}/bootstrap.yaml"), \
+            "GROOT_HOME 指定的目录下未生成 bootstrap.yaml"
+        # init 只生成 bootstrap.yaml，不再生成老的 config.yaml / env.yaml
+        assert not os.path.exists(f"{test_home}/config.yaml"), \
+            "init 不应生成 config.yaml"
+        assert not os.path.exists(f"{test_home}/env.yaml"), \
+            "init 不应生成 env.yaml"
 
         process = subprocess.Popen(
             [GROOT_BIN, "-p", "8092"],
@@ -111,7 +116,8 @@ class TestEnvironmentVariables:
     def test_auth_always_on(self):
         """TC-ENV-003: 认证始终开启（JWT API Key 机制）
 
-        写入新格式 security.auth 配置（仅 header_name + secret），启动后验证：
+        写入 bootstrap.yaml 使服务可启动（auth 配置存于数据库配置表，
+        JWT 密钥由服务首次启动自动生成入库），启动后验证：
         - 不带 Key 访问 POST /chat → 401（认证无法关闭）
         - GET /web/health 免认证 → 200
         """
@@ -121,14 +127,13 @@ class TestEnvironmentVariables:
         env = os.environ.copy()
         env["GROOT_HOME"] = test_home
 
-        # 新格式配置：认证始终开启，只需 HS256 签名密钥
+        # bootstrap.yaml 存在即可启动（SQLite 本地模式）；
+        # 认证始终开启且密钥在数据库配置表中，无需写入文件
         config_content = """
-security:
-  auth:
-    header_name: X-API-Key
-    secret: cli-args-test-secret-0123456789
+server:
+  host: 0.0.0.0
 """
-        with open(f"{test_home}/config.yaml", "w") as f:
+        with open(f"{test_home}/bootstrap.yaml", "w") as f:
             f.write(config_content)
 
         process = subprocess.Popen(
@@ -165,13 +170,13 @@ class TestConfigPriority:
         test_home = "/tmp/groot_priority_test"
         os.makedirs(test_home, exist_ok=True)
 
-        # 配置文件设置端口 8080
+        # bootstrap.yaml 设置端口 8080（server 节结构与老 config.yaml 相同）
         config_content = """
 server:
   host: 0.0.0.0
   port: 8080
 """
-        with open(f"{test_home}/config.yaml", "w") as f:
+        with open(f"{test_home}/bootstrap.yaml", "w") as f:
             f.write(config_content)
 
         env = os.environ.copy()

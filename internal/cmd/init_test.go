@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zfd81/groot/internal/config"
 )
 
 func TestParseInitFlags(t *testing.T) {
@@ -85,15 +87,24 @@ func TestRunInit(t *testing.T) {
 		}
 	}
 
-	// 检查配置文件创建
-	configPath := filepath.Join(homeDir, "config.yaml")
-	stat, err := os.Stat(configPath)
+	// 检查配置文件创建：init 只产出 bootstrap.yaml
+	bootstrapPath := filepath.Join(homeDir, config.BootstrapFileName)
+	stat, err := os.Stat(bootstrapPath)
 	if err != nil {
-		t.Fatalf("stat config.yaml: %v", err)
+		t.Fatalf("stat bootstrap.yaml: %v", err)
 	}
-	// config.yaml 含 JWT 签名密钥，权限要求 0600（仅当前用户可读写）
+	// bootstrap.yaml 可能承载数据库凭据，权限要求 0600（仅当前用户可读写）
 	if perm := stat.Mode().Perm(); perm != 0o600 {
-		t.Errorf("config.yaml 权限 = %o, want 0600（含 JWT 签名密钥应私密）", perm)
+		t.Errorf("bootstrap.yaml 权限 = %o, want 0600（可能承载数据库凭据应私密）", perm)
+	}
+
+	// 模板应可被 LoadBootstrap 加载，且全注释模板等价于缺省配置
+	b, err := config.LoadBootstrap(homeDir)
+	if err != nil {
+		t.Fatalf("LoadBootstrap: %v", err)
+	}
+	if b.Server.Port != 8080 {
+		t.Errorf("Server.Port = %d, want 8080（全注释模板应得到缺省值）", b.Server.Port)
 	}
 }
 
@@ -120,27 +131,20 @@ func TestRunInitExistingDirectory(t *testing.T) {
 	}
 }
 
-// TestRunInitExistingConfig 验证已存在的 config.yaml 不会被 init 覆盖。
-// 此行为很关键：config.yaml 含 JWT 签名密钥，覆盖意味着重新生成 secret，
-// 所有已签发的 API Key 会立即失效。
-func TestRunInitExistingConfig(t *testing.T) {
-	tmpDir := t.TempDir()
-	homeDir := filepath.Join(tmpDir, "config_exists")
-
-	// 预创建配置文件
-	os.MkdirAll(homeDir, 0755)
-	configPath := filepath.Join(homeDir, "config.yaml")
-	os.WriteFile(configPath, []byte("existing: config"), 0644)
-
-	err := RunInit(homeDir)
-	if err != nil {
-		t.Fatalf("RunInit failed: %v", err)
+// TestRunInit_PreservesExistingBootstrap 已存在的 bootstrap.yaml 不被覆盖
+func TestRunInit_PreservesExistingBootstrap(t *testing.T) {
+	home := t.TempDir()
+	custom := "server:\n  port: 9999\n"
+	p := filepath.Join(home, config.BootstrapFileName)
+	if err := os.WriteFile(p, []byte(custom), 0600); err != nil {
+		t.Fatalf("预置文件: %v", err)
 	}
-
-	// 检查配置文件未被覆盖
-	data, _ := os.ReadFile(configPath)
-	if string(data) != "existing: config" {
-		t.Errorf("配置文件被覆盖了")
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	data, _ := os.ReadFile(p)
+	if string(data) != custom {
+		t.Errorf("用户自定义 bootstrap.yaml 被覆盖:\n%s", data)
 	}
 }
 
@@ -200,64 +204,15 @@ func TestRunInit_PreservesExistingGrootMd(t *testing.T) {
 	}
 }
 
-// TestRunInit_CreatesEnvYaml 验证 init 写入 env.yaml；内容应为全注释模板，
-// 默认对应 local 模式（不启用 MinIO）。
-func TestRunInit_CreatesEnvYaml(t *testing.T) {
+// TestRunInit_NoLegacyFiles init 不再产出老配置文件
+func TestRunInit_NoLegacyFiles(t *testing.T) {
 	home := t.TempDir()
 	if err := RunInit(home); err != nil {
-		t.Fatalf("RunInit failed: %v", err)
+		t.Fatalf("RunInit: %v", err)
 	}
-	envPath := filepath.Join(home, "env.yaml")
-	stat, err := os.Stat(envPath)
-	if err != nil {
-		t.Fatalf("env.yaml 未创建: %v", err)
-	}
-	// 凭据文件权限要求 0600（仅当前用户可读写）
-	if perm := stat.Mode().Perm(); perm != 0o600 {
-		t.Errorf("env.yaml 权限 = %o, want 0600（凭据文件应私密）", perm)
-	}
-
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(data)
-	// 模板应是全注释（无生效的 minio: 顶层节）
-	for _, line := range strings.Split(got, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "database:" {
-			t.Errorf("env.yaml 模板默认应全注释，不应包含生效的 'database:' 行")
+	for _, legacy := range []string{"config.yaml", "env.yaml"} {
+		if _, err := os.Stat(filepath.Join(home, legacy)); !os.IsNotExist(err) {
+			t.Errorf("init 不应生成 %s", legacy)
 		}
-	}
-	// 应包含被注释掉的 database 引导，方便用户启用
-	if !strings.Contains(got, "database") && !strings.Contains(got, "driver") {
-		// Accept if template doesn't have database section yet
-		t.Log("env.yaml 模板暂未包含 database 引导（可接受）")
-	}
-}
-
-// TestRunInit_PreservesExistingEnvYaml 验证已存在的 env.yaml 不会被 init 覆盖
-// （用户填好的 MinIO 凭据安全）。
-func TestRunInit_PreservesExistingEnvYaml(t *testing.T) {
-	home := t.TempDir()
-	if err := os.MkdirAll(home, 0755); err != nil {
-		t.Fatal(err)
-	}
-	custom := "minio:\n  endpoint: my-real-minio:9000\n  access_key: my-ak\n"
-	envPath := filepath.Join(home, "env.yaml")
-	if err := os.WriteFile(envPath, []byte(custom), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := RunInit(home); err != nil {
-		t.Fatalf("RunInit failed: %v", err)
-	}
-
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != custom {
-		t.Errorf("用户自定义 env.yaml 被覆盖\n期望:\n%s\n实际:\n%s", custom, string(data))
 	}
 }

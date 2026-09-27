@@ -11,9 +11,38 @@ import (
 
 // keyLimiter tracks rate limits for a single key (API key or client IP)
 type keyLimiter struct {
-	qps      *rate.Limiter
-	sem      chan struct{}
+	qps *rate.Limiter
+	sem chan struct{}
+
+	// mu 只保护 lastUsed。qps 与 sem 自身并发安全，建桶后不再改写。
+	mu       sync.Mutex
 	lastUsed time.Time
+}
+
+// touch 记录本次使用时间，供空闲回收判定。
+func (kl *keyLimiter) touch() {
+	kl.mu.Lock()
+	kl.lastUsed = time.Now()
+	kl.mu.Unlock()
+}
+
+// idleFor 返回距上次使用经过的时长。
+func (kl *keyLimiter) idleFor(now time.Time) time.Duration {
+	kl.mu.Lock()
+	defer kl.mu.Unlock()
+	return now.Sub(kl.lastUsed)
+}
+
+// release 非阻塞地归还一个并发名额。通道为空时直接返回，
+// 不会因为桶被 Reconfigure 换过、持有者多于令牌而挂起调用方。
+func (kl *keyLimiter) release() {
+	if kl.sem == nil {
+		return
+	}
+	select {
+	case <-kl.sem:
+	default:
+	}
 }
 
 // RateLimiter manages per-key and global rate limits
@@ -56,17 +85,18 @@ func New(cfg config.RateLimitConfig) (*RateLimiter, error) {
 // Allow checks if a request is allowed for the given key (QPS only).
 // Returns true if allowed, false if rate limited.
 func (rl *RateLimiter) Allow(key string) bool {
-	if !rl.cfg.Enabled {
+	cfg, global := rl.snapshot()
+	if !cfg.Enabled {
 		return true
 	}
 
 	// Global QPS check
-	if rl.global != nil && rl.global.qps != nil && !rl.global.qps.Allow() {
+	if global != nil && global.qps != nil && !global.qps.Allow() {
 		return false
 	}
 
 	// Per-key QPS check
-	kl := rl.getOrCreateLimiter(key)
+	kl := rl.getOrCreateLimiter(key, cfg)
 	return kl.qps == nil || kl.qps.Allow()
 }
 
@@ -74,30 +104,31 @@ func (rl *RateLimiter) Allow(key string) bool {
 // Returns true if both checks pass, false if rate limited.
 // Caller must call Release when done.
 func (rl *RateLimiter) Acquire(key string) bool {
-	if !rl.cfg.Enabled {
+	cfg, global := rl.snapshot()
+	if !cfg.Enabled {
 		return true
 	}
 
 	// Global QPS check
-	if rl.global != nil && rl.global.qps != nil && !rl.global.qps.Allow() {
+	if global != nil && global.qps != nil && !global.qps.Allow() {
 		return false
 	}
 
 	// Global concurrency check
-	if rl.global != nil && rl.global.sem != nil {
+	if global != nil && global.sem != nil {
 		select {
-		case rl.global.sem <- struct{}{}:
+		case global.sem <- struct{}{}:
 		default:
 			return false
 		}
 	}
 
 	// Per-key QPS + concurrency check
-	kl := rl.getOrCreateLimiter(key)
+	kl := rl.getOrCreateLimiter(key, cfg)
 	if kl.qps != nil && !kl.qps.Allow() {
 		// Release global sem if we acquired it
-		if rl.global != nil && rl.global.sem != nil {
-			<-rl.global.sem
+		if global != nil {
+			global.release()
 		}
 		return false
 	}
@@ -106,39 +137,80 @@ func (rl *RateLimiter) Acquire(key string) bool {
 		case kl.sem <- struct{}{}:
 		default:
 			// Release global sem if we acquired it
-			if rl.global != nil && rl.global.sem != nil {
-				<-rl.global.sem
+			if global != nil {
+				global.release()
 			}
 			return false
 		}
 	}
 
-	kl.lastUsed = time.Now()
+	kl.touch()
 	return true
 }
 
 // Release releases a concurrency slot for the given key.
 // Must be called after Acquire returns true.
+//
+// 不看 Enabled 开关：一个在开启期间取到名额的请求，可能在关停之后才归还，
+// 此时若早退，per-key 桶的槽位就永远还不回去（per-key 桶在重建时保留）。
+// 关停期间 Acquire 不占槽位，对空通道做非阻塞归还是 no-op，无副作用。
+//
+// 归还时重新取快照而非沿用获取时的：全局桶重建后旧实例被丢弃，
+// 不再有人读它的计数，少还一次不影响新桶的容量。偏差说明见 Reconfigure。
 func (rl *RateLimiter) Release(key string) {
-	if !rl.cfg.Enabled {
-		return
-	}
+	_, global := rl.snapshot()
 
 	// Release per-key sem
-	if kl := rl.getLimiter(key); kl != nil && kl.sem != nil {
-		select {
-		case <-kl.sem:
-		default:
-		}
+	if kl := rl.getLimiter(key); kl != nil {
+		kl.release()
 	}
 
 	// Release global sem
-	if rl.global != nil && rl.global.sem != nil {
-		select {
-		case <-rl.global.sem:
-		default:
+	if global != nil {
+		global.release()
+	}
+}
+
+// Reconfigure 用新配置替换限流参数。
+//
+// 已建桶的 key 保留旧容量，随后首次出现的 key 按新配置建桶。正在进行的
+// 请求不被打断——中途抽走名额会让一个已放行的请求在归还时对不上账。
+// 旧桶在空闲超过回收窗口后由 cleanup 清掉，此后该 key 再来即按新配置建桶。
+//
+// per-key 桶不清空：Release 是按 key 查当前桶来归还的，清空后一个
+// 重建前取到名额的请求会把名额还进新桶，凭空放宽新上限。
+//
+// 全局桶只在全局参数变化时才重建，未变则保留桶及其令牌状态——
+// 界面整包提交只改 per-key 参数时，不应丢掉全局 QPS 桶的计数。
+// 重建瞬间正在占用全局名额的请求，其归还会落到新桶上，新桶出现
+// 「持有者多于令牌」的欠账。欠账在新桶的通道下一次排空前一直存在，
+// 排空时多余的 no-op 归还把偏差吸收掉；归还路径均为非阻塞，欠账不会
+// 挂住调用方，且全局桶的容量通常远大于瞬时并发，这点偏差不影响限流意图。
+func (rl *RateLimiter) Reconfigure(cfg config.RateLimitConfig) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if cfg.GlobalQPS != rl.cfg.GlobalQPS || cfg.GlobalConcurrency != rl.cfg.GlobalConcurrency {
+		rl.global = nil
+		if cfg.GlobalQPS > 0 || cfg.GlobalConcurrency > 0 {
+			rl.global = newKeyLimiter(cfg.GlobalQPS, cfg.GlobalConcurrency)
 		}
 	}
+	rl.cfg = cfg
+}
+
+// Config 返回当前生效的限流配置，供接口回读与启动日志使用。
+func (rl *RateLimiter) Config() config.RateLimitConfig {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	return rl.cfg
+}
+
+// snapshot 一次取出配置与全局桶，避免调用方在一次判定内多次加锁，
+// 也避免中途被 Reconfigure 换掉造成前后不一致。
+func (rl *RateLimiter) snapshot() (config.RateLimitConfig, *keyLimiter) {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	return rl.cfg, rl.global
 }
 
 // Stop stops the background cleanup goroutine
@@ -148,12 +220,12 @@ func (rl *RateLimiter) Stop() {
 }
 
 // getOrCreateLimiter returns an existing limiter for the key or creates a new one
-func (rl *RateLimiter) getOrCreateLimiter(key string) *keyLimiter {
+func (rl *RateLimiter) getOrCreateLimiter(key string, cfg config.RateLimitConfig) *keyLimiter {
 	rl.mu.RLock()
 	kl, ok := rl.limiters[key]
 	rl.mu.RUnlock()
 	if ok {
-		kl.lastUsed = time.Now()
+		kl.touch()
 		return kl
 	}
 
@@ -162,11 +234,11 @@ func (rl *RateLimiter) getOrCreateLimiter(key string) *keyLimiter {
 
 	kl, ok = rl.limiters[key]
 	if ok {
-		kl.lastUsed = time.Now()
+		kl.touch()
 		return kl
 	}
 
-	kl = newKeyLimiter(rl.cfg.DefaultQPS, rl.cfg.DefaultConcurrency)
+	kl = newKeyLimiter(cfg.DefaultQPS, cfg.DefaultConcurrency)
 	rl.limiters[key] = kl
 	return kl
 }
@@ -198,7 +270,7 @@ func (rl *RateLimiter) cleanup(maxAge time.Duration) {
 
 	now := time.Now()
 	for key, kl := range rl.limiters {
-		if now.Sub(kl.lastUsed) > maxAge {
+		if kl.idleFor(now) > maxAge {
 			delete(rl.limiters, key)
 		}
 	}

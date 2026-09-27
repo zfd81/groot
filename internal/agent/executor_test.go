@@ -13,6 +13,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/repo/memorydb"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 // newExecutorFileLogger 创建写入 dir 的 JSON 文件 logger，
@@ -78,7 +79,7 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 		nil, // subAgentRegistry 为 nil -> soloErr，提前返回
 		nil,
 		nil,
-		config.Config{},
+		setting.New(config.Bootstrap{}, nil),
 		log,
 	)
 

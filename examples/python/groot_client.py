@@ -19,6 +19,7 @@ Usage:
 """
 
 import json
+import os
 from typing import Optional, Callable
 
 import requests
@@ -187,5 +188,28 @@ class GrootClient:
     def list_tools(self) -> dict:
         """列出可用 MCP 工具。"""
         resp = self.session.get(f"{self.base_url}/tools")
+        resp.raise_for_status()
+        return resp.json()
+
+    def transcribe(self, audio_path: str, model: Optional[str] = None,
+                   language: Optional[str] = None) -> dict:
+        """音频转文字。返回 {"text": 识别文本, "model": 实际使用的模型}。
+
+        model 省略时由服务端使用设置中配置的语音模型。
+        """
+        # 该接口是 multipart 表单。session 默认带 application/json 的 Content-Type，
+        # 这里显式置 None 让 requests 按 files 自动生成 multipart 边界。
+        data = {}
+        if model:
+            data["model"] = model
+        if language:
+            data["language"] = language
+        with open(audio_path, "rb") as f:
+            resp = self.session.post(
+                f"{self.base_url}/audio/transcriptions",
+                headers={"Content-Type": None},
+                data=data,
+                files={"file": (os.path.basename(audio_path), f)},
+            )
         resp.raise_for_status()
         return resp.json()

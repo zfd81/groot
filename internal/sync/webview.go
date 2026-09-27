@@ -8,7 +8,6 @@ import (
 // needsRestartPaths 列出拉取后需要重启服务才生效的路径前缀。
 // 参考 spec §1.10.1。
 var needsRestartPaths = []string{
-	"config.yaml",
 	"mcp/",
 	"subagents/",
 }

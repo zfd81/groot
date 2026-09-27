@@ -193,8 +193,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 
 ```
 {GROOT_HOME}/
-├── config.yaml                    # 主配置文件（业务配置）
-├── env.yaml                       # 环境配置文件（数据库等基础设施凭据）
+├── bootstrap.yaml                 # 配置文件（服务、日志、数据库连接等启动配置）
 ├── GROOT.md                       # 项目规范文件（自动注入系统指令）
 ├── groot.db                       # SQLite 数据库文件（默认模式；MySQL/PG 模式下无此文件）
 ├── skills/                        # Skills 目录
@@ -212,7 +211,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │   └── groot-{date}.log           # 日志文件
 ```
 
-> **运行时数据存储在数据库中：** 会话与对话历史、附件内容、定时任务及其执行记录、集群成员注册信息统一存储在数据库中（默认 SQLite，文件为 `{GROOT_HOME}/groot.db`；可通过 `env.yaml` 切换为 MySQL/PostgreSQL），没有对应的文件目录。
+> **运行时数据存储在数据库中：** 会话与对话历史、附件内容、定时任务及其执行记录、集群成员注册信息统一存储在数据库中（默认 SQLite，文件为 `{GROOT_HOME}/groot.db`；可通过 `bootstrap.yaml` 切换为 MySQL/PostgreSQL），没有对应的文件目录。
 
 ### 2.4 目录说明
 
@@ -220,8 +219,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 
 | 目录/文件 | 说明 |
 |----------|------|
-| `config.yaml` | 主配置文件，控制服务行为 |
-| `env.yaml` | 环境配置文件，存放数据库等基础设施连接凭据，与业务配置解耦 |
+| `bootstrap.yaml` | 启动配置文件（服务监听、日志、数据库连接等），业务配置在 Web 设置面板中维护；默认全注释即 SQLite 本地模式 |
 | `GROOT.md` | 项目规范文件，自动注入系统指令最前面，支持热加载 |
 | `skills/` | Skills 定义目录（固定位置），支持热插拔 |
 | `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
@@ -264,18 +262,17 @@ export DEEPSEEK_API_KEY="sk-xxxx"
 
 ### 2.7 配置文件
 
-`groot init` 会生成两个配置文件：
+`groot init` 会生成一个配置文件：
 
 | 文件 | 用途 |
 |------|------|
-| `~/.groot/config.yaml` | 业务配置（服务端口、安全、日志等），包含完整注释模板 |
-| `~/.groot/env.yaml` | 基础设施环境配置（数据库连接凭据），默认全注释即 SQLite 本地模式 |
+| `~/.groot/bootstrap.yaml` | 启动配置文件（服务监听、日志、数据库连接及常驻组件构造参数），默认全注释即 SQLite 本地模式 |
 
-`config.yaml` 中所有配置项（server、react、attachment、memory、security、logging 等）均已注释并标注默认值，按需取消注释即可。
+`bootstrap.yaml` 中所有配置项均已注释并标注默认值，按需取消注释即可；改动本文件需重启服务生效。
 
-> **模型配置不在配置文件中**：模型配置通过 Web UI 管理，登录后进入 设置 → 模型，可创建、编辑、删除模型，切换默认模型，启用/禁用模型并测试连接。API Key 支持填写 `${ENV_VAR}` 引用环境变量。
+> **业务配置不在配置文件中**：模型、限流、通知渠道、附件限制、记忆、推理循环、子 Agent、定时任务开关等业务配置存放在数据库配置表中，登录 Web 界面后在设置面板中维护，保存即生效。模型配置在 设置 → 模型，其余业务配置在 设置 → 配置。
 
-> 完整配置项说明见 [四、配置详解](#四配置详解)，数据库配置见 [4.7 数据库配置（env.yaml）](#47-数据库配置envyaml)。
+> 完整配置项说明见 [四、配置详解](#四配置详解)，数据库配置见 [4.7 数据库配置（bootstrap.yaml）](#47-数据库配置bootstrapyaml)。
 
 ### 2.8 停止服务
 
@@ -305,7 +302,7 @@ kill -SIGTERM <pid>
 groot init
 ```
 
-初始化会在 `~/.groot` 下生成 `config.yaml`、`env.yaml`、`GROOT.md` 及资源目录。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置envyaml)。
+初始化会在 `~/.groot` 下生成 `bootstrap.yaml`（全注释模板，权限 0600）、`GROOT.md` 及资源目录（skills/mcp/subagents/logs）。JWT 签名密钥由服务首次启动时自动生成并存入数据库，init 不生成密钥。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置bootstrapyaml)。
 
 ### 3.2 启动服务
 
@@ -333,7 +330,7 @@ http://localhost:8080/ui/
 | 会话管理 | 侧边栏查看历史会话列表、继续会话、分页加载 |
 | 会话搜索 | 侧边栏搜索图标或快捷键 `Ctrl`/`⌘` + `K`，按关键词搜索历史对话的指令与执行结果，点击结果跳转到对应会话并定位轮次 |
 | 会话日志 | 顶部栏「查看日志」按钮，查看当前会话的运行日志（扫描最近 7 天，最多 1000 条），支持按级别过滤 |
-| 文件面板 | 顶部栏文件夹图标打开右侧面板，浏览 Groot home 目录（`~/.groot`）：树形导航、文件预览（Markdown 渲染/代码高亮/图片）、在线编辑（Markdown 支持分屏实时预览）、一键创建 Skill/MCP/Agent、上传文件或整个目录、下载；`config.yaml`、`env.yaml` 为只读，`groot.db` 不显示。MySQL/PostgreSQL 模式下还提供配置同步入口，见 [4.7.1](#471-配置同步web-工作空间) |
+| 文件面板 | 顶部栏文件夹图标打开右侧面板，浏览 Groot home 目录（`~/.groot`）：树形导航、文件预览（Markdown 渲染/代码高亮/图片）、在线编辑（Markdown 支持分屏实时预览）、一键创建 Skill/MCP/Agent、上传文件或整个目录、下载；`bootstrap.yaml`（及老部署迁移遗留的 `config.yaml`、`env.yaml`）为只读，`groot.db` 不显示。MySQL/PostgreSQL 模式下还提供配置同步入口，见 [4.7.1](#471-配置同步web-工作空间) |
 
 **设置界面导航**（右上角进入）：
 
@@ -382,6 +379,17 @@ curl -X POST http://localhost:8080/chat \
 
 > 更多安装方式见 [二、安装部署](#二安装部署)，完整配置说明见 [四、配置详解](#四配置详解)，API 详细说明见 [七、REST API](#七rest-api)。
 
+### 3.6 从老版本升级
+
+老版本使用 `config.yaml` + `env.yaml` 两个配置文件。升级到当前版本无需手工迁移，新版本服务在原工作目录上**首次启动时自动完成迁移**：
+
+- `config.yaml` 中的启动项（server、logging 等）与 `env.yaml` 中的 `database` 节合并生成 `bootstrap.yaml`
+- 业务配置项（记忆、推理循环、子 Agent、附件、限流、通知渠道、定时任务开关等）与 JWT 签名密钥迁入数据库配置表，此后经 Web 设置面板维护
+- 老文件 `config.yaml`、`env.yaml` 原地保留但不再生效（文件面板中以只读展示），确认迁移无误后可自行删除
+- JWT 签名密钥原样迁入配置表，**已签发的 API Key 不受影响**，无需重新创建
+
+如迁移结果不符合预期，删除生成的 `bootstrap.yaml` 后重启服务即可重新触发文件侧迁移（配置表中已有的键不会被覆盖）。
+
 ---
 
 ## 四、配置详解
@@ -390,17 +398,20 @@ curl -X POST http://localhost:8080/chat \
 
 配置文件由 `groot init` 生成：
 
-- `{GROOT_HOME}/config.yaml`：业务配置（本节 4.2~4.6 的全部内容）
-- `{GROOT_HOME}/env.yaml`：基础设施环境配置（数据库连接，见 [4.7](#47-数据库配置envyaml)）
+- `{GROOT_HOME}/bootstrap.yaml`：启动配置（服务监听、日志、数据库连接及常驻组件构造参数），权限 0600
 
 未初始化直接启动会报错并提示先运行 `groot init`。
 
+业务配置（模型、记忆、推理循环、子 Agent、附件、限流、通知渠道、定时任务开关等）不在配置文件中，存放于数据库配置表，登录 Web 界面后在设置面板中维护，保存即生效（见 [4.3 配置字段详解](#43-配置字段详解)）。
+
 ### 4.2 完整配置文件示例
 
-```yaml
-# Groot Agent 配置文件
+`bootstrap.yaml` 的全部配置项如下。每一项都有代码默认值，`groot init` 生成的模板保持全注释即可正常启动（即 SQLite 本地模式），只需取消注释并修改需要变动的行；**改动本文件需重启服务生效**。
 
-# Agent 基础配置
+```yaml
+# Groot 配置文件（bootstrap.yaml）
+
+# Agent 元信息
 agent:
   name: groot                      # Agent 名称
   version: 1.0.0                   # Agent 版本号
@@ -410,76 +421,35 @@ server:
   host: 0.0.0.0                    # 服务监听地址
   port: 8080                       # 服务监听端口
 
-# 模型配置通过 Web UI 管理（登录后进入 设置 → 模型），不在本文件中配置
-
-# ReAct 执行配置
-react:
-  max_iterations: 20               # ReAct 循环最大迭代次数
-  step_timeout: 60                 # 单步 LLM 调用超时（秒）
-  error_retry: 2                   # 单步 LLM 调用失败重试次数
-
-# 附件处理配置
-attachment:
-  max_size: 50                     # 单个附件最大大小（MB）
-  max_total_size: 100              # 附件总大小上限（MB）
-  max_count: 10                    # 附件数量上限
-  allowed_types: []                # 允许的附件类型（空数组表示允许所有类型）
-
-# 记忆模块配置
-memory:
-  history_window: 20               # LLM 上下文窗口（轮次），-1 表示不限制
-
-# 定时任务调度配置
-schedule:
-  enabled: false                   # 是否允许在对话中创建定时任务（默认关闭）
-  max_concurrent_tasks: 3          # 最大并发执行任务数
-  sync_interval: 30s               # 定期同步间隔（对比数据库任务与调度器状态，修复不一致）
-
-# 消息通知配置
-message:
-  queue_size: 256                  # 消息队列容量
-  workers: 2                       # 消息发送 worker 数量
-  senders:
-    webhook:
-      enabled: false               # 是否启用 webhook 通知
-      url: ""                      # Webhook URL（接收 POST JSON）
-    email:
-      enabled: false               # 是否启用邮件通知
-      smtp_host: ""                # SMTP 服务器地址
-      smtp_port: 587               # SMTP 端口
-      username: ""                 # SMTP 用户名
-      password: ""                 # SMTP 密码
-      from: ""                     # 发件人地址
-
-# 子 Agent 调度配置
-subagent:
-  max_concurrency: 5               # 同时运行的子 Agent 上限（FIFO 排队）
-  exec_timeout: 5m                 # 单次子 Agent 执行超时（排队不计入）
-  max_task_length: 16000           # call_agent task 参数长度上限（字符）
-  max_result_length: 8000          # 子 Agent 返回文本截断长度
-
-# 安全配置
-security:
-  rate_limit:
-    enabled: false                 # 是否启用速率限制（默认关闭）
-    global_qps: 0                  # 全局 QPS 限制（0=不限制）
-    global_concurrency: 0          # 全局并发限制（0=不限制）
-    default_qps: 10                # 每 API Key 默认 QPS
-    default_concurrency: 5         # 每 API Key 默认并发数
-    cleanup_interval: 5m           # 空闲限流器清理间隔
-  auth:
-    header_name: X-API-Key         # API Key 请求头名称
-    secret: "..."                  # JWT 签名密钥（init 自动生成，请勿泄露）
-
 # 日志配置
 logging:
   level: info                      # 日志级别：debug/info/warn/error
   format: json                     # 日志格式：json/text
   output: [stdout, file]           # 输出目标：stdout/file（可同时输出）
   file:
-    directory: logs                # 日志文件目录
+    directory: logs                # 日志文件目录（相对路径以 GROOT_HOME 为基准）
     filename_pattern: groot-{date}.log  # 文件名模式，{date} 替换为 YYYY-MM-DD
     max_age: 7                     # 日志保留天数
+
+# 消息层构造参数（通知渠道 Webhook/邮件 的地址与凭据在 Web 设置面板中配置）
+message:
+  queue_size: 256                  # 消息队列容量
+  workers: 2                       # 消息发送 worker 数量
+
+# 调度器构造参数（是否允许模型创建定时任务，在 Web 设置面板中开关）
+schedule:
+  max_concurrent_tasks: 3          # 最大并发执行任务数
+  sync_interval: 30s               # 定期同步间隔（对比数据库任务与调度器状态，修复不一致）
+
+# 限流后台协程（限流开关与各项阈值在 Web 设置面板中配置）
+security:
+  rate_limit:
+    cleanup_interval: 5m           # 空闲限流器清理间隔
+
+# 数据库配置（整节省略即 SQLite 本地模式；MySQL/PostgreSQL 示例见 4.7）
+#database:
+#  driver: mysql
+#  dsn: "user:${GROOT_DB_PASSWORD}@tcp(host:3306)/groot?charset=utf8mb4&parseTime=True&loc=UTC"
 ```
 
 ### 4.3 配置字段详解
@@ -530,77 +500,43 @@ logging:
 
 > **目录固定**：Skills 目录固定为 `{GROOT_HOME}/skills`，无需配置。Skills 热插拔天然支持，无需配置开关。
 
-#### ReAct 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `max_iterations` | 否 | ReAct 循环最大迭代次数，默认 `20` |
-| `step_timeout` | 否 | 单步 LLM 调用超时（秒），默认 `60` |
-| `error_retry` | 否 | 单步 LLM 调用失败重试次数，默认 `2` |
-
-#### Attachment 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `max_size` | 否 | 单个附件最大大小（MB），默认 `50` |
-| `max_total_size` | 否 | 附件总大小上限（MB），默认 `100` |
-| `max_count` | 否 | 单次请求最大附件数量，默认 `10` |
-| `allowed_types` | 否 | 允许的文件扩展名列表，默认空数组（允许所有类型） |
-
-#### Memory 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `history_window` | 否 | 注入 LLM 上下文的历史对话轮次窗口，`-1` 表示不限制，默认 `20` |
-
 #### Schedule 配置
 
+`bootstrap.yaml` 中承载调度器的构造参数：
+
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `enabled` | 否 | 是否允许在对话中创建定时任务，默认 `false`。关闭时对话中无法创建/管理任务（系统级清理和同步不受影响） |
 | `max_concurrent_tasks` | 否 | 最大并发执行任务数，超出的任务跳过当次执行，默认 `3` |
 | `sync_interval` | 否 | 定期同步间隔（Go duration 格式，如 `30s`/`1m`），对比数据库中的任务与调度器状态，自动修复不一致，默认 `30s` |
 
+> 「是否允许在对话中创建定时任务」的开关在 Web 设置面板中维护，见下文 [业务配置（Web 设置面板）](#业务配置web-设置面板)。
+
 #### Message 配置
+
+`bootstrap.yaml` 中承载消息层的构造参数：
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
 | `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `256` |
 | `workers` | 否 | 消息发送 worker 数量，默认 `2` |
-| `senders.webhook.enabled` | 否 | 是否启用 webhook 通知，默认 `false` |
-| `senders.webhook.url` | 否 | Webhook URL，任务完成/失败时 POST JSON 到该地址 |
-| `senders.email.enabled` | 否 | 是否启用邮件通知，默认 `false` |
-| `senders.email.smtp_host` | 否 | SMTP 服务器地址 |
-| `senders.email.smtp_port` | 否 | SMTP 端口，默认 `587` |
-| `senders.email.username` | 否 | SMTP 认证用户名 |
-| `senders.email.password` | 否 | SMTP 认证密码 |
-| `senders.email.from` | 否 | 发件人邮箱地址 |
 
-> **说明：** stdout sender 始终启用，无需配置。webhook 和 email sender 按需配置。定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道。
-
-#### SubAgent 配置
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `max_concurrency` | 否 | 同时运行的子 Agent 上限（全局 semaphore，超出 FIFO 排队），默认 `5` |
-| `exec_timeout` | 否 | 单次子 Agent 执行超时（Go duration 格式，如 `5m`/`30s`，排队不计入），默认 `5m` |
-| `max_task_length` | 否 | `call_agent` 工具 `task` 参数最大字符数，超出报错，默认 `16000` |
-| `max_result_length` | 否 | 子 Agent 返回文本截断长度，超出截断并附警告，默认 `8000` |
-
-> **说明：** 子 Agent 的目录、`agent.md` 与专属 mcp/skills 配置放在 `{GROOT_HOME}/subagents/<name>/` 下，详见 [五、扩展能力](#五扩展能力) 中的「5.3 多 Agent」。
+> 通知渠道（Webhook / 邮件）的地址与凭据在 Web 设置面板中维护，见下文 [业务配置（Web 设置面板）](#业务配置web-设置面板)。stdout sender 始终启用，无需配置。
 
 #### Security 配置
 
+`bootstrap.yaml` 中只承载限流后台协程的定时参数：
+
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `auth.header_name` | 否 | API Key 请求头名称，默认 `X-API-Key` |
-| `auth.secret` | 否 | JWT 签名密钥；`groot init` 自动生成，为空时启动自动补齐。更换后所有 API Key 立即失效 |
-| `rate_limit.enabled` | 否 | 是否启用速率限制，默认 `false` |
-| `rate_limit.global_qps` | 否 | 全局 QPS 限制，`0` 表示不限制 |
-| `rate_limit.global_concurrency` | 否 | 全局并发限制，`0` 表示不限制 |
-| `rate_limit.default_qps` | 否 | 每 API Key 默认 QPS，默认 `10` |
-| `rate_limit.default_concurrency` | 否 | 每 API Key 默认并发数，默认 `5`（仅 `/chat` 生效） |
 | `rate_limit.cleanup_interval` | 否 | 空闲限流器清理间隔，默认 `5m` |
+
+限流开关与各项阈值（启用开关、默认/全局的 QPS 与并发）在 Web 设置面板中维护，见下文 [业务配置（Web 设置面板）](#业务配置web-设置面板)。
+
+**JWT 签名密钥与请求头名称**存放在数据库配置表中，不在配置文件里，登录 Web 界面后在 **设置 → 配置 → 认证** 分组中维护（本分组改动需重启服务生效）：
+
+- JWT 签名密钥（`security.auth.secret`）：服务首次启动时自动生成并写入配置表，`groot init` 不生成密钥。集群各节点共享同一数据库即共享同一密钥，A 节点签发的 API Key 在 B 节点可以验证
+- 密钥不以明文经界面或接口暴露，面板只展示脱敏值；需要更换时点击「重新生成」（带二次确认），**更换后所有已签发的 API Key 立即失效**，重启各节点后生效。亦可直接改数据库配置表
+- API Key 请求头名称（`security.auth.header_name`，默认 `X-API-Key`）：在同一分组中自定义，清空即恢复默认；启动时读取一次，改动需重启生效
 
 > **速率限制说明：**
 > - **限流维度**：按 API Key 名称（caller）维度限流
@@ -629,6 +565,46 @@ logging:
 | `file.directory` | 否 | 日志文件目录，默认 `logs` |
 | `file.filename_pattern` | 否 | 文件名模式，`{date}` 替换为 YYYY-MM-DD |
 | `file.max_age` | 否 | 日志保留天数，默认 `7` |
+
+#### 业务配置（Web 设置面板）
+
+记忆、推理循环、子 Agent、附件、限流、认证、定时任务开关与通知渠道等业务配置存放在数据库配置表中，登录 Web 界面后在 **设置 → 配置** 中按分组维护，**保存即生效**，无需重启（「认证」分组例外：启动时读取一次，改动需重启生效）。集群部署时各节点共享同一数据库，业务配置天然共享同一份值。
+
+| 面板分组 | 面板项 | 默认值 | 说明 |
+|------|------|------|------|
+| 记忆 | 上下文轮次 | `20` | 每次请求带给模型的历史对话轮数，`-1` 表示不限制 |
+| 推理循环 | 最大迭代次数 | `20` | 单次任务中「思考—调用工具」的最多轮数（ReAct 循环） |
+| 推理循环 | 单步超时（秒） | `60` | 一次模型调用的最长等待时间 |
+| 推理循环 | 错误重试次数 | `2` | 单步失败后的重试次数，`0` 表示不重试 |
+| 子 Agent | 并发上限 | `5` | 同时运行的子 Agent 数上限（全局 semaphore，超出 FIFO 排队），对保存后新发起的调用生效 |
+| 子 Agent | 执行超时 | `5m` | 子 Agent 单次执行的时限（Go duration 格式，如 `5m`/`90s`，排队不计入） |
+| 子 Agent | 任务描述上限 | `16000` | `call_agent` 工具 `task` 参数最大字符数，超出报错 |
+| 子 Agent | 返回结果上限 | `8000` | 子 Agent 返回内容的最大字符数，超出截断并附警告 |
+| 附件 | 单文件上限（MB） | `50` | 单个附件允许的最大体积 |
+| 附件 | 单次合计上限（MB） | `100` | 一次上传所有附件的体积之和上限 |
+| 附件 | 单次数量上限 | `10` | 一次最多上传的附件个数 |
+| 附件 | 允许的扩展名 | 空 | 逗号分隔（如 `.png, .jpg, .pdf`），留空表示不限制类型 |
+| 限流 | 启用限流 | 关 | 按调用方限制接口的请求速率与并发；已建立的调用方保留原上限，新调用方按新值 |
+| 限流 | 默认 QPS | `10` | 每个调用方每秒允许的请求数，`0` 表示不限制 |
+| 限流 | 默认并发 | `5` | 每个调用方同时进行的对话数上限（仅 `/chat` 生效），`0` 表示不限制 |
+| 限流 | 全局 QPS | `0` | 所有调用方合计的每秒请求数上限，`0` 表示不限制 |
+| 限流 | 全局并发 | `0` | 所有调用方合计的同时对话数上限，`0` 表示不限制 |
+| 认证 | 请求头名称 | `X-API-Key` | 对外 API 读取 API Key 的请求头，清空则恢复默认；**改动需重启生效** |
+| 认证 | 签名密钥 | 首次启动自动生成 | 只展示脱敏值；「重新生成」更换密钥（带二次确认），所有已签发的 API Key 立即失效；**改动需重启生效** |
+| 定时任务 | 允许创建定时任务 | 关 | 开启后模型可在对话中创建与管理定时任务（系统级清理和同步不受影响），保存后下一次对话生效 |
+| Webhook 通知 | 推送地址 | 空 | 接收通知的 HTTP 地址（任务完成/失败时 POST JSON），启用前必须填写 |
+| Webhook 通知 | 启用 Webhook | 关 | 定时任务结果等事件推送到上述地址 |
+| 邮件通知 | SMTP 主机 | 空 | 邮件服务器地址，启用前必须填写 |
+| 邮件通知 | SMTP 端口 | `587` | 常用 25、465、587 |
+| 邮件通知 | 用户名 | 空 | 登录邮件服务器的账号 |
+| 邮件通知 | 密码 | 空 | 登录邮件服务器的密码，只在需要更换时填写（已设置时留空保持不变） |
+| 邮件通知 | 发件人 | 空 | 通知邮件的发件地址，启用前必须填写 |
+| 邮件通知 | 启用邮件 | 关 | 定时任务结果等事件发送到配置的邮箱 |
+
+> **说明：**
+> - 定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道；stdout 渠道始终启用，无需配置
+> - 子 Agent 的目录、`agent.md` 与专属 mcp/skills 配置放在 `{GROOT_HOME}/subagents/<name>/` 下，详见 [五、扩展能力](#五扩展能力) 中的「5.3 多 Agent」
+> - 语音输入（转录模型、话筒开关等）在 **设置 → 通用** 的「语音输入」分组中维护，同样存放于配置表
 
 ### 4.4 目录配置说明
 
@@ -684,29 +660,30 @@ logging:
 
 **支持热更新的配置：**
 - 模型配置：存储在数据库中，Web 界面（设置 → 模型）增删改立即生效
+- 业务配置（记忆、推理循环、子 Agent、附件、限流、定时任务开关、Webhook / 邮件通知渠道）：在 Web 设置面板「配置」分区调整，保存即生效
 - Skills 配置：修改 SKILL.md 文件自动生效
 - GROOT.md：每次对话按需读取，修改后下次对话自动生效
 - API Key：创建后立即可用，删除后立即失效
 
 **不支持热更新的配置：**
-- Server 配置、Security 配置、Rate Limit 配置、Memory 配置、Logging 配置、Schedule 配置、Message 配置需重启服务
+- `bootstrap.yaml` 的全部配置项（Agent 元信息、Server、Logging、数据库连接、Message 的 `queue_size` / `workers`、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`）需重启服务
+- JWT 签名密钥与 API Key 请求头名称（设置面板 **设置 → 配置 → 认证** 分组维护，存于数据库配置表，启动时读取一次）需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
 - 子 Agent 定义（`subagents/<name>/agent.md`）及其专属 MCP 需重启服务
-- 数据库配置（`env.yaml`）需重启服务
 
 > 重启可在 Web 界面 **设置 → 集群管理** 中完成，无需登录服务器，见 [Q12](#q12-配置修改后需要重启吗)。
 
 ---
 
-### 4.7 数据库配置（env.yaml）
+### 4.7 数据库配置（bootstrap.yaml）
 
-Groot 的运行时数据（会话与对话历史、附件、定时任务及执行记录、集群成员信息）统一存储在数据库中。数据库连接凭据存放在 `{GROOT_HOME}/env.yaml`，与业务配置 `config.yaml` 解耦。
+Groot 的运行时数据（会话与对话历史、附件、定时任务及执行记录、集群成员信息）统一存储在数据库中。数据库连接凭据写在 `{GROOT_HOME}/bootstrap.yaml` 的 `database` 节。
 
 **三种模式：**
 
 | 模式 | 配置方式 | 适用场景 |
 |------|---------|---------|
-| SQLite（默认） | `env.yaml` 全注释（无 `database` 节），零配置 | 单机部署，数据文件为 `{GROOT_HOME}/groot.db` |
+| SQLite（默认） | `bootstrap.yaml` 的 `database` 节保持全注释，零配置 | 单机部署，数据文件为 `{GROOT_HOME}/groot.db` |
 | MySQL | 取消 MySQL 示例块注释并填写连接信息 | 多实例集群部署、集中管理数据 |
 | PostgreSQL | 取消 PostgreSQL 示例块注释并填写连接信息 | 多实例集群部署、集中管理数据 |
 
@@ -744,14 +721,14 @@ database:
 
 **注意事项：**
 
-- `env.yaml` 中同一时间只能存在一个 `database` 节（MySQL/PostgreSQL 二选一）
-- 即使 `config.yaml` 中残留数据库相关配置也不再生效，数据库连接只认 `env.yaml`
+- `bootstrap.yaml` 中同一时间只能存在一个 `database` 节（MySQL/PostgreSQL 二选一）
+- 数据库连接只认 `bootstrap.yaml` 的 `database` 节；老部署迁移遗留的 `env.yaml` 不再生效（见 [3.6 从老版本升级](#36-从老版本升级)）
 - 多实例共享同一数据库即组成集群（SQLite 模式下为同一台机器上的多个实例，MySQL/PostgreSQL 模式下可跨主机），自动进行 Leader 选举（Leader 负责定时任务调度）；成员状态可在 Web 界面 **设置 → 集群管理** 中查看，并可在该面板重启指定实例
 - MySQL/PostgreSQL 模式下可在 Web 工作空间面板中将 skills、subagents、mcp 等配置资源在本地目录与数据库之间同步，详见 [4.7.1 配置同步](#471-配置同步web-工作空间)
 
 #### 4.7.1 配置同步（Web 工作空间）
 
-在 MySQL/PostgreSQL 模式下（需配置 `~/.groot/env.yaml` 中的 `database` 节），集群共享的配置资源（`config.yaml`、skills、subagents、mcp、GROOT.md）以数据库中的镜像为准，通过 Web 工作空间面板在本地工作目录与数据库之间同步：面板工具栏的同步按钮比较全部白名单资源，文件树的行菜单可只比较单个资源。对话框列出差异清单后，由使用者选择推送方向：
+在 MySQL/PostgreSQL 模式下（需配置 `~/.groot/bootstrap.yaml` 中的 `database` 节），集群共享的配置资源（skills、subagents、mcp、GROOT.md）以数据库中的镜像为准，通过 Web 工作空间面板在本地工作目录与数据库之间同步：面板工具栏的同步按钮比较全部白名单资源，文件树的行菜单可只比较单个资源。对话框列出差异清单后，由使用者选择推送方向：
 
 | 状态 | 含义 |
 |---|---|
@@ -762,7 +739,9 @@ database:
 - **推送**：将勾选的本地文件写入数据库（本地独有 → 新增记录；内容不同 → 覆盖远端；数据库独有 → 删除远端记录）
 - **拉取**：将勾选的数据库记录写入本地（数据库独有 → 新增本地文件；内容不同 → 覆盖本地；本地独有 → 删除本地文件）
 
-数据库中被删除的资源保留删除标记，因此「本地独有」会进一步标注是否为他人删除。操作将删除文件时（推送删除数据库记录、拉取删除本地文件）对话框会二次确认并告知数量。变更 `config.yaml`、`mcp/`、`subagents/` 下的内容需重启服务才生效，拉取后对话框会提示；可在 **设置 → 集群管理** 中直接重启对应实例。从数据库拉取会覆盖本地文件并关闭面板中已打开的文件。SQLite 模式（单机）下配置直接读取本地文件，面板中不提供同步入口。
+数据库中被删除的资源保留删除标记，因此「本地独有」会进一步标注是否为他人删除。操作将删除文件时（推送删除数据库记录、拉取删除本地文件）对话框会二次确认并告知数量。变更 `mcp/`、`subagents/` 下的内容需重启服务才生效，拉取后对话框会提示；可在 **设置 → 集群管理** 中直接重启对应实例。从数据库拉取会覆盖本地文件并关闭面板中已打开的文件。SQLite 模式（单机）下配置直接读取本地文件，面板中不提供同步入口。
+
+> **配置不经文件同步**：业务配置存放在数据库配置表中，各节点连同一个库即读到同一份值，天然共享；`bootstrap.yaml` 描述的是单节点自身的环境（本机端口、日志目录、数据库地址），各节点内容本就允许不同，因此不在同步范围内。
 
 ---
 
@@ -1059,15 +1038,16 @@ Web 界面输入框左下角的 Agent 下拉可切换当前会话使用的 Agent
 |-----|--------------|
 | `GET /chat/status/:sid` | 编排模式下 `progress.sub_agents` 含当前运行的子 Agent 列表 |
 
-#### 5.3.6 配置项（`config.yaml`）
+#### 5.3.6 配置项（Web 设置面板）
 
-```yaml
-subagent:
-  max_concurrency: 5        # 同时运行的子 Agent 上限（FIFO 排队）
-  max_task_length: 16000    # call_agent task 参数长度上限（字符）
-  max_result_length: 8000   # 子 Agent 结果长度上限，超出截断
-  exec_timeout: 5m          # 单次子 Agent 执行超时
-```
+子 Agent 调度参数存放在数据库配置表中，登录 Web 界面后在 **设置 → 配置** 的「子 Agent」分组中维护，保存即生效（并发上限对保存后新发起的调用生效）：
+
+| 面板项 | 默认值 | 说明 |
+|------|------|------|
+| 并发上限 | `5` | 同时运行的子 Agent 上限（FIFO 排队） |
+| 执行超时 | `5m` | 单次子 Agent 执行超时（排队不计入） |
+| 任务描述上限 | `16000` | `call_agent` task 参数长度上限（字符） |
+| 返回结果上限 | `8000` | 子 Agent 结果长度上限，超出截断 |
 
 #### 5.3.7 关键限制
 
@@ -1211,11 +1191,10 @@ groot init
 | `mcp/` | MCP 配置目录 |
 | `subagents/` | 子 Agent 定义目录 |
 | `logs/` | 日志文件目录 |
-| `config.yaml` | 主配置文件（业务配置） |
-| `env.yaml` | 环境配置文件（数据库凭据，默认全注释即 SQLite 模式） |
+| `bootstrap.yaml` | 配置文件（全注释模板，权限 0600；默认全注释即 SQLite 本地模式） |
 | `GROOT.md` | 项目规范文件（含子 Agent 调度引导段） |
 
-> 会话、定时任务、集群等运行时数据存储在数据库中，init 不创建对应目录。
+> 会话、定时任务、集群等运行时数据存储在数据库中，init 不创建对应目录。init 不生成 JWT 签名密钥——密钥由服务首次启动时自动生成并存入数据库配置表。
 
 ### 6.4 查看实例状态（groot status）
 
@@ -1300,6 +1279,7 @@ groot user reset -y   # 跳过确认直接执行
 | `/chat/status/{sid}` | GET | `status` | 查询最近一次对话状态 |
 | `/chat/{sid}` | GET | `detail` | 查询最近一次对话详情（完整步骤记录） |
 | `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
+| `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
 | `/sess/{sid}` | GET | `session` | 查询会话详情（完整对话历史） |
 | `/sess/history` | GET | `history` | 查询会话列表 |
 | `/sess/search` | GET | `session` | 搜索历史对话（关键词匹配指令与结果） |
@@ -1579,7 +1559,47 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 7.4 GET /chat/status/{sid} - 查询对话状态
+### 7.4 POST /audio/transcriptions - 音频转录
+
+需要携带具有 `chat` 权限的 API Key，与 `/chat` 相同。
+
+把音频转成文字。请求为 `multipart/form-data`：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `file` | 是 | 音频文件，支持 webm、mp3、mp4、mpeg、mpga、m4a、wav、ogg、flac |
+| `model` | 否 | 转录模型名，省略时用设置中配置的语音模型 |
+| `language` | 否 | 音频语种的 ISO-639-1 代码，如 `zh`、`en`，可提升准确率 |
+
+```bash
+curl -X POST http://localhost:8080/audio/transcriptions \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -F "file=@recording.webm" \
+  -F "model=whisper-1"
+```
+
+响应：
+
+```json
+{
+  "text": "打开登录日志",
+  "model": "whisper-1"
+}
+```
+
+**错误响应：**
+
+- `400 invalid_request`：缺少 `file` 字段或识别结果为空
+- `400 unsupported_type`：扩展名不受支持
+- `400 file_too_large`：超过 `attachment.max_size`
+- `400 invalid_model`：模型不存在、已禁用或未配置语音模型
+- `502 upstream_error`：上游转录服务出错，`message` 透传原文
+
+模型也可用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为表单 `model` → 请求头 `X-Model-Name` → 设置中配置的语音模型。
+
+---
+
+### 7.5 GET /chat/status/{sid} - 查询对话状态
 
 查询指定会话中最近一次对话的运行状态。
 
@@ -1633,7 +1653,7 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 7.5 GET /chat/{sid}/{cid} - 查询对话详情
+### 7.6 GET /chat/{sid}/{cid} - 查询对话详情
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。省略 `cid`（即 `GET /chat/{sid}`）时返回该会话最近一次对话的详情。
 
@@ -1675,7 +1695,7 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 7.6 GET /sess/{sid} - 查询会话详情
+### 7.7 GET /sess/{sid} - 查询会话详情
 
 查询会话详情，包括完整对话历史（所有轮次）。
 
@@ -1746,7 +1766,7 @@ curl -X POST http://localhost:8080/chat \
 
 ---
 
-### 7.7 GET /sess/history - 查询会话列表
+### 7.8 GET /sess/history - 查询会话列表
 
 查询所有会话列表，支持分页。参数通过 URL Query String 传递。
 
@@ -1787,7 +1807,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.8 GET /sess/search - 搜索历史对话
+### 7.9 GET /sess/search - 搜索历史对话
 
 按关键词在历史对话（主 Agent 已完成轮次）的指令与执行结果中模糊搜索，返回轮次级结果，按轮次开始时间倒序。
 
@@ -1842,7 +1862,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.9 GET /web/health - 健康检查
+### 7.10 GET /web/health - 健康检查
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -1896,11 +1916,11 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.10 GET /schedule - 列出定时任务
+### 7.11 GET /schedule - 列出定时任务
 
 查询所有定时任务，支持按状态过滤。
 
-> **可用性说明：** 7.10 ~ 7.16 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
+> **可用性说明：** 7.11 ~ 7.17 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
 
 **Query 参数：**
 
@@ -1934,7 +1954,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.11 GET /schedule/:id - 查询任务详情
+### 7.12 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -1942,11 +1962,11 @@ X-API-Key: 在Web界面创建的APIKey
 |------|------|------|------|
 | `id` | string | 是 | 任务 ID（路径参数） |
 
-**响应：** 返回完整任务定义，格式同 7.10 中单条任务。
+**响应：** 返回完整任务定义，格式同 7.11 中单条任务。
 
 ---
 
-### 7.12 DELETE /schedule/:id - 删除任务
+### 7.13 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -1966,7 +1986,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.13 POST /schedule/:id/disable - 禁用任务
+### 7.14 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -1980,7 +2000,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.14 POST /schedule/:id/enable - 启用任务
+### 7.15 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -1994,7 +2014,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.15 POST /schedule/:id/archive - 归档任务
+### 7.16 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -2008,7 +2028,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.16 GET /schedule/:id/history - 执行历史
+### 7.17 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -2036,7 +2056,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 ---
 
-### 7.17 定时任务创建（通过对话）
+### 7.18 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
@@ -2073,7 +2093,7 @@ print(f"会话ID: {result['session_id']}")
 result2 = client.execute_chat("生成摘要", session_id=result["session_id"])
 ```
 
-> 完整代码及 15 个测试用例：[examples/python/](examples/python/)
+> 完整代码及 17 个测试用例：[examples/python/](examples/python/)
 
 ### 8.2 Java
 
@@ -2090,7 +2110,7 @@ System.out.println("会话ID: " + result.getSessionId());
 ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), null);
 ```
 
-> 完整代码及 16 个测试用例：[examples/java/](examples/java/)
+> 完整代码及 18 个测试用例：[examples/java/](examples/java/)
 
 ---
 
@@ -2129,15 +2149,9 @@ result3 = client.execute_chat("写单元测试代码", session_id=sid)
 
 通过对话创建定时任务，让 Agent 在指定时间自动执行并推送结果。
 
-**1. 配置消息通知（config.yaml）：**
+**1. 配置消息通知（Web 设置面板）：**
 
-```yaml
-message:
-  senders:
-    webhook:
-      enabled: true
-      url: "https://hooks.slack.com/services/xxx"
-```
+登录 Web 界面，进入 **设置 → 配置**，在「Webhook 通知」分组中填写推送地址（如 `https://hooks.slack.com/services/xxx`）并打开启用开关，保存即生效。
 
 **2. 通过对话创建任务：**
 
@@ -2207,7 +2221,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **解决：**
 - 降低请求频率，等待当前请求完成后再发起下一条
-- 可通过配置文件调整 `rate_limit.default_qps` 和 `rate_limit.default_concurrency`
+- 可在 Web 设置面板「配置」分区调整默认 QPS 与默认并发（对应 `rate_limit.default_qps` 和 `rate_limit.default_concurrency`），保存即生效
 
 ---
 
@@ -2240,7 +2254,7 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q8: 如何创建定时任务
 
-**说明：** 定时任务通过对话创建，不使用 API 直接创建（需先在 `config.yaml` 中开启 `schedule.enabled: true`）。
+**说明：** 定时任务通过对话创建，不使用 API 直接创建（需先开启 `schedule.enabled: true`，可在 Web 设置面板「配置」分区打开定时任务开关，保存即生效）。
 
 - 在对话中用自然语言描述需求（如「每天早上 9 点帮我生成报表」）
 - Agent 自动调用 `schedule_create` 工具创建任务
@@ -2271,7 +2285,7 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q11: 通知渠道如何配置
 
-1. 在 `config.yaml` 中启用所需 sender（webhook / email）
+1. 登录 Web 界面，在 **设置 → 配置** 的「Webhook 通知」/「邮件通知」分组中启用所需渠道，保存即生效
 2. 创建任务时通过 `notify_on_success` / `notify_on_failure` 指定渠道
 3. stdout sender 始终启用，无需配置
 
@@ -2282,8 +2296,8 @@ export OPENAI_API_KEY="your-api-key"
 ### Q12: 配置修改后需要重启吗
 
 **需要重启的配置：**
-- Server、Security、Rate Limit、Memory、Logging、Schedule、Message 配置（`config.yaml`）
-- 数据库配置（`env.yaml`）
+- `bootstrap.yaml` 的全部配置项：Agent 元信息、Server、Logging、数据库连接、Message 的 `queue_size` / `workers`、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`
+- JWT 签名密钥与 API Key 请求头名称（数据库配置表，启动时读取一次）
 - MCP 配置文件（`mcp/*.json`）
 - 子 Agent 定义（`subagents/<name>/agent.md`）
 
@@ -2291,6 +2305,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **不需要重启的配置：**
 - 模型配置：通过 Web UI（设置 → 模型）管理，存储在数据库中，增删改立即生效
+- 业务配置（记忆、推理循环、子 Agent、附件、限流、定时任务开关、Webhook / 邮件通知渠道）：在 Web 设置面板「配置」分区调整，保存即生效
 - Skills（`SKILL.md`）：支持热加载
 - GROOT.md：支持热加载
 - 定时任务：存储在数据库中，由 sync 机制自动同步到调度器，无需重启
@@ -2301,7 +2316,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **原因：** 调度接口只在 Leader 实例且 `schedule.enabled: true` 时可用；当前实例是 Follower，或配置中未开启调度。
 
-**解决：** 在 `config.yaml` 中开启 `schedule.enabled: true` 并重启；集群部署时在 Web 界面 **设置 → 集群管理** 中确认 Leader 地址，把调度管理请求发往 Leader。
+**解决：** 在 Web 设置面板「配置」分区打开定时任务开关，保存即生效（开关存放在数据库配置表中）；集群部署时在 Web 界面 **设置 → 集群管理** 中确认 Leader 地址，把调度管理请求发往 Leader。
 
 ---
 
@@ -2323,7 +2338,7 @@ export OPENAI_API_KEY="your-api-key"
 |------|------|------|
 | `OPENAI_API_KEY` | OpenAI API 密钥 | Web UI 模型配置的 api_key 填写 `${OPENAI_API_KEY}` 时需设置 |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | Web UI 模型配置的 api_key 填写 `${DEEPSEEK_API_KEY}` 时需设置 |
-| `GROOT_DB_PASSWORD` | 数据库密码 | `env.yaml` 的 DSN 中有引用时需设置 |
+| `GROOT_DB_PASSWORD` | 数据库密码 | `bootstrap.yaml` 的 DSN 中有引用时需设置 |
 
 > **判断方法：** 查看配置文件或 Web UI 模型配置中是否使用 `${VAR_NAME}` 格式引用。如果引用了某个变量，则需设置对应的环境变量；如果直接写明文密钥，则不需要设置环境变量。变量名可自定义。
 
@@ -2333,8 +2348,7 @@ export OPENAI_API_KEY="your-api-key"
 
 | 路径 | 说明 |
 |------|------|
-| `{GROOT_HOME}/config.yaml` | 主配置文件（业务配置） |
-| `{GROOT_HOME}/env.yaml` | 环境配置文件（数据库凭据） |
+| `{GROOT_HOME}/bootstrap.yaml` | 配置文件（服务、日志、数据库连接等启动配置） |
 | `{GROOT_HOME}/GROOT.md` | 项目规范文件 |
 | `{GROOT_HOME}/groot.db` | SQLite 数据库文件（默认模式） |
 | `{GROOT_HOME}/skills/{name}/SKILL.md` | Skill 定义文件 |
@@ -2383,6 +2397,8 @@ export OPENAI_API_KEY="your-api-key"
 | 400 | `attachment_missing_content` | 附件缺少内容 |
 | 400 | `attachment_decode_error` | 附件 Base64 解码失败 |
 | 400 | `attachment_validation_error` | 其他附件校验失败 |
+| 400 | `unsupported_type` | 转录音频扩展名不受支持（支持 webm/mp3/mp4/mpeg/mpga/m4a/wav/ogg/flac） |
+| 400 | `file_too_large` | 转录音频超过 `attachment.max_size` 单文件上限 |
 | 401 | `unauthorized` | API Key 无效、过期、已删除或缺失 |
 | 403 | `forbidden` | API Key 权限不足 |
 | 404 | `session_not_found` | 会话不存在 |
@@ -2395,6 +2411,7 @@ export OPENAI_API_KEY="your-api-key"
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
 | 500 | `schedule_error` | 定时任务操作失败 |
+| 502 | `upstream_error` | 上游转录服务出错（连接超时、鉴权失败、模型拒绝），`message` 透传上游原文 |
 | 503 | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或 `schedule.enabled` 未开启） |
 
 ### E. 联系与支持

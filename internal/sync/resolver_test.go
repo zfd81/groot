@@ -36,14 +36,14 @@ func TestResolveLocalPaths_SpecificSkill(t *testing.T) {
 
 func TestResolveLocalPaths_FileResource(t *testing.T) {
 	homeDir := t.TempDir()
-	os.WriteFile(filepath.Join(homeDir, "config.yaml"), []byte("agent: groot\n"), 0644)
+	os.WriteFile(filepath.Join(homeDir, "GROOT.md"), []byte("# GROOT\n"), 0644)
 
-	paths, err := ResolveLocalPaths(homeDir, []string{"config.yaml"})
+	paths, err := ResolveLocalPaths(homeDir, []string{"GROOT.md"})
 	if err != nil {
 		t.Fatalf("ResolveLocalPaths: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != "config.yaml" {
-		t.Errorf("expected [config.yaml], got %v", paths)
+	if len(paths) != 1 || paths[0] != "GROOT.md" {
+		t.Errorf("expected [GROOT.md], got %v", paths)
 	}
 }
 
@@ -51,19 +51,19 @@ func TestResolveLocalPaths_DefaultAll(t *testing.T) {
 	homeDir := t.TempDir()
 	// 只创建部分资源
 	os.MkdirAll(filepath.Join(homeDir, "skills", "w"), 0755)
-	os.WriteFile(filepath.Join(homeDir, "config.yaml"), []byte(""), 0644)
+	os.WriteFile(filepath.Join(homeDir, "GROOT.md"), []byte(""), 0644)
 
 	paths, err := ResolveLocalPaths(homeDir, nil) // nil = all
 	if err != nil {
 		t.Fatalf("ResolveLocalPaths: %v", err)
 	}
-	// 应当包含 config.yaml 和 skills/w,不应包含不存在的 mcp / subagents / GROOT.md
+	// 应当包含 GROOT.md 和 skills/w,不应包含不存在的 mcp / subagents
 	found := map[string]bool{}
 	for _, p := range paths {
 		found[p] = true
 	}
-	if !found["config.yaml"] {
-		t.Error("expected config.yaml in default resolve")
+	if !found["GROOT.md"] {
+		t.Error("expected GROOT.md in default resolve")
 	}
 	if !found["skills/w"] {
 		t.Error("expected skills/w in default resolve")

@@ -115,10 +115,11 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("task 长度超过 %d 字符上限", t.maxTaskLen)
 	}
 
-	if err := t.registry.Acquire(ctx); err != nil {
+	release, err := t.registry.Acquire(ctx)
+	if err != nil {
 		return "", fmt.Errorf("acquire subagent semaphore: %w", err)
 	}
-	defer t.registry.Release()
+	defer release()
 
 	execCtx, cancel := context.WithTimeout(ctx, t.execTimeout)
 	defer cancel()

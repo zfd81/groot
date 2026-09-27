@@ -310,8 +310,8 @@ func (s *Service) Mkdir(dirRel, name string) error {
 		return err
 	}
 	// 只读判定先于重名判定：只读文件名不允许被目录占位。
-	// 只读规则只命中 home 根下的 env.yaml/config.yaml，而根已被上面的
-	// CanUpload 挡掉，因此这里目前不可达，仅作防御——只读名单若日后扩展到
+	// 只读规则只命中 home 根下的 bootstrap.yaml/config.yaml/env.yaml，而根已被
+	// 上面的 CanUpload 挡掉，因此这里目前不可达，仅作防御——只读名单若日后扩展到
 	// 子目录，顺序仍然正确。
 	if s.res.ReadOnly(n) {
 		return ErrReadOnly

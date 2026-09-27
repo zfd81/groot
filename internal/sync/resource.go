@@ -24,10 +24,10 @@ func invalidPathf(format string, args ...any) error {
 	return &invalidPathError{msg: fmt.Sprintf(format, args...)}
 }
 
-// SyncableResourceRoots 是受 sync 管理的根路径白名单。
-// env.yaml / memory / schedules / cluster 不在此列。
+// SyncableResourceRoots 是受 sync 管理的根路径白名单，全部为纯资源文件。
+// 配置不在此列：bootstrap.yaml 是节点本地的启动配置（含数据库凭据，
+// 且各节点可以不同），业务配置经数据库配置表在集群内共享。
 var SyncableResourceRoots = []string{
-	"config.yaml",
 	"skills",
 	"subagents",
 	"mcp",
@@ -37,7 +37,7 @@ var SyncableResourceRoots = []string{
 // ValidateSyncPath 校验用户指定的 path 是否在白名单范围内且符合资源对象操作规则:
 //   - 必须以白名单根为前缀
 //   - 不允许直接操作 skills/{name}/SKILL.md (必须操作整个 skill 目录)
-//   - 不允许操作 env.yaml 等黑名单路径
+//   - 不允许操作 bootstrap.yaml / env.yaml 等白名单之外的路径
 func ValidateSyncPath(path string) error {
 	if path == "" {
 		return invalidPathf("sync: empty path")

@@ -27,7 +27,7 @@ type SyncManager interface {
 }
 
 // ErrSyncDisabled 表示当前未启用数据库模式,sync 命令不可用。
-var ErrSyncDisabled = errors.New("sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 env.yaml 中配置 database 节")
+var ErrSyncDisabled = errors.New("sync: 仅在 MySQL/PostgreSQL 模式下可用 — 请在 bootstrap.yaml 中配置 database 节")
 
 // disabledSyncManager 是 local 模式下的空实现,所有方法返回 ErrSyncDisabled。
 type disabledSyncManager struct{}

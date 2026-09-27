@@ -47,15 +47,15 @@ func TestComputeDiff_Added(t *testing.T) {
 	localDir := t.TempDir()
 	remoteDir := t.TempDir()
 
-	makeFile(t, localDir, "config.yaml", "agent:\n  name: groot\n")
+	makeFile(t, localDir, "GROOT.md", "# GROOT\n")
 
 	r := resourcelocal.New(remoteDir)
-	result, err := ComputeDiff(r, localDir, []string{"config.yaml"})
+	result, err := ComputeDiff(r, localDir, []string{"GROOT.md"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
-	if len(result.Added) != 1 || result.Added[0] != "config.yaml" {
-		t.Errorf("expected Added=[config.yaml], got %+v", result)
+	if len(result.Added) != 1 || result.Added[0] != "GROOT.md" {
+		t.Errorf("expected Added=[GROOT.md], got %+v", result)
 	}
 	if len(result.Modified) != 0 || len(result.Removed) != 0 {
 		t.Errorf("unexpected changes: %+v", result)
@@ -83,17 +83,17 @@ func TestComputeDiff_Same(t *testing.T) {
 	localDir := t.TempDir()
 	remoteDir := t.TempDir()
 
-	content := "agent:\n  name: groot\n"
-	makeFile(t, localDir, "config.yaml", content)
-	makeFile(t, remoteDir, "config.yaml", content)
+	content := "# GROOT\n"
+	makeFile(t, localDir, "GROOT.md", content)
+	makeFile(t, remoteDir, "GROOT.md", content)
 
 	r := resourcelocal.New(remoteDir)
-	result, err := ComputeDiff(r, localDir, []string{"config.yaml"})
+	result, err := ComputeDiff(r, localDir, []string{"GROOT.md"})
 	if err != nil {
 		t.Fatalf("ComputeDiff: %v", err)
 	}
 	if len(result.Same) != 1 {
-		t.Errorf("expected Same=[config.yaml], got %+v", result)
+		t.Errorf("expected Same=[GROOT.md], got %+v", result)
 	}
 }
 

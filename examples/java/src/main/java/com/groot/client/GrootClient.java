@@ -239,6 +239,32 @@ public class GrootClient implements AutoCloseable {
         return executeJson(req);
     }
 
+    /**
+     * 音频转文字。
+     *
+     * @param audioFile 音频文件（webm / mp3 / wav 等）
+     * @param model     转录模型名；null 或空串表示使用服务端设置中配置的语音模型
+     * @param language  语种提示（如 "zh"）；null 或空串表示不指定
+     * @return 含 text（识别文本）与 model（实际使用的模型）的 JSON
+     */
+    public JsonNode transcribe(java.io.File audioFile, String model, String language) throws IOException {
+        MultipartBody.Builder form = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", audioFile.getName(),
+                        RequestBody.create(audioFile, MediaType.get("application/octet-stream")));
+        if (model != null && !model.isEmpty()) {
+            form.addFormDataPart("model", model);
+        }
+        if (language != null && !language.isEmpty()) {
+            form.addFormDataPart("language", language);
+        }
+        Request req = new Request.Builder()
+                .url(baseUrl + "/audio/transcriptions")
+                .post(form.build())
+                .build();
+        return executeJson(req);
+    }
+
     // ==================== 查询接口 ====================
 
     /** 健康检查。 */

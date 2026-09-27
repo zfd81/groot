@@ -12,48 +12,79 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 )
 
+// registration 把一个渠道的发送器实例与其配置绑在一起，
+// 保证两者总是被原子地一起替换或删除。
+type registration struct {
+	sender Sender
+	cfg    config.SenderConf
+}
+
 // Layer is the message notification layer
+//
+// senders 可在运行期被替换（设置面板改完即生效），由 mu 保护。
+// 取发送器与投递分成两步：先在锁内拿到实例，
+// 再在锁外调用 Send——发送是网络操作，持锁会把整个消息层卡住。
 type Layer struct {
-	queue         chan *sendJob
-	queueSize     int
-	senders       map[string]Sender
-	senderConfigs map[string]config.SenderConf
-	workers       int
-	stopCh        chan struct{}
-	wg            sync.WaitGroup
-	log           *logger.Logger
+	mu        sync.RWMutex
+	queue     chan *sendJob
+	queueSize int
+	senders   map[string]registration
+	workers   int
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+	log       *logger.Logger
 }
 
 // NewLayer creates a new message layer
 func NewLayer(cfg config.MessageConfig, log *logger.Logger) *Layer {
 	return &Layer{
-		queue:         make(chan *sendJob, cfg.QueueSize),
-		queueSize:     cfg.QueueSize,
-		senders:       make(map[string]Sender),
-		senderConfigs: make(map[string]config.SenderConf),
-		workers:       cfg.Workers,
-		stopCh:        make(chan struct{}),
-		log:           log,
+		queue:     make(chan *sendJob, cfg.QueueSize),
+		queueSize: cfg.QueueSize,
+		senders:   make(map[string]registration),
+		workers:   cfg.Workers,
+		stopCh:    make(chan struct{}),
+		log:       log,
 	}
 }
 
-// Register registers a sender with its config
+// Register registers a sender with its config.
+// 启动路径使用；运行期改动走 SetSender。
 func (l *Layer) Register(name string, sender Sender, cfg config.SenderConf) {
-	l.senders[name] = sender
-	l.senderConfigs[name] = cfg
+	l.SetSender(name, sender, cfg)
 }
 
-// isSenderEnabled checks if a channel is available: registered and enabled
-func (l *Layer) isSenderEnabled(name string) bool {
-	cfg, ok := l.senderConfigs[name]
-	if !ok {
-		return false
+// SetSender 注册或替换一个发送器，随后开始处理的消息即走新实例。
+// 正在投递中的消息握着旧实例的指针，按旧配置发完——
+// 中途换掉会让一次已开始的网络请求结果无处归属。
+func (l *Layer) SetSender(name string, sender Sender, cfg config.SenderConf) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.senders[name] = registration{sender: sender, cfg: cfg}
+}
+
+// RemoveSender 注销一个发送器，此后该渠道被视为不可用。
+func (l *Layer) RemoveSender(name string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.senders, name)
+}
+
+// resolve 在锁内取出一个可用渠道的发送器实例。
+// 第二个返回值为 false 表示未注册或已禁用。
+func (l *Layer) resolve(name string) (Sender, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	r, ok := l.senders[name]
+	if !ok || !r.cfg.Enabled {
+		return nil, false
 	}
-	if !cfg.Enabled {
-		return false
-	}
-	_, registered := l.senders[name]
-	return registered
+	return r.sender, true
+}
+
+// ChannelEnabled 报告某渠道当前是否可投递：已注册且已启用。
+func (l *Layer) ChannelEnabled(name string) bool {
+	_, ok := l.resolve(name)
+	return ok
 }
 
 // Start launches the worker goroutine pool
@@ -135,9 +166,11 @@ func (l *Layer) processJob(job *sendJob) {
 	}()
 
 	var enabledChannels []string
+	var targets []Sender
 	for _, name := range job.channels {
-		if l.isSenderEnabled(name) {
+		if s, ok := l.resolve(name); ok {
 			enabledChannels = append(enabledChannels, name)
+			targets = append(targets, s)
 		}
 	}
 
@@ -157,7 +190,7 @@ func (l *Layer) processJob(job *sendJob) {
 	var wg sync.WaitGroup
 	for i, name := range enabledChannels {
 		wg.Add(1)
-		go func(idx int, channelName string) {
+		go func(idx int, channelName string, sender Sender) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -173,8 +206,8 @@ func (l *Layer) processJob(job *sendJob) {
 					)
 				}
 			}()
-			results[idx] = l.senders[channelName].Send(ctx, job.event)
-		}(i, name)
+			results[idx] = sender.Send(ctx, job.event)
+		}(i, name, targets[i])
 	}
 	wg.Wait()
 

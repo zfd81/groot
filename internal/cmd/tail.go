@@ -114,25 +114,24 @@ type LogConfig struct {
 	} `yaml:"logging"`
 }
 
-// loadConfig reads config.yaml from homeDir and parses it into LogConfig
-// If the file doesn't exist, returns default config
+// loadConfig 读取日志目录配置：bootstrap.yaml 优先，缺失时回落老
+// config.yaml，都没有时返回默认值。两个文件的 logging 节结构相同。
 func loadConfig(homeDir string) (*LogConfig, error) {
-	configPath := filepath.Join(homeDir, "config.yaml")
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return getDefaultLogConfig(), nil
+	for _, name := range []string{config.BootstrapFileName, "config.yaml"} {
+		data, err := os.ReadFile(filepath.Join(homeDir, name))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		var cfg LogConfig
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+		return &cfg, nil
 	}
-
-	var cfg LogConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
-	}
-
-	return &cfg, nil
+	return getDefaultLogConfig(), nil
 }
 
 // getDefaultLogConfig returns a LogConfig with default values

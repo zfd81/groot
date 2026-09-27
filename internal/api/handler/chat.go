@@ -15,24 +15,23 @@ import (
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/attachment"
-	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 // ChatHandler 对话处理器
 type ChatHandler struct {
-	memory            *memory.Manager
-	runtimeState      *agent.RuntimeState
-	agentExecutor     *agent.Executor
-	mcpManager        *mcp.Manager
-	subAgentRegistry  *agent.SubAgentRegistry
-	attachmentHandler *attachment.Handler
-	models            *llm.ModelService
-	config            config.Config
-	log               *logger.Logger
+	memory           *memory.Manager
+	runtimeState     *agent.RuntimeState
+	agentExecutor    *agent.Executor
+	mcpManager       *mcp.Manager
+	subAgentRegistry *agent.SubAgentRegistry
+	models           *llm.ModelService
+	settings         *setting.Settings
+	log              *logger.Logger
 }
 
 // NewChatHandler 创建对话处理器
@@ -42,21 +41,19 @@ func NewChatHandler(
 	executor *agent.Executor,
 	mcpMgr *mcp.Manager,
 	subAgentReg *agent.SubAgentRegistry,
-	attHandler *attachment.Handler,
 	models *llm.ModelService,
-	cfg config.Config,
+	settings *setting.Settings,
 	log *logger.Logger,
 ) *ChatHandler {
 	return &ChatHandler{
-		memory:            mem,
-		runtimeState:      runtime,
-		agentExecutor:     executor,
-		mcpManager:        mcpMgr,
-		subAgentRegistry:  subAgentReg,
-		attachmentHandler: attHandler,
-		models:            models,
-		config:            cfg,
-		log:               log,
+		memory:           mem,
+		runtimeState:     runtime,
+		agentExecutor:    executor,
+		mcpManager:       mcpMgr,
+		subAgentRegistry: subAgentReg,
+		models:           models,
+		settings:         settings,
+		log:              log,
 	}
 }
 
@@ -151,8 +148,17 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 5. 附件校验（在会话处理之前）
-	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
+	// 5. 运行时配置：本次请求读一次，附件校验与历史窗口共用同一份快照，
+	// 避免两处读到不同版本的配置。读取失败退回 YAML 值，配置表故障不阻断对话。
+	rt, rtErr := h.settings.Runtime(ctx)
+	if rtErr != nil {
+		h.log.Error("读取运行时配置失败，本次请求使用 YAML 默认值", zap.Error(rtErr))
+		rt = h.settings.RuntimeStatic()
+	}
+
+	// 5.1. 附件校验（在会话处理之前）
+	if len(req.Attachments) > 0 {
+		attachmentHandler := attachment.NewHandler(rt.Attachment)
 		// 转换为 attachment.Attachment 格式
 		attInput := make([]attachment.Attachment, len(req.Attachments))
 		for i, att := range req.Attachments {
@@ -162,7 +168,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 				Content: att.Content,
 			}
 		}
-		if err := h.attachmentHandler.Validate(attInput); err != nil {
+		if err := attachmentHandler.Validate(attInput); err != nil {
 			// Check if it's an AttachmentError with specific code
 			if attErr, ok := err.(*attachment.AttachmentError); ok {
 				rc.JSON(400, utils.H{"status": attErr.Code, "message": attErr.Message})
@@ -192,7 +198,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		// 使用新方法，传入 token 预算
 		historyMessages, err = h.memory.GetContextMessagesWithTokenLimit(
 			sessionID,
-			h.config.Memory.HistoryWindow,
+			rt.Memory.HistoryWindow,
 			mdl.MaxContextTokens,
 		)
 		if err != nil {
@@ -228,7 +234,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 10. 处理附件
 	var multimodalContents []agent.MultimodalContent
-	if len(req.Attachments) > 0 && h.attachmentHandler != nil {
+	if len(req.Attachments) > 0 {
 		for _, att := range req.Attachments {
 			switch att.Type {
 			case "file", "image", "audio", "video":

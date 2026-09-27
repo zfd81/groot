@@ -12,6 +12,7 @@ import (
 	"github.com/zfd81/groot/internal/repo/resourcedb"
 	"github.com/zfd81/groot/internal/repo/resourcelocal"
 	"github.com/zfd81/groot/internal/repo/scheduledb"
+	"github.com/zfd81/groot/internal/repo/settingdb"
 	"github.com/zfd81/groot/internal/repo/userdb"
 	"github.com/zfd81/groot/internal/schedule"
 )
@@ -26,6 +27,7 @@ type Repos struct {
 	Model    repo.ModelRepo
 	APIKey   repo.APIKeyRepo
 	Message  repo.MessageRepo
+	Setting  repo.SettingRepo
 
 	// SyncResource 是配置同步(push/pull/diff)要比较的远端仓储。
 	// SQLite 单机模式下没有可比较的远端(Resource 指向本地文件系统,
@@ -55,6 +57,7 @@ func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
 		Model:    modeldb.New(sqlxDB, dialect),
 		APIKey:   apikeydb.New(sqlxDB, dialect),
 		Message:  messagedb.New(sqlxDB, dialect),
+		Setting:  settingdb.New(sqlxDB, dialect),
 
 		SyncResource: syncResourceRepo,
 	}

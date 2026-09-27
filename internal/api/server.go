@@ -14,7 +14,6 @@ import (
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/api/websession"
-	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/cluster"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/lifecycle"
@@ -22,9 +21,11 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
+	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/schedule"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 // Server represents the API server
@@ -52,6 +53,8 @@ func NewServer(
 	apiKeys repo.APIKeyRepo,
 	members repo.MemberRepo,
 	syncResources repo.ResourceRepo, // 配置同步的远端仓储；SQLite 单机模式下为 nil（同步禁用）
+	settings *setting.Settings, // 配置对象：YAML 与配置表的统一读取入口
+	msgLayer *message.Layer, // 消息层：发送器配置保存后在此注册
 	clusterInst *cluster.Cluster, // 集群实例：提供本机 reg_id 与消息发送能力
 	role lifecycle.Role, // 进程角色：决定健康检查的 process_mode 与是否支持重启
 ) *Server {
@@ -66,9 +69,6 @@ func NewServer(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
 		server.WithMaxRequestBodySize(maxBodySize),
 	)
-
-	// Create attachment handler (temp directory is fixed at {attachmentTempBase}/temp)
-	attHandler := attachment.NewHandler(cfg.Attachment)
 
 	// Web 登录会话存储：认证始终启用，会话固定 1 小时且活跃时滑动续期。
 	webStore := websession.NewStore(time.Hour)
@@ -86,7 +86,7 @@ func NewServer(
 	rateLimitMW := middleware.NewRateLimitMiddleware(rateLimiter)
 
 	// Create handlers
-	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, subAgentReg, attHandler, models, cfg, log)
+	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, subAgentReg, models, settings, log)
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
 	sessionH := handler.NewSessionHandler(mem)
@@ -95,7 +95,7 @@ func NewServer(
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
 	modelsH := handler.NewModelsHandler(models, log)
-	scheduleH := handler.NewScheduleHandler(scheduleMgr, log)
+	scheduleH := handler.NewScheduleHandler(scheduleMgr, settings, log)
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)
 	apiKeysH := handler.NewAPIKeysHandler(apiKeys, cfg.Security, log)
 	// 集群消息服务未挂接时 sender 必须是 nil 接口，而不是包着 nil 指针的非空接口
@@ -116,10 +116,20 @@ func NewServer(
 	// 配置同步：syncResources 为 nil 时端点统一返回 409 sync_disabled
 	syncH := handler.NewSyncHandler(homeDir, syncResources)
 
+	transcriptionH := handler.NewTranscriptionHandler(settings, models, log)
+	settingH := handler.NewSettingHandler(handler.SettingHandlerDeps{
+		Settings: settings,
+		Models:   models,
+		Registry: subAgentReg,
+		Limiter:  rateLimiter,
+		Messages: msgLayer,
+		Log:      log,
+	})
+
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, settingH)
 
 	return &Server{
 		hertz:  h,

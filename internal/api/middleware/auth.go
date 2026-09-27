@@ -114,6 +114,12 @@ func getRequiredPermission(path, method string) string {
 		return "chat"
 	}
 
+	// Transcription endpoint (POST /audio/transcriptions)：语音输入是聊天的一种输入方式，
+	// 与 /chat 共用 chat 权限，不另设权限点
+	if path == "/audio/transcriptions" && method == "POST" {
+		return "chat"
+	}
+
 	// Status endpoint (GET /chat/status/:sid)
 	if strings.HasPrefix(path, "/chat/status/") {
 		return "status"

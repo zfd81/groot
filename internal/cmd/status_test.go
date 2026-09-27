@@ -454,3 +454,42 @@ func TestProcessModeLabel(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusPort_FromBootstrap 端口取自 bootstrap.yaml
+func TestStatusPort_FromBootstrap(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "bootstrap.yaml"), []byte("server:\n  port: 9191\n"), 0600)
+
+	port, err := resolveStatusPort(home)
+	if err != nil {
+		t.Fatalf("resolveStatusPort: %v", err)
+	}
+	if port != 9191 {
+		t.Errorf("port = %d, want 9191", port)
+	}
+}
+
+// TestStatusPort_LegacyFallback bootstrap 缺失时回落老 config.yaml
+func TestStatusPort_LegacyFallback(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "config.yaml"), []byte("server:\n  port: 9292\n"), 0600)
+
+	port, err := resolveStatusPort(home)
+	if err != nil {
+		t.Fatalf("resolveStatusPort: %v", err)
+	}
+	if port != 9292 {
+		t.Errorf("port = %d, want 9292", port)
+	}
+}
+
+// TestStatusPort_NoFiles 两个文件都没有时取默认端口
+func TestStatusPort_NoFiles(t *testing.T) {
+	port, err := resolveStatusPort(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveStatusPort: %v", err)
+	}
+	if port != 8080 {
+		t.Errorf("port = %d, want 8080", port)
+	}
+}

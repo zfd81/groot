@@ -32,18 +32,18 @@ func TestSyncManager_Diff_NoFiles(t *testing.T) {
 func TestSyncManager_Push_SingleFile(t *testing.T) {
 	mgr, homeDir, remoteDir := newTestManager(t)
 
-	os.WriteFile(filepath.Join(homeDir, "config.yaml"), []byte("agent: groot\n"), 0644)
+	os.WriteFile(filepath.Join(homeDir, "GROOT.md"), []byte("# GROOT\n"), 0644)
 
-	if err := mgr.Push([]string{"config.yaml"}); err != nil {
+	if err := mgr.Push([]string{"GROOT.md"}); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 
-	remote := filepath.Join(remoteDir, "config.yaml")
+	remote := filepath.Join(remoteDir, "GROOT.md")
 	data, err := os.ReadFile(remote)
 	if err != nil {
 		t.Fatalf("remote file not found after push: %v", err)
 	}
-	if string(data) != "agent: groot\n" {
+	if string(data) != "# GROOT\n" {
 		t.Errorf("remote content mismatch: %q", data)
 	}
 }

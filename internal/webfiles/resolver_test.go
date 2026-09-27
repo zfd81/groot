@@ -88,14 +88,19 @@ func TestResolver_Hidden(t *testing.T) {
 	}
 }
 
-// TestResolver_ReadOnly 验证只读规则只覆盖根目录的两个配置文件。
+// TestResolver_ReadOnly 验证只读规则覆盖根目录的三个配置文件：
+// bootstrap.yaml（当前配置）与迁移遗留的 config.yaml / env.yaml。
 func TestResolver_ReadOnly(t *testing.T) {
 	r, _ := newResolverForTest(t)
-	if !r.ReadOnly("env.yaml") || !r.ReadOnly("config.yaml") {
-		t.Error("env.yaml/config.yaml 应为只读")
+	for _, n := range []string{"bootstrap.yaml", "config.yaml", "env.yaml"} {
+		if !r.ReadOnly(n) {
+			t.Errorf("ReadOnly(%q) = false, want true", n)
+		}
 	}
-	if r.ReadOnly("skills/config.yaml") || r.ReadOnly("GROOT.md") {
-		t.Error("非根配置文件不应只读")
+	for _, n := range []string{"skills/bootstrap.yaml", "GROOT.md"} {
+		if r.ReadOnly(n) {
+			t.Errorf("ReadOnly(%q) = true, want false", n)
+		}
 	}
 }
 
@@ -124,7 +129,7 @@ func TestResolver_CaseInsensitive(t *testing.T) {
 			t.Errorf("Hidden(%q) = false, want true", n)
 		}
 	}
-	for _, n := range []string{"Env.yaml", "CONFIG.YAML"} {
+	for _, n := range []string{"Env.yaml", "CONFIG.YAML", "Bootstrap.YAML"} {
 		if !r.ReadOnly(n) {
 			t.Errorf("ReadOnly(%q) = false, want true", n)
 		}

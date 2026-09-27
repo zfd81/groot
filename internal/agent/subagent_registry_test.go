@@ -38,19 +38,107 @@ func TestSubAgentRegistry_GetMissing(t *testing.T) {
 func TestSubAgentRegistry_AcquireRelease(t *testing.T) {
 	r := newEmptyRegistry(1)
 	ctx := context.Background()
-	if err := r.Acquire(ctx); err != nil {
+	release, err := r.Acquire(ctx)
+	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
 	timed, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
-	if err := r.Acquire(timed); err == nil {
+	if _, err := r.Acquire(timed); err == nil {
 		t.Fatal("second acquire should fail due to ctx timeout")
 	}
-	r.Release()
-	if err := r.Acquire(ctx); err != nil {
+	release()
+	release2, err := r.Acquire(ctx)
+	if err != nil {
 		t.Fatalf("acquire after release: %v", err)
 	}
-	r.Release()
+	release2()
+}
+
+// TestSubAgentRegistry_ReleaseIsIdempotent 验证重复调用释放函数不会多还名额。
+// 多还会让 semaphore 的计数变成负债，后续获取凭空超出上限。
+func TestSubAgentRegistry_ReleaseIsIdempotent(t *testing.T) {
+	r := newEmptyRegistry(1)
+	ctx := context.Background()
+	release, err := r.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+	release()
+
+	// 容量仍应是 1：占满后第二次获取必须阻塞到超时
+	held, err := r.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("re-acquire: %v", err)
+	}
+	defer held()
+	timed, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if _, err := r.Acquire(timed); err == nil {
+		t.Fatal("capacity leaked: acquire should have blocked")
+	}
+}
+
+// TestSubAgentRegistry_SetMaxConcurrency 验证调整上限对随后的获取生效，
+// 且旧名额的释放不会把容量还到新 semaphore 上。
+func TestSubAgentRegistry_SetMaxConcurrency(t *testing.T) {
+	r := newEmptyRegistry(1)
+	ctx := context.Background()
+
+	// 占满旧上限
+	releaseOld, err := r.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire before resize: %v", err)
+	}
+
+	r.SetMaxConcurrency(2)
+	if got := r.MaxConcurrency(); got != 2 {
+		t.Fatalf("MaxConcurrency() = %d, want 2", got)
+	}
+
+	// 新上限为 2，应能再取两个名额
+	r1, err := r.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("first acquire after resize: %v", err)
+	}
+	r2, err := r.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("second acquire after resize: %v", err)
+	}
+
+	// 第三个应被新上限挡住
+	timed, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if _, err := r.Acquire(timed); err == nil {
+		t.Fatal("third acquire should be blocked by new limit")
+	}
+
+	// 归还旧名额：它属于旧 semaphore，不应放宽新上限
+	releaseOld()
+	timed2, cancel2 := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel2()
+	if _, err := r.Acquire(timed2); err == nil {
+		t.Fatal("old release leaked capacity into the new semaphore")
+	}
+
+	r1()
+	r2()
+	r3, err := r.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire after releasing new holders: %v", err)
+	}
+	r3()
+}
+
+// TestSubAgentRegistry_SetMaxConcurrencyIgnoresNonPositive 验证非正数不改动上限。
+func TestSubAgentRegistry_SetMaxConcurrencyIgnoresNonPositive(t *testing.T) {
+	r := newEmptyRegistry(3)
+	r.SetMaxConcurrency(0)
+	r.SetMaxConcurrency(-1)
+	if got := r.MaxConcurrency(); got != 3 {
+		t.Fatalf("MaxConcurrency() = %d, want 3", got)
+	}
 }
 
 // TestSubAgentRegistry_BuildDescription 验证拼接出的描述按字典序包含每个子 Agent。

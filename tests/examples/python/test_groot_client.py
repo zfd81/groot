@@ -9,6 +9,7 @@ Usage:
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -28,6 +29,8 @@ class MockGrootHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/chat":
             self._handle_chat()
+        elif self.path == "/audio/transcriptions":
+            self._handle_transcription()
         else:
             self.send_error(404)
 
@@ -89,6 +92,26 @@ class MockGrootHandler(BaseHTTPRequestHandler):
         payload = "".join(events)
         self.wfile.write(payload.encode())
         self.wfile.flush()
+
+    def _handle_transcription(self):
+        """模拟 POST /audio/transcriptions：校验 multipart，回显 model 字段。"""
+        ctype = self.headers.get("Content-Type", "")
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length > 0 else b""
+        if not ctype.startswith("multipart/form-data"):
+            self._json_response(400, {"status": "invalid_request", "message": "expect multipart"})
+            return
+        if b'name="file"' not in body:
+            self._json_response(400, {"status": "invalid_request", "message": "缺少 file 字段"})
+            return
+        # 从表单里取 model；客户端没传时模拟服务端回落到配置表里的值
+        model = "whisper-1"
+        marker = b'name="model"\r\n\r\n'
+        if marker in body:
+            start = body.index(marker) + len(marker)
+            end = body.index(b"\r\n", start)
+            model = body[start:end].decode()
+        self._json_response(200, {"text": "你好，世界", "model": model})
 
     def _json_response(self, status, data):
         self.send_response(status)
@@ -211,3 +234,20 @@ class TestGrootClient(unittest.TestCase):
     def test_execute_chat_with_model(self):
         result = self.client.execute_chat("指令", model_name="gpt-4o")
         self.assertIsNotNone(result["session_id"])
+
+    def _tmp_audio(self):
+        f = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+        f.write(b"FAKE-AUDIO")
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_transcribe_default_model(self):
+        result = self.client.transcribe(self._tmp_audio())
+        self.assertEqual(result["text"], "你好，世界")
+        # 未指定 model 时由服务端回落到配置的语音模型
+        self.assertEqual(result["model"], "whisper-1")
+
+    def test_transcribe_explicit_model(self):
+        result = self.client.transcribe(self._tmp_audio(), model="my-asr", language="zh")
+        self.assertEqual(result["model"], "my-asr")

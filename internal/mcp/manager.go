@@ -15,20 +15,25 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 
-	"github.com/cloudwego/eino/components/tool"
 	mcpp "github.com/cloudwego/eino-ext/components/tool/mcp"
+	"github.com/cloudwego/eino/components/tool"
 
 	"github.com/zfd81/groot/internal/logger"
 )
 
+// BuiltinGroupSchedule 是内置调度工具的组名：RegisterBuiltinTools 写入
+// ToolInfo.MCP 的值与 SetBuiltinGate 的键都用它。
+const BuiltinGroupSchedule = "schedule"
+
 // Manager manages all MCP configurations and tool registry
 type Manager struct {
 	mcps         map[string]*MCPConfig
-	clients      map[string]client.MCPClient    // mcp-go clients per MCP
-	einoTools    map[string]tool.BaseTool       // eino tools from MCP servers
-	builtinTools map[string]tool.BaseTool       // built-in tools (e.g., schedule)
-	toolInfos    map[string]*ToolInfo           // tool metadata (for API)
-	errors       map[string]string              // MCP discovery errors
+	clients      map[string]client.MCPClient // mcp-go clients per MCP
+	einoTools    map[string]tool.BaseTool    // eino tools from MCP servers
+	builtinTools map[string]tool.BaseTool    // built-in tools (e.g., schedule)
+	toolInfos    map[string]*ToolInfo        // tool metadata (for API)
+	builtinGates map[string]func() bool      // 内置工具组的可见性门控，每次取用时求值
+	errors       map[string]string           // MCP discovery errors
 	logger       *logger.Logger
 	mu           sync.RWMutex
 }
@@ -41,13 +46,72 @@ func NewManager(log *logger.Logger) *Manager {
 		einoTools:    make(map[string]tool.BaseTool),
 		builtinTools: make(map[string]tool.BaseTool),
 		toolInfos:    make(map[string]*ToolInfo),
+		builtinGates: make(map[string]func() bool),
 		errors:       make(map[string]string),
 		logger:       log,
 	}
 }
 
-// GetTools returns all eino tools (MCP + builtin) for engine usage
+// SetBuiltinGate 给一组内置工具挂上可见性门控。group 与 RegisterBuiltinTools
+// 写入 ToolInfo.MCP 的值一致（调度工具为 BuiltinGroupSchedule）。
+//
+// 传函数而非布尔值，是为了把「是否可用」的求值推迟到每次取工具时：
+// 布尔值在挂载那一刻就被定死，改配置要重启才生效；函数则每次读到当前值，
+// 于是配置表一改，下一次对话就按新值走。
+//
+// 未挂门控的组一律可见，因此既有内置工具不受影响。
+func (m *Manager) SetBuiltinGate(group string, allow func() bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.builtinGates[group] = allow
+}
+
+// hiddenGroups 把各门控各求值一次，返回当前被挡住的组名集合。
+// 求值放在锁外：门控可能读配置表，不能让 I/O 占着 Manager 的锁；
+// 求值与过滤之间门控翻转属良性竞争，下一次调用即按新值走。
+//
+// 没有内置工具时不求值门控：Leader 降级后 UnregisterBuiltinTools 清空了
+// builtinTools 但门控仍挂着，此时求值只是白读一次配置表。
+func (m *Manager) hiddenGroups() map[string]struct{} {
+	m.mu.RLock()
+	if len(m.builtinTools) == 0 {
+		m.mu.RUnlock()
+		return nil
+	}
+	gates := make(map[string]func() bool, len(m.builtinGates))
+	for g, f := range m.builtinGates {
+		gates[g] = f
+	}
+	m.mu.RUnlock()
+
+	hidden := make(map[string]struct{}, len(gates))
+	for g, f := range gates {
+		if !f() {
+			hidden[g] = struct{}{}
+		}
+	}
+	return hidden
+}
+
+// builtinHidden 判断名为 name 的内置工具是否被挡住。调用方需持有读锁。
+// 只对 builtinTools 里的工具生效：MCP 工具不受门控影响，即便 MCP 名恰好与组名相同。
+func (m *Manager) builtinHidden(name string, hidden map[string]struct{}) bool {
+	if _, isBuiltin := m.builtinTools[name]; !isBuiltin {
+		return false
+	}
+	info, ok := m.toolInfos[name]
+	if !ok {
+		return false
+	}
+	_, h := hidden[info.MCP]
+	return h
+}
+
+// GetTools returns all eino tools (MCP + builtin) for engine usage.
+// 被门控挡住的内置工具不返回给模型。
 func (m *Manager) GetTools() []tool.BaseTool {
+	hidden := m.hiddenGroups()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -55,7 +119,10 @@ func (m *Manager) GetTools() []tool.BaseTool {
 	for _, t := range m.einoTools {
 		result = append(result, t)
 	}
-	for _, t := range m.builtinTools {
+	for name, t := range m.builtinTools {
+		if m.builtinHidden(name, hidden) {
+			continue
+		}
 		result = append(result, t)
 	}
 	return result
@@ -75,7 +142,7 @@ func (m *Manager) RegisterBuiltinTools(tools map[string]tool.BaseTool) {
 		m.toolInfos[name] = &ToolInfo{
 			Name:        info.Name,
 			Description: info.Desc,
-			MCP:         "schedule",
+			MCP:         BuiltinGroupSchedule,
 		}
 	}
 
@@ -154,12 +221,18 @@ func (m *Manager) Get(name string) (*MCPConfig, bool) {
 	return config, ok
 }
 
-// GetTool retrieves a tool by name
+// GetTool retrieves a tool by name.
+// 被门控挡住的内置工具按「不存在」返回，与 ListTools 口径一致。
 func (m *Manager) GetTool(name string) (*ToolInfo, bool) {
+	hidden := m.hiddenGroups()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	tool, ok := m.toolInfos[name]
-	return tool, ok
+	if !ok || m.builtinHidden(name, hidden) {
+		return nil, false
+	}
+	return tool, true
 }
 
 // List returns all registered MCPs
@@ -174,13 +247,20 @@ func (m *Manager) List() []*MCPConfig {
 	return result
 }
 
-// ListTools returns all registered tools metadata
+// ListTools returns all registered tools metadata.
+// 被门控挡住的内置工具不出现在结果里：清单是给使用者看的，
+// 列出一个模型拿不到的工具只会造成误解。
 func (m *Manager) ListTools() []*ToolInfo {
+	hidden := m.hiddenGroups()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make([]*ToolInfo, 0, len(m.toolInfos))
-	for _, tool := range m.toolInfos {
+	for name, tool := range m.toolInfos {
+		if m.builtinHidden(name, hidden) {
+			continue
+		}
 		result = append(result, tool)
 	}
 	return result
@@ -235,11 +315,20 @@ func (m *Manager) Count() int {
 	return len(m.mcps)
 }
 
-// ToolCount returns the number of registered tools
+// ToolCount 返回当前可见的工具数量，与 ListTools 同口径：
+// 被门控挡住的内置工具不计入。
 func (m *Manager) ToolCount() int {
+	hidden := m.hiddenGroups()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.toolInfos)
+	n := 0
+	for name := range m.toolInfos {
+		if !m.builtinHidden(name, hidden) {
+			n++
+		}
+	}
+	return n
 }
 
 // LoadAll loads all MCP configs from directory

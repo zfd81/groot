@@ -59,9 +59,12 @@ type SubAgentEntry struct {
 }
 
 // SubAgentRegistry 全局单例：所有子 Agent 的注册表 + 并发控制。
+//
+// sem 可在运行中被 SetMaxConcurrency 整体替换，故读写都须持 mu。
 type SubAgentRegistry struct {
 	entries map[string]*SubAgentEntry
 	sem     *semaphore.Weighted
+	maxConc int // sem 的当前容量，供 SetMaxConcurrency 判断是否需要替换
 	log     *logger.Logger
 	mu      sync.RWMutex
 }
@@ -74,6 +77,7 @@ func NewRegistryForTest(maxConc int) *SubAgentRegistry {
 	return &SubAgentRegistry{
 		entries: make(map[string]*SubAgentEntry),
 		sem:     semaphore.NewWeighted(int64(maxConc)),
+		maxConc: maxConc,
 	}
 }
 
@@ -100,14 +104,57 @@ func (r *SubAgentRegistry) Get(name string) (*SubAgentEntry, bool) {
 	return e, ok
 }
 
-// Acquire 占用一个并发名额；ctx 取消时立即返回错误。
-func (r *SubAgentRegistry) Acquire(ctx context.Context) error {
-	return r.sem.Acquire(ctx, 1)
+// Acquire 占用一个并发名额，返回释放该名额的函数；ctx 取消时立即返回错误
+// （此时返回的释放函数为空操作，调用方无需区分）。
+//
+// 释放函数捕获获取时的那个 semaphore，而不是每次去读 r.sem。
+// SetMaxConcurrency 会整体替换 r.sem，若释放时才读字段，改动前取到名额的
+// 任务会把名额还到新 semaphore 上，凭空多出容量，并发上限失效。
+func (r *SubAgentRegistry) Acquire(ctx context.Context) (func(), error) {
+	r.mu.RLock()
+	sem := r.sem
+	r.mu.RUnlock()
+
+	if err := sem.Acquire(ctx, 1); err != nil {
+		return func() {}, err
+	}
+	var once sync.Once
+	return func() { once.Do(func() { sem.Release(1) }) }, nil
 }
 
-// Release 释放并发名额。
-func (r *SubAgentRegistry) Release() {
-	r.sem.Release(1)
+// SetMaxConcurrency 调整并发上限，对随后获取名额的任务生效。
+//
+// 正在执行与正在排队的任务都挂在旧 semaphore 上，各自按旧上限走完：
+// 已经开始的任务无论如何都要等它执行完，中途改变它们的名额归属只会让
+// 计数错乱。因此这里只换掉 r.sem，不等待既有任务排空。
+//
+// 由此带来两点既定行为：调低上限时，旧任务仍在跑而新任务已按新上限放行，
+// 瞬时并发可超过新上限，待旧任务结束后自然收敛；调高上限不会立刻疏通已在
+// 排队的任务，它们仍等旧任务释放。
+//
+// n 非正数时不做改动。
+func (r *SubAgentRegistry) SetMaxConcurrency(n int) {
+	if n <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n == r.maxConc {
+		return
+	}
+	r.sem = semaphore.NewWeighted(int64(n))
+	r.maxConc = n
+	if r.log != nil {
+		r.log.Info("子 Agent 并发上限已调整，对随后的调用生效",
+			zap.Int("max_concurrency", n))
+	}
+}
+
+// MaxConcurrency 返回当前并发上限。
+func (r *SubAgentRegistry) MaxConcurrency() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.maxConc
 }
 
 // BuildDescription 拼接 call_agent 工具描述（启动期或测试期调用，运行时不再变化）。
@@ -251,9 +298,11 @@ func BuildSubAgentRegistry(
 	models *llm.ModelService,
 	log *logger.Logger,
 ) *SubAgentRegistry {
+	maxConc := max(subCfg.MaxConcurrency, 5)
 	reg := &SubAgentRegistry{
 		entries: make(map[string]*SubAgentEntry),
-		sem:     semaphore.NewWeighted(int64(max(subCfg.MaxConcurrency, 5))),
+		sem:     semaphore.NewWeighted(int64(maxConc)),
+		maxConc: maxConc,
 		log:     log,
 	}
 

@@ -10,12 +10,12 @@ import (
 func TestBuildWebDiff_SortsAndLabelsEntries(t *testing.T) {
 	d := DiffResult{
 		Added:    []string{"skills/weather/SKILL.md"},
-		Modified: []string{"config.yaml"},
+		Modified: []string{"GROOT.md"},
 		Removed:  []string{"mcp/db/config.json"},
-		Same:     []string{"GROOT.md"},
+		Same:     []string{"skills/translator/SKILL.md"},
 		Remote: map[string]RemoteMeta{
 			"skills/weather/SKILL.md": {Deleted: true, UpdatedAt: time.UnixMilli(1757734800000)},
-			"config.yaml":             {Deleted: false, UpdatedAt: time.UnixMilli(1757734900000)},
+			"GROOT.md":                {Deleted: false, UpdatedAt: time.UnixMilli(1757734900000)},
 			"mcp/db/config.json":      {Deleted: false, UpdatedAt: time.UnixMilli(1757735000000)},
 		},
 	}
@@ -29,14 +29,14 @@ func TestBuildWebDiff_SortsAndLabelsEntries(t *testing.T) {
 		t.Fatalf("len(Entries) = %d, want 3 (Same excluded)", len(view.Entries))
 	}
 	// 按路径升序
-	wantPaths := []string{"config.yaml", "mcp/db/config.json", "skills/weather/SKILL.md"}
+	wantPaths := []string{"GROOT.md", "mcp/db/config.json", "skills/weather/SKILL.md"}
 	for i, want := range wantPaths {
 		if view.Entries[i].Path != want {
 			t.Fatalf("Entries[%d].Path = %q, want %q", i, view.Entries[i].Path, want)
 		}
 	}
 	if view.Entries[0].Status != "M" {
-		t.Fatalf("config.yaml status = %q, want M", view.Entries[0].Status)
+		t.Fatalf("GROOT.md status = %q, want M", view.Entries[0].Status)
 	}
 	if view.Entries[1].Status != "D" {
 		t.Fatalf("mcp/db/config.json status = %q, want D", view.Entries[1].Status)
@@ -48,13 +48,13 @@ func TestBuildWebDiff_SortsAndLabelsEntries(t *testing.T) {
 		t.Fatal("tombstoned path should have RemoteDeleted = true")
 	}
 	if view.Entries[0].RemoteDeleted {
-		t.Fatal("config.yaml should have RemoteDeleted = false")
+		t.Fatal("GROOT.md should have RemoteDeleted = false")
 	}
 }
 
 func TestBuildWebDiff_NeedsRestartFlags(t *testing.T) {
 	d := DiffResult{
-		Modified: []string{"config.yaml", "mcp/db/config.json", "subagents/x/agent.md", "skills/w/SKILL.md"},
+		Modified: []string{"GROOT.md", "mcp/db/config.json", "subagents/x/agent.md", "skills/w/SKILL.md"},
 		Remote:   map[string]RemoteMeta{},
 	}
 
@@ -64,13 +64,15 @@ func TestBuildWebDiff_NeedsRestartFlags(t *testing.T) {
 	for _, e := range view.Entries {
 		byPath[e.Path] = e.NeedsRestart
 	}
-	for _, p := range []string{"config.yaml", "mcp/db/config.json", "subagents/x/agent.md"} {
+	for _, p := range []string{"mcp/db/config.json", "subagents/x/agent.md"} {
 		if !byPath[p] {
 			t.Errorf("%s NeedsRestart = false, want true", p)
 		}
 	}
-	if byPath["skills/w/SKILL.md"] {
-		t.Error("skills/w/SKILL.md NeedsRestart = true, want false")
+	for _, p := range []string{"GROOT.md", "skills/w/SKILL.md"} {
+		if byPath[p] {
+			t.Errorf("%s NeedsRestart = true, want false", p)
+		}
 	}
 	if !view.NeedsRestart {
 		t.Error("view.NeedsRestart = false, want true")
@@ -82,7 +84,7 @@ func TestBuildWebDiff_NeedsRestartFlags(t *testing.T) {
 // 这个测试同时锁定三件事:tag 拼写、entries 是 [] 而非 null、
 // 以及远端无记录时 remoteUpdatedAt 整个 key 不出现(零值 time.Time 守卫)。
 func TestBuildWebDiff_JSONShape(t *testing.T) {
-	emptyJSON, err := json.Marshal(BuildWebDiff(DiffResult{Same: []string{"config.yaml"}}))
+	emptyJSON, err := json.Marshal(BuildWebDiff(DiffResult{Same: []string{"GROOT.md"}}))
 	if err != nil {
 		t.Fatalf("marshal empty diff: %v", err)
 	}
@@ -93,9 +95,9 @@ func TestBuildWebDiff_JSONShape(t *testing.T) {
 
 	d := DiffResult{
 		Added:    []string{"skills/new/SKILL.md"}, // 远端无记录 → 无 remoteUpdatedAt
-		Modified: []string{"config.yaml"},         // 远端有记录 → 有 remoteUpdatedAt
+		Modified: []string{"mcp/db/config.json"},  // 远端有记录 → 有 remoteUpdatedAt
 		Remote: map[string]RemoteMeta{
-			"config.yaml": {Deleted: true, UpdatedAt: time.UnixMilli(1757734900000)},
+			"mcp/db/config.json": {Deleted: true, UpdatedAt: time.UnixMilli(1757734900000)},
 		},
 	}
 	fullJSON, err := json.Marshal(BuildWebDiff(d))
@@ -103,7 +105,7 @@ func TestBuildWebDiff_JSONShape(t *testing.T) {
 		t.Fatalf("marshal full diff: %v", err)
 	}
 	wantFull := `{"inSync":false,"needsRestart":true,"entries":[` +
-		`{"path":"config.yaml","status":"M","remoteDeleted":true,"needsRestart":true,"remoteUpdatedAt":1757734900000},` +
+		`{"path":"mcp/db/config.json","status":"M","remoteDeleted":true,"needsRestart":true,"remoteUpdatedAt":1757734900000},` +
 		`{"path":"skills/new/SKILL.md","status":"A","remoteDeleted":false,"needsRestart":false}]}`
 	if string(fullJSON) != wantFull {
 		t.Errorf("full diff JSON =\n  %s\nwant\n  %s", fullJSON, wantFull)
@@ -119,7 +121,7 @@ func TestBuildWebDiff_JSONShape(t *testing.T) {
 }
 
 func TestBuildWebDiff_EmptyDiffIsInSync(t *testing.T) {
-	view := BuildWebDiff(DiffResult{Same: []string{"config.yaml"}, Remote: map[string]RemoteMeta{}})
+	view := BuildWebDiff(DiffResult{Same: []string{"GROOT.md"}, Remote: map[string]RemoteMeta{}})
 
 	if !view.InSync {
 		t.Fatal("InSync = false, want true")
@@ -132,14 +134,13 @@ func TestBuildWebDiff_EmptyDiffIsInSync(t *testing.T) {
 	}
 }
 
-// TestNeedsRestart 覆盖 needsRestartPaths 三个前缀的正例、精确匹配分支和反例。
+// TestNeedsRestart 覆盖 needsRestartPaths 两个前缀的正例、精确匹配分支和反例。
 func TestNeedsRestart(t *testing.T) {
 	tests := []struct {
 		path string
 		want bool
 	}{
-		// 三个前缀各自的正例
-		{"config.yaml", true},
+		// 两个前缀各自的正例
 		{"mcp/db/config.json", true},
 		{"subagents/x/agent.md", true},
 
@@ -151,13 +152,11 @@ func TestNeedsRestart(t *testing.T) {
 		{"skills/w/SKILL.md", false},
 		{"mcpfoo/bar.json", false},
 		{"subagentsfoo/a.md", false},
-		{"a/config.yaml", false},
+		{"GROOT.md", false},
 
-		// config.yaml 是唯一不带斜杠的前缀,所以 HasPrefix 会让 config.yaml.bak 命中。
-		// 这是宽松前缀匹配的已知副作用,但在 sync 里不可达:ValidateSyncPath 拒绝
-		// "config.yaml.bak" 进入 sync,且全量遍历时它不在任何白名单根之下。
-		// 此处断言现状仅为锁定行为——将来若要收紧匹配,应能看到这条用例和它的理由。
-		{"config.yaml.bak", true},
+		// config.yaml 已退出同步白名单:配置改经数据库配置表共享,
+		// 不再作为文件资源同步,自然也不再触发重启提示。
+		{"config.yaml", false},
 	}
 
 	for _, tt := range tests {

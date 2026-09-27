@@ -28,6 +28,7 @@ func newServiceForTest(t *testing.T) (*Service, string) {
 	mustMkdir("mcp")
 	mustMkdir("logs")
 	mustWrite("GROOT.md", "# memo\n")
+	mustWrite("bootstrap.yaml", "server:\n")
 	mustWrite("config.yaml", "server:\n  port: 8080\n")
 	mustWrite("env.yaml", "database:\n")
 	mustWrite("groot.db", "SQLite format 3\x00")
@@ -73,7 +74,7 @@ func TestService_List_Root(t *testing.T) {
 		t.Errorf("目录排序不对: %v", names)
 	}
 	for _, e := range entries {
-		wantRO := e.Name == "config.yaml" || e.Name == "env.yaml"
+		wantRO := e.Name == "bootstrap.yaml" || e.Name == "config.yaml" || e.Name == "env.yaml"
 		if e.Readonly != wantRO {
 			t.Errorf("%s readonly = %v, want %v", e.Name, e.Readonly, wantRO)
 		}
@@ -171,6 +172,9 @@ func TestService_Write(t *testing.T) {
 	if err := svc.Write("env.yaml", "hack"); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("写只读文件应 ErrReadOnly, got %v", err)
 	}
+	if err := svc.Write("bootstrap.yaml", "hack"); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("写只读文件应 ErrReadOnly, got %v", err)
+	}
 	if err := svc.Write("not-exist.md", "x"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("写不存在文件应 ErrNotFound, got %v", err)
 	}
@@ -208,6 +212,9 @@ func TestService_Rename(t *testing.T) {
 		t.Errorf("改名二级目录应成功, got %v", err)
 	}
 	if err := svc.Rename("config.yaml", "c2.yaml"); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("改名只读文件应 ErrReadOnly, got %v", err)
+	}
+	if err := svc.Rename("bootstrap.yaml", "b2.yaml"); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("改名只读文件应 ErrReadOnly, got %v", err)
 	}
 	if err := svc.Rename("note2.md", "env.yaml"); !errors.Is(err, ErrReadOnly) {
@@ -302,6 +309,9 @@ func TestService_Delete(t *testing.T) {
 		t.Errorf("删非空目录应 ErrNotEmpty, got %v", err)
 	}
 	if err := svc.Delete("config.yaml"); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("删只读文件应 ErrReadOnly, got %v", err)
+	}
+	if err := svc.Delete("bootstrap.yaml"); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("删只读文件应 ErrReadOnly, got %v", err)
 	}
 	if err := svc.Delete(""); !errors.Is(err, ErrInvalid) {

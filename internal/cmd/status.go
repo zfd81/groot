@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // StatusFlags holds the parsed flags for the status command
@@ -70,6 +72,28 @@ func PrintStatusHelp() {
 	fmt.Println("  groot status -p 9090    # 查看 9090 端口实例状态")
 }
 
+// resolveStatusPort 解析服务端口：bootstrap.yaml 优先，缺失时回落老
+// config.yaml（服务从未启动过的老部署），两者都没有时用默认端口。
+// status 只是探活，不因配置文件缺失而失败。
+func resolveStatusPort(homeDir string) (int, error) {
+	if b, err := config.LoadBootstrap(homeDir); err == nil {
+		return b.Server.Port, nil
+	}
+	data, err := os.ReadFile(filepath.Join(homeDir, "config.yaml"))
+	if err != nil {
+		return 8080, nil
+	}
+	var legacy struct {
+		Server struct {
+			Port int `yaml:"port"`
+		} `yaml:"server"`
+	}
+	if err := yaml.Unmarshal(data, &legacy); err != nil || legacy.Server.Port == 0 {
+		return 8080, nil
+	}
+	return legacy.Server.Port, nil
+}
+
 // RunStatus is the main entry point for the status command
 func RunStatus(flags *StatusFlags) error {
 	homeDir := GetDefaultHome()
@@ -77,11 +101,7 @@ func RunStatus(flags *StatusFlags) error {
 	// Determine port
 	port := flags.Port
 	if port == 0 {
-		cfg, err := config.Load(homeDir)
-		if err != nil {
-			return fmt.Errorf("无法加载配置: %w", err)
-		}
-		port = cfg.Server.Port
+		port, _ = resolveStatusPort(homeDir)
 	}
 
 	// Fetch health status

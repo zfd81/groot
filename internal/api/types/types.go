@@ -271,3 +271,118 @@ type RestartResponse struct {
 	RegID  string `json:"reg_id"`
 	Self   bool   `json:"self"`
 }
+
+// VoiceSettingsRequest 是 PUT /web/settings/voice 的请求体。
+// 三个字段整体保存，不支持部分更新：设置面板一次提交整个分区。
+type VoiceSettingsRequest struct {
+	Enabled  bool   `json:"enabled"`
+	Model    string `json:"model"`
+	AutoSend bool   `json:"auto_send"`
+}
+
+// VoiceSettingsResponse 是 GET /web/settings/voice 的响应体。
+type VoiceSettingsResponse struct {
+	Enabled  bool   `json:"enabled"`
+	Model    string `json:"model"`
+	AutoSend bool   `json:"auto_send"`
+}
+
+// RuntimeSettingsPayload 是 /web/settings/runtime 的请求与响应体。
+// 读写同构：界面按分区整体提交，回读的字段与提交的字段一一对应，
+// 前端无需为两个方向维护两套结构。
+//
+// 不含 security.rate_limit.cleanup_interval：它是后台回收协程的周期，改动需重启才生效。
+// 也不含 schedule.max_concurrent_tasks 与 schedule.sync_interval：它们是调度器的构造参数，
+// 改动同样需重启。
+//
+// 分区字段为指针当且仅当其全零值是合法配置；其余分区的零值会被 Validate 拒绝，
+// 缺失即被捕获，无需指针。
+type RuntimeSettingsPayload struct {
+	Memory     MemorySettings     `json:"memory"`
+	React      ReactSettings      `json:"react"`
+	SubAgent   SubAgentSettings   `json:"subagent"`
+	Attachment AttachmentSettings `json:"attachment"`
+	// 指针：全零对该分区是合法值（关闭限流、各维度不限制），
+	// 需要区分「未携带」与「显式关闭」，未携带时拒绝而不是静默关掉限流。
+	RateLimit *RateLimitSettings `json:"rate_limit"`
+	// 指针：{enabled:false} 是合法值，需要区分「未携带」与「显式关闭」
+	Schedule *ScheduleSettings `json:"schedule"`
+}
+
+// MemorySettings 对话历史相关配置。
+type MemorySettings struct {
+	HistoryWindow int `json:"history_window"` // LLM 上下文窗口（轮次），-1 不限制
+}
+
+// ReactSettings ReAct 循环的执行限额。
+type ReactSettings struct {
+	MaxIterations int `json:"max_iterations"`
+	StepTimeout   int `json:"step_timeout"` // 单步 LLM 调用超时（秒）
+	ErrorRetry    int `json:"error_retry"`
+}
+
+// SubAgentSettings 子 Agent 的执行限额。
+type SubAgentSettings struct {
+	MaxConcurrency  int    `json:"max_concurrency"` // 同时运行的子 Agent 数上限
+	ExecTimeout     string `json:"exec_timeout"`    // Go duration 字面量，如 "5m"
+	MaxTaskLength   int    `json:"max_task_length"`
+	MaxResultLength int    `json:"max_result_length"`
+}
+
+// AttachmentSettings 附件上传限额。
+type AttachmentSettings struct {
+	MaxSize      int      `json:"max_size"`       // 单文件上限（MB）
+	MaxTotalSize int      `json:"max_total_size"` // 单次合计上限（MB）
+	MaxCount     int      `json:"max_count"`
+	AllowedTypes []string `json:"allowed_types"` // 空数组表示不限制
+}
+
+// RateLimitSettings 限流参数。QPS 与并发上限为 0 表示该维度不限制。
+type RateLimitSettings struct {
+	Enabled            bool    `json:"enabled"`
+	GlobalQPS          float64 `json:"global_qps"`
+	GlobalConcurrency  int     `json:"global_concurrency"`
+	DefaultQPS         float64 `json:"default_qps"`
+	DefaultConcurrency int     `json:"default_concurrency"`
+}
+
+// ScheduleSettings 定时任务相关的可配置项。
+// 只有开关：并发数与同步间隔是调度器构造参数，改动需重启，不在此列。
+type ScheduleSettings struct {
+	Enabled bool `json:"enabled"` // 是否允许在对话中创建定时任务
+}
+
+// SendersPayload 是 /web/settings/senders 的请求与响应体。
+// 读写同构，但 password 字段方向不同：响应中是脱敏值，
+// 请求中空串表示不改密码。
+// 密码一旦设置无法经接口清空，需换新密码或关闭渠道。
+type SendersPayload struct {
+	Senders map[string]SenderSettings `json:"senders"`
+}
+
+// SenderSettings 单个发送渠道的参数。
+// 字段是两个渠道的并集：webhook 只用 url，email 用其余几项。
+type SenderSettings struct {
+	Enabled  bool   `json:"enabled"`
+	URL      string `json:"url"`
+	SMTPHost string `json:"smtp_host"`
+	SMTPPort int    `json:"smtp_port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	From     string `json:"from"`
+}
+
+// AuthSettingsPayload 是 /web/settings/auth 系列接口的响应体。
+// 密钥只以脱敏形式返回，界面据 secret_set 判断密钥是否已设置。
+type AuthSettingsPayload struct {
+	HeaderName        string `json:"header_name"`         // 当前生效的 API Key 请求头名
+	HeaderNameDefault string `json:"header_name_default"` // 默认请求头名，供界面「恢复默认」提示
+	SecretMasked      string `json:"secret_masked"`       // 脱敏后的 JWT 签名密钥；未设置时为空串
+	SecretSet         bool   `json:"secret_set"`          // 密钥是否已设置
+}
+
+// PutAuthSettingsRequest 是 PUT /web/settings/auth 的请求体。
+// header_name 为空串表示恢复默认请求头名。
+type PutAuthSettingsRequest struct {
+	HeaderName string `json:"header_name"`
+}

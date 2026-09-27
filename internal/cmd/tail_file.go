@@ -15,13 +15,13 @@ import (
 
 // FileWatcher watches log files for changes and handles log rotation
 type FileWatcher struct {
-	ctx              context.Context
-	logDir           string
-	currentFile      string
-	formatter        *Formatter
-	filter           *Filter
-	watcher          *fsnotify.Watcher
-	currentPosition  int64
+	ctx             context.Context
+	logDir          string
+	currentFile     string
+	formatter       *Formatter
+	filter          *Filter
+	watcher         *fsnotify.Watcher
+	currentPosition int64
 }
 
 // NewFileWatcher creates a new FileWatcher instance

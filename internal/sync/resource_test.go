@@ -7,10 +7,10 @@ import (
 
 func TestSyncableRoots(t *testing.T) {
 	roots := SyncableResourceRoots
-	if len(roots) != 5 {
-		t.Fatalf("expected 5 roots, got %d", len(roots))
+	if len(roots) != 4 {
+		t.Fatalf("expected 4 roots, got %d", len(roots))
 	}
-	for _, r := range []string{"config.yaml", "skills", "subagents", "mcp", "GROOT.md"} {
+	for _, r := range []string{"skills", "subagents", "mcp", "GROOT.md"} {
 		found := false
 		for _, root := range roots {
 			if root == r {
@@ -25,8 +25,9 @@ func TestSyncableRoots(t *testing.T) {
 }
 
 func TestValidateSyncPath_WhitelistRoot(t *testing.T) {
-	if err := ValidateSyncPath("config.yaml"); err != nil {
-		t.Errorf("expected nil, got %v", err)
+	// config.yaml 已退出同步白名单（配置改经数据库配置表共享），必须被拒绝
+	if err := ValidateSyncPath("config.yaml"); err == nil || !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("expected ErrInvalidPath for config.yaml, got %v", err)
 	}
 	if err := ValidateSyncPath("skills"); err != nil {
 		t.Errorf("expected nil, got %v", err)

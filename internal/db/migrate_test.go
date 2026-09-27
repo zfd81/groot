@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -207,6 +208,62 @@ func TestMigrate_CreatesClusterMessageTables(t *testing.T) {
 		}
 		if !exists {
 			t.Errorf("index %s missing after Migrate", idx.name)
+		}
+	}
+}
+
+// TestMigrate_SettingsTable 新库执行 Migrate 后 settings 表应可读写，且复合主键生效
+func TestMigrate_SettingsTable(t *testing.T) {
+	sqlxDB, dialect, err := Open(nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer sqlxDB.Close()
+	if err := Migrate(sqlxDB, dialect); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	ins := fmt.Sprintf(
+		"INSERT INTO settings (scope, scope_id, name, value, updated_at) VALUES (%s)",
+		dialect.Placeholders(5))
+	if _, err := sqlxDB.Exec(ins, "global", "", "voice.model", "whisper-1", int64(1)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var got string
+	q := fmt.Sprintf(
+		"SELECT value FROM settings WHERE scope=%s AND scope_id=%s AND name=%s",
+		dialect.Placeholder(1), dialect.Placeholder(2), dialect.Placeholder(3))
+	if err := sqlxDB.Get(&got, q, "global", "", "voice.model"); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if got != "whisper-1" {
+		t.Errorf("value = %q, want %q", got, "whisper-1")
+	}
+
+	// 复合主键必须生效：同键二次插入应触发冲突，上层 Upsert 依赖此行为做覆盖写
+	if _, err := sqlxDB.Exec(ins, "global", "", "voice.model", "other", int64(2)); err == nil {
+		t.Fatal("同一 (scope, scope_id, name) 重复插入应违反主键约束")
+	}
+}
+
+// TestDDLStatements_SettingsTable 对三个方言的 settings 建表语句做纯字符串检查，
+// 兜住本地跑不到的 MySQL/PG 路径。
+func TestDDLStatements_SettingsTable(t *testing.T) {
+	for _, d := range []Dialect{DialectSQLite, DialectMySQL, DialectPostgres} {
+		var createStmt string
+		for _, stmt := range ddlStatements(d) {
+			if strings.Contains(stmt, "CREATE TABLE IF NOT EXISTS settings") {
+				createStmt = stmt
+				break
+			}
+		}
+		if createStmt == "" {
+			t.Errorf("dialect %v: 找不到 settings 建表语句", d)
+			continue
+		}
+		if !strings.Contains(createStmt, "PRIMARY KEY (scope, scope_id, name)") {
+			t.Errorf("dialect %v: 建表语句缺少复合主键 (scope, scope_id, name):\n%s", d, createStmt)
 		}
 	}
 }

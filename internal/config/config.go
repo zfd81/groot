@@ -17,19 +17,19 @@ type Config struct {
 	SubAgent   SubAgentConfig   `yaml:"subagent"`
 	Security   SecurityConfig   `yaml:"security"`
 	Logging    LoggingConfig    `yaml:"logging"`
-	Database   *DatabaseConfig  `yaml:"-"` // loaded from env.yaml, not config.yaml
+	Database   *DatabaseConfig  `yaml:"-"` // assembled from bootstrap.yaml
 }
 
 // AgentConfig holds agent metadata
 type AgentConfig struct {
-	Name    string `yaml:"name"`
-	Version string `yaml:"version"`
+	Name    string `yaml:"name,omitempty"`
+	Version string `yaml:"version,omitempty"`
 }
 
 // ServerConfig holds HTTP server settings
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host string `yaml:"host,omitempty"`
+	Port int    `yaml:"port,omitempty"`
 }
 
 // MemoryConfig 记忆模块配置
@@ -104,31 +104,31 @@ type RateLimitConfig struct {
 // AuthConfig holds authentication settings（认证始终开启，无开关）
 type AuthConfig struct {
 	HeaderName string `yaml:"header_name"` // API Key 请求头名称，默认 X-API-Key
-	Secret     string `yaml:"secret"`      // JWT 签名密钥；为空时服务启动自动生成并回写 config.yaml
+	Secret     string `yaml:"secret"`      // JWT 签名密钥；存于数据库配置表，启动时由 EnsureAuthSecret 兜底生成
 }
 
 // LoggingConfig holds logging settings
 type LoggingConfig struct {
-	Level  string        `yaml:"level"`
-	Format string        `yaml:"format"`
-	Output []string      `yaml:"output"`
-	File   LogFileConfig `yaml:"file"`
+	Level  string        `yaml:"level,omitempty"`
+	Format string        `yaml:"format,omitempty"`
+	Output []string      `yaml:"output,omitempty"`
+	File   LogFileConfig `yaml:"file,omitempty"`
 }
 
 // LogFileConfig holds log file settings
 type LogFileConfig struct {
-	Directory       string `yaml:"directory"`
-	FilenamePattern string `yaml:"filename_pattern"`
-	MaxAge          int    `yaml:"max_age"`
+	Directory       string `yaml:"directory,omitempty"`
+	FilenamePattern string `yaml:"filename_pattern,omitempty"`
+	MaxAge          int    `yaml:"max_age,omitempty"`
 }
 
-// DatabaseConfig 数据库连接配置（来自 env.yaml）
+// DatabaseConfig 数据库连接配置（来自 bootstrap.yaml）
 type DatabaseConfig struct {
-	Driver          string `yaml:"driver"`            // "sqlite" | "mysql" | "postgres"
-	DSN             string `yaml:"dsn"`               // 连接字符串，支持 ${ENV_VAR}
-	MaxOpenConns    int    `yaml:"max_open_conns"`    // 默认 20
-	MaxIdleConns    int    `yaml:"max_idle_conns"`    // 默认 5
-	ConnMaxLifetime string `yaml:"conn_max_lifetime"` // 默认 "30m"
+	Driver          string `yaml:"driver,omitempty"`            // "sqlite" | "mysql" | "postgres"
+	DSN             string `yaml:"dsn,omitempty"`               // 连接字符串，支持 ${ENV_VAR}
+	MaxOpenConns    int    `yaml:"max_open_conns,omitempty"`    // 默认 20
+	MaxIdleConns    int    `yaml:"max_idle_conns,omitempty"`    // 默认 5
+	ConnMaxLifetime string `yaml:"conn_max_lifetime,omitempty"` // 默认 "30m"
 }
 
 // ExpandEnv replaces ${VAR_NAME} with environment variable values

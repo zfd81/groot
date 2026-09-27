@@ -73,13 +73,8 @@ func RunInit(homeDir string) error {
 		}
 	}
 
-	// 创建配置文件
-	if err := createConfigFile(homeDir); err != nil {
-		return err
-	}
-
-	// 创建环境配置文件 env.yaml（基础设施凭据，默认全注释 → local 模式）
-	if err := createEnvFile(homeDir); err != nil {
+	// 创建配置文件 bootstrap.yaml（启动配置，默认全注释 → SQLite 本地模式）
+	if err := createBootstrapFile(homeDir); err != nil {
 		return err
 	}
 
@@ -124,51 +119,27 @@ func shortenPath(path string, isRoot bool) string {
 	return path
 }
 
-func createConfigFile(homeDir string) error {
-	configPath := filepath.Join(homeDir, "config.yaml")
+// createBootstrapFile 在 homeDir 写入 bootstrap.yaml；已存在则跳过，
+// 避免覆盖用户已填好的数据库凭据。
+// 0600：文件可能承载数据库凭据。JWT 签名密钥不在此文件中 ——
+// 它由服务首次启动时生成并存入数据库配置表。
+func createBootstrapFile(homeDir string) error {
+	path := filepath.Join(homeDir, config.BootstrapFileName)
 
-	_, err := os.Stat(configPath)
+	_, err := os.Stat(path)
 	if err == nil {
-		fmt.Println("配置文件 config.yaml 已存在，跳过创建")
+		fmt.Println("配置文件 bootstrap.yaml 已存在，跳过创建")
 		return nil
 	}
 	if !os.IsNotExist(err) {
 		return fmt.Errorf("检查配置文件失败: %w", err)
 	}
 
-	secret, err := config.GenerateAuthSecret()
-	if err != nil {
-		return fmt.Errorf("生成认证密钥失败: %w", err)
-	}
-	template := config.GenerateConfigTemplate(secret)
-	// config.yaml 含 JWT 签名密钥，权限 0600（仅当前用户可读写），看齐 env.yaml 的凭据文件标准
-	if err := os.WriteFile(configPath, []byte(template), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(config.GenerateBootstrapTemplate()), 0600); err != nil {
 		return fmt.Errorf("创建配置文件失败: %w", err)
 	}
 
-	fmt.Println("配置文件 config.yaml 创建成功")
-	return nil
-}
-
-// createEnvFile 在 homeDir 写入 env.yaml；已存在则跳过避免覆盖用户填好的凭据。
-// 默认内容**全注释**，等价于本地磁盘存储模式（零配置）。
-func createEnvFile(homeDir string) error {
-	envPath := filepath.Join(homeDir, config.EnvFileName)
-
-	_, err := os.Stat(envPath)
-	if err == nil {
-		fmt.Println("环境配置文件 env.yaml 已存在，跳过创建")
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		return fmt.Errorf("检查环境配置文件失败: %w", err)
-	}
-
-	if err := os.WriteFile(envPath, []byte(config.GenerateEnvTemplate()), 0600); err != nil {
-		return fmt.Errorf("创建环境配置文件失败: %w", err)
-	}
-
-	fmt.Println("环境配置文件 env.yaml 创建成功")
+	fmt.Println("配置文件 bootstrap.yaml 创建成功")
 	return nil
 }
 
@@ -212,12 +183,9 @@ func createGrootMdFile(homeDir string) error {
 func printNextSteps(homeDir string) {
 	shortPath := shortenPath(homeDir, true)
 	fmt.Println("下一步：")
-	fmt.Println("  1. 编辑配置文件，填写 LLM API 信息")
-	fmt.Printf("     vim %s/config.yaml\n", shortPath)
-	fmt.Println("  2. 设置环境变量（如果配置文件使用了 ${VAR_NAME}）")
-	fmt.Println("     export OPENAI_API_KEY=\"your-api-key\"")
-	fmt.Println("  3. （可选）启用数据库后端：编辑环境配置文件")
-	fmt.Printf("     vim %s/env.yaml   # 默认全注释 → SQLite 本地模式\n", shortPath)
-	fmt.Println("  4. 启动服务")
+	fmt.Println("  1. （可选）调整启动配置：服务端口、日志、数据库连接")
+	fmt.Printf("     vim %s/bootstrap.yaml   # 默认全注释 → SQLite 本地模式\n", shortPath)
+	fmt.Println("  2. 启动服务")
 	fmt.Println("     groot")
+	fmt.Println("  3. 打开 Web 界面，在设置面板中配置模型与其他业务项")
 }

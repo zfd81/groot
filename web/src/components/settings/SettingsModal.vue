@@ -1,13 +1,34 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Sunny, Moon, Monitor, Document, Collection, Tools } from '@element-plus/icons-vue'
+import { Sunny, Moon, Monitor, Document } from '@element-plus/icons-vue'
+import BoltIcon from '../files/BoltIcon.vue'
+import WrenchIcon from '../files/WrenchIcon.vue'
 import { useThemeStore, type ThemeMode } from '../../stores/theme'
 import { useLanguageStore, type Lang } from '../../stores/language'
 import { useMetaStore } from '../../stores/meta'
 import { useAuthStore } from '../../stores/auth'
 import { api, ApiError } from '../../api/client'
 import type { ToolsResp, AgentsResp, AgentInfo, AgentDefinitionResp, HealthResp } from '../../api/types'
+// ElMessageBox 不在 unplugin 自动导入范围内，需显式引入（含样式）
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { type VoiceSettings } from '../../api/voice'
+import { useVoiceStore } from '../../stores/voice'
+import {
+  runtimeLimits,
+  defaultRuntimeSettings,
+  cloneRuntimeSettings,
+  type RuntimeSettings,
+} from '../../api/runtime'
+import { useRuntimeStore } from '../../stores/runtime'
+import { senderLimits, editableSenders, type SendersSettings } from '../../api/senders'
+import { useSendersStore } from '../../stores/senders'
+import {
+  fetchAuthSettings,
+  saveAuthHeaderName,
+  regenerateAuthSecret,
+  type AuthSettings,
+} from '../../api/authSettings'
 import ModelsPanel from './ModelsPanel.vue'
 import ApiKeysPanel from './ApiKeysPanel.vue'
 import ClusterPanel from './ClusterPanel.vue'
@@ -21,6 +42,7 @@ const { mode } = storeToRefs(theme)
 const langStore = useLanguageStore()
 const { locale } = storeToRefs(langStore)
 const meta = useMetaStore()
+const { models } = storeToRefs(meta)
 
 const section = ref<string>('general')
 const menuOptions = computed(() => [
@@ -29,8 +51,241 @@ const menuOptions = computed(() => [
   { label: t('settings.menuAgents'), key: 'agents' },
   { label: t('settings.menuApiKeys'), key: 'apikeys' },
   { label: t('settings.menuCluster'), key: 'cluster' },
+  { label: t('settings.menuConfig'), key: 'config' },
   { label: t('settings.menuAccount'), key: 'account' },
 ])
+
+// 语音配置。面板打开时读一次，每次改动即时保存，与外观、语言的行为一致。
+const voiceStore = useVoiceStore()
+// 本地副本：编辑中的值。保存成功后写回 store，失败则从 store 回滚，
+// 避免把一个服务端已拒绝的值留在界面上。
+const voice = ref<VoiceSettings>({ ...voiceStore.settings })
+const voiceSaving = ref(false)
+
+// 可选的识别模型来自模型列表；语音接口要求模型已启用
+const voiceModelOptions = computed(() =>
+  (models.value || []).filter((m) => m.enabled).map((m) => ({ label: m.name, value: m.name }))
+)
+
+async function loadVoice() {
+  await voiceStore.reload()
+  voice.value = { ...voiceStore.settings }
+}
+
+// ---- 运行时配置 ----
+const runtimeStore = useRuntimeStore()
+// 本地副本：编辑中的值不直接改 store，保存失败时可整体回滚
+const runtime = ref<RuntimeSettings>(defaultRuntimeSettings())
+const runtimeSaving = ref(false)
+
+async function loadRuntime() {
+  try {
+    await runtimeStore.reload()
+    runtime.value = cloneRuntimeSettings(runtimeStore.settings)
+  } catch (e: any) {
+    ElMessage.error(t('settings.runtimeLoadFailed', { msg: e?.message || '' }))
+  }
+}
+
+// saveRuntime 整体保存运行时配置的全部分组。越界由服务端裁决，失败即回源，
+// 避免界面上留下一个并未生效的值。
+//
+// 保存必须串行：输入框 blur 触发的 change 紧接 input-number 的 ▲ 点击会连发两次，
+// 若并发两个 PUT，先发后到的响应会用服务端旧值覆盖用户后来的改动。
+// 因此保存进行中再触发只记脏标记，由正在跑的那次收尾时再发一轮；
+// 每轮都读最新的本地副本，且只在最后一轮成功后才用服务端回传值覆盖本地副本。
+let runtimeDirty = false
+async function saveRuntime() {
+  // 读取失败时本地副本仍是 defaultRuntimeSettings() 的占位值，此时保存会把整包默认值
+  // 写到服务端、覆盖真实配置。store 的 loaded 只在 reload 成功后置 true，据此挡掉。
+  if (!runtimeStore.loaded) {
+    ElMessage.warning(t('settings.saveBlockedNotLoaded'))
+    return
+  }
+  if (runtimeSaving.value) {
+    runtimeDirty = true
+    return
+  }
+  runtimeSaving.value = true
+  try {
+    do {
+      runtimeDirty = false
+      await runtimeStore.save(runtime.value)
+    } while (runtimeDirty)
+    runtime.value = cloneRuntimeSettings(runtimeStore.settings)
+    ElMessage.success(t('settings.runtimeSaved'))
+  } catch (e: any) {
+    ElMessage.error(t('settings.runtimeSaveFailed', { msg: e?.message || '' }))
+    await loadRuntime()
+  } finally {
+    runtimeSaving.value = false
+  }
+}
+
+// 附件扩展名以逗号分隔的文本编辑，比多选标签更贴合「自由填写扩展名」的场景
+const allowedTypesText = computed({
+  get: () => runtime.value.attachment.allowed_types.join(', '),
+  set: (raw: string) => {
+    runtime.value.attachment.allowed_types = raw
+      .split(',')
+      .map((x) => x.trim())
+      .filter((x) => x !== '')
+  },
+})
+
+// ---- 发送器配置 ----
+const sendersStore = useSendersStore()
+// 本地副本用 editableSenders 生成：密码清空，不动密码直接保存即提交空串
+const senders = ref<SendersSettings>(editableSenders(sendersStore.settings))
+const sendersSaving = ref(false)
+// 服务端回读的密码非空即表示已设置；输入框用它决定提示文案
+const smtpPasswordSet = computed(() => sendersStore.settings.senders.email.password !== '')
+
+async function loadSenders() {
+  try {
+    await sendersStore.reload()
+    senders.value = editableSenders(sendersStore.settings)
+  } catch (e: any) {
+    ElMessage.error(t('settings.sendersLoadFailed', { msg: e?.message || '' }))
+  }
+}
+
+// saveSenders 整体保存两个渠道。启用了渠道但参数不全由服务端拒绝，
+// 失败即回源，避免界面上留下一个并未生效的值。
+//
+// 保存必须串行，原因同 saveRuntime：并发两个 PUT 时先发后到的响应会覆盖用户后来的改动。
+// 保存进行中再触发只记脏标记，由正在跑的那次收尾时再发一轮；
+// 每轮都读最新的本地副本，且只在最后一轮成功后才用 editableSenders 覆盖本地副本。
+let sendersDirty = false
+async function saveSenders() {
+  // 同 saveRuntime：读取失败时本地副本是 defaultSendersSettings() 的占位值，
+  // 保存会覆盖服务端真实配置；loaded 只在 reload 成功后置 true。
+  if (!sendersStore.loaded) {
+    ElMessage.warning(t('settings.saveBlockedNotLoaded'))
+    return
+  }
+  if (sendersSaving.value) {
+    sendersDirty = true
+    return
+  }
+  sendersSaving.value = true
+  try {
+    do {
+      sendersDirty = false
+      await sendersStore.save(senders.value)
+    } while (sendersDirty)
+    senders.value = editableSenders(sendersStore.settings)
+    ElMessage.success(t('settings.sendersSaved'))
+  } catch (e: any) {
+    ElMessage.error(t('settings.sendersSaveFailed', { msg: e?.message || '' }))
+    await loadSenders()
+  } finally {
+    sendersSaving.value = false
+  }
+}
+
+// ---- 认证配置 ----
+// 重启后生效的一组，无其他页面消费，不进 store，面板内自管理。
+// authSettings 保存服务端最近一次回读值，请求头名的输入框绑定独立副本，
+// 保存失败时用回读值回滚，避免把服务端已拒绝的值留在界面上。
+const authSettings = ref<AuthSettings | null>(null)
+const authHeaderName = ref('')
+const authSaving = ref(false)
+const authRegenerating = ref(false)
+
+async function loadAuthSettings() {
+  try {
+    const s = await fetchAuthSettings()
+    authSettings.value = s
+    authHeaderName.value = s.header_name
+  } catch (e: any) {
+    ElMessage.error(t('settings.authLoadFailed', { msg: e?.message || '' }))
+  }
+}
+
+// saveAuthHeader 保存 API Key 请求头名。空串即恢复默认，由服务端裁决；
+// 保存成功用回传值覆盖本地（恢复默认时回读即默认值）。
+//
+// 保存必须串行，原因同 saveRuntime：并发两个 PUT 时先发后到的响应会覆盖后来的改动。
+// 保存进行中再触发只记脏标记，由正在跑的那次收尾时再发一轮。
+let authDirty = false
+async function saveAuthHeader() {
+  // 读取失败时本地没有可信的服务端状态，先挡掉，避免盲写
+  if (!authSettings.value) {
+    ElMessage.warning(t('settings.saveBlockedNotLoaded'))
+    return
+  }
+  if (authSaving.value) {
+    authDirty = true
+    return
+  }
+  authSaving.value = true
+  try {
+    let s = authSettings.value
+    do {
+      authDirty = false
+      s = await saveAuthHeaderName(authHeaderName.value)
+    } while (authDirty)
+    authSettings.value = s
+    authHeaderName.value = s.header_name
+    ElMessage.success(t('settings.authSaved'))
+  } catch (e: any) {
+    ElMessage.error(t('settings.authSaveFailed', { msg: e?.message || '' }))
+    authHeaderName.value = authSettings.value.header_name // 回滚到服务端生效值
+  } finally {
+    authSaving.value = false
+  }
+}
+
+// confirmRegenerateSecret 重新生成签名密钥。后果不可逆（全部已签发的
+// API Key 重启后立即失效），必须先经警告型二次确认。
+async function confirmRegenerateSecret() {
+  try {
+    await ElMessageBox.confirm(
+      t('settings.authRegenerateConfirmBody'),
+      t('settings.authRegenerateConfirmTitle'),
+      {
+        confirmButtonText: t('settings.authRegenerate'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning',
+      }
+    )
+  } catch {
+    return // 取消
+  }
+  authRegenerating.value = true
+  try {
+    const s = await regenerateAuthSecret()
+    authSettings.value = s
+    authHeaderName.value = s.header_name
+    ElMessage.success(t('settings.authRegenerateSuccess'))
+  } catch (e: any) {
+    ElMessage.error(t('settings.authRegenerateFailed', { msg: e?.message || '' }))
+  } finally {
+    authRegenerating.value = false
+  }
+}
+
+// saveVoice 保存整个分区。开关打开但未选模型时拒绝保存，并从 store 回滚，
+// 避免本地状态与服务端脱节（否则会存下一个话筒一按就报错的状态）。
+// 保存成功不弹提示，与通用面板的语言、外观行为一致。
+async function saveVoice() {
+  if (voice.value.enabled && !voice.value.model) {
+    ElMessage.warning(t('settings.voiceModelRequired'))
+    voice.value = { ...voiceStore.settings }
+    return
+  }
+  voiceSaving.value = true
+  try {
+    // 写 store 而非直接调接口：成功后聊天输入框共享同一份状态，话筒随即显示或隐藏
+    await voiceStore.save(voice.value)
+  } catch (e: any) {
+    ElMessage.error(t('settings.voiceSaveFailed', { msg: e?.message || '' }))
+    await loadVoice()
+  } finally {
+    voiceSaving.value = false
+  }
+}
 
 // 外观三选一卡片配置。
 const themeCards: { value: ThemeMode; icon: typeof Sunny; labelKey: string }[] = [
@@ -150,7 +405,13 @@ async function ensureLoaded() {
 watch(
   () => props.show,
   (v) => {
-    if (v) void ensureLoaded()
+    if (v) {
+      void ensureLoaded()
+      void loadVoice()
+      void loadRuntime()
+      void loadSenders()
+      void loadAuthSettings()
+    }
   }
 )
 
@@ -245,6 +506,47 @@ async function openAgentTools(a: AgentInfo) {
               </button>
             </div>
           </div>
+          <!-- 语音输入：影响聊天页话筒按钮的行为，属于界面交互偏好，
+               故放在通用而非配置分区（后者承载 Agent 运行参数）。
+               其中 model 同时被对外的 /audio/transcriptions 用作缺省模型。 -->
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configVoice') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.voiceModel') }}</div>
+                <div class="label-desc">{{ t('settings.voiceModelDesc') }}</div>
+              </div>
+              <el-select
+                v-model="voice.model"
+                style="width: 220px"
+                clearable
+                :placeholder="t('settings.voiceModelPlaceholder')"
+                @change="saveVoice"
+              >
+                <el-option
+                  v-for="o in voiceModelOptions"
+                  :key="o.value"
+                  :label="o.label"
+                  :value="o.value"
+                />
+              </el-select>
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.voiceEnabled') }}</div>
+                <div class="label-desc">{{ t('settings.voiceEnabledDesc') }}</div>
+              </div>
+              <el-switch v-model="voice.enabled" :loading="voiceSaving" @change="saveVoice" />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.voiceAutoSend') }}</div>
+                <div class="label-desc">{{ t('settings.voiceAutoSendDesc') }}</div>
+              </div>
+              <el-switch v-model="voice.auto_send" :loading="voiceSaving" @change="saveVoice" />
+            </div>
+          </div>
+
           <!-- 运行环境：工作目录 / 数据库类型 / 日志目录（只读展示） -->
           <div v-for="r in envRows" :key="r.key" class="row env-row">
             <div class="row-label">
@@ -252,6 +554,386 @@ async function openAgentTools(a: AgentInfo) {
               <div class="label-desc">{{ t(r.descKey) }}</div>
             </div>
             <span class="mono env-value">{{ r.value }}</span>
+          </div>
+        </div>
+
+        <!-- 配置：Agent 运行参数，按分类分组，后续分类在此追加同构的 config-group -->
+        <div v-else-if="section === 'config'" class="config-panel">
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configMemory') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.historyWindow') }}</div>
+                <div class="label-desc">{{ t('settings.historyWindowDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.memory.history_window"
+                :min="runtimeLimits.historyWindow.min"
+                :max="runtimeLimits.historyWindow.max"
+                :step="1"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configReact') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.maxIterations') }}</div>
+                <div class="label-desc">{{ t('settings.maxIterationsDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.react.max_iterations"
+                :min="runtimeLimits.maxIterations.min"
+                :max="runtimeLimits.maxIterations.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.stepTimeout') }}</div>
+                <div class="label-desc">{{ t('settings.stepTimeoutDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.react.step_timeout"
+                :min="runtimeLimits.stepTimeout.min"
+                :max="runtimeLimits.stepTimeout.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.errorRetry') }}</div>
+                <div class="label-desc">{{ t('settings.errorRetryDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.react.error_retry"
+                :min="runtimeLimits.errorRetry.min"
+                :max="runtimeLimits.errorRetry.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configSubAgent') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.maxConcurrency') }}</div>
+                <div class="label-desc">{{ t('settings.maxConcurrencyDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.subagent.max_concurrency"
+                :min="runtimeLimits.subAgentConcurrency.min"
+                :max="runtimeLimits.subAgentConcurrency.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.execTimeout') }}</div>
+                <div class="label-desc">{{ t('settings.execTimeoutDesc') }}</div>
+              </div>
+              <el-input
+                v-model="runtime.subagent.exec_timeout"
+                style="width: 140px"
+                placeholder="5m"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.maxTaskLength') }}</div>
+                <div class="label-desc">{{ t('settings.maxTaskLengthDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.subagent.max_task_length"
+                :min="runtimeLimits.subAgentTextLength.min"
+                :max="runtimeLimits.subAgentTextLength.max"
+                :step="500"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.maxResultLength') }}</div>
+                <div class="label-desc">{{ t('settings.maxResultLengthDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.subagent.max_result_length"
+                :min="runtimeLimits.subAgentTextLength.min"
+                :max="runtimeLimits.subAgentTextLength.max"
+                :step="500"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configAttachment') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.attachMaxSize') }}</div>
+                <div class="label-desc">{{ t('settings.attachMaxSizeDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.attachment.max_size"
+                :min="runtimeLimits.attachmentSize.min"
+                :max="runtimeLimits.attachmentSize.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.attachMaxTotalSize') }}</div>
+                <div class="label-desc">{{ t('settings.attachMaxTotalSizeDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.attachment.max_total_size"
+                :min="runtimeLimits.attachmentSize.min"
+                :max="runtimeLimits.attachmentSize.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.attachMaxCount') }}</div>
+                <div class="label-desc">{{ t('settings.attachMaxCountDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.attachment.max_count"
+                :min="runtimeLimits.attachmentCount.min"
+                :max="runtimeLimits.attachmentCount.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.attachAllowedTypes') }}</div>
+                <div class="label-desc">{{ t('settings.attachAllowedTypesDesc') }}</div>
+              </div>
+              <el-input
+                v-model="allowedTypesText"
+                style="width: 260px"
+                :placeholder="t('settings.attachAllowedTypesPlaceholder')"
+                @change="saveRuntime"
+              />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configRateLimit') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.rateLimitEnabled') }}</div>
+                <div class="label-desc">{{ t('settings.rateLimitEnabledDesc') }}</div>
+              </div>
+              <el-switch v-model="runtime.rate_limit.enabled" :loading="runtimeSaving" @change="saveRuntime" />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.rateLimitDefaultQps') }}</div>
+                <div class="label-desc">{{ t('settings.rateLimitDefaultQpsDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.rate_limit.default_qps"
+                :min="runtimeLimits.rateLimitQPS.min"
+                :max="runtimeLimits.rateLimitQPS.max"
+                :precision="1"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.rateLimitDefaultConcurrency') }}</div>
+                <div class="label-desc">{{ t('settings.rateLimitDefaultConcurrencyDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.rate_limit.default_concurrency"
+                :min="runtimeLimits.rateLimitConcurrency.min"
+                :max="runtimeLimits.rateLimitConcurrency.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.rateLimitGlobalQps') }}</div>
+                <div class="label-desc">{{ t('settings.rateLimitGlobalQpsDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.rate_limit.global_qps"
+                :min="runtimeLimits.rateLimitQPS.min"
+                :max="runtimeLimits.rateLimitQPS.max"
+                :precision="1"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.rateLimitGlobalConcurrency') }}</div>
+                <div class="label-desc">{{ t('settings.rateLimitGlobalConcurrencyDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="runtime.rate_limit.global_concurrency"
+                :min="runtimeLimits.rateLimitConcurrency.min"
+                :max="runtimeLimits.rateLimitConcurrency.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveRuntime"
+              />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configAuth') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.authHeaderName') }}</div>
+                <div class="label-desc">{{ t('settings.authHeaderNameDesc') }}</div>
+              </div>
+              <el-input
+                v-model="authHeaderName"
+                style="width: 220px"
+                :placeholder="authSettings?.header_name_default || 'X-API-Key'"
+                @change="saveAuthHeader"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.authSecret') }}</div>
+                <div class="label-desc">{{ t('settings.authSecretDesc') }}</div>
+              </div>
+              <div class="auth-secret">
+                <span class="mono">
+                  {{ authSettings?.secret_set ? authSettings.secret_masked : t('settings.authSecretNotSet') }}
+                </span>
+                <el-button :loading="authRegenerating" @click="confirmRegenerateSecret">
+                  {{ t('settings.authRegenerate') }}
+                </el-button>
+              </div>
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configSchedule') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.scheduleEnabled') }}</div>
+                <div class="label-desc">{{ t('settings.scheduleEnabledDesc') }}</div>
+              </div>
+              <el-switch v-model="runtime.schedule.enabled" :loading="runtimeSaving" @change="saveRuntime" />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configWebhook') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.webhookUrl') }}</div>
+                <div class="label-desc">{{ t('settings.webhookUrlDesc') }}</div>
+              </div>
+              <el-input
+                v-model="senders.senders.webhook.url"
+                style="width: 320px"
+                placeholder="https://"
+                @change="saveSenders"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.webhookEnabled') }}</div>
+                <div class="label-desc">{{ t('settings.webhookEnabledDesc') }}</div>
+              </div>
+              <el-switch v-model="senders.senders.webhook.enabled" :loading="sendersSaving" @change="saveSenders" />
+            </div>
+          </div>
+
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configEmail') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.smtpHost') }}</div>
+                <div class="label-desc">{{ t('settings.smtpHostDesc') }}</div>
+              </div>
+              <el-input v-model="senders.senders.email.smtp_host" style="width: 220px" @change="saveSenders" />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.smtpPort') }}</div>
+                <div class="label-desc">{{ t('settings.smtpPortDesc') }}</div>
+              </div>
+              <el-input-number
+                v-model="senders.senders.email.smtp_port"
+                :min="senderLimits.smtpPort.min"
+                :max="senderLimits.smtpPort.max"
+                controls-position="right"
+                style="width: 140px"
+                @change="saveSenders"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.smtpUsername') }}</div>
+                <div class="label-desc">{{ t('settings.smtpUsernameDesc') }}</div>
+              </div>
+              <el-input v-model="senders.senders.email.username" style="width: 220px" @change="saveSenders" />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.smtpPassword') }}</div>
+                <div class="label-desc">{{ t('settings.smtpPasswordDesc') }}</div>
+              </div>
+              <el-input
+                v-model="senders.senders.email.password"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                style="width: 220px"
+                :placeholder="smtpPasswordSet ? t('settings.smtpPasswordKeepHint') : t('settings.smtpPasswordUnsetHint')"
+                @change="saveSenders"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.smtpFrom') }}</div>
+                <div class="label-desc">{{ t('settings.smtpFromDesc') }}</div>
+              </div>
+              <el-input v-model="senders.senders.email.from" style="width: 220px" @change="saveSenders" />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.emailEnabled') }}</div>
+                <div class="label-desc">{{ t('settings.emailEnabledDesc') }}</div>
+              </div>
+              <el-switch v-model="senders.senders.email.enabled" :loading="sendersSaving" @change="saveSenders" />
+            </div>
           </div>
         </div>
 
@@ -320,14 +1002,14 @@ async function openAgentTools(a: AgentInfo) {
                   <el-tooltip :content="t('settings.viewAgentSkills')" :show-after="200" placement="top">
                     <button type="button" class="agent-icon-btn" @click="openAgentSkills(a)">
                       <el-icon>
-                        <Collection />
+                        <BoltIcon />
                       </el-icon>
                     </button>
                   </el-tooltip>
                   <el-tooltip :content="t('settings.viewAgentTools')" :show-after="200" placement="top">
                     <button type="button" class="agent-icon-btn" @click="openAgentTools(a)">
                       <el-icon>
-                        <Tools />
+                        <WrenchIcon />
                       </el-icon>
                     </button>
                   </el-tooltip>
@@ -473,13 +1155,45 @@ async function openAgentTools(a: AgentInfo) {
   padding: 16px 0;
 }
 
-/* 通用面板：每行之间加分割线，末行不带 */
-.general-panel>div {
+/* 通用面板与配置分组：每行之间加分割线，末行不带 */
+.general-panel>div:not(.config-group),
+.config-group>.row {
   border-bottom: 1px solid rgba(127, 127, 127, 0.15);
 }
 
-.general-panel>div:last-child {
+.general-panel>div:not(.config-group):last-child,
+.config-group>.row:last-child {
   border-bottom: none;
+}
+
+/* 配置分组以卡片承载：边框把同一分类的若干行圈成一块，
+   使「分类」这一层级不再只靠标题的字重区分。
+   通用面板内嵌的语音分组共用这套外观，两处分区观感一致。 */
+.config-group {
+  border: 1px solid var(--el-border-color-lighter, rgba(127, 127, 127, 0.2));
+  border-radius: 10px;
+  padding: 4px 16px 6px;
+  background: var(--el-bg-color-overlay, transparent);
+}
+
+.config-group+.config-group {
+  margin-top: 16px;
+}
+
+/* 卡片内的组标题：撑满卡片宽度并以分割线收尾，与下方各行区隔。
+   负的左右外边距让分割线贴到卡片内壁，而非缩在内边距里。 */
+.config-group>.group-title {
+  margin: 0 -16px 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  font-size: 0.95em;
+  opacity: 1;
+}
+
+/* 通用面板中语音卡片与上方外观块的间距。
+   卡片自带边框，靠内边距分隔已不够，改用外边距。 */
+.general-panel>.config-group {
+  margin-top: 16px;
 }
 
 .label-title {
@@ -577,6 +1291,13 @@ async function openAgentTools(a: AgentInfo) {
   text-align: right;
   word-break: break-all;
   padding-top: 2px;
+}
+
+/* 认证分组的密钥行：脱敏值与「重新生成」按钮同排右对齐 */
+.auth-secret {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .tool-group {

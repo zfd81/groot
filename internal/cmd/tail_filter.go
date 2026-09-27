@@ -7,8 +7,8 @@ import (
 
 // Filter filters log lines based on level and keyword
 type Filter struct {
-	level    string // normalized lowercase
-	keyword  string
+	level   string // normalized lowercase
+	keyword string
 }
 
 // NewFilter creates a new Filter instance

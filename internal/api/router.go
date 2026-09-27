@@ -29,6 +29,8 @@ func RegisterRoutes(h *server.Hertz,
 	logsH *handler.LogsHandler,
 	filesH *handler.FilesHandler,
 	syncH *handler.SyncHandler,
+	transcriptionH *handler.TranscriptionHandler,
+	settingH *handler.SettingHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
 	h.GET("/web/health", healthH.Serve)
@@ -61,6 +63,19 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.GET("/apikeys/:id/token", apiKeysH.Token)
 	webGroup.DELETE("/apikeys/:id", apiKeysH.Delete)
 	webGroup.GET("/logs/:sid", logsH.Serve)
+	// 聊天页调用的转录接口，与对外接口共用同一 handler
+	webGroup.POST("/audio/transcriptions", transcriptionH.Serve)
+	// 语音配置读写
+	webGroup.GET("/settings/voice", settingH.GetVoice)
+	webGroup.PUT("/settings/voice", settingH.PutVoice)
+	webGroup.GET("/settings/runtime", settingH.GetRuntime)
+	webGroup.PUT("/settings/runtime", settingH.PutRuntime)
+	webGroup.GET("/settings/senders", settingH.GetSenders)
+	webGroup.PUT("/settings/senders", settingH.PutSenders)
+	// 认证配置：请求头名读写与密钥重新生成，改动需重启生效
+	webGroup.GET("/settings/auth", settingH.GetAuthSettings)
+	webGroup.PUT("/settings/auth", settingH.PutAuthSettings)
+	webGroup.POST("/settings/auth/secret", settingH.RegenerateAuthSecret)
 
 	// 文件面板端点（filesH 为 nil 表示初始化失败，跳过注册）
 	if filesH != nil {
@@ -92,6 +107,9 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.GET("/chat/status/:sid", statusH.Serve)
 	apiGroup.GET("/chat/:sid", detailH.GetLatest)  // 获取最近一次对话详情
 	apiGroup.GET("/chat/:sid/:cid", detailH.Serve) // 获取指定对话详情
+
+	// 对外转录接口：与 /chat 同组，API Key 鉴权并计入限流
+	apiGroup.POST("/audio/transcriptions", transcriptionH.Serve)
 
 	// Session endpoints - 会话管理
 	// 静态路由（/sess/history、/sess/search）优先级高于命名参数路由（/sess/:sid），可共存

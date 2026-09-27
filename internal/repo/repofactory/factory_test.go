@@ -86,3 +86,16 @@ func TestNewRepos_MessageRepoWired(t *testing.T) {
 		t.Fatal("Message repo 不应为 nil")
 	}
 }
+
+func TestNewRepos_SettingRepoWired(t *testing.T) {
+	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer sqlxDB.Close()
+
+	repos := NewRepos(sqlxDB, dialect, t.TempDir())
+	if repos.Setting == nil {
+		t.Fatal("Setting repo 不应为 nil")
+	}
+}

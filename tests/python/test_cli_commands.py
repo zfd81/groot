@@ -5,8 +5,9 @@
 
 源码依据：
 - init（internal/cmd/init.go）：创建 skills/mcp/subagents/logs 目录，
-  生成 config.yaml（含随机 security.auth.secret，权限 0600）、env.yaml（0600，
-  全注释 → SQLite 本地模式）、GROOT.md；已存在的文件一律跳过不覆盖。
+  生成 bootstrap.yaml（权限 0600，全注释模板 → SQLite 本地模式，不含密钥——
+  JWT 签名密钥由服务首次启动生成并存入数据库配置表）、GROOT.md；
+  不生成 config.yaml/env.yaml；已存在的文件一律跳过不覆盖。
 - user reset（internal/cmd/user.go）：删除用户表全部数据，-y 跳过确认；
   直接读写数据库（SQLite WAL 支持多进程），无需停服，/web/me 的 needs_setup
   实时反映用户表计数。
@@ -14,8 +15,9 @@
   「未检测到运行中的 Groot 实例」并以退出码 0 结束。
 
 用例点：
-- TC-CLI-101 groot init 生成 config.yaml（含非空 secret、0600）/env.yaml/GROOT.md/子目录
-- TC-CLI-102 重复 init 跳过已有文件，secret 不被覆盖
+- TC-CLI-101 groot init 生成 bootstrap.yaml（0600、全注释、不含密钥）/GROOT.md/子目录，
+  不生成 config.yaml/env.yaml
+- TC-CLI-102 重复 init 跳过已有文件，bootstrap.yaml 内容不被覆盖
 - TC-CLI-103 groot --help 含 init/status/tail/user，不含已移除的 chat/schedule/push/pull/diff 子命令
 - TC-CLI-104 groot status 未运行实例：提示未检测到，退出码 0
 - TC-CLI-105 groot status 运行中实例（共享服务）：输出健康信息
@@ -86,7 +88,8 @@ class TestGrootInit:
     """groot init 初始化工作目录"""
 
     def test_init_creates_files(self, temp_home):
-        """TC-CLI-101: 生成 config.yaml（非空 secret、0600）、env.yaml、GROOT.md、子目录"""
+        """TC-CLI-101: 生成 bootstrap.yaml（0600、全注释、不含密钥）、GROOT.md、子目录，
+        不生成 config.yaml/env.yaml"""
         result = _run_groot(["init"], temp_home)
         assert result.returncode == 0, result.stderr
         assert "初始化完成" in result.stdout
@@ -95,36 +98,50 @@ class TestGrootInit:
         for d in ("skills", "mcp", "subagents", "logs"):
             assert os.path.isdir(os.path.join(temp_home, d)), f"缺少目录 {d}"
 
-        # config.yaml：yaml 可解析，security.auth.secret 非空，权限 0600
-        config_path = os.path.join(temp_home, "config.yaml")
-        assert os.path.isfile(config_path)
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-        secret = config["security"]["auth"]["secret"]
-        assert secret and isinstance(secret, str), "secret 应为非空字符串"
-        mode = stat.S_IMODE(os.stat(config_path).st_mode)
-        assert mode == 0o600, f"config.yaml 权限应为 0600，实际: {oct(mode)}"
+        # bootstrap.yaml：存在、权限 0600
+        bootstrap_path = os.path.join(temp_home, "bootstrap.yaml")
+        assert os.path.isfile(bootstrap_path)
+        mode = stat.S_IMODE(os.stat(bootstrap_path).st_mode)
+        assert mode == 0o600, f"bootstrap.yaml 权限应为 0600，实际: {oct(mode)}"
 
-        # env.yaml（0600）与 GROOT.md
-        env_path = os.path.join(temp_home, "env.yaml")
-        assert os.path.isfile(env_path)
-        assert stat.S_IMODE(os.stat(env_path).st_mode) == 0o600
+        # 全注释模板：yaml 解析结果为空（无未注释的配置项），
+        # 尤其不含未注释的 database 节；且不含密钥（JWT 密钥由服务首次启动写入数据库）
+        with open(bootstrap_path) as f:
+            content = f.read()
+        assert yaml.safe_load(content) is None, "模板应全注释，不含未注释的配置项"
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            assert not stripped.startswith("database:"), "模板不应含未注释的 database: 行"
+        assert "secret" not in content, "bootstrap.yaml 不应包含密钥"
+
+        # GROOT.md 存在；不再生成 config.yaml / env.yaml
         assert os.path.isfile(os.path.join(temp_home, "GROOT.md"))
+        assert not os.path.exists(os.path.join(temp_home, "config.yaml")), \
+            "init 不应生成 config.yaml"
+        assert not os.path.exists(os.path.join(temp_home, "env.yaml")), \
+            "init 不应生成 env.yaml"
 
-    def test_init_idempotent_keeps_secret(self, temp_home):
-        """TC-CLI-102: 重复 init 跳过已有文件，不覆盖已生成的 secret"""
+    def test_init_idempotent_keeps_bootstrap(self, temp_home):
+        """TC-CLI-102: 重复 init 跳过已有文件，不覆盖已有的 bootstrap.yaml 内容"""
         assert _run_groot(["init"], temp_home).returncode == 0
-        config_path = os.path.join(temp_home, "config.yaml")
-        with open(config_path) as f:
-            secret_before = yaml.safe_load(f)["security"]["auth"]["secret"]
+        bootstrap_path = os.path.join(temp_home, "bootstrap.yaml")
+
+        # 修改文件内容后重复 init，内容应保持不变（跳过创建、不覆盖）
+        marker = "# user-customized-marker\n"
+        with open(bootstrap_path, "a") as f:
+            f.write(marker)
+        with open(bootstrap_path) as f:
+            content_before = f.read()
 
         result = _run_groot(["init"], temp_home)
         assert result.returncode == 0, result.stderr
         assert "已存在，跳过创建" in result.stdout
 
-        with open(config_path) as f:
-            secret_after = yaml.safe_load(f)["security"]["auth"]["secret"]
-        assert secret_after == secret_before, "重复 init 不应改变已有 secret"
+        with open(bootstrap_path) as f:
+            content_after = f.read()
+        assert content_after == content_before, "重复 init 不应改变已有 bootstrap.yaml"
 
     def test_init_unknown_flag(self, temp_home):
         """init 传未知 flag 报错退出（退出码 1）"""

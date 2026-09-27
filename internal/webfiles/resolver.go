@@ -149,9 +149,13 @@ func (r *Resolver) Hidden(n string) bool {
 }
 
 // ReadOnly 判定 n 是否只读（n 必须是 Normalize/Resolve 的返回值）：
-// home 根下的 env.yaml 与 config.yaml，大小写不敏感。
+// home 根下的 bootstrap.yaml（当前配置），以及老部署迁移后遗留的
+// config.yaml 与 env.yaml —— 遗留文件已不生效，面板上改它只会造成误解。
+// 大小写不敏感。
 func (r *Resolver) ReadOnly(n string) bool {
-	return strings.EqualFold(n, "env.yaml") || strings.EqualFold(n, "config.yaml")
+	return strings.EqualFold(n, "bootstrap.yaml") ||
+		strings.EqualFold(n, "config.yaml") ||
+		strings.EqualFold(n, "env.yaml")
 }
 
 // CanUpload 判定能否向目录 n 上传（n 必须是 Normalize/Resolve 的返回值）：

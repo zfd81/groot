@@ -9,24 +9,49 @@ import (
 
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/schedule"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 // ScheduleHandler handles schedule task REST endpoints
 type ScheduleHandler struct {
-	mgr **schedule.Manager
-	log *logger.Logger
+	mgr      **schedule.Manager
+	settings *setting.Settings
+	log      *logger.Logger
 }
 
-// NewScheduleHandler creates a new schedule handler
-func NewScheduleHandler(mgr **schedule.Manager, log *logger.Logger) *ScheduleHandler {
-	return &ScheduleHandler{mgr: mgr, log: log}
+// NewScheduleHandler creates a new schedule handler；settings 不能为 nil，生产装配总是传入。
+func NewScheduleHandler(mgr **schedule.Manager, settings *setting.Settings, log *logger.Logger) *ScheduleHandler {
+	return &ScheduleHandler{mgr: mgr, settings: settings, log: log}
+}
+
+// manager 返回当前可用的调度管理器；不可用时已写好 503 响应并返回 false。
+//
+// 不可用有两种情况：本节点不是 Leader（管理器为 nil），或 schedule.enabled 为关。
+// 开关每次请求读一次配置表，设置面板保存后即刻生效；配置表读不到时按静态默认值判定，
+// 一次查询失败不该让整组接口变成 503。
+func (h *ScheduleHandler) manager(ctx context.Context, rc *app.RequestContext) (*schedule.Manager, bool) {
+	mgr := *h.mgr
+	if mgr == nil {
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+		return nil, false
+	}
+	enabled := h.settings.RuntimeStatic().Schedule.Enabled
+	if sc, err := h.settings.Schedule(ctx); err != nil {
+		h.log.Warn("读取调度开关失败,按静态配置处理", zap.Error(err))
+	} else {
+		enabled = sc.Enabled
+	}
+	if !enabled {
+		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务未启用"})
+		return nil, false
+	}
+	return mgr, true
 }
 
 // List handles GET /schedule
 func (h *ScheduleHandler) List(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
@@ -50,9 +75,8 @@ func (h *ScheduleHandler) List(ctx context.Context, rc *app.RequestContext) {
 
 // Get handles GET /schedule/:id
 func (h *ScheduleHandler) Get(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
@@ -70,9 +94,8 @@ func (h *ScheduleHandler) Get(ctx context.Context, rc *app.RequestContext) {
 
 // Delete handles DELETE /schedule/:id
 func (h *ScheduleHandler) Delete(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
@@ -89,9 +112,8 @@ func (h *ScheduleHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 
 // Disable handles POST /schedule/:id/disable
 func (h *ScheduleHandler) Disable(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
@@ -108,9 +130,8 @@ func (h *ScheduleHandler) Disable(ctx context.Context, rc *app.RequestContext) {
 
 // Enable handles POST /schedule/:id/enable
 func (h *ScheduleHandler) Enable(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
@@ -127,9 +148,8 @@ func (h *ScheduleHandler) Enable(ctx context.Context, rc *app.RequestContext) {
 
 // Archive handles POST /schedule/:id/archive
 func (h *ScheduleHandler) Archive(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
@@ -146,9 +166,8 @@ func (h *ScheduleHandler) Archive(ctx context.Context, rc *app.RequestContext) {
 
 // History handles GET /schedule/:id/history
 func (h *ScheduleHandler) History(ctx context.Context, rc *app.RequestContext) {
-	mgr := *h.mgr
-	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+	mgr, ok := h.manager(ctx, rc)
+	if !ok {
 		return
 	}
 
