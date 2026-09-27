@@ -80,7 +80,7 @@ def _write_minimal_config(home: str, port: int) -> None:
         "message": {
             "queue_size": 10,
             "workers": 1,
-            "senders": {"webhook": {"enabled": False, "url": ""}, "email": {"enabled": False}},
+            "senders": {"webhook": {"enabled": False, "url": ""}},
         },
         "logging": {"level": "info", "format": "json", "output": ["stdout"]},
         "subagent": {

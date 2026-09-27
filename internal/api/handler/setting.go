@@ -233,7 +233,6 @@ func payloadToRuntime(p types.RuntimeSettingsPayload, base setting.RuntimeSettin
 }
 
 // GetSenders 处理 GET /web/settings/senders。
-// SMTP 密码以脱敏形式返回：界面需要知道密码已设置，但不该拿到原文。
 func (h *SettingHandler) GetSenders(ctx context.Context, rc *app.RequestContext) {
 	m, err := h.settings.Message(ctx)
 	if err != nil {
@@ -245,19 +244,13 @@ func (h *SettingHandler) GetSenders(ctx context.Context, rc *app.RequestContext)
 }
 
 // sendersToPayload 把配置对象的发送器参数摊平成接口结构。
-// 密码只以脱敏形式进入响应。
 func sendersToPayload(m config.MessageConfig) types.SendersPayload {
 	out := types.SendersPayload{Senders: map[string]types.SenderSettings{}}
-	for _, name := range []string{setting.SenderWebhook, setting.SenderEmail} {
+	for _, name := range []string{setting.SenderWebhook} {
 		c := m.Senders[name]
 		out.Senders[name] = types.SenderSettings{
-			Enabled:  c.Enabled,
-			URL:      c.URL,
-			SMTPHost: c.SMTPHost,
-			SMTPPort: c.SMTPPort,
-			Username: c.Username,
-			Password: llm.MaskAPIKey(c.Password),
-			From:     c.From,
+			Enabled: c.Enabled,
+			URL:     c.URL,
 		}
 	}
 	return out
@@ -278,13 +271,8 @@ func (h *SettingHandler) PutSenders(ctx context.Context, rc *app.RequestContext)
 	confs := make(map[string]config.SenderConf, len(req.Senders))
 	for name, s := range req.Senders {
 		confs[name] = config.SenderConf{
-			Enabled:  s.Enabled,
-			URL:      strings.TrimSpace(s.URL),
-			SMTPHost: strings.TrimSpace(s.SMTPHost),
-			SMTPPort: s.SMTPPort,
-			Username: strings.TrimSpace(s.Username),
-			Password: s.Password, // 不 trim：空格可能是密码的一部分
-			From:     strings.TrimSpace(s.From),
+			Enabled: s.Enabled,
+			URL:     strings.TrimSpace(s.URL),
 		}
 	}
 
@@ -298,8 +286,8 @@ func (h *SettingHandler) PutSenders(ctx context.Context, rc *app.RequestContext)
 		return
 	}
 
-	// 从配置表回读：请求体里的空密码已在 SetMessage 中补成原值，
-	// 注册用的必须是补齐后的参数，否则换成空密码会让邮件发送失败
+	// 从配置表回读：请求体可能只提交了部分渠道，注册用的必须是
+	// 合并了表内已有值与默认值之后的完整参数
 	saved, err := h.settings.Message(ctx)
 	if err != nil {
 		h.log.Error("回读发送器配置失败", zap.Error(err))
@@ -311,7 +299,7 @@ func (h *SettingHandler) PutSenders(ctx context.Context, rc *app.RequestContext)
 }
 
 // applySenders 把配置表中的发送器参数注册进消息层。
-// 每个可配置渠道都注册，启用与否交给 SenderConf.Enabled 判定——
+// 渠道无条件注册，启用与否交给 SenderConf.Enabled 判定——
 // 注销再注册会让一次配置改动产生两次 map 写入，中间态下渠道短暂不可用。
 // 消息层是每节点一份的实例，这里只更新本节点；其他节点在下一次启动时从配置表取到新值。
 func (h *SettingHandler) applySenders(m config.MessageConfig) {
@@ -320,7 +308,4 @@ func (h *SettingHandler) applySenders(m config.MessageConfig) {
 	}
 	w := m.Senders[setting.SenderWebhook]
 	h.messages.SetSender(setting.SenderWebhook, senders.NewWebhook(w.URL), w)
-	e := m.Senders[setting.SenderEmail]
-	h.messages.SetSender(setting.SenderEmail,
-		senders.NewEmail(e.SMTPHost, e.SMTPPort, e.Username, e.Password, e.From), e)
 }

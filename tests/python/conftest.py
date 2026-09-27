@@ -342,8 +342,7 @@ def server():
             "queue_size": 10,
             "workers": 1,
             "senders": {
-                "webhook": {"enabled": False, "url": ""},
-                "email": {"enabled": False, "smtp_host": "", "smtp_port": 587, "username": "", "password": "", "from": ""}
+                "webhook": {"enabled": False, "url": ""}
             }
         },
         "logging": {"level": "debug", "format": "json", "output": ["stdout"]},

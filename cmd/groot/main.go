@@ -358,7 +358,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 
 	// Initialize message layer
 	// 队列容量与协程数来自 bootstrap.yaml（改动需重启）；发送器参数来自配置对象，
-	// 保存即生效。两个可配置渠道无条件注册，是否投递由 Enabled 决定——
+	// 保存即生效。渠道无条件注册，是否投递由 Enabled 决定——
 	// 启动时按 enabled 决定注册与否的话，在界面上打开渠道就得重启。
 	msgCfg, err := settings.Message(context.Background())
 	if err != nil {
@@ -367,12 +367,8 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 		msgCfg = config.MessageConfig{QueueSize: boot.Message.QueueSize, Workers: boot.Message.Workers, Senders: map[string]config.SenderConf{}}
 	}
 	msgLayer := message.NewLayer(msgCfg, log)
-	webhookConf := msgCfg.Senders["webhook"]
-	msgLayer.Register("webhook", senders.NewWebhook(webhookConf.URL), webhookConf)
-	emailConf := msgCfg.Senders["email"]
-	msgLayer.Register("email", senders.NewEmail(emailConf.SMTPHost, emailConf.SMTPPort,
-		emailConf.Username, emailConf.Password, emailConf.From), emailConf)
-	msgLayer.Register("stdout", senders.NewStdout(), config.SenderConf{Enabled: true})
+	webhookConf := msgCfg.Senders[setting.SenderWebhook]
+	msgLayer.Register(setting.SenderWebhook, senders.NewWebhook(webhookConf.URL), webhookConf)
 	msgLayer.Start()
 	log.Info("消息层已启动")
 

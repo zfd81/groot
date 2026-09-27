@@ -63,7 +63,7 @@ def _create_cluster_config(home: str, port: int) -> None:
         "schedule": {"enabled": False, "max_concurrent_tasks": 10, "sync_interval": "30s"},
         "message": {
             "queue_size": 10, "workers": 1,
-            "senders": {"webhook": {"enabled": False}, "email": {"enabled": False}},
+            "senders": {"webhook": {"enabled": False}},
         },
         "logging": {"level": "info", "format": "console", "output": ["stdout"]},
         "attachment": {"max_size": 50, "max_total_size": 100, "max_count": 10,

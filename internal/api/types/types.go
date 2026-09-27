@@ -352,24 +352,15 @@ type ScheduleSettings struct {
 	Enabled bool `json:"enabled"` // 是否允许在对话中创建定时任务
 }
 
-// SendersPayload 是 /web/settings/senders 的请求与响应体。
-// 读写同构，但 password 字段方向不同：响应中是脱敏值，
-// 请求中空串表示不改密码。
-// 密码一旦设置无法经接口清空，需换新密码或关闭渠道。
+// SendersPayload 是 /web/settings/senders 的请求与响应体，读写同构。
 type SendersPayload struct {
 	Senders map[string]SenderSettings `json:"senders"`
 }
 
-// SenderSettings 单个发送渠道的参数。
-// 字段是两个渠道的并集：webhook 只用 url，email 用其余几项。
+// SenderSettings 单个发送渠道的参数。webhook 只用 url。
 type SenderSettings struct {
-	Enabled  bool   `json:"enabled"`
-	URL      string `json:"url"`
-	SMTPHost string `json:"smtp_host"`
-	SMTPPort int    `json:"smtp_port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	From     string `json:"from"`
+	Enabled bool   `json:"enabled"`
+	URL     string `json:"url"`
 }
 
 // AuthSettingsPayload 是 /web/settings/auth 系列接口的响应体。

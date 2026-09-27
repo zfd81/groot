@@ -91,16 +91,11 @@ func (s *Settings) ImportLegacy(ctx context.Context, lb *config.LegacyBusiness) 
 	addStr(KeyAuthHeaderName, lb.Auth.HeaderName)
 
 	for name, conf := range lb.Senders {
-		if name != SenderWebhook && name != SenderEmail {
-			continue // 未知渠道不迁移
+		if name != SenderWebhook {
+			continue // 注册表里没有实现的渠道不迁移
 		}
 		addTrue(senderKey(name, fieldEnabled), conf.Enabled)
 		addStr(senderKey(name, fieldURL), conf.URL)
-		addStr(senderKey(name, fieldSMTPHost), conf.SMTPHost)
-		addInt(senderKey(name, fieldSMTPPort), conf.SMTPPort)
-		addStr(senderKey(name, fieldUsername), conf.Username)
-		addStr(senderKey(name, fieldPassword), conf.Password)
-		addStr(senderKey(name, fieldFrom), conf.From)
 	}
 
 	if len(rows) == 0 {

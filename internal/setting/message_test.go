@@ -43,8 +43,8 @@ func TestMessage_EmptyTableUsesDefaults(t *testing.T) {
 	if w.Enabled || w.URL != "" {
 		t.Errorf("webhook = %+v, 表为空时应为零值（关闭、无地址）", w)
 	}
-	if got.Senders["email"].SMTPPort != 587 {
-		t.Errorf("email SMTPPort = %d, want 默认值 587", got.Senders["email"].SMTPPort)
+	if len(got.Senders) != 1 {
+		t.Errorf("Senders = %+v, 只应有 webhook 一个可配置渠道", got.Senders)
 	}
 	if got.QueueSize != 100 || got.Workers != 4 {
 		t.Errorf("队列参数不进表，应保持 bootstrap 值: %+v", got)
@@ -56,11 +56,7 @@ func TestSetMessage_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	err := s.SetMessage(ctx, map[string]config.SenderConf{
-		"webhook": {Enabled: false, URL: "https://table.example.com/hook"},
-		"email": {
-			Enabled: true, SMTPHost: "smtp.table.test", SMTPPort: 465,
-			Username: "table-user", Password: "table-pass", From: "table@test",
-		},
+		"webhook": {Enabled: true, URL: "https://table.example.com/hook"},
 	})
 	if err != nil {
 		t.Fatalf("SetMessage: %v", err)
@@ -71,49 +67,11 @@ func TestSetMessage_RoundTrip(t *testing.T) {
 		t.Fatalf("Message: %v", err)
 	}
 	w := got.Senders["webhook"]
-	if w.Enabled || w.URL != "https://table.example.com/hook" {
+	if !w.Enabled || w.URL != "https://table.example.com/hook" {
 		t.Errorf("webhook 回读 = %+v", w)
-	}
-	e := got.Senders["email"]
-	if !e.Enabled || e.SMTPHost != "smtp.table.test" || e.SMTPPort != 465 {
-		t.Errorf("email 回读 = %+v", e)
-	}
-	if e.Password != "table-pass" {
-		t.Errorf("Password = %q, want table-pass", e.Password)
 	}
 	if got.QueueSize != 100 {
 		t.Errorf("QueueSize = %d, 不应被 SetMessage 改动", got.QueueSize)
-	}
-}
-
-func TestSetMessage_EmptyPasswordKeepsStored(t *testing.T) {
-	// 空串表示「不改密码」：界面回读时密码是脱敏值，
-	// 原样提交会把星号存成真密码
-	s, _ := newMessageSettings(t)
-	ctx := context.Background()
-
-	err := s.SetMessage(ctx, map[string]config.SenderConf{
-		"email": {Enabled: true, SMTPHost: "smtp.a.test", SMTPPort: 25, From: "a@test", Password: "first-pass"},
-	})
-	if err != nil {
-		t.Fatalf("首次保存: %v", err)
-	}
-	err = s.SetMessage(ctx, map[string]config.SenderConf{
-		"email": {Enabled: true, SMTPHost: "smtp.b.test", SMTPPort: 25, From: "a@test", Password: ""},
-	})
-	if err != nil {
-		t.Fatalf("二次保存: %v", err)
-	}
-
-	got, err := s.Message(ctx)
-	if err != nil {
-		t.Fatalf("Message: %v", err)
-	}
-	if got.Senders["email"].Password != "first-pass" {
-		t.Errorf("Password = %q, 空串应保留原密码", got.Senders["email"].Password)
-	}
-	if got.Senders["email"].SMTPHost != "smtp.b.test" {
-		t.Errorf("SMTPHost = %q, 其余字段应已更新", got.Senders["email"].SMTPHost)
 	}
 }
 
@@ -128,20 +86,17 @@ func TestSetMessage_Validates(t *testing.T) {
 		{"未知渠道", map[string]config.SenderConf{
 			"telegram": {Enabled: true},
 		}},
+		{"已下线的 email 渠道", map[string]config.SenderConf{
+			"email": {Enabled: true, URL: "https://example.com/hook"},
+		}},
+		{"已下线的 stdout 渠道", map[string]config.SenderConf{
+			"stdout": {Enabled: true},
+		}},
 		{"启用 webhook 但地址为空", map[string]config.SenderConf{
 			"webhook": {Enabled: true, URL: "   "},
 		}},
 		{"webhook 地址不是 http", map[string]config.SenderConf{
 			"webhook": {Enabled: true, URL: "ftp://example.com/hook"},
-		}},
-		{"启用 email 但主机为空", map[string]config.SenderConf{
-			"email": {Enabled: true, SMTPHost: "", SMTPPort: 587},
-		}},
-		{"email 端口越界", map[string]config.SenderConf{
-			"email": {Enabled: true, SMTPHost: "smtp.test", SMTPPort: 70000},
-		}},
-		{"启用 email 但发件人为空", map[string]config.SenderConf{
-			"email": {Enabled: true, SMTPHost: "smtp.test", SMTPPort: 587, From: "  "},
 		}},
 	}
 	for _, c := range cases {
@@ -163,7 +118,6 @@ func TestSetMessage_DisabledSkipsFieldChecks(t *testing.T) {
 
 	err := s.SetMessage(context.Background(), map[string]config.SenderConf{
 		"webhook": {Enabled: false, URL: ""},
-		"email":   {Enabled: false, SMTPHost: "", SMTPPort: 0},
 	})
 	if err != nil {
 		t.Fatalf("关闭渠道不应校验参数: %v", err)
@@ -191,7 +145,7 @@ func TestMessage_DirtyValueFallsBack(t *testing.T) {
 	ctx := context.Background()
 
 	err := store.Upsert(ctx, &repo.Setting{
-		Scope: repo.ScopeGlobal, Name: "message.senders.email.smtp_port", Value: "abc",
+		Scope: repo.ScopeGlobal, Name: "message.senders.webhook.enabled", Value: "abc",
 	})
 	if err != nil {
 		t.Fatalf("Upsert: %v", err)
@@ -201,8 +155,8 @@ func TestMessage_DirtyValueFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Message: %v", err)
 	}
-	if got.Senders["email"].SMTPPort != 587 {
-		t.Errorf("SMTPPort = %d, 脏数据应退回默认值 587", got.Senders["email"].SMTPPort)
+	if got.Senders["webhook"].Enabled {
+		t.Error("Enabled = true, 脏数据应退回默认值 false")
 	}
 }
 
@@ -217,12 +171,12 @@ func TestSetMessage_NoStore(t *testing.T) {
 	}
 }
 
-func TestSetMessage_WritesOnlySubmittedSender(t *testing.T) {
+func TestSetMessage_WritesOnlyKnownSenders(t *testing.T) {
 	s, store := newMessageSettings(t)
 	ctx := context.Background()
 
 	err := s.SetMessage(ctx, map[string]config.SenderConf{
-		"email": {Enabled: true, SMTPHost: "smtp.test", SMTPPort: 587, From: "a@test"},
+		"webhook": {Enabled: true, URL: "https://example.com/hook"},
 	})
 	if err != nil {
 		t.Fatalf("SetMessage: %v", err)
@@ -233,33 +187,9 @@ func TestSetMessage_WritesOnlySubmittedSender(t *testing.T) {
 		t.Fatalf("ListByScope: %v", err)
 	}
 	for _, it := range items {
-		if strings.HasPrefix(it.Name, "message.senders.webhook.") {
-			t.Errorf("未提交的 webhook 不应写入表，却出现 %s", it.Name)
+		if strings.HasPrefix(it.Name, "message.senders.") &&
+			!strings.HasPrefix(it.Name, "message.senders.webhook.") {
+			t.Errorf("表中出现非 webhook 渠道的配置行 %s", it.Name)
 		}
-	}
-
-	got, err := s.Message(ctx)
-	if err != nil {
-		t.Fatalf("Message: %v", err)
-	}
-	w := got.Senders["webhook"]
-	if w.Enabled || w.URL != "" {
-		t.Errorf("webhook 应保持基准零值（未提交不写表），得到 %+v", w)
-	}
-}
-
-func TestSetMessage_EmptyMapIsNoop(t *testing.T) {
-	s, store := newMessageSettings(t)
-	ctx := context.Background()
-
-	if err := s.SetMessage(ctx, map[string]config.SenderConf{}); err != nil {
-		t.Fatalf("空 map 应为 no-op，得到错误: %v", err)
-	}
-	items, err := store.ListByScope(ctx, repo.ScopeGlobal, "")
-	if err != nil {
-		t.Fatalf("ListByScope: %v", err)
-	}
-	if len(items) != 0 {
-		t.Errorf("空 map 不应写入任何行，表中有 %d 行", len(items))
 	}
 }

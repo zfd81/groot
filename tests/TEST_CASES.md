@@ -354,9 +354,9 @@
 - 消息层：替换发送器后新消息走新实例且旧实例不再收到、注销后无可用渠道、禁用渠道不投递且重新启用无需重注册、替换与投递并发（-race）
 - 内置工具门控：门控关闭时 GetTools 与 ListTools 均不含该组、ToolCount 同口径、未挂门控的组一律可见、GetTool 尊重门控、同名 MCP 的工具不被挡且同组内置工具仍被挡、一次 GetTools/ListTools 门控各求值一次
 - 配置对象（限流）：五项边界表驱动（0 表示不限制、负数与超上限拒绝）、表内缺键保持 YAML、脏数据回落、rows 含五键且不含 cleanup_interval、NaN 拒绝且表内 "NaN" 退回基准值、限流五键经假仓库往返
-- 配置对象（发送渠道）：表为空回落 YAML、往返一致且队列参数不受影响、空密码保留原值、未知渠道 / 启用但地址空 / 非 http 地址 / 启用但主机空 / 端口越界表驱动拒绝、关闭渠道免校验、无仓库时读 YAML、启用邮件缺发件人拒绝、脏 smtp_port 回退、无仓库时 SetMessage 返回 ErrNoSettingStore、只提交 email 时不写 webhook 行、空 map 不写入
+- 配置对象（发送渠道）：表为空回落 YAML、往返一致且队列参数不受影响、未知渠道 / 启用但地址空 / 非 http 地址表驱动拒绝、关闭渠道免校验、无仓库时读 YAML、脏 enabled 值回退、无仓库时 SetMessage 返回 ErrNoSettingStore、只写已知渠道的键、已废弃渠道的残留配置行被清理（无仓库时跳过）
 - 配置对象（调度）：开关往返，尤其 false 能写进表而非回落 YAML 的 true、schedule.enabled 脏值回落与空表回落
-- 设置 handler：限流保存后限流器 Config 即刻更新且 CleanupInterval 保持、越界 400 且限流器不变、回读含限流分区、缺 rate_limit 分区 400（消息含 rate_limit）、缺 schedule 分区 400、限流保存后 GET 回读 7/3/true；发送渠道回读脱敏且响应体不含原文、保存后 ChannelEnabled 为真、关闭后为假、校验失败 400 且消息层不变、空密码保留、非法 JSON 400、只提交 webhook 后 email 在消息层仍启用；调度开关经接口往返、调度接口在开关关闭时 503
+- 设置 handler：限流保存后限流器 Config 即刻更新且 CleanupInterval 保持、越界 400 且限流器不变、回读含限流分区、缺 rate_limit 分区 400（消息含 rate_limit）、缺 schedule 分区 400、限流保存后 GET 回读 7/3/true；发送渠道经接口往返、保存后 ChannelEnabled 为真、关闭后为假、校验失败 400 且消息层不变、非法 JSON 400、重复提交覆盖地址、未知渠道 400；调度开关经接口往返、调度接口在开关关闭时 503
 
 ---
 

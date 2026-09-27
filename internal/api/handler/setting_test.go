@@ -603,11 +603,12 @@ func newMessageHandlerForTest(t *testing.T) (*SettingHandler, *message.Layer) {
 	return h, layer
 }
 
-func TestSettingHandler_GetSendersMasksPassword(t *testing.T) {
+// TestSettingHandler_SendersRoundTrip 验证 webhook 参数经接口往返后保持，
+// 且响应只含 webhook 这一个渠道。
+func TestSettingHandler_SendersRoundTrip(t *testing.T) {
 	h, _ := newMessageHandlerForTest(t)
 
-	body := `{"senders":{"email":{"enabled":true,"smtp_host":"smtp.test","smtp_port":587,` +
-		`"username":"u","password":"super-secret","from":"a@test"}}}`
+	body := `{"senders":{"webhook":{"enabled":true,"url":"https://hook.test/a"}}}`
 	rc := callJSON(h.PutSenders, consts.MethodPut, body, nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("PutSenders status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
@@ -617,19 +618,16 @@ func TestSettingHandler_GetSendersMasksPassword(t *testing.T) {
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("GetSenders status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if strings.Contains(string(rc.Response.Body()), "super-secret") {
-		t.Fatalf("响应泄露了 SMTP 密码: %s", rc.Response.Body())
-	}
 	var out types.SendersPayload
 	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
 		t.Fatalf("解析响应: %v", err)
 	}
-	// MaskAPIKey 保留尾 4 位，12 位的 super-secret 脱敏为 ****cret
-	if out.Senders["email"].Password != "****cret" {
-		t.Errorf("password = %q, want ****cret", out.Senders["email"].Password)
+	if len(out.Senders) != 1 {
+		t.Fatalf("Senders = %+v, 只应有 webhook 一个渠道", out.Senders)
 	}
-	if out.Senders["email"].SMTPHost != "smtp.test" {
-		t.Errorf("smtp_host = %q, want smtp.test", out.Senders["email"].SMTPHost)
+	got := out.Senders["webhook"]
+	if !got.Enabled || got.URL != "https://hook.test/a" {
+		t.Errorf("webhook = %+v", got)
 	}
 }
 
@@ -680,16 +678,15 @@ func TestSettingHandler_PutSendersRejectsBadConfig(t *testing.T) {
 	}
 }
 
-func TestSettingHandler_PutSendersEmptyPasswordKeepsStored(t *testing.T) {
+// TestSettingHandler_PutSendersOverwritesURL 验证二次提交能改掉已存的地址。
+func TestSettingHandler_PutSendersOverwritesURL(t *testing.T) {
 	h, _ := newMessageHandlerForTest(t)
 
-	first := `{"senders":{"email":{"enabled":true,"smtp_host":"smtp.a","smtp_port":25,` +
-		`"username":"u","password":"please-keep-me","from":"a@test"}}}`
+	first := `{"senders":{"webhook":{"enabled":true,"url":"https://hook.test/a"}}}`
 	if rc := callJSON(h.PutSenders, consts.MethodPut, first, nil); rc.Response.StatusCode() != 200 {
 		t.Fatalf("首次 status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	second := `{"senders":{"email":{"enabled":true,"smtp_host":"smtp.b","smtp_port":25,` +
-		`"username":"u","password":"","from":"a@test"}}}`
+	second := `{"senders":{"webhook":{"enabled":true,"url":"https://hook.test/b"}}}`
 	if rc := callJSON(h.PutSenders, consts.MethodPut, second, nil); rc.Response.StatusCode() != 200 {
 		t.Fatalf("二次 status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
@@ -699,12 +696,8 @@ func TestSettingHandler_PutSendersEmptyPasswordKeepsStored(t *testing.T) {
 	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
 		t.Fatalf("解析响应: %v", err)
 	}
-	// please-keep-me 脱敏为 ****p-me；若密码被空串覆盖，这里会是空串
-	if out.Senders["email"].Password != "****p-me" {
-		t.Errorf("password = %q, 空串提交应保留原密码", out.Senders["email"].Password)
-	}
-	if out.Senders["email"].SMTPHost != "smtp.b" {
-		t.Errorf("smtp_host = %q, want smtp.b", out.Senders["email"].SMTPHost)
+	if out.Senders["webhook"].URL != "https://hook.test/b" {
+		t.Errorf("url = %q, want https://hook.test/b", out.Senders["webhook"].URL)
 	}
 }
 
@@ -720,29 +713,20 @@ func TestSettingHandler_PutSendersBadJSON(t *testing.T) {
 	}
 }
 
-func TestSettingHandler_PutSendersKeepsOtherSenderApplied(t *testing.T) {
+// TestSettingHandler_PutSendersRejectsUnknownChannel 验证已下线的渠道名被拒，
+// 且不会注册进消息层。
+func TestSettingHandler_PutSendersRejectsUnknownChannel(t *testing.T) {
 	h, layer := newMessageHandlerForTest(t)
 
-	email := `{"senders":{"email":{"enabled":true,"smtp_host":"smtp.a","smtp_port":25,` +
-		`"username":"u","password":"pw","from":"a@test"}}}`
-	if rc := callJSON(h.PutSenders, consts.MethodPut, email, nil); rc.Response.StatusCode() != 200 {
-		t.Fatalf("email status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !layer.ChannelEnabled("email") {
-		t.Fatal("启用后 email 应在消息层可用")
-	}
-
-	// 只提交 webhook：注册用的必须是回读后的完整配置，
-	// 若误用请求体则 email 会被空配置覆盖而不可用
-	webhook := `{"senders":{"webhook":{"enabled":true,"url":"https://hook.test/a"}}}`
-	if rc := callJSON(h.PutSenders, consts.MethodPut, webhook, nil); rc.Response.StatusCode() != 200 {
-		t.Fatalf("webhook status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !layer.ChannelEnabled("webhook") {
-		t.Error("保存后 webhook 应在消息层可用")
-	}
-	if !layer.ChannelEnabled("email") {
-		t.Error("只提交 webhook 不应影响已启用的 email")
+	for _, name := range []string{"email", "stdout"} {
+		body := `{"senders":{"` + name + `":{"enabled":true,"url":"https://hook.test/a"}}}`
+		rc := callJSON(h.PutSenders, consts.MethodPut, body, nil)
+		if rc.Response.StatusCode() != 400 {
+			t.Errorf("%s status=%d, want 400, body=%s", name, rc.Response.StatusCode(), rc.Response.Body())
+		}
+		if layer.ChannelEnabled(name) {
+			t.Errorf("%s 不应在消息层可用", name)
+		}
 	}
 }
 

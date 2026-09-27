@@ -53,13 +53,8 @@ type MessageConfig struct {
 
 // SenderConf 单个发送器配置
 type SenderConf struct {
-	Enabled  bool   `yaml:"enabled"`
-	URL      string `yaml:"url,omitempty"`
-	SMTPHost string `yaml:"smtp_host,omitempty"`
-	SMTPPort int    `yaml:"smtp_port,omitempty"`
-	Username string `yaml:"username,omitempty"`
-	Password string `yaml:"password,omitempty"`
-	From     string `yaml:"from,omitempty"`
+	Enabled bool   `yaml:"enabled"`
+	URL     string `yaml:"url,omitempty"`
 }
 
 // SubAgentConfig 子 Agent 调度配置

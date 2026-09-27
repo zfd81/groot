@@ -21,7 +21,7 @@ import {
   type RuntimeSettings,
 } from '../../api/runtime'
 import { useRuntimeStore } from '../../stores/runtime'
-import { senderLimits, editableSenders, type SendersSettings } from '../../api/senders'
+import { editableSenders, type SendersSettings } from '../../api/senders'
 import { useSendersStore } from '../../stores/senders'
 import {
   fetchAuthSettings,
@@ -135,11 +135,8 @@ const allowedTypesText = computed({
 
 // ---- 发送器配置 ----
 const sendersStore = useSendersStore()
-// 本地副本用 editableSenders 生成：密码清空，不动密码直接保存即提交空串
 const senders = ref<SendersSettings>(editableSenders(sendersStore.settings))
 const sendersSaving = ref(false)
-// 服务端回读的密码非空即表示已设置；输入框用它决定提示文案
-const smtpPasswordSet = computed(() => sendersStore.settings.senders.email.password !== '')
 
 async function loadSenders() {
   try {
@@ -875,66 +872,6 @@ async function openAgentTools(a: AgentInfo) {
             </div>
           </div>
 
-          <div class="config-group">
-            <div class="group-title">{{ t('settings.configEmail') }}</div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.smtpHost') }}</div>
-                <div class="label-desc">{{ t('settings.smtpHostDesc') }}</div>
-              </div>
-              <el-input v-model="senders.senders.email.smtp_host" style="width: 220px" @change="saveSenders" />
-            </div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.smtpPort') }}</div>
-                <div class="label-desc">{{ t('settings.smtpPortDesc') }}</div>
-              </div>
-              <el-input-number
-                v-model="senders.senders.email.smtp_port"
-                :min="senderLimits.smtpPort.min"
-                :max="senderLimits.smtpPort.max"
-                controls-position="right"
-                style="width: 140px"
-                @change="saveSenders"
-              />
-            </div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.smtpUsername') }}</div>
-                <div class="label-desc">{{ t('settings.smtpUsernameDesc') }}</div>
-              </div>
-              <el-input v-model="senders.senders.email.username" style="width: 220px" @change="saveSenders" />
-            </div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.smtpPassword') }}</div>
-                <div class="label-desc">{{ t('settings.smtpPasswordDesc') }}</div>
-              </div>
-              <el-input
-                v-model="senders.senders.email.password"
-                type="password"
-                show-password
-                autocomplete="new-password"
-                style="width: 220px"
-                :placeholder="smtpPasswordSet ? t('settings.smtpPasswordKeepHint') : t('settings.smtpPasswordUnsetHint')"
-                @change="saveSenders"
-              />
-            </div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.smtpFrom') }}</div>
-                <div class="label-desc">{{ t('settings.smtpFromDesc') }}</div>
-              </div>
-              <el-input v-model="senders.senders.email.from" style="width: 220px" @change="saveSenders" />
-            </div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.emailEnabled') }}</div>
-                <div class="label-desc">{{ t('settings.emailEnabledDesc') }}</div>
-              </div>
-              <el-switch v-model="senders.senders.email.enabled" :loading="sendersSaving" @change="saveSenders" />
-            </div>
-          </div>
         </div>
 
         <!-- 账户：修改密码 -->

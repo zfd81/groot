@@ -247,9 +247,11 @@ message:
 	if !w.Enabled || w.URL != "https://hook.example.com" {
 		t.Errorf("webhook = %+v", w)
 	}
-	e := msg.Senders[SenderEmail]
-	if !e.Enabled || e.SMTPHost != "smtp.example.com" || e.SMTPPort != 2525 ||
-		e.Username != "bot" || e.Password != "s3cret" || e.From != "bot@example.com" {
-		t.Errorf("email = %+v", e)
+	// 老 config.yaml 里的 email 段没有对应实现，不应迁入配置表
+	if _, ok := msg.Senders["email"]; ok {
+		t.Errorf("已下线的 email 渠道被迁入: %+v", msg.Senders)
+	}
+	if len(msg.Senders) != 1 {
+		t.Errorf("Senders = %+v, 只应迁入 webhook", msg.Senders)
 	}
 }

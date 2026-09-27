@@ -21,15 +21,11 @@ import (
 	"github.com/zfd81/groot/internal/repo"
 )
 
-// SenderWebhook 与 SenderEmail 是允许配置的渠道名。
-// stdout 无参数可配且恒为启用，不在此列。
-const (
-	SenderWebhook = "webhook"
-	SenderEmail   = "email"
-)
+// SenderWebhook 是允许配置的渠道名。
+const SenderWebhook = "webhook"
 
 // configurableSenders 限定可配置的渠道，顺序固定以便接口回读稳定。
-var configurableSenders = []string{SenderWebhook, SenderEmail}
+var configurableSenders = []string{SenderWebhook}
 
 // senderKey 拼出某渠道某字段在配置表中的键名。
 func senderKey(sender, field string) string {
@@ -38,19 +34,8 @@ func senderKey(sender, field string) string {
 
 // 发送器配置的字段名。
 const (
-	fieldEnabled  = "enabled"
-	fieldURL      = "url"
-	fieldSMTPHost = "smtp_host"
-	fieldSMTPPort = "smtp_port"
-	fieldUsername = "username"
-	fieldPassword = "password"
-	fieldFrom     = "from"
-)
-
-// MinSMTPPort 与 MaxSMTPPort 是 SMTP 端口的取值范围。
-const (
-	MinSMTPPort = 1
-	MaxSMTPPort = 65535
+	fieldEnabled = "enabled"
+	fieldURL     = "url"
 )
 
 // Message 读取消息通知配置。QueueSize 与 Workers 来自 bootstrap.yaml
@@ -69,15 +54,10 @@ func (s *Settings) Message(ctx context.Context) (config.MessageConfig, error) {
 		return config.MessageConfig{}, err
 	}
 
-	// 渠道的基准值：webhook 全零，email 只有惯用的 SMTP 端口 587
-	defaults := map[string]config.SenderConf{
-		SenderWebhook: {},
-		SenderEmail:   {SMTPPort: 587},
-	}
 	out := base
 	out.Senders = make(map[string]config.SenderConf, len(configurableSenders))
 	for _, name := range configurableSenders {
-		out.Senders[name] = senderConfFrom(defaults[name], name, vals)
+		out.Senders[name] = senderConfFrom(config.SenderConf{}, name, vals)
 	}
 	return out, nil
 }
@@ -91,29 +71,12 @@ func senderConfFrom(base config.SenderConf, sender string, vals map[string]strin
 	if raw, ok := vals[senderKey(sender, fieldURL)]; ok {
 		base.URL = raw
 	}
-	if raw, ok := vals[senderKey(sender, fieldSMTPHost)]; ok {
-		base.SMTPHost = raw
-	}
-	if raw, ok := vals[senderKey(sender, fieldSMTPPort)]; ok {
-		base.SMTPPort = parseInt(raw, base.SMTPPort)
-	}
-	if raw, ok := vals[senderKey(sender, fieldUsername)]; ok {
-		base.Username = raw
-	}
-	if raw, ok := vals[senderKey(sender, fieldPassword)]; ok {
-		base.Password = raw
-	}
-	if raw, ok := vals[senderKey(sender, fieldFrom)]; ok {
-		base.From = raw
-	}
 	return base
 }
 
 // SetMessage 保存发送器配置。校验不通过即整次拒绝，不做部分写入。
 //
 // 只写入 confs 中出现的渠道：界面可以只提交被改动的那一个。
-// 某渠道的 Password 为空串时保留表内原值——界面回读到的是脱敏值，
-// 原样提交会把星号存成真密码。
 func (s *Settings) SetMessage(ctx context.Context, confs map[string]config.SenderConf) error {
 	for name, conf := range confs {
 		if err := validateSenderConf(name, conf); err != nil {
@@ -124,19 +87,11 @@ func (s *Settings) SetMessage(ctx context.Context, confs map[string]config.Sende
 		return ErrNoSettingStore
 	}
 
-	current, err := s.Message(ctx)
-	if err != nil {
-		return err
-	}
-
 	var rows []*repo.Setting
 	for _, name := range configurableSenders {
 		conf, ok := confs[name]
 		if !ok {
 			continue
-		}
-		if conf.Password == "" {
-			conf.Password = current.Senders[name].Password
 		}
 		rows = append(rows, senderRows(name, conf)...)
 	}
@@ -164,8 +119,7 @@ func validateSenderConf(name string, conf config.SenderConf) error {
 		return nil
 	}
 
-	switch name {
-	case SenderWebhook:
+	if name == SenderWebhook {
 		addr := strings.TrimSpace(conf.URL)
 		if addr == "" {
 			return fmt.Errorf("%w: 启用 webhook 需填写推送地址", ErrInvalidSetting)
@@ -174,18 +128,6 @@ func validateSenderConf(name string, conf config.SenderConf) error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("%w: webhook 地址应是完整的 http 或 https 链接，当前为 %q",
 				ErrInvalidSetting, conf.URL)
-		}
-	case SenderEmail:
-		if strings.TrimSpace(conf.SMTPHost) == "" {
-			return fmt.Errorf("%w: 启用邮件需填写 SMTP 主机", ErrInvalidSetting)
-		}
-		if conf.SMTPPort < MinSMTPPort || conf.SMTPPort > MaxSMTPPort {
-			return fmt.Errorf("%w: SMTP 端口应在 %d 与 %d 之间，当前为 %d",
-				ErrInvalidSetting, MinSMTPPort, MaxSMTPPort, conf.SMTPPort)
-		}
-		// from 同时用作 MAIL FROM、RCPT TO 与收件人，为空必然在发送时失败
-		if strings.TrimSpace(conf.From) == "" {
-			return fmt.Errorf("%w: 启用邮件需填写发件人地址", ErrInvalidSetting)
 		}
 	}
 	return nil
@@ -200,11 +142,6 @@ func senderRows(name string, conf config.SenderConf) []*repo.Setting {
 	}{
 		{fieldEnabled, strconv.FormatBool(conf.Enabled)},
 		{fieldURL, strings.TrimSpace(conf.URL)},
-		{fieldSMTPHost, strings.TrimSpace(conf.SMTPHost)},
-		{fieldSMTPPort, strconv.Itoa(conf.SMTPPort)},
-		{fieldUsername, conf.Username},
-		{fieldPassword, conf.Password},
-		{fieldFrom, strings.TrimSpace(conf.From)},
 	}
 	out := make([]*repo.Setting, 0, len(kv))
 	for _, it := range kv {
