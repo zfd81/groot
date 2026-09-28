@@ -27,6 +27,14 @@ const SenderWebhook = "webhook"
 // configurableSenders 限定可配置的渠道，顺序固定以便接口回读稳定。
 var configurableSenders = []string{SenderWebhook}
 
+// ConfigurableSenders 返回可配置渠道名的副本，供包外遍历。
+// 返回副本而非切片本身，避免调用方意外修改包内状态。
+func ConfigurableSenders() []string {
+	out := make([]string, len(configurableSenders))
+	copy(out, configurableSenders)
+	return out
+}
+
 // senderKey 拼出某渠道某字段在配置表中的键名。
 func senderKey(sender, field string) string {
 	return "message.senders." + sender + "." + field

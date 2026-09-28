@@ -173,6 +173,17 @@ SMTP 密码输入框不回显已存密码，带 `autocomplete="new-password"`，
 - 修复：限流器的 `cfg` 字段与调用方桶的 `lastUsed` 此前无锁读写，`-race` 可报数据竞争；消息层的两个注册表 map 此前同样无锁读写。本次一并加锁，消息层两个 map 合并为一个受锁保护的 map。
 - 保持不变：`security.rate_limit.cleanup_interval`、`message.queue_size`、`message.workers`、`schedule.max_concurrent_tasks`、`schedule.sync_interval` 留在 YAML。
 
+**2026-09-28 缺陷修复：**
+
+- 修复：附件类型白名单按界面提示格式（`.png, .jpg`）填写时无法匹配任何附件。校验侧取扩展名已去点，而配置值未归一化，两边永远比不相等。现在写入侧（`setting.normalizeAllowedTypes`）与消费侧（`attachment.normalizeExtensions`）各做一次「去空白、去前导点、转小写」归一化；消费侧那一道兜住老 config.yaml 迁移进来的存量带点值，无需数据迁移。界面提示与手册不变，带点与不带点两种写法均有效。
+- 修复：白名单中只剩点号的项（`.`、`..`）归一化后为空被丢弃，使整个白名单变成空列表，而空列表的语义是「不限制类型」，于是配置越严反而放行全部附件。现在 `RuntimeSettings.Validate` 在保存环节直接拒绝这类项；消费侧另以 `Handler.restrictTypes` 显式记录「使用者是否配置了限制」，不再从列表长度推断该意图。
+- 修复：子 Agent 并发上限在启动期被 `max(n, 5)` 抬升，界面设 2 重启后实际跑 5 而界面仍显示 2。现改为 `resolveMaxConcurrency`：只在零值或负数时回落默认 5，区间内的值原样保留，与 `SetMaxConcurrency` 语义一致。
+- 修复：`image`、`audio`、`video` 三类附件此前完全绕过单文件上限与总量累计，只有 `file` 受限。现在四类统一受体积限制。类型白名单的适用范围保持 `file || image` 不变。
+- 调整：子 Agent 的推理循环参数（迭代上限、重试、单步超时）从启动期固化进 `SubAgentEntry` 改为每次调用现场由 `deriveReactRuntime` 从运行时配置派生，与子 Agent 跟随父 Agent model 的做法一致。此前设置面板改动这三项后主 Agent 即时生效而子 Agent 要等重启；现在两者同源于一次执行开始时的配置快照，生效粒度都是「下一次对话」。`BuildAgentTool` 增加 `react config.ReactConfig` 参数，`BuildSubAgentRegistry` 与 `buildSubAgentEntry` 不再接收 `reactCfg`。
+- 调整：白名单归一化后去重并保持首次出现的顺序。`.PNG, png` 这类写法归一化后是同一扩展名，重复项会让界面回读显示两个相同条目，并多占 `MaxAttachmentTypeCount` 的额度。
+- 调整：新增 `senders.New(name, conf)` 工厂函数按渠道名构造发送器，`setting.ConfigurableSenders()` 导出可配置渠道列表。启动注册与保存后注册两处改为遍历该列表加调用工厂，`sendersToPayload` 也改用它。渠道名与实现的映射收敛到工厂一处，新增渠道需改动的位置从四处降到两处，且只在列表中登记而未提供实现时该渠道会被显式跳过，不再出现一条路径注册了另一条没注册的状态。当前只有 webhook 一种渠道，行为无差异。
+- 调整：前端首屏占位默认值（`web/src/api/runtime.ts`）7 项与 `internal/setting/defaults.go` 对齐。此前 `max_iterations` 等值两侧不一致，因 store 的 `loaded` 标志挡住了读取失败时的整包写回，影响仅限接口返回前一瞬的显示。
+
 ### 2.2 后续独立迭代
 
 - 限流的全局桶在替换瞬间存在名额归还错位，偏差不超过瞬时并发数；若日后需要严格计数，可把全局桶也改为按取得时的实例归还，做法同子 Agent 并发上限的信号量替换。

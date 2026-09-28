@@ -272,3 +272,78 @@ func newTestLogger(t *testing.T) *logger.Logger {
 	t.Helper()
 	return logger.New(config.LoggingConfig{Level: "error", Format: "console", Output: []string{"stdout"}})
 }
+
+// TestResolveMaxConcurrency 验证并发上限的初始化语义：区间内的值原样保留，
+// 缺失（零值/负数）才回落默认 5。
+func TestResolveMaxConcurrency(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+		desc string
+	}{
+		{0, 5, "零值回落默认"},
+		{-1, 5, "负数回落默认"},
+		{1, 1, "下限值原样保留"},
+		{2, 2, "小于默认值的合法配置不被抬升"},
+		{4, 4, "小于默认值的合法配置不被抬升"},
+		{5, 5, "等于默认值"},
+		{100, 100, "上限值原样保留"},
+	}
+	for _, c := range cases {
+		if got := resolveMaxConcurrency(c.in); got != c.want {
+			t.Errorf("resolveMaxConcurrency(%d) = %d, want %d（%s）",
+				c.in, got, c.want, c.desc)
+		}
+	}
+}
+
+// TestBuildSubAgentRegistry_RespectsSmallConcurrency 验证启动期取的并发上限
+// 与运行期 SetMaxConcurrency 语义一致：都保留小于 5 的合法值。
+// 修复前启动期会把 2 抬成 5，导致重启后界面显示 2 而实际跑 5。
+func TestBuildSubAgentRegistry_RespectsSmallConcurrency(t *testing.T) {
+	dir := t.TempDir() // 空目录：不加载任何子 Agent，只验证并发初始化
+	reg := BuildSubAgentRegistry(
+		context.Background(),
+		dir,
+		config.SubAgentConfig{MaxConcurrency: 2},
+		nil,
+		logger.NewNop(),
+	)
+	if got := reg.MaxConcurrency(); got != 2 {
+		t.Errorf("启动期并发上限 = %d, want 2（不应被抬升到 5）", got)
+	}
+
+	reg.SetMaxConcurrency(2)
+	if got := reg.MaxConcurrency(); got != 2 {
+		t.Errorf("SetMaxConcurrency(2) 后 = %d, want 2", got)
+	}
+}
+
+// TestDeriveReactRuntime 验证推理参数派生：迭代零值回落 20、重试为 0 时不建
+// RetryConfig、超时按秒换算。这段逻辑原先内联在 buildSubAgentEntry 中，
+// 抽出后每次 call_agent 调用现场执行。
+func TestDeriveReactRuntime(t *testing.T) {
+	// 正常值
+	r := deriveReactRuntime(config.ReactConfig{MaxIterations: 30, StepTimeout: 90, ErrorRetry: 3})
+	if r.maxIterations != 30 {
+		t.Errorf("maxIterations = %d, want 30", r.maxIterations)
+	}
+	if r.stepTimeout != 90*time.Second {
+		t.Errorf("stepTimeout = %v, want 90s", r.stepTimeout)
+	}
+	if r.retryConfig == nil || r.retryConfig.MaxRetries != 3 {
+		t.Errorf("retryConfig = %+v, want MaxRetries=3", r.retryConfig)
+	}
+
+	// 迭代零值回落默认，重试为 0 时不建 RetryConfig
+	z := deriveReactRuntime(config.ReactConfig{})
+	if z.maxIterations != 20 {
+		t.Errorf("零值 maxIterations = %d, want 20", z.maxIterations)
+	}
+	if z.retryConfig != nil {
+		t.Errorf("ErrorRetry=0 时 retryConfig 应为 nil，实际 %+v", z.retryConfig)
+	}
+	if z.stepTimeout != 0 {
+		t.Errorf("零值 stepTimeout = %v, want 0", z.stepTimeout)
+	}
+}

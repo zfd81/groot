@@ -246,7 +246,7 @@ func (h *SettingHandler) GetSenders(ctx context.Context, rc *app.RequestContext)
 // sendersToPayload 把配置对象的发送器参数摊平成接口结构。
 func sendersToPayload(m config.MessageConfig) types.SendersPayload {
 	out := types.SendersPayload{Senders: map[string]types.SenderSettings{}}
-	for _, name := range []string{setting.SenderWebhook} {
+	for _, name := range setting.ConfigurableSenders() {
 		c := m.Senders[name]
 		out.Senders[name] = types.SenderSettings{
 			Enabled: c.Enabled,
@@ -306,6 +306,10 @@ func (h *SettingHandler) applySenders(m config.MessageConfig) {
 	if h.messages == nil {
 		return
 	}
-	w := m.Senders[setting.SenderWebhook]
-	h.messages.SetSender(setting.SenderWebhook, senders.NewWebhook(w.URL), w)
+	for _, name := range setting.ConfigurableSenders() {
+		conf := m.Senders[name]
+		if s := senders.New(name, conf); s != nil {
+			h.messages.SetSender(name, s, conf)
+		}
+	}
 }

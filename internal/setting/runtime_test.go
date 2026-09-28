@@ -420,3 +420,68 @@ func TestRuntime_ScheduleEnabledRoundTrip(t *testing.T) {
 		t.Errorf("Schedule() = %+v, want Enabled=true 且其余两项保持 bootstrap 值", sc)
 	}
 }
+
+// TestNormalizeAllowedTypes 验证写入侧归一化：去空白、去前导点、转小写、丢空项。
+func TestNormalizeAllowedTypes(t *testing.T) {
+	got := normalizeAllowedTypes([]string{" .PNG ", "PDF", ".", "", ".tar.gz"})
+	want := []string{"png", "pdf", "tar.gz"}
+	if len(got) != len(want) {
+		t.Fatalf("归一化结果 = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("结果[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestNormalizeAllowedTypes_NilStaysNil 验证 nil 保持 nil，
+// 交由 encodeAllowedTypes 编码为 "[]"（语义：不限制类型）。
+func TestNormalizeAllowedTypes_NilStaysNil(t *testing.T) {
+	if got := normalizeAllowedTypes(nil); got != nil {
+		t.Errorf("normalizeAllowedTypes(nil) = %v, want nil", got)
+	}
+}
+
+// TestValidateRuntime_RejectsDotOnlyAllowedType 验证只含点号的白名单项在保存
+// 环节就被拒绝，不会落库后归一化为空再被丢弃。
+func TestValidateRuntime_RejectsDotOnlyAllowedType(t *testing.T) {
+	for _, bad := range []string{".", "..", " . "} {
+		rt := validCfg()
+		rt.Attachment.AllowedTypes = []string{bad}
+		err := rt.Validate()
+		if err == nil {
+			t.Errorf("白名单项 %q 应被拒绝，实际通过校验", bad)
+			continue
+		}
+		if !errors.Is(err, ErrInvalidSetting) {
+			t.Errorf("白名单项 %q 的错误应包装 ErrInvalidSetting，实际 %v", bad, err)
+		}
+	}
+}
+
+// TestValidateRuntime_AcceptsDottedAllowedType 验证带点的正常扩展名（UI 提示
+// 的格式）仍然通过校验，收紧校验没有误伤。
+func TestValidateRuntime_AcceptsDottedAllowedType(t *testing.T) {
+	rt := validCfg()
+	rt.Attachment.AllowedTypes = []string{".png", "pdf", ".tar.gz"}
+	if err := rt.Validate(); err != nil {
+		t.Errorf("带点扩展名应通过校验，实际报错: %v", err)
+	}
+}
+
+// TestNormalizeAllowedTypes_Dedup 验证归一化后去重且保持首次出现的顺序。
+// ".PNG" 与 "png" 归一化后是同一扩展名，重复入库会让界面回读显示两个相同条目，
+// 并多占 MaxAttachmentTypeCount 的额度。
+func TestNormalizeAllowedTypes_Dedup(t *testing.T) {
+	got := normalizeAllowedTypes([]string{".PNG", "png", " .Png ", "pdf", ".pdf", "txt"})
+	want := []string{"png", "pdf", "txt"}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeAllowedTypes 去重后 = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("第 %d 项 = %q, want %q（应保持首次出现的顺序）", i, got[i], want[i])
+		}
+	}
+}

@@ -64,17 +64,18 @@ export const runtimeLimits = {
 } as const
 
 // defaultRuntimeSettings 仅用于首屏渲染的占位，真实值由接口返回后覆盖。
+// 数值与 internal/setting/defaults.go 保持一致，避免首屏闪现与服务端不同的值。
 export function defaultRuntimeSettings(): RuntimeSettings {
   return {
     memory: { history_window: 20 },
-    react: { max_iterations: 30, step_timeout: 120, error_retry: 2 },
+    react: { max_iterations: 20, step_timeout: 60, error_retry: 2 },
     subagent: {
-      max_concurrency: 4,
+      max_concurrency: 5,
       exec_timeout: '5m',
-      max_task_length: 3000,
+      max_task_length: 16000,
       max_result_length: 8000,
     },
-    attachment: { max_size: 10, max_total_size: 50, max_count: 5, allowed_types: [] },
+    attachment: { max_size: 50, max_total_size: 100, max_count: 10, allowed_types: [] },
     rate_limit: {
       enabled: false,
       global_qps: 0,

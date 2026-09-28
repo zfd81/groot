@@ -182,6 +182,11 @@ func (r RuntimeSettings) Validate() error {
 		if strings.TrimSpace(t) == "" {
 			return fmt.Errorf("%w: attachment.allowed_types 不允许空白项", ErrInvalidSetting)
 		}
+		// 「.」「..」这类只剩点号的项归一化后为空，会被静默丢弃，导致界面显示的
+		// 白名单与实际生效的不一致。在保存环节直接报错，而不是落库后再兜。
+		if strings.Trim(strings.TrimSpace(t), ".") == "" {
+			return fmt.Errorf("%w: attachment.allowed_types 项 %q 无效，需包含扩展名", ErrInvalidSetting, t)
+		}
 	}
 
 	if err := checkFloatRange("security.rate_limit.global_qps", r.RateLimit.GlobalQPS,
@@ -349,10 +354,45 @@ func (r RuntimeSettings) rows() []*repo.Setting {
 	return out
 }
 
-// encodeAllowedTypes 把附件类型白名单编码为 JSON 数组字符串，
+// normalizeAllowedTypes 把附件类型白名单归一化为「不带前导点的小写扩展名」。
+//
+// UI 输入框与 README 提示的格式是 ".png, .jpg"，而校验侧（attachment 包）拿到
+// 的扩展名已由 filepath.Ext 去点。此处在写表前统一形式，使入库值与 UI 回读值
+// 都是规范形态。消费侧另有一道同样的归一化，负责兜住存量数据。
+//
+// 归一化后去重并保持首次出现的顺序：".PNG, png" 这类写法归一化后是同一个
+// 扩展名，留着重复项会让界面回读显示两个相同条目，还多占 MaxAttachmentTypeCount
+// 的额度。
+//
+// nil 输入返回 nil，由 encodeAllowedTypes 编码为 "[]"，语义是「不限制类型」。
+func normalizeAllowedTypes(types []string) []string {
+	if types == nil {
+		return nil
+	}
+	out := make([]string, 0, len(types))
+	seen := make(map[string]struct{}, len(types))
+	for _, t := range types {
+		s := strings.ToLower(strings.TrimSpace(t))
+		s = strings.TrimPrefix(s, ".")
+		if s == "" {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+// encodeAllowedTypes 把附件类型白名单归一化后编码为 JSON 数组字符串，
 // 是 attachment.allowed_types 写表时的唯一编码（rows 与 ImportLegacy 共用）。
+// 归一化放在这里而非各调用点：两条写入路径都经过它，其中 ImportLegacy 不走
+// Validate，因此只有在此处统一才能保证入库值一律是规范形态。
 // nil 切片被 Marshal 成 null，回落为空数组，语义是「不限制类型」。
 func encodeAllowedTypes(types []string) string {
+	types = normalizeAllowedTypes(types)
 	data, err := json.Marshal(types)
 	if err != nil || types == nil {
 		return "[]"

@@ -1058,8 +1058,21 @@ async function openAgentTools(a: AgentInfo) {
   min-width: 0;
   padding: 16px;
   overflow-y: auto;
-  /* Firefox：细滚动条，轨道透明只留滑块 */
+  /* Firefox：细滚动条，轨道与滑块常态皆透明，见下方 :hover 规则 */
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.settings-menu {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+/* 滚动条仅在指针进入该区域时显形。常态把滑块设为透明而不是收起滚动条
+   （scrollbar-width: none / display: none），是为了让 6px 宽度始终占位：
+   否则滑块出现的一瞬会挤压内容宽度，整个面板的文字横向跳一下。 */
+.settings-content:hover,
+.settings-menu:hover {
   scrollbar-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.35)) transparent;
 }
 
@@ -1076,13 +1089,14 @@ async function openAgentTools(a: AgentInfo) {
 
 .settings-content::-webkit-scrollbar-thumb,
 .settings-menu::-webkit-scrollbar-thumb {
-  background: var(--el-border-color-darker, rgba(127, 127, 127, 0.35));
+  background: transparent;
   border-radius: 3px;
+  transition: background-color 0.2s;
 }
 
-.settings-menu {
-  scrollbar-width: thin;
-  scrollbar-color: var(--el-border-color-darker, rgba(127, 127, 127, 0.35)) transparent;
+.settings-content:hover::-webkit-scrollbar-thumb,
+.settings-menu:hover::-webkit-scrollbar-thumb {
+  background: var(--el-border-color-darker, rgba(127, 127, 127, 0.35));
 }
 
 .row {

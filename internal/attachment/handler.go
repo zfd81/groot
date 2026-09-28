@@ -31,10 +31,11 @@ const (
 
 // Handler handles attachment validation
 type Handler struct {
-	maxSize      int64
-	maxTotalSize int64
-	maxCount     int
-	allowedTypes []string
+	maxSize       int64
+	maxTotalSize  int64
+	maxCount      int
+	restrictTypes bool
+	allowedTypes  []string
 }
 
 // NewHandler creates a new attachment handler
@@ -43,7 +44,11 @@ func NewHandler(cfg config.AttachmentConfig) *Handler {
 		maxSize:      int64(cfg.MaxSize) * 1024 * 1024,
 		maxTotalSize: int64(cfg.MaxTotalSize) * 1024 * 1024,
 		maxCount:     cfg.MaxCount,
-		allowedTypes: cfg.AllowedTypes,
+		// restrictTypes 取自原始配置而非归一化结果：用户配置了白名单就一定生效，
+		// 即使条目全是无效值（如只填一个「.」）也按「拒绝所有」处理，不会因为
+		// 归一化后列表变空而反转成「不限制」。
+		restrictTypes: len(cfg.AllowedTypes) > 0,
+		allowedTypes:  normalizeExtensions(cfg.AllowedTypes),
 	}
 }
 
@@ -79,16 +84,16 @@ func (h *Handler) Validate(attachments []Attachment) error {
 				}
 			}
 		}
-		if att.Type == "file" && att.Content != "" {
-			estimatedSize := int64(len(att.Content)) * 3 / 4
-			if estimatedSize > h.maxSize {
-				return &AttachmentError{
-					Code:    ErrCodeSizeExceeded,
-					Message: fmt.Sprintf("附件大小超过限制：%s (最大 %d MB，实际约 %d MB)", att.Name, h.maxSize/1024/1024, estimatedSize/1024/1024),
-				}
+		// 体积限制适用于全部附件类型：除文本内容外，任何类型的上传都要受单文件
+		// 上限约束，并计入总量。
+		estimatedSize := int64(len(att.Content)) * 3 / 4
+		if estimatedSize > h.maxSize {
+			return &AttachmentError{
+				Code:    ErrCodeSizeExceeded,
+				Message: fmt.Sprintf("附件大小超过限制：%s (最大 %d MB，实际约 %d MB)", att.Name, h.maxSize/1024/1024, estimatedSize/1024/1024),
 			}
-			totalSize += estimatedSize
 		}
+		totalSize += estimatedSize
 	}
 
 	if totalSize > h.maxTotalSize {
@@ -101,15 +106,44 @@ func (h *Handler) Validate(attachments []Attachment) error {
 }
 
 func (h *Handler) isTypeAllowed(ext string) bool {
-	if len(h.allowedTypes) == 0 {
+	if !h.restrictTypes {
 		return true
 	}
 	for _, allowed := range h.allowedTypes {
-		if strings.ToLower(allowed) == strings.ToLower(ext) {
+		if allowed == ext {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeExtensions 把白名单配置归一化为「不带前导点的小写扩展名」，与 Validate
+// 中 filepath.Ext 去点后的形式对齐。
+//
+// 归一化在写入侧与消费侧各做一次。本函数是消费侧这一道，作用是兜住存量数据：
+// 老 config.yaml 迁移进来的、或此前经 UI 写入的带点值，无需数据迁移脚本即可
+// 正确匹配。
+//
+// 多段扩展名（如 .tar.gz）只去前导点，得到 tar.gz；而 filepath.Ext 只取最后
+// 一段，实际比较时拿到的是 gz，两者不会相等，因此这类配置项不会命中。这是
+// 已知限制，方向是拒绝而非放行，故不做特殊处理。
+//
+// nil 输入返回 nil。是否限制类型由 Handler.restrictTypes 承载，不依赖本函数的
+// 返回长度。
+func normalizeExtensions(types []string) []string {
+	if types == nil {
+		return nil
+	}
+	out := make([]string, 0, len(types))
+	for _, t := range types {
+		s := strings.ToLower(strings.TrimSpace(t))
+		s = strings.TrimPrefix(s, ".")
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // Attachment represents an incoming attachment

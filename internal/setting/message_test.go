@@ -193,3 +193,18 @@ func TestSetMessage_WritesOnlyKnownSenders(t *testing.T) {
 		}
 	}
 }
+
+// TestConfigurableSenders 验证导出的渠道列表内容正确，且返回副本——
+// 调用方修改返回值不应污染包内状态。
+func TestConfigurableSenders(t *testing.T) {
+	got := ConfigurableSenders()
+	if len(got) != 1 || got[0] != SenderWebhook {
+		t.Fatalf("ConfigurableSenders() = %v, want [%s]", got, SenderWebhook)
+	}
+
+	got[0] = "tampered"
+	again := ConfigurableSenders()
+	if again[0] != SenderWebhook {
+		t.Errorf("返回值被外部修改后污染了包内状态: %v", again)
+	}
+}

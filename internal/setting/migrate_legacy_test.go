@@ -214,8 +214,10 @@ message:
 	if a.MaxSize != 200 || a.MaxTotalSize != 500 || a.MaxCount != 9 {
 		t.Errorf("attachment = %+v", a)
 	}
-	if len(a.AllowedTypes) != 2 || a.AllowedTypes[0] != ".pdf" || a.AllowedTypes[1] != ".txt" {
-		t.Errorf("attachment.allowed_types = %v, want [.pdf .txt]", a.AllowedTypes)
+	// 老 YAML 里写的是 [".pdf", ".txt"]，写表时经 encodeAllowedTypes 归一化为
+	// 不带点的小写形式，与消费侧 filepath.Ext 去点后的扩展名一致
+	if len(a.AllowedTypes) != 2 || a.AllowedTypes[0] != "pdf" || a.AllowedTypes[1] != "txt" {
+		t.Errorf("attachment.allowed_types = %v, want [pdf txt]", a.AllowedTypes)
 	}
 
 	sec, err := s.Security(ctx)

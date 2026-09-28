@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 )
@@ -48,6 +49,7 @@ type CallAgentTool struct {
 	maxTaskLen        int
 	maxResultLen      int
 	execTimeout       time.Duration
+	react             config.ReactConfig // 本次请求的推理循环参数，透传给 BuildAgentTool
 	memory            *memory.Manager
 	runtimeState      *RuntimeState
 	tokenAccumulators *TokenAccumulators
@@ -63,6 +65,7 @@ type CallAgentToolConfig struct {
 	MaxTaskLen        int
 	MaxResultLen      int
 	ExecTimeout       time.Duration
+	React             config.ReactConfig
 	Memory            *memory.Manager
 	RuntimeState      *RuntimeState
 	TokenAccumulators *TokenAccumulators
@@ -79,6 +82,7 @@ func NewCallAgentTool(cfg CallAgentToolConfig) *CallAgentTool {
 		maxTaskLen:        cfg.MaxTaskLen,
 		maxResultLen:      cfg.MaxResultLen,
 		execTimeout:       cfg.ExecTimeout,
+		react:             cfg.React,
 		memory:            cfg.Memory,
 		runtimeState:      cfg.RuntimeState,
 		tokenAccumulators: cfg.TokenAccumulators,
@@ -139,7 +143,7 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// 现场按运行时父 model 构造子 Agent Tool —— 让子 Agent 跟随主 Agent 当前 model。
 	// 详细优先级见 SubAgentEntry.BuildAgentTool 注释。
 	parentModel := ParentModelFromContext(ctx)
-	subTool, resolvedModel, buildErr := entry.BuildAgentTool(execCtx, parentModel)
+	subTool, resolvedModel, buildErr := entry.BuildAgentTool(execCtx, parentModel, t.react)
 	if buildErr != nil {
 		return "", fmt.Errorf("build subagent tool: %w", buildErr)
 	}

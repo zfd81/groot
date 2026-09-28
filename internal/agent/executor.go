@@ -207,6 +207,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				MaxTaskLen:        rt.SubAgent.MaxTaskLength,
 				MaxResultLen:      rt.SubAgent.MaxResultLength,
 				ExecTimeout:       execTimeout,
+				React:             rt.React,
 				Memory:            e.memoryManager,
 				RuntimeState:      e.runtimeState,
 				TokenAccumulators: e.tokenAccumulators,

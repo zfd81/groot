@@ -367,14 +367,18 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 		msgCfg = config.MessageConfig{QueueSize: boot.Message.QueueSize, Workers: boot.Message.Workers, Senders: map[string]config.SenderConf{}}
 	}
 	msgLayer := message.NewLayer(msgCfg, log)
-	webhookConf := msgCfg.Senders[setting.SenderWebhook]
-	msgLayer.Register(setting.SenderWebhook, senders.NewWebhook(webhookConf.URL), webhookConf)
+	for _, name := range setting.ConfigurableSenders() {
+		senderConf := msgCfg.Senders[name]
+		if s := senders.New(name, senderConf); s != nil {
+			msgLayer.Register(name, s, senderConf)
+		}
+	}
 	msgLayer.Start()
 	log.Info("消息层已启动")
 
 	// Load sub-agents (fixed directory: {GROOT_HOME}/subagents)
 	subAgentDir := filepath.Join(homeDir, "subagents")
-	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.React, cfg.SubAgent, modelService, log)
+	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.SubAgent, modelService, log)
 	log.Info("SubAgents 加载完成", zap.Strings("agents", subAgentReg.Names()))
 
 	// Create executor (used by both API server and schedule runner)

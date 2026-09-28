@@ -26,6 +26,35 @@ import (
 	"github.com/zfd81/groot/internal/mcp"
 )
 
+// reactRuntime 是从 config.ReactConfig 派生出的、可直接喂给 adk 的推理参数。
+type reactRuntime struct {
+	maxIterations int                   // 已应用默认值（>=1）
+	retryConfig   *adk.ModelRetryConfig // ErrorRetry 为 0 时为 nil
+	stepTimeout   time.Duration         // 单步 LLM 调用超时
+}
+
+// deriveReactRuntime 把配置值换算成 adk 需要的形式。
+//
+// 每次 call_agent 调用现场执行，与 BuildAgentTool 跟随父 Agent model 的做法
+// 一致：设置面板改动推理参数后，下一次子 Agent 调用即用新值，不必重启。
+// Solo 模式（直接以某个子 Agent 身份对话）走 Executor 的 rt.React，
+// 两条路径改动后取值一致。
+func deriveReactRuntime(cfg config.ReactConfig) reactRuntime {
+	maxIter := cfg.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 20
+	}
+	var retryCfg *adk.ModelRetryConfig
+	if cfg.ErrorRetry > 0 {
+		retryCfg = &adk.ModelRetryConfig{MaxRetries: cfg.ErrorRetry}
+	}
+	return reactRuntime{
+		maxIterations: maxIter,
+		retryConfig:   retryCfg,
+		stepTimeout:   time.Duration(cfg.StepTimeout) * time.Second,
+	}
+}
+
 // SubAgentEntry 单个子 Agent 的运行时数据（启动期一次性构建，运行时只读）。
 //
 // v3.8 架构变更：不再预构建 ChatModel/ChatModelAgent/AgentTool。原因——
@@ -46,12 +75,11 @@ type SubAgentEntry struct {
 	SkillBK     einoskill.Backend // 供 /agents、/skills 查询；Watcher 热更新入口
 
 	// 构建子 ChatModelAgent 所需的纯配置；BuildAgentTool 每次现场用这些拼装。
-	AgentMdModel  string                       // agent.md 中显式声明的 model；空字符串表示跟随父 Agent
-	MaxIterations int                          // 已应用默认值（>=1）
-	RetryConfig   *adk.ModelRetryConfig        // 可空
-	SkillMW       adk.ChatModelAgentMiddleware // 已构建的 skill middleware；可空
-	StepTimeout   time.Duration                // 单步 LLM 调用超时
-	Models        *llm.ModelService            // 模型配置读取入口
+	// 推理循环参数（迭代/重试/超时）不在此列：它们随每次调用从运行时配置派生，
+	// 见 deriveReactRuntime。
+	AgentMdModel string                       // agent.md 中显式声明的 model；空字符串表示跟随父 Agent
+	SkillMW      adk.ChatModelAgentMiddleware // 已构建的 skill middleware；可空
+	Models       *llm.ModelService            // 模型配置读取入口
 
 	// testTool 仅供 _test.go 注入预制 InvokableTool 跳过 BuildAgentTool 的真实
 	// LLM dial。生产路径绝不写入；BuildAgentTool 在非 nil 时直接返回它。
@@ -280,6 +308,19 @@ func scanSubAgentDirs(dir string, log *logger.Logger) []parsedSubAgent {
 	return result
 }
 
+// resolveMaxConcurrency 决定 semaphore 的初始容量。
+//
+// 合法区间由 setting.MinSubAgentMaxConcurrency..MaxSubAgentMaxConcurrency（1..100）
+// 定义，校验层已把关，此处只兜住「配置缺失」这一种情况：零值或负数回落到默认 5。
+// 不对区间内的值做任何抬升——用户在 UI 里设的 2 必须在重启后仍是 2，否则界面
+// 显示与实际行为分叉。
+func resolveMaxConcurrency(n int) int {
+	if n <= 0 {
+		return 5
+	}
+	return n
+}
+
 // BuildSubAgentRegistry 启动期一次性构建子 Agent 注册表。
 //
 // dir 通常是 {GROOT_HOME}/subagents。流程：
@@ -293,12 +334,11 @@ func scanSubAgentDirs(dir string, log *logger.Logger) []parsedSubAgent {
 func BuildSubAgentRegistry(
 	ctx context.Context,
 	dir string,
-	reactCfg config.ReactConfig,
 	subCfg config.SubAgentConfig,
 	models *llm.ModelService,
 	log *logger.Logger,
 ) *SubAgentRegistry {
-	maxConc := max(subCfg.MaxConcurrency, 5)
+	maxConc := resolveMaxConcurrency(subCfg.MaxConcurrency)
 	reg := &SubAgentRegistry{
 		entries: make(map[string]*SubAgentEntry),
 		sem:     semaphore.NewWeighted(int64(maxConc)),
@@ -307,7 +347,7 @@ func BuildSubAgentRegistry(
 	}
 
 	for _, p := range scanSubAgentDirs(dir, log) {
-		entry, err := buildSubAgentEntry(ctx, p, reactCfg, models, log)
+		entry, err := buildSubAgentEntry(ctx, p, models, log)
 		if err != nil {
 			log.Error("build subagent failed, skip", zap.String("name", p.name), zap.Error(err))
 			continue
@@ -331,7 +371,6 @@ func BuildSubAgentRegistry(
 func buildSubAgentEntry(
 	ctx context.Context,
 	p parsedSubAgent,
-	reactCfg config.ReactConfig,
 	models *llm.ModelService,
 	log *logger.Logger,
 ) (*SubAgentEntry, error) {
@@ -368,29 +407,17 @@ func buildSubAgentEntry(
 		return nil, fmt.Errorf("skill middleware: %w", err)
 	}
 
-	// 3. ChatModelAgent 装配材料（不立即构建——见 SubAgentEntry 注释）
-	maxIter := reactCfg.MaxIterations
-	if maxIter <= 0 {
-		maxIter = 20
-	}
-	var retryCfg *adk.ModelRetryConfig
-	if reactCfg.ErrorRetry > 0 {
-		retryCfg = &adk.ModelRetryConfig{MaxRetries: reactCfg.ErrorRetry}
-	}
-	stepTimeout := time.Duration(reactCfg.StepTimeout) * time.Second
-
+	// 3. ChatModelAgent 装配材料（不立即构建——见 SubAgentEntry 注释）。
+	// 推理循环参数不在此固化，每次 BuildAgentTool 现场从运行时配置派生。
 	return &SubAgentEntry{
-		Name:          p.name,
-		Description:   p.md.Description,
-		Instruction:   p.md.Content,
-		MCPManager:    mcpMgr,
-		SkillBK:       skillBK,
-		AgentMdModel:  p.md.Model,
-		MaxIterations: maxIter,
-		RetryConfig:   retryCfg,
-		SkillMW:       skillMW,
-		StepTimeout:   stepTimeout,
-		Models:        models,
+		Name:         p.name,
+		Description:  p.md.Description,
+		Instruction:  p.md.Content,
+		MCPManager:   mcpMgr,
+		SkillBK:      skillBK,
+		AgentMdModel: p.md.Model,
+		SkillMW:      skillMW,
+		Models:       models,
 	}, nil
 }
 
@@ -403,9 +430,12 @@ func buildSubAgentEntry(
 //  2. parentModelName — 父任务运行时 model（编排模式默认）
 //  3. ModelService 解析默认模型兜底
 //
+// react 是本次调用的推理循环参数（迭代/重试/超时），来自调用方当次读取的
+// 运行时配置，因此设置面板改动后下一次 call_agent 即生效。
+//
 // 返回 (InvokableTool, resolvedModel, error)。resolvedModel 反映本次调用实际选用的
 // model 名（即传给 NewChatModel 的模型配置名），调用方可写入 ChatRecord.Model。
-func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, extraTools ...tool.BaseTool) (tool.InvokableTool, string, error) {
+func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName string, react config.ReactConfig, extraTools ...tool.BaseTool) (tool.InvokableTool, string, error) {
 	modelName := e.AgentMdModel
 	if modelName == "" {
 		modelName = parentModelName
@@ -417,12 +447,14 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 		return e.testTool, modelName, nil
 	}
 
+	rr := deriveReactRuntime(react)
+
 	mdl, err := e.Models.GetByName(ctx, modelName)
 	if err != nil {
 		return nil, modelName, fmt.Errorf("模型配置不可用: %w", err)
 	}
 
-	chatModel, err := llm.NewChatModel(ctx, mdl, e.StepTimeout)
+	chatModel, err := llm.NewChatModel(ctx, mdl, rr.stepTimeout)
 	if err != nil {
 		return nil, mdl.Name, fmt.Errorf("chat model: %w", err)
 	}
@@ -436,7 +468,7 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 		Description:   e.Description,
 		Instruction:   e.Instruction,
 		Model:         chatModel,
-		MaxIterations: e.MaxIterations,
+		MaxIterations: rr.maxIterations,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools},
 			// 叶子节点（子 Agent）不需要 EmitInternalEvents，由父 Agent 透出
@@ -445,8 +477,8 @@ func (e *SubAgentEntry) BuildAgentTool(ctx context.Context, parentModelName stri
 	if e.SkillMW != nil {
 		agentCfg.Handlers = []adk.ChatModelAgentMiddleware{e.SkillMW}
 	}
-	if e.RetryConfig != nil {
-		agentCfg.ModelRetryConfig = e.RetryConfig
+	if rr.retryConfig != nil {
+		agentCfg.ModelRetryConfig = rr.retryConfig
 	}
 	cmAgent, err := adk.NewChatModelAgent(ctx, agentCfg)
 	if err != nil {
