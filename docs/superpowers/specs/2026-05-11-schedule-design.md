@@ -1,6 +1,6 @@
 # 定时任务调度系统设计
 
-**日期**：2026-05-11（初版）/ 2026-06-10（迁移到数据库后端后重写）/ 2026-06-26（移除 memory 清理调度）
+**日期**：2026-05-11（初版）/ 2026-06-10（迁移到数据库后端后重写）/ 2026-06-26（移除 memory 清理调度）/ 2026-09-30（通知改由 LLM 调用 MCP 完成）
 **状态**：实现稿
 **作者**：zfd81 + Claude
 
@@ -10,7 +10,7 @@
 
 ### 1.1 概述
 
-为 Groot 提供定时任务调度能力。用户通过对话创建定时任务，Leader 实例在指定时间自动执行 Agent 指令，执行结果通过消息层推送通知。
+为 Groot 提供定时任务调度能力。用户通过对话创建定时任务，Leader 实例在指定时间自动执行 Agent 指令，任务结束后可按用户以自然语言描述的通知要求，由 LLM 调用已配置的 MCP 工具发送通知（详见 [定时任务通知设计](2026-09-30-schedule-notification-design.md)）。
 
 ### 1.2 核心原则
 
@@ -18,7 +18,7 @@
 - **统一调度引擎**：使用 gocron 统一管理所有定时任务（用户任务 + active 任务重注册兜底）
 - **数据库持久化**：所有任务定义和执行历史走 `schedule.ScheduleRepo` 接口，落到 `schedule_tasks` / `schedule_executions` 两张表（详见 [数据库后端设计 §1.9.1 / §1.9.2](2026-06-10-database-backend-design.md)）
 - **三种状态**：`active` / `disabled` / `archive`，存放于 `schedule_tasks.status` 列
-- **消息层解耦**：执行结果推入消息层，由消息层统一路由分发，不经过 LLM
+- **通知交给 LLM**：通知要求以自然语言描述，任务结束后由 LLM 在同一会话中调用 MCP 工具完成发送
 
 ### 1.3 源码目录
 
@@ -33,7 +33,8 @@ internal/
 │   ├── storage.go          # Storage — ScheduleRepo 上层薄壳，统一 task/execution 操作 API
 │   ├── engine.go           # Engine — 启动时 ListActiveTasks 并注册到 gocron
 │   ├── manager.go          # Manager — 任务生命周期管理（CRUD、启停、归档、Rerun）
-│   ├── runner.go           # Runner — 任务执行器，调用 agent.Executor + 消息层
+│   ├── runner.go           # Runner — 任务执行器，调用 agent.Executor
+│   ├── notify.go           # 收尾通知轮 — 按通知要求构造指令，在任务会话中再执行一轮
 │   ├── sync.go             # 定期重注册 active 任务到 gocron（兜底）
 │   ├── tools.go            # 8 个内置工具，Agent 侧
 │   ├── idgen.go            # generateExecutionID — 基于随机字节生成 execution_id
@@ -87,9 +88,11 @@ type TaskDef struct {
     SystemPrompt string `json:"system_prompt"`
 }
 
+// NotificationConfig 为自然语言通知要求，空串表示不通知。
+// 自定义 UnmarshalJSON：非字符串值（如数组、null）解码为空串。
 type NotificationConfig struct {
-    OnSuccess []string `json:"on_success"`
-    OnFailure []string `json:"on_failure"`
+    OnSuccess string `json:"on_success"`
+    OnFailure string `json:"on_failure"`
 }
 ```
 
@@ -117,18 +120,17 @@ type NotificationConfig struct {
 
 ```go
 type ExecutionRecord struct {
-    ExecutionID   string               `json:"execution_id"`
-    TaskID        string               `json:"task_id"`
-    StartedAt     time.Time            `json:"started_at"`
-    FinishedAt    *time.Time           `json:"finished_at"`
-    TriggerType   string               `json:"trigger_type"`     // cron / once / interval / manual
-    SessionID     string               `json:"session_id"`
-    ChatID        string               `json:"chat_id"`
-    Status        string               `json:"status"`           // running / completed / failed / cancelled
-    DurationMs    int64                `json:"duration_ms"`
-    StepCount     int                  `json:"step_count"`
-    Error         string               `json:"error"`
-    Notifications []NotificationResult `json:"notifications"`
+    ExecutionID string     `json:"execution_id"`
+    TaskID      string     `json:"task_id"`
+    StartedAt   time.Time  `json:"started_at"`
+    FinishedAt  *time.Time `json:"finished_at"`
+    TriggerType string     `json:"trigger_type"` // cron / once / interval / manual
+    SessionID   string     `json:"session_id"`
+    ChatID      string     `json:"chat_id"`
+    Status      string     `json:"status"`       // running / completed / failed / cancelled
+    DurationMs  int64      `json:"duration_ms"`
+    StepCount   int        `json:"step_count"`
+    Error       string     `json:"error"`
 }
 ```
 
@@ -208,9 +210,9 @@ func NewStorage(r ScheduleRepo, log *logger.Logger) *Storage
 8. 构造 ExecutionRecord（chat_id = startTime.Format("20060102150405")，
    error = agentTask.Error.Message 若非 nil）
    storage.SaveExecution(task.ID, record)
-9. sendNotifications(task, status, agentTask.Result)
-   按 status 选 OnSuccess / OnFailure 渠道，eventType="schedule.{status}"
-   发布到 message.Layer，goroutine 异步收集结果并记日志
+9. notify(task, sessionID, status, agentTask.Result, record.Error, ...)
+   按 status 选 OnSuccess / OnFailure 通知要求，为空则跳过；
+   否则在同一 session 中同步执行一轮收尾通知（2 分钟超时），由 LLM 调用 MCP 工具发送
 10. 一次性任务（ParseScheduleType==Once）且 status == "completed" → MoveTask(taskID, "active", "archive")
     （失败任务保留在 active，不归档；用户可查执行记录后手动处理）
 11. 记 INFO 完成日志
@@ -327,8 +329,8 @@ type Engine struct {
 | `instruction` | 是 | 要执行的指令 |
 | `model` | 否 | 指定 LLM 模型 |
 | `missed_policy` | 否 | `run_once` / `skip`，默认 `run_once` |
-| `notify_on_success` | 否 | 成功通知渠道列表 |
-| `notify_on_failure` | 否 | 失败通知渠道列表 |
+| `notify_on_success` | 否 | 成功后的通知要求（自然语言，需已配置相应 MCP 工具），留空不通知 |
+| `notify_on_failure` | 否 | 失败后的通知要求（自然语言，需已配置相应 MCP 工具），留空不通知 |
 
 > `system_prompt` 不在工具入参中暴露：`TaskDef.SystemPrompt` 字段保留供内部预设。
 
@@ -371,7 +373,7 @@ schedule:
 
 ### 1.15 错误处理
 
-- **任务执行失败**：记 ERROR、保存执行记录（status=failed）、发布失败通知，recurring 任务下次继续执行
+- **任务执行失败**：记 ERROR、保存执行记录（status=failed）、按失败通知要求执行收尾通知轮，recurring 任务下次继续执行
 - **panic 恢复**：gocron 内置 panic 恢复，不会导致调度器崩溃
 - **执行超时**：复用 `agent.Executor` 的超时机制
 - **DB 错误**：透传 `schedule.ErrNotFound` / `schedule.ErrConflict`；调用方按需 `errors.Is` 判定
@@ -423,3 +425,9 @@ schedule:
 
 - **移除**：`gocron` 中的 memory 清理 Job（`memory.NewCleanupTask`）及配套的 `ParseCleanupTime` 工具函数
 - **保留**：active 任务定期重注册兜底 Job（`schedule.NewSyncTask`）
+
+#### 通知（2026-09-30）
+
+- **调整**：`NotificationConfig` 字段由渠道列表 `[]string` 改为自然语言通知要求 `string`；旧数组格式读取时视为空
+- **调整**：核心原则"消息层解耦"改为"通知交给 LLM"；`Runner` 不再依赖消息层，任务结束后执行收尾通知轮（`notify.go`），由 LLM 调用 MCP 工具发送
+- **移除**：`ExecutionRecord.Notifications` 字段与 `NotificationResult` 类型

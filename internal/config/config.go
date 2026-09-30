@@ -13,7 +13,6 @@ type Config struct {
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
 	Schedule   ScheduleConfig   `yaml:"schedule"`
-	Message    MessageConfig    `yaml:"message"`
 	SubAgent   SubAgentConfig   `yaml:"subagent"`
 	Security   SecurityConfig   `yaml:"security"`
 	Logging    LoggingConfig    `yaml:"logging"`
@@ -42,19 +41,6 @@ type ScheduleConfig struct {
 	Enabled            bool   `yaml:"enabled"`              // 是否允许在对话中创建定时任务（默认关闭）
 	MaxConcurrentTasks int    `yaml:"max_concurrent_tasks"` // 最大并发执行数
 	SyncInterval       string `yaml:"sync_interval"`        // 目录同步间隔
-}
-
-// MessageConfig 消息通知配置
-type MessageConfig struct {
-	QueueSize int                   `yaml:"queue_size"` // 发送队列容量
-	Workers   int                   `yaml:"workers"`    // 发送工作协程数
-	Senders   map[string]SenderConf `yaml:"senders"`    // 发送器配置
-}
-
-// SenderConf 单个发送器配置
-type SenderConf struct {
-	Enabled bool   `yaml:"enabled"`
-	URL     string `yaml:"url,omitempty"`
 }
 
 // SubAgentConfig 子 Agent 调度配置

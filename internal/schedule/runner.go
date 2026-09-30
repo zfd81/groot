@@ -11,30 +11,31 @@ import (
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/message"
 )
+
+// taskExecutor runs an agent task within a session. *agent.Executor satisfies it.
+type taskExecutor interface {
+	Execute(ctx context.Context, sessionID string, task *agent.Task, sse *agent.SSEWriter)
+}
 
 // Runner executes scheduled tasks
 type Runner struct {
-	executor    *agent.Executor
-	memoryMgr   *memory.Manager
-	msgLayer    *message.Layer
-	storage     *Storage
-	log         *logger.Logger
+	executor  taskExecutor
+	memoryMgr *memory.Manager
+	storage   *Storage
+	log       *logger.Logger
 }
 
 // NewRunner creates a new task runner
 func NewRunner(
 	exec *agent.Executor,
 	mem *memory.Manager,
-	msg *message.Layer,
 	storage *Storage,
 	log *logger.Logger,
 ) *Runner {
 	return &Runner{
 		executor:  exec,
 		memoryMgr: mem,
-		msgLayer:  msg,
 		storage:   storage,
 		log:       log,
 	}
@@ -110,8 +111,8 @@ func (r *Runner) Run(taskID string) func() {
 			r.log.Error("保存执行记录失败", zap.String("task_id", task.ID), zap.Error(err))
 		}
 
-		// Send notifications
-		r.sendNotifications(task, status, agentTask.Result)
+		// Notification round
+		r.notify(task, sessionID, status, agentTask.Result, record.Error, startTime, time.Duration(durationMs)*time.Millisecond)
 
 		// One-shot task auto-archive
 		if ParseScheduleType(task.Schedule) == ScheduleTypeOnce && status == "completed" {
@@ -174,7 +175,7 @@ func (r *Runner) RunImmediate(task *Task) error {
 		r.log.Error("保存执行记录失败", zap.String("task_id", task.ID), zap.Error(err))
 	}
 
-	r.sendNotifications(task, status, agentTask.Result)
+	r.notify(task, sessionID, status, agentTask.Result, record.Error, startTime, time.Duration(durationMs)*time.Millisecond)
 	return nil
 }
 
@@ -194,51 +195,4 @@ func (r *Runner) detectTriggerType(schedule string) string {
 	default:
 		return "cron"
 	}
-}
-
-func (r *Runner) sendNotifications(task *Task, status string, result string) {
-	var channels []string
-	if status == "completed" {
-		channels = task.Notification.OnSuccess
-	} else {
-		channels = task.Notification.OnFailure
-	}
-
-	if len(channels) == 0 {
-		return
-	}
-
-	eventType := fmt.Sprintf("schedule.%s", status)
-	resultCh, err := r.msgLayer.Publish(context.Background(), message.Event{
-		Type:    eventType,
-		Time:    time.Now(),
-		Title:   task.Name,
-		Content: result,
-		Metadata: map[string]any{
-			"task_id": task.ID,
-		},
-	}, channels)
-
-	if err != nil {
-		r.log.Error("消息发布失败", zap.String("task_id", task.ID), zap.Error(err))
-		return
-	}
-
-	go func() {
-		results := <-resultCh
-		for _, res := range results {
-			if res.Success {
-				r.log.Info("通知发送成功",
-					zap.String("task_id", task.ID),
-					zap.String("channel", res.Channel),
-				)
-			} else {
-				r.log.Error("通知发送失败",
-					zap.String("task_id", task.ID),
-					zap.String("channel", res.Channel),
-					zap.String("reason", res.Message),
-				)
-			}
-		}
-	}()
 }

@@ -256,6 +256,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			}
 		}
 		task.Status = StatusFailed
+		task.Error = &TaskError{Code: "subagent_unavailable", Message: soloErr.Error()}
 		return
 	}
 
@@ -441,8 +442,12 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			sessionLog.Error("追加历史消息失败: " + appendErr.Error())
 		}
 
-		// 回写最终状态到 task，供调用方（chat handler）查询
+		// 回写最终状态、结果与错误到 task，供调用方（chat handler、定时任务）查询
 		task.Status = TaskStatus(chatStatus)
+		task.Result = chatResult
+		if chatError != nil {
+			task.Error = &TaskError{Code: chatError.Code, Message: chatError.Message}
+		}
 	}
 }
 

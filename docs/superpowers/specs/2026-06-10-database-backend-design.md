@@ -470,7 +470,7 @@ CREATE TABLE schedule_executions (
 - `status` 与 chat 状态枚举一致：`'running' | 'completed' | 'failed' | 'cancelled'`
 - 表是 append-only：`SaveExecution` 写入初始行（`status='running'`，`finished_at=NULL`），`CompleteExecution` 回填结果
 
-**`ExecutionRecord` 的字段构成**：见 `internal/schedule/types.go`，关键字段为 `ExecutionID` / `TaskID` / `StartedAt time.Time` / `FinishedAt *time.Time` / `Status string` / `DurationMs int64` / `StepCount int` / `Error string` / `Notifications []NotificationResult`。
+**`ExecutionRecord` 的字段构成**：见 `internal/schedule/types.go`，关键字段为 `ExecutionID` / `TaskID` / `StartedAt time.Time` / `FinishedAt *time.Time` / `Status string` / `DurationMs int64` / `StepCount int` / `Error string`。
 
 **索引策略**：
 

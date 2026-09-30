@@ -14,8 +14,8 @@ import (
 
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/repo"
+	"github.com/zfd81/groot/internal/repo/clustermsgdb"
 	"github.com/zfd81/groot/internal/repo/memberdb"
-	"github.com/zfd81/groot/internal/repo/messagedb"
 )
 
 // newTestDB 建一个临时 SQLite 库。多个 MessageService 共用同一个 *sqlx.DB
@@ -32,23 +32,23 @@ func newTestDB(t *testing.T) (*sqlx.DB, db.Dialect) {
 
 func newTestMessageService(t *testing.T, sqlxDB *sqlx.DB, dialect db.Dialect, instanceID string) *MessageService {
 	t.Helper()
-	return NewMessageService(messagedb.New(sqlxDB, dialect), newTestLogger(),
+	return NewMessageService(clustermsgdb.New(sqlxDB, dialect), newTestLogger(),
 		func() string { return instanceID })
 }
 
-// flakyMessageRepo 让前 failures 次 Insert 返回错误，用于验证 SendMessage 的重试。
-type flakyMessageRepo struct {
-	repo.MessageRepo
+// flakyClusterMessageRepo 让前 failures 次 Insert 返回错误，用于验证 SendMessage 的重试。
+type flakyClusterMessageRepo struct {
+	repo.ClusterMessageRepo
 	failures int32
 	calls    int32
 }
 
-func (r *flakyMessageRepo) Insert(ctx context.Context, m *repo.ClusterMessage) error {
+func (r *flakyClusterMessageRepo) Insert(ctx context.Context, m *repo.ClusterMessage) error {
 	atomic.AddInt32(&r.calls, 1)
 	if atomic.AddInt32(&r.failures, -1) >= 0 {
 		return errors.New("db down")
 	}
-	return r.MessageRepo.Insert(ctx, m)
+	return r.ClusterMessageRepo.Insert(ctx, m)
 }
 
 func validMessage() Message {
@@ -150,7 +150,7 @@ func TestSendMessage_Validation(t *testing.T) {
 
 func TestSendMessage_RetriesOnceThenSucceeds(t *testing.T) {
 	sqlxDB, dialect := newTestDB(t)
-	flaky := &flakyMessageRepo{MessageRepo: messagedb.New(sqlxDB, dialect), failures: 1}
+	flaky := &flakyClusterMessageRepo{ClusterMessageRepo: clustermsgdb.New(sqlxDB, dialect), failures: 1}
 	ms := NewMessageService(flaky, newTestLogger(), func() string { return "inst-A" })
 
 	if err := ms.SendMessage(context.Background(), validMessage()); err != nil {
@@ -163,7 +163,7 @@ func TestSendMessage_RetriesOnceThenSucceeds(t *testing.T) {
 
 func TestSendMessage_FailsAfterSecondError(t *testing.T) {
 	sqlxDB, dialect := newTestDB(t)
-	flaky := &flakyMessageRepo{MessageRepo: messagedb.New(sqlxDB, dialect), failures: 2}
+	flaky := &flakyClusterMessageRepo{ClusterMessageRepo: clustermsgdb.New(sqlxDB, dialect), failures: 2}
 	ms := NewMessageService(flaky, newTestLogger(), func() string { return "inst-A" })
 
 	err := ms.SendMessage(context.Background(), validMessage())
@@ -220,14 +220,14 @@ func (r *recorder) messages() []Message {
 	return append([]Message(nil), r.got...)
 }
 
-func consumersOf(t *testing.T, ms *MessageService, instanceID string) []*repo.MessageConsumer {
+func consumersOf(t *testing.T, ms *MessageService, instanceID string) []*repo.ClusterMessageConsumer {
 	t.Helper()
 	// 找到库里所有消息（用一个从未消费过的假实例视角）
 	all, err := ms.repo.ListPending(context.Background(), "__probe__", time.Now(), 100)
 	if err != nil {
 		t.Fatalf("ListPending: %v", err)
 	}
-	var out []*repo.MessageConsumer
+	var out []*repo.ClusterMessageConsumer
 	for _, m := range all {
 		cs, err := ms.repo.ListConsumers(context.Background(), m.ID)
 		if err != nil {
@@ -473,7 +473,7 @@ func TestNewMessageCleanupTask_RunsCleanup(t *testing.T) {
 func TestCluster_TriggerPoll_DeliversMessage(t *testing.T) {
 	sqlxDB, dialect := newTestDB(t)
 	c := newManualCluster(t, 8080, memberdb.New(sqlxDB, dialect))
-	ms := NewMessageService(messagedb.New(sqlxDB, dialect), newTestLogger(), c.RegID)
+	ms := NewMessageService(clustermsgdb.New(sqlxDB, dialect), newTestLogger(), c.RegID)
 	c.SetMessageService(ms)
 
 	done := make(chan Message, 1)
@@ -500,7 +500,7 @@ func TestCluster_TriggerPoll_DeliversMessage(t *testing.T) {
 func TestCluster_TriggerPoll_SkipsWhilePreviousRoundInProgress(t *testing.T) {
 	sqlxDB, dialect := newTestDB(t)
 	c := newManualCluster(t, 8080, memberdb.New(sqlxDB, dialect))
-	ms := NewMessageService(messagedb.New(sqlxDB, dialect), newTestLogger(), c.RegID)
+	ms := NewMessageService(clustermsgdb.New(sqlxDB, dialect), newTestLogger(), c.RegID)
 	c.SetMessageService(ms)
 
 	started := make(chan struct{}, 2) // 容量 2：即使错误地跑了第二轮也不会阻塞处理器

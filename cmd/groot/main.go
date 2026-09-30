@@ -33,8 +33,6 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/message"
-	"github.com/zfd81/groot/internal/message/senders"
 	"github.com/zfd81/groot/internal/repo/repofactory"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
@@ -356,26 +354,6 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	// Initialize runtime state
 	runtimeState := agent.NewRuntimeState()
 
-	// Initialize message layer
-	// 队列容量与协程数来自 bootstrap.yaml（改动需重启）；发送器参数来自配置对象，
-	// 保存即生效。渠道无条件注册，是否投递由 Enabled 决定——
-	// 启动时按 enabled 决定注册与否的话，在界面上打开渠道就得重启。
-	msgCfg, err := settings.Message(context.Background())
-	if err != nil {
-		// 配置表读取失败时回退到代码默认值：bootstrap 队列参数 + 空渠道
-		log.Error("读取发送器配置失败，改用代码默认值", zap.Error(err))
-		msgCfg = config.MessageConfig{QueueSize: boot.Message.QueueSize, Workers: boot.Message.Workers, Senders: map[string]config.SenderConf{}}
-	}
-	msgLayer := message.NewLayer(msgCfg, log)
-	for _, name := range setting.ConfigurableSenders() {
-		senderConf := msgCfg.Senders[name]
-		if s := senders.New(name, senderConf); s != nil {
-			msgLayer.Register(name, s, senderConf)
-		}
-	}
-	msgLayer.Start()
-	log.Info("消息层已启动")
-
 	// Load sub-agents (fixed directory: {GROOT_HOME}/subagents)
 	subAgentDir := filepath.Join(homeDir, "subagents")
 	subAgentReg := agent.BuildSubAgentRegistry(context.Background(), subAgentDir, cfg.SubAgent, modelService, log)
@@ -395,7 +373,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 
 	// Initialize schedule module (storage and runner needed regardless of leader status)
 	scheduleStorage = schedule.NewStorage(repos.Schedule, log)
-	scheduleRunner = schedule.NewRunner(exec, memMgr, msgLayer, scheduleStorage, log)
+	scheduleRunner = schedule.NewRunner(exec, memMgr, scheduleStorage, log)
 
 	// Define leader task callbacks
 	startLeaderTasks := func() {
@@ -491,7 +469,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 
 	// 集群消息服务必须在 Join 之前挂接：Join 会同步触发 register → onBecomeLeader，
 	// 且心跳 goroutine 启动后不再允许修改 Cluster 的挂接字段。
-	clusterMsg = cluster.NewMessageService(repos.Message, log, clusterInst.RegID)
+	clusterMsg = cluster.NewMessageService(repos.ClusterMessage, log, clusterInst.RegID)
 	clusterInst.SetMessageService(clusterMsg)
 	// 生命周期指令处理器（重启）：模块名 lifecycle，早于 startedAt 的指令被忽略
 	clusterMsg.RegisterHandler(lifecycle.ModuleName, lifecycle.NewClusterHandler(ctrl, startedAt, log))
@@ -506,7 +484,7 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	)
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, settings, msgLayer, clusterInst, role)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, settings, clusterInst, role)
 
 	// 停止来源 1：操作系统信号
 	sigCh := make(chan os.Signal, 1)
@@ -553,9 +531,6 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 
 		// Stop server（使 srv.Start() 返回）
 		srv.Stop(ctx)
-
-		// Stop message layer
-		msgLayer.Stop()
 
 		// Close MCP clients
 		mcpMgr.Close()

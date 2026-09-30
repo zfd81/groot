@@ -67,8 +67,8 @@ def _insert_schedule(task_id: str, task_name: str, status: str = "active",
             "system_prompt": ""
         },
         "notification": {
-            "on_success": [],
-            "on_failure": []
+            "on_success": "",
+            "on_failure": ""
         },
         "created_at": "2026-05-11T00:00:00Z",
         "updated_at": "2026-05-11T00:00:00Z"
@@ -425,8 +425,7 @@ class TestScheduleHistoryAPI:
                 "status": "completed",
                 "duration_ms": 1234,
                 "step_count": 3,
-                "error": "",
-                "notifications": []
+                "error": ""
             },
             {
                 "execution_id": f"{self.TASK_ID}-20260510T090002",
@@ -439,8 +438,7 @@ class TestScheduleHistoryAPI:
                 "status": "failed",
                 "duration_ms": 5000,
                 "step_count": 1,
-                "error": "执行超时",
-                "notifications": []
+                "error": "执行超时"
             }
         ]
         _insert_execution_records(self.TASK_ID, records)

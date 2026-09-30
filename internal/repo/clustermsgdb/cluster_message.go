@@ -1,5 +1,5 @@
-// internal/repo/messagedb/message.go
-package messagedb
+// internal/repo/clustermsgdb/cluster_message.go
+package clustermsgdb
 
 import (
 	"context"
@@ -16,8 +16,8 @@ type messageRepo struct {
 	dialect db.Dialect
 }
 
-// New 创建基于 sqlx 的 MessageRepo 实现。
-func New(sqlxDB *sqlx.DB, dialect db.Dialect) repo.MessageRepo {
+// New 创建基于 sqlx 的 ClusterMessageRepo 实现。
+func New(sqlxDB *sqlx.DB, dialect db.Dialect) repo.ClusterMessageRepo {
 	return &messageRepo{db: sqlxDB, dialect: dialect}
 }
 
@@ -58,8 +58,8 @@ type consumerRow struct {
 	ErrorMessage string `db:"error_message"`
 }
 
-func rowToConsumer(row consumerRow) *repo.MessageConsumer {
-	return &repo.MessageConsumer{
+func rowToConsumer(row consumerRow) *repo.ClusterMessageConsumer {
+	return &repo.ClusterMessageConsumer{
 		MessageID:    row.MessageID,
 		InstanceID:   row.InstanceID,
 		ConsumedAt:   time.UnixMilli(row.ConsumedAt),
@@ -104,7 +104,7 @@ func (r *messageRepo) ListPending(ctx context.Context, instanceID string, now ti
 	return msgs, nil
 }
 
-func (r *messageRepo) RecordConsumption(ctx context.Context, c *repo.MessageConsumer) error {
+func (r *messageRepo) RecordConsumption(ctx context.Context, c *repo.ClusterMessageConsumer) error {
 	q := r.db.Rebind(`INSERT INTO cluster_message_consumers
 		(message_id, instance_id, consumed_at, status, error_message)
 		VALUES (?, ?, ?, ?, ?)`)
@@ -113,14 +113,14 @@ func (r *messageRepo) RecordConsumption(ctx context.Context, c *repo.MessageCons
 	return err
 }
 
-func (r *messageRepo) ListConsumers(ctx context.Context, messageID int64) ([]*repo.MessageConsumer, error) {
+func (r *messageRepo) ListConsumers(ctx context.Context, messageID int64) ([]*repo.ClusterMessageConsumer, error) {
 	q := r.db.Rebind(`SELECT message_id, instance_id, consumed_at, status, error_message
 		FROM cluster_message_consumers WHERE message_id = ? ORDER BY instance_id ASC`)
 	var rows []consumerRow
 	if err := r.db.SelectContext(ctx, &rows, q, messageID); err != nil {
 		return nil, err
 	}
-	out := make([]*repo.MessageConsumer, len(rows))
+	out := make([]*repo.ClusterMessageConsumer, len(rows))
 	for i, row := range rows {
 		out[i] = rowToConsumer(row)
 	}

@@ -99,6 +99,9 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 	if task.Status != StatusFailed {
 		t.Errorf("soloErr 路径应将任务标记为 failed，实际 %v", task.Status)
 	}
+	if task.Error == nil || task.Error.Code != "subagent_unavailable" {
+		t.Errorf("soloErr 路径应回写 subagent_unavailable 错误，实际 %+v", task.Error)
+	}
 
 	lines := readExecutorLogLines(t, logDir)
 	if len(lines) == 0 || lines[0] == "" {

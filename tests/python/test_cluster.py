@@ -61,10 +61,6 @@ def _create_cluster_config(home: str, port: int) -> None:
         "security": {"auth": {"header_name": "X-API-Key", "secret": TEST_AUTH_SECRET}},
         "memory": {"history_window": 20},
         "schedule": {"enabled": False, "max_concurrent_tasks": 10, "sync_interval": "30s"},
-        "message": {
-            "queue_size": 10, "workers": 1,
-            "senders": {"webhook": {"enabled": False}},
-        },
         "logging": {"level": "info", "format": "console", "output": ["stdout"]},
         "attachment": {"max_size": 50, "max_total_size": 100, "max_count": 10,
                        "allowed_types": ["txt"]},

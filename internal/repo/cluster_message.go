@@ -1,4 +1,4 @@
-// internal/repo/message.go
+// internal/repo/cluster_message.go
 package repo
 
 import (
@@ -27,8 +27,8 @@ type ClusterMessage struct {
 	SourceInstance string
 }
 
-// MessageConsumer 记录某个实例对某条消息的处理结果（cluster_message_consumers 表的一行）。
-type MessageConsumer struct {
+// ClusterMessageConsumer 记录某个实例对某条消息的处理结果（cluster_message_consumers 表的一行）。
+type ClusterMessageConsumer struct {
 	MessageID    int64
 	InstanceID   string
 	ConsumedAt   time.Time
@@ -36,8 +36,8 @@ type MessageConsumer struct {
 	ErrorMessage string
 }
 
-// MessageRepo 是集群消息的持久化接口。
-type MessageRepo interface {
+// ClusterMessageRepo 是集群消息的持久化接口。
+type ClusterMessageRepo interface {
 	// Insert 写入一条消息。ID 由数据库自增生成，调用方不依赖回填。
 	Insert(ctx context.Context, m *ClusterMessage) error
 
@@ -46,10 +46,10 @@ type MessageRepo interface {
 	ListPending(ctx context.Context, instanceID string, now time.Time, limit int) ([]*ClusterMessage, error)
 
 	// RecordConsumption 写入一条消费记录。同一 (message_id, instance_id) 重复写入返回错误。
-	RecordConsumption(ctx context.Context, c *MessageConsumer) error
+	RecordConsumption(ctx context.Context, c *ClusterMessageConsumer) error
 
 	// ListConsumers 返回某条消息的全部消费记录，按 instance_id 升序。
-	ListConsumers(ctx context.Context, messageID int64) ([]*MessageConsumer, error)
+	ListConsumers(ctx context.Context, messageID int64) ([]*ClusterMessageConsumer, error)
 
 	// DeleteBefore 删除 created_at 早于 before 的消息，并清理已无对应消息的孤立消费记录。
 	// 返回删除的消息数与消费记录数。

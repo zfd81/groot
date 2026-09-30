@@ -82,7 +82,7 @@ func TestNewRepos_MessageRepoWired(t *testing.T) {
 	defer sqlxDB.Close()
 
 	repos := NewRepos(sqlxDB, dialect, homeDir)
-	if repos.Message == nil {
+	if repos.ClusterMessage == nil {
 		t.Fatal("Message repo 不应为 nil")
 	}
 }

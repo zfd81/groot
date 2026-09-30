@@ -35,12 +35,6 @@ func GenerateBootstrapTemplate() string {
 #    filename_pattern: groot-{date}.log
 #    max_age: 7                       # 日志保留天数
 
-# ─── 消息层构造参数 ───
-# Webhook 通知渠道的地址在设置面板中配置。
-#message:
-#  queue_size: 256                    # 发送队列容量
-#  workers: 2                         # 发送工作协程数
-
 # ─── 调度器构造参数 ───
 # 是否允许模型创建定时任务，在设置面板中开关。
 #schedule:

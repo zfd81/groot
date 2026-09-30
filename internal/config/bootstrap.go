@@ -21,15 +21,8 @@ type Bootstrap struct {
 	Server   ServerConfig      `yaml:"server,omitempty"`
 	Logging  LoggingConfig     `yaml:"logging,omitempty"`
 	Database *DatabaseConfig   `yaml:"database,omitempty"`
-	Message  MessageBootstrap  `yaml:"message,omitempty"`
 	Schedule ScheduleBootstrap `yaml:"schedule,omitempty"`
 	Security SecurityBootstrap `yaml:"security,omitempty"`
-}
-
-// MessageBootstrap 消息层的构造参数。发送渠道参数在配置表中。
-type MessageBootstrap struct {
-	QueueSize int `yaml:"queue_size,omitempty"`
-	Workers   int `yaml:"workers,omitempty"`
 }
 
 // ScheduleBootstrap 调度器的构造参数。enabled 开关在配置表中。
@@ -88,13 +81,6 @@ func applyBootstrapDefaults(b *Bootstrap) {
 	}
 	if b.Server.Port == 0 {
 		b.Server.Port = 8080
-	}
-
-	if b.Message.QueueSize == 0 {
-		b.Message.QueueSize = 256
-	}
-	if b.Message.Workers == 0 {
-		b.Message.Workers = 2
 	}
 
 	if b.Schedule.MaxConcurrentTasks == 0 {

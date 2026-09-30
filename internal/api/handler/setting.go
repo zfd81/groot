@@ -11,11 +11,8 @@ import (
 
 	"github.com/zfd81/groot/internal/agent"
 	"github.com/zfd81/groot/internal/api/types"
-	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
-	"github.com/zfd81/groot/internal/message"
-	"github.com/zfd81/groot/internal/message/senders"
 	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/setting"
 )
@@ -23,14 +20,13 @@ import (
 // SettingHandler 处理配置的读写。接口按分类而非按单键暴露，
 // 与设置面板的分区一一对应。
 //
-// registry、limiter 与 messages 是三个生效载体：配置表是持久来源，它们是运行中的实例。
+// registry 与 limiter 是两个生效载体：配置表是持久来源，它们是运行中的实例。
 // 表与实例都要更新——只写表则要等重启才生效，只改实例则重启后丢失。
 type SettingHandler struct {
 	settings *setting.Settings
 	models   *llm.ModelService
 	registry *agent.SubAgentRegistry
 	limiter  *ratelimit.RateLimiter
-	messages *message.Layer
 	log      *logger.Logger
 }
 
@@ -42,8 +38,6 @@ type SettingHandlerDeps struct {
 	Models   *llm.ModelService
 	Registry *agent.SubAgentRegistry
 	Limiter  *ratelimit.RateLimiter
-	// Messages 用于在保存后把发送器注册进运行中的消息层。
-	Messages *message.Layer
 	Log      *logger.Logger
 }
 
@@ -53,7 +47,6 @@ func NewSettingHandler(deps SettingHandlerDeps) *SettingHandler {
 		models:   deps.Models,
 		registry: deps.Registry,
 		limiter:  deps.Limiter,
-		messages: deps.Messages,
 		log:      deps.Log,
 	}
 }
@@ -230,86 +223,4 @@ func payloadToRuntime(p types.RuntimeSettingsPayload, base setting.RuntimeSettin
 	out.RateLimit.DefaultConcurrency = p.RateLimit.DefaultConcurrency
 	out.Schedule.Enabled = p.Schedule.Enabled
 	return out
-}
-
-// GetSenders 处理 GET /web/settings/senders。
-func (h *SettingHandler) GetSenders(ctx context.Context, rc *app.RequestContext) {
-	m, err := h.settings.Message(ctx)
-	if err != nil {
-		h.log.Error("读取发送器配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
-		return
-	}
-	rc.JSON(200, sendersToPayload(m))
-}
-
-// sendersToPayload 把配置对象的发送器参数摊平成接口结构。
-func sendersToPayload(m config.MessageConfig) types.SendersPayload {
-	out := types.SendersPayload{Senders: map[string]types.SenderSettings{}}
-	for _, name := range setting.ConfigurableSenders() {
-		c := m.Senders[name]
-		out.Senders[name] = types.SenderSettings{
-			Enabled: c.Enabled,
-			URL:     c.URL,
-		}
-	}
-	return out
-}
-
-// PutSenders 处理 PUT /web/settings/senders。
-//
-// 写表在前、注册进消息层在后：写表失败时直接返回，
-// 不会留下「消息层已改、表里还是旧值」的状态。
-// 注册后新开始处理的消息即走新参数，正在投递的消息按旧参数发完。
-func (h *SettingHandler) PutSenders(ctx context.Context, rc *app.RequestContext) {
-	var req types.SendersPayload
-	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
-		return
-	}
-
-	confs := make(map[string]config.SenderConf, len(req.Senders))
-	for name, s := range req.Senders {
-		confs[name] = config.SenderConf{
-			Enabled: s.Enabled,
-			URL:     strings.TrimSpace(s.URL),
-		}
-	}
-
-	if err := h.settings.SetMessage(ctx, confs); err != nil {
-		if errors.Is(err, setting.ErrInvalidSetting) {
-			rc.JSON(400, utils.H{"status": "invalid_request", "message": err.Error()})
-			return
-		}
-		h.log.Error("保存发送器配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
-		return
-	}
-
-	// 从配置表回读：请求体可能只提交了部分渠道，注册用的必须是
-	// 合并了表内已有值与默认值之后的完整参数
-	saved, err := h.settings.Message(ctx)
-	if err != nil {
-		h.log.Error("回读发送器配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
-		return
-	}
-	h.applySenders(saved)
-	rc.JSON(200, sendersToPayload(saved))
-}
-
-// applySenders 把配置表中的发送器参数注册进消息层。
-// 渠道无条件注册，启用与否交给 SenderConf.Enabled 判定——
-// 注销再注册会让一次配置改动产生两次 map 写入，中间态下渠道短暂不可用。
-// 消息层是每节点一份的实例，这里只更新本节点；其他节点在下一次启动时从配置表取到新值。
-func (h *SettingHandler) applySenders(m config.MessageConfig) {
-	if h.messages == nil {
-		return
-	}
-	for _, name := range setting.ConfigurableSenders() {
-		conf := m.Senders[name]
-		if s := senders.New(name, conf); s != nil {
-			h.messages.SetSender(name, s, conf)
-		}
-	}
 }

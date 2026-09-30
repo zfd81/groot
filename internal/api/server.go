@@ -21,7 +21,6 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/message"
 	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/schedule"
@@ -54,7 +53,6 @@ func NewServer(
 	members repo.MemberRepo,
 	syncResources repo.ResourceRepo, // 配置同步的远端仓储；SQLite 单机模式下为 nil（同步禁用）
 	settings *setting.Settings, // 配置对象：YAML 与配置表的统一读取入口
-	msgLayer *message.Layer, // 消息层：发送器配置保存后在此注册
 	clusterInst *cluster.Cluster, // 集群实例：提供本机 reg_id 与消息发送能力
 	role lifecycle.Role, // 进程角色：决定健康检查的 process_mode 与是否支持重启
 ) *Server {
@@ -122,7 +120,6 @@ func NewServer(
 		Models:   models,
 		Registry: subAgentReg,
 		Limiter:  rateLimiter,
-		Messages: msgLayer,
 		Log:      log,
 	})
 

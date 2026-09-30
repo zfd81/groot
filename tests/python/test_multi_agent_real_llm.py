@@ -121,11 +121,6 @@ def _write_config(home: str, port: int) -> None:
         },
         "memory": {"history_window": 20},
         "schedule": {"enabled": False, "max_concurrent_tasks": 1, "sync_interval": "30s"},
-        "message": {
-            "queue_size": 10,
-            "workers": 1,
-            "senders": {"webhook": {"enabled": False, "url": ""}},
-        },
         "logging": {"level": "info", "format": "json", "output": ["stdout"]},
         "react": {"max_iterations": 6},  # 限步避免无限循环
         "subagent": {

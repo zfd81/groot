@@ -1,5 +1,5 @@
-// internal/repo/messagedb/message_test.go
-package messagedb
+// internal/repo/clustermsgdb/cluster_message_test.go
+package clustermsgdb
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/zfd81/groot/internal/repo"
 )
 
-func newTestRepo(t *testing.T) repo.MessageRepo {
+func newTestRepo(t *testing.T) repo.ClusterMessageRepo {
 	t.Helper()
 	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
 	if err != nil {
@@ -34,7 +34,7 @@ func newMsg(typ, target string, priority int, ttl time.Duration) *repo.ClusterMe
 	}
 }
 
-func mustInsert(t *testing.T, r repo.MessageRepo, m *repo.ClusterMessage) {
+func mustInsert(t *testing.T, r repo.ClusterMessageRepo, m *repo.ClusterMessage) {
 	t.Helper()
 	if err := r.Insert(context.Background(), m); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -107,7 +107,7 @@ func TestListPending_ExcludesConsumedBySelfOnly(t *testing.T) {
 		t.Fatalf("setup: expected 1 pending, got %d", len(first))
 	}
 
-	err := r.RecordConsumption(ctx, &repo.MessageConsumer{
+	err := r.RecordConsumption(ctx, &repo.ClusterMessageConsumer{
 		MessageID: first[0].ID, InstanceID: "inst-A",
 		ConsumedAt: time.Now(), Status: repo.ConsumeStatusSuccess,
 	})
@@ -175,7 +175,7 @@ func TestRecordConsumption_DuplicateFails(t *testing.T) {
 	mustInsert(t, r, newMsg("sync", "", 5, time.Hour))
 	pending, _ := r.ListPending(ctx, "inst-A", time.Now(), 10)
 
-	c := &repo.MessageConsumer{MessageID: pending[0].ID, InstanceID: "inst-A",
+	c := &repo.ClusterMessageConsumer{MessageID: pending[0].ID, InstanceID: "inst-A",
 		ConsumedAt: time.Now(), Status: repo.ConsumeStatusSuccess}
 	if err := r.RecordConsumption(ctx, c); err != nil {
 		t.Fatalf("first RecordConsumption: %v", err)
@@ -192,9 +192,9 @@ func TestListConsumers(t *testing.T) {
 	pending, _ := r.ListPending(ctx, "inst-A", time.Now(), 10)
 	id := pending[0].ID
 
-	r.RecordConsumption(ctx, &repo.MessageConsumer{MessageID: id, InstanceID: "inst-B",
+	r.RecordConsumption(ctx, &repo.ClusterMessageConsumer{MessageID: id, InstanceID: "inst-B",
 		ConsumedAt: time.Now(), Status: repo.ConsumeStatusFailed, ErrorMessage: "boom"})
-	r.RecordConsumption(ctx, &repo.MessageConsumer{MessageID: id, InstanceID: "inst-A",
+	r.RecordConsumption(ctx, &repo.ClusterMessageConsumer{MessageID: id, InstanceID: "inst-A",
 		ConsumedAt: time.Now(), Status: repo.ConsumeStatusSuccess})
 
 	got, err := r.ListConsumers(ctx, id)
@@ -225,7 +225,7 @@ func TestDeleteBefore(t *testing.T) {
 		t.Fatalf("setup: expected 2 messages, got %d", len(all))
 	}
 	for _, m := range all {
-		r.RecordConsumption(ctx, &repo.MessageConsumer{MessageID: m.ID, InstanceID: "inst-A",
+		r.RecordConsumption(ctx, &repo.ClusterMessageConsumer{MessageID: m.ID, InstanceID: "inst-A",
 			ConsumedAt: time.Now(), Status: repo.ConsumeStatusSuccess})
 	}
 

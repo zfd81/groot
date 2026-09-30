@@ -21,8 +21,6 @@ import {
   type RuntimeSettings,
 } from '../../api/runtime'
 import { useRuntimeStore } from '../../stores/runtime'
-import { editableSenders, type SendersSettings } from '../../api/senders'
-import { useSendersStore } from '../../stores/senders'
 import {
   fetchAuthSettings,
   saveAuthHeaderName,
@@ -132,54 +130,6 @@ const allowedTypesText = computed({
       .filter((x) => x !== '')
   },
 })
-
-// ---- 发送器配置 ----
-const sendersStore = useSendersStore()
-const senders = ref<SendersSettings>(editableSenders(sendersStore.settings))
-const sendersSaving = ref(false)
-
-async function loadSenders() {
-  try {
-    await sendersStore.reload()
-    senders.value = editableSenders(sendersStore.settings)
-  } catch (e: any) {
-    ElMessage.error(t('settings.sendersLoadFailed', { msg: e?.message || '' }))
-  }
-}
-
-// saveSenders 整体保存两个渠道。启用了渠道但参数不全由服务端拒绝，
-// 失败即回源，避免界面上留下一个并未生效的值。
-//
-// 保存必须串行，原因同 saveRuntime：并发两个 PUT 时先发后到的响应会覆盖用户后来的改动。
-// 保存进行中再触发只记脏标记，由正在跑的那次收尾时再发一轮；
-// 每轮都读最新的本地副本，且只在最后一轮成功后才用 editableSenders 覆盖本地副本。
-let sendersDirty = false
-async function saveSenders() {
-  // 同 saveRuntime：读取失败时本地副本是 defaultSendersSettings() 的占位值，
-  // 保存会覆盖服务端真实配置；loaded 只在 reload 成功后置 true。
-  if (!sendersStore.loaded) {
-    ElMessage.warning(t('settings.saveBlockedNotLoaded'))
-    return
-  }
-  if (sendersSaving.value) {
-    sendersDirty = true
-    return
-  }
-  sendersSaving.value = true
-  try {
-    do {
-      sendersDirty = false
-      await sendersStore.save(senders.value)
-    } while (sendersDirty)
-    senders.value = editableSenders(sendersStore.settings)
-    ElMessage.success(t('settings.sendersSaved'))
-  } catch (e: any) {
-    ElMessage.error(t('settings.sendersSaveFailed', { msg: e?.message || '' }))
-    await loadSenders()
-  } finally {
-    sendersSaving.value = false
-  }
-}
 
 // ---- 认证配置 ----
 // 重启后生效的一组，无其他页面消费，不进 store，面板内自管理。
@@ -406,7 +356,6 @@ watch(
       void ensureLoaded()
       void loadVoice()
       void loadRuntime()
-      void loadSenders()
       void loadAuthSettings()
     }
   }
@@ -846,29 +795,6 @@ async function openAgentTools(a: AgentInfo) {
                 <div class="label-desc">{{ t('settings.scheduleEnabledDesc') }}</div>
               </div>
               <el-switch v-model="runtime.schedule.enabled" :loading="runtimeSaving" @change="saveRuntime" />
-            </div>
-          </div>
-
-          <div class="config-group">
-            <div class="group-title">{{ t('settings.configWebhook') }}</div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.webhookUrl') }}</div>
-                <div class="label-desc">{{ t('settings.webhookUrlDesc') }}</div>
-              </div>
-              <el-input
-                v-model="senders.senders.webhook.url"
-                style="width: 320px"
-                placeholder="https://"
-                @change="saveSenders"
-              />
-            </div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.webhookEnabled') }}</div>
-                <div class="label-desc">{{ t('settings.webhookEnabledDesc') }}</div>
-              </div>
-              <el-switch v-model="senders.senders.webhook.enabled" :loading="sendersSaving" @change="saveSenders" />
             </div>
           </div>
 

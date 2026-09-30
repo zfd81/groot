@@ -42,9 +42,6 @@ func TestLoadBootstrap_AllCommented(t *testing.T) {
 	if b.Server.Host != "0.0.0.0" || b.Server.Port != 8080 {
 		t.Errorf("server = %+v, want 0.0.0.0:8080", b.Server)
 	}
-	if b.Message.QueueSize != 256 || b.Message.Workers != 2 {
-		t.Errorf("message = %+v, want 256/2", b.Message)
-	}
 	if b.Schedule.MaxConcurrentTasks != 3 || b.Schedule.SyncInterval != "30s" {
 		t.Errorf("schedule = %+v, want 3/30s", b.Schedule)
 	}
@@ -79,7 +76,7 @@ logging:
   level: debug
   file:
     directory: /var/log/groot
-message:
+message: # 已下线的节，残留时应被忽略
   queue_size: 512
 schedule:
   sync_interval: 10s
@@ -99,11 +96,11 @@ security:
 		t.Errorf("logging = %+v", b.Logging)
 	}
 	// 同节内未给出的字段仍取缺省值
-	if b.Logging.Format != "json" || b.Message.Workers != 2 {
-		t.Errorf("同节内缺省值未填充: format=%q workers=%d", b.Logging.Format, b.Message.Workers)
+	if b.Logging.Format != "json" {
+		t.Errorf("同节内缺省值未填充: format=%q", b.Logging.Format)
 	}
-	if b.Message.QueueSize != 512 || b.Schedule.SyncInterval != "10s" {
-		t.Errorf("message/schedule = %+v / %+v", b.Message, b.Schedule)
+	if b.Schedule.SyncInterval != "10s" {
+		t.Errorf("schedule = %+v", b.Schedule)
 	}
 	if b.Security.RateLimit.CleanupInterval != "1m" {
 		t.Errorf("cleanup_interval = %q", b.Security.RateLimit.CleanupInterval)

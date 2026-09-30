@@ -59,21 +59,21 @@ func (t *createTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 			"instruction":       {Type: schema.String, Desc: "要执行的指令", Required: true},
 			"model":             {Type: schema.String, Desc: "LLM 模型名称（可选）"},
 			"missed_policy":     {Type: schema.String, Desc: "错过策略，默认 run_once", Enum: []string{"run_once", "skip"}},
-			"notify_on_success": {Type: schema.Array, ElemInfo: &schema.ParameterInfo{Type: schema.String}, Desc: "成功通知渠道列表"},
-			"notify_on_failure": {Type: schema.Array, ElemInfo: &schema.ParameterInfo{Type: schema.String}, Desc: "失败通知渠道列表"},
+			"notify_on_success": {Type: schema.String, Desc: "任务成功后的通知要求，用自然语言描述通知方式与对象（如：用邮件把结果发给 a@example.com），需已配置相应的 MCP 工具；留空则不通知"},
+			"notify_on_failure": {Type: schema.String, Desc: "任务失败后的通知要求，用自然语言描述通知方式与对象，需已配置相应的 MCP 工具；留空则不通知"},
 		}),
 	}, nil
 }
 
 func (t *createTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
 	var input struct {
-		Name            string   `json:"name"`
-		Schedule        string   `json:"schedule"`
-		Instruction     string   `json:"instruction"`
-		Model           string   `json:"model"`
-		MissedPolicy    string   `json:"missed_policy"`
-		NotifyOnSuccess []string `json:"notify_on_success"`
-		NotifyOnFailure []string `json:"notify_on_failure"`
+		Name            string `json:"name"`
+		Schedule        string `json:"schedule"`
+		Instruction     string `json:"instruction"`
+		Model           string `json:"model"`
+		MissedPolicy    string `json:"missed_policy"`
+		NotifyOnSuccess string `json:"notify_on_success"`
+		NotifyOnFailure string `json:"notify_on_failure"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", fmt.Errorf("参数解析失败: %w", err)
@@ -145,7 +145,9 @@ func (t *deleteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *deleteTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
-	var input struct{ TaskID string `json:"task_id"` }
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", err
 	}
@@ -168,7 +170,9 @@ func (t *disableTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *disableTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
-	var input struct{ TaskID string `json:"task_id"` }
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", err
 	}
@@ -191,7 +195,9 @@ func (t *enableTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *enableTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
-	var input struct{ TaskID string `json:"task_id"` }
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", err
 	}
@@ -214,7 +220,9 @@ func (t *archiveTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *archiveTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
-	var input struct{ TaskID string `json:"task_id"` }
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", err
 	}
@@ -237,7 +245,9 @@ func (t *historyTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *historyTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
-	var input struct{ TaskID string `json:"task_id"` }
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", err
 	}
@@ -264,7 +274,9 @@ func (t *inspectTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *inspectTool) InvokableRun(ctx context.Context, argsJSON string, opts ...tool.Option) (string, error) {
-	var input struct{ TaskID string `json:"task_id"` }
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
 	if err := json.Unmarshal([]byte(argsJSON), &input); err != nil {
 		return "", err
 	}

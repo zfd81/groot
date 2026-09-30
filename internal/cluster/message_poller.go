@@ -67,7 +67,7 @@ func safeHandle(ctx context.Context, h MessageHandler, msg Message) (err error) 
 
 // recordResult 写入消费记录并打日志。写记录失败只打日志，消息会在下一轮再次被处理（至少一次语义）。
 func (s *MessageService) recordResult(ctx context.Context, instanceID string, rm *repo.ClusterMessage, handleErr error) {
-	c := &repo.MessageConsumer{
+	c := &repo.ClusterMessageConsumer{
 		MessageID:  rm.ID,
 		InstanceID: instanceID,
 		ConsumedAt: time.Now(),

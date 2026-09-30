@@ -25,7 +25,6 @@ type LegacyBusiness struct {
 	RateLimit       RateLimitConfig
 	ScheduleEnabled bool
 	Auth            AuthConfig
-	Senders         map[string]SenderConf
 }
 
 // legacyConfigFile 描述老 config.yaml 的顶层结构（bootstrap 项与业务项的并集）。
@@ -38,7 +37,6 @@ type legacyConfigFile struct {
 	React      ReactConfig      `yaml:"react"`
 	Attachment AttachmentConfig `yaml:"attachment"`
 	Schedule   ScheduleConfig   `yaml:"schedule"`
-	Message    MessageConfig    `yaml:"message"`
 	SubAgent   SubAgentConfig   `yaml:"subagent"`
 	Security   SecurityConfig   `yaml:"security"`
 	Logging    LoggingConfig    `yaml:"logging"`
@@ -95,7 +93,6 @@ func MigrateLegacy(homeDir string) (*LegacyBusiness, error) {
 		RateLimit:       legacyCfg.Security.RateLimit,
 		ScheduleEnabled: legacyCfg.Schedule.Enabled,
 		Auth:            legacyCfg.Security.Auth,
-		Senders:         legacyCfg.Message.Senders,
 	}, nil
 }
 
@@ -140,10 +137,6 @@ func buildBootstrapFromLegacy(lc legacyConfigFile, db *DatabaseConfig) *Bootstra
 		Server:   lc.Server,
 		Logging:  lc.Logging,
 		Database: db,
-		Message: MessageBootstrap{
-			QueueSize: lc.Message.QueueSize,
-			Workers:   lc.Message.Workers,
-		},
 		Schedule: ScheduleBootstrap{
 			MaxConcurrentTasks: lc.Schedule.MaxConcurrentTasks,
 			SyncInterval:       lc.Schedule.SyncInterval,
@@ -162,7 +155,7 @@ func marshalBootstrapWithHeader(b *Bootstrap) ([]byte, error) {
 	}
 	header := `# 本文件由 Groot 从 config.yaml 与 env.yaml 自动迁移生成。
 # 老文件已不再被读取，确认本文件内容无误后可自行删除它们。
-# 业务配置（模型、限流阈值、通知渠道等）已迁入数据库，请在 Web 设置面板中维护。
+# 业务配置（模型、限流阈值等）已迁入数据库，请在 Web 设置面板中维护。
 
 `
 	return append([]byte(header), body...), nil

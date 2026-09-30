@@ -57,7 +57,7 @@
 | TestHeartbeat_RecordLost_ReregistersWithoutUpdateRole | 记录丢失走重注册路径，不调用 UpdateRole，单实例重选为 leader |
 | TestFollowerPromotion_WritesRoleOnce | follower 提升为 leader 仅写一次角色，之后作为 leader 心跳不再写 |
 
-**集群消息存储** (`internal/repo/messagedb/message_test.go`)
+**集群消息存储** (`internal/repo/clustermsgdb/cluster_message_test.go`)
 
 | 测试函数 | 测试内容 |
 |---------|---------|
@@ -282,7 +282,7 @@
 
 | 测试函数 | 测试内容 |
 |---------|---------|
-| TestExecutor_ExecuteLogsCarrySessionID | Execute 产出的每行日志都携带 session_id（真实 sqlite + file logger，走 soloErr 路径） |
+| TestExecutor_ExecuteLogsCarrySessionID | Execute 产出的每行日志都携带 session_id（真实 sqlite + file logger，走 soloErr 路径），且 task.Error 回写为 subagent_unavailable |
 
 **日志读取** (`internal/logger/reader_test.go`)
 
@@ -345,22 +345,33 @@
 
 ### 1.6 运行时配置迁移测试
 
-位于 `internal/ratelimit/limiter_test.go`、`internal/message/layer_test.go`、`internal/mcp/manager_builtin_test.go`、
-`internal/setting/runtime_test.go`、`internal/setting/message_test.go` 与 `internal/api/handler/setting_test.go`。
+位于 `internal/ratelimit/limiter_test.go`、`internal/mcp/manager_builtin_test.go`、
+`internal/setting/runtime_test.go` 与 `internal/api/handler/setting_test.go`。
 
 覆盖点：
 
 - 限流器：重建后新调用方按新上限、已建桶保留旧容量（取与还落在同一桶）、开关在线关停与恢复、全局桶重建、重建与请求并发（-race）、关停期间在途请求归还不泄漏名额、全局参数未变时桶实例不换、参数归零后全局桶为空、重建与清理协程并发
-- 消息层：替换发送器后新消息走新实例且旧实例不再收到、注销后无可用渠道、禁用渠道不投递且重新启用无需重注册、替换与投递并发（-race）
 - 内置工具门控：门控关闭时 GetTools 与 ListTools 均不含该组、ToolCount 同口径、未挂门控的组一律可见、GetTool 尊重门控、同名 MCP 的工具不被挡且同组内置工具仍被挡、一次 GetTools/ListTools 门控各求值一次
 - 配置对象（限流）：五项边界表驱动（0 表示不限制、负数与超上限拒绝）、表内缺键保持 YAML、脏数据回落、rows 含五键且不含 cleanup_interval、NaN 拒绝且表内 "NaN" 退回基准值、限流五键经假仓库往返
-- 配置对象（发送渠道）：表为空回落 YAML、往返一致且队列参数不受影响、未知渠道 / 启用但地址空 / 非 http 地址表驱动拒绝、关闭渠道免校验、无仓库时读 YAML、脏 enabled 值回退、无仓库时 SetMessage 返回 ErrNoSettingStore、只写已知渠道的键、已废弃渠道的残留配置行被清理（无仓库时跳过）
 - 配置对象（调度）：开关往返，尤其 false 能写进表而非回落 YAML 的 true、schedule.enabled 脏值回落与空表回落
-- 设置 handler：限流保存后限流器 Config 即刻更新且 CleanupInterval 保持、越界 400 且限流器不变、回读含限流分区、缺 rate_limit 分区 400（消息含 rate_limit）、缺 schedule 分区 400、限流保存后 GET 回读 7/3/true；发送渠道经接口往返、保存后 ChannelEnabled 为真、关闭后为假、校验失败 400 且消息层不变、非法 JSON 400、重复提交覆盖地址、未知渠道 400；调度开关经接口往返、调度接口在开关关闭时 503
+- 设置 handler：限流保存后限流器 Config 即刻更新且 CleanupInterval 保持、越界 400 且限流器不变、回读含限流分区、缺 rate_limit 分区 400（消息含 rate_limit）、缺 schedule 分区 400、限流保存后 GET 回读 7/3/true；调度开关经接口往返、调度接口在开关关闭时 503
 
 ---
 
-### 1.7 认证配置面板测试
+### 1.7 定时任务通知测试
+
+位于 `internal/schedule/notify_test.go`。
+
+| 测试函数 | 测试内容 |
+|---------|---------|
+| TestNotificationConfig_UnmarshalJSON | 字符串取原值；旧数组 `["webhook"]`、null、字段缺失均解码为空要求 |
+| TestNotificationConfig_TaskRoundTrip | 含旧格式通知字段的任务 payload 可加载，序列化往返后通知要求不丢失 |
+| TestBuildNotifyInstruction | 成功指令含任务名、ID、状态、结果、要求与约束且不含错误段；失败指令含错误信息；超长结果按上限截断并带截断标记 |
+| TestRunner_Notify | 要求为空或全空白时不调用执行器；completed 取成功要求，failed / cancelled 取失败要求；在原会话执行，ID 为 `{sessionID}-notify`，Caller 为 `schedule_notify`，模型取任务定义；执行器返回失败时不 panic |
+
+---
+
+### 1.8 认证配置面板测试
 
 位于 `internal/setting/auth_test.go` 与 `internal/api/handler/auth_setting_test.go`。
 

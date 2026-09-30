@@ -96,7 +96,7 @@ func (s *MessageService) SendMessage(ctx context.Context, msg Message) error
 
 **写入流程：**
 
-- 通过 `repo.MessageRepo.Insert` 写入 `cluster_messages`
+- 通过 `repo.ClusterMessageRepo.Insert` 写入 `cluster_messages`
 - 写入成功后记录 "集群消息已发送" 日志（字段：type / target / module / priority）
 
 **失败处理（发送阶段）：**
@@ -206,7 +206,7 @@ type MessageHandler interface {
 ```go
 // MessageService 管理消息的发送、轮询处理、处理器注册和清理
 type MessageService struct {
-    repo     repo.MessageRepo           // 仓储接口（cluster_messages / cluster_message_consumers）
+    repo     repo.ClusterMessageRepo    // 仓储接口（cluster_messages / cluster_message_consumers）
     log      *logger.Logger
     selfID   func() string              // 返回本实例 ID，由 Cluster 提供
     mu       sync.RWMutex               // 保护 handlers
@@ -214,7 +214,7 @@ type MessageService struct {
 }
 
 // NewMessageService 构造消息服务
-func NewMessageService(msgRepo repo.MessageRepo, log *logger.Logger, selfID func() string) *MessageService
+func NewMessageService(msgRepo repo.ClusterMessageRepo, log *logger.Logger, selfID func() string) *MessageService
 
 // RegisterHandler 注册模块处理器；同名模块后注册者覆盖先注册者
 func (s *MessageService) RegisterHandler(module string, h MessageHandler)
@@ -328,10 +328,10 @@ WHERE message_id NOT IN (SELECT id FROM cluster_messages);
 
 ```
 internal/repo/
-├── message.go                # ClusterMessage / MessageConsumer 类型、MessageRepo 接口
-└── messagedb/
-    ├── message.go            # MessageRepo 的 sqlx 实现（SQLite/MySQL/PostgreSQL）
-    └── message_test.go
+├── cluster_message.go        # ClusterMessage / ClusterMessageConsumer 类型、ClusterMessageRepo 接口
+└── clustermsgdb/
+    ├── cluster_message.go    # ClusterMessageRepo 的 sqlx 实现（SQLite/MySQL/PostgreSQL）
+    └── cluster_message_test.go
 
 internal/cluster/
 ├── cluster.go                # 现有集群管理；心跳 tick 中调用 triggerPoll()
@@ -500,12 +500,12 @@ log.Error("集群消息清理失败", zap.Error(err))
 - **共享资源**：复用 `instance_id`、数据库连接
 - **独立关注点**：集群管理关注成员注册和选举，消息系统关注指令传递
 
-### 13.2 与 message 模块
+### 13.2 与定时任务通知
 
 - **职责分离**：
-  - `internal/message`：外部通知层（webhook/email/stdout），用于任务完成通知
-  - `internal/cluster`：集群内部指令层（cluster_messages），用于实例间协调
-- **无重叠**：两者服务不同场景，互不干扰
+  - `internal/cluster`：集群内部指令层（cluster_messages），用于实例间协调，是系统内唯一的"消息"模块
+  - 定时任务通知：由 LLM 调用 MCP 工具完成（见 [定时任务通知设计](2026-09-30-schedule-notification-design.md)），不经过集群消息
+- **命名约定**：仓储层类型与目录统一带 `Cluster` 前缀（`ClusterMessageRepo`、`clustermsgdb`），避免与业务"通知"混淆
 
 ### 13.3 与 schedule 模块
 
@@ -526,6 +526,12 @@ log.Error("集群消息清理失败", zap.Error(err))
 - 调整：清理任务由 Leader 的 gocron 调度器每日 03:00 执行（`AddDaily`），不复用不存在的 memory cleanup
 - 新增：处理器 panic 被捕获并记录为 failed；单条处理器 30 秒超时
 - 调整：功能设计章节（3.1–3.4、4.2、5.2、7.1）伪代码更新为实际实现形态
+
+### 2026-09-30 仓储层命名消歧
+
+- 重命名：`internal/repo/message.go` → `internal/repo/cluster_message.go`，`internal/repo/messagedb/` → `internal/repo/clustermsgdb/`
+- 重命名：`MessageRepo` → `ClusterMessageRepo`，`MessageConsumer` → `ClusterMessageConsumer`，`repofactory.Repos.Message` → `Repos.ClusterMessage`
+- 调整：13.2 节随外部通知层 `internal/message` 的移除改写为与定时任务通知的关系
 
 ---
 

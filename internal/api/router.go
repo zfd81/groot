@@ -70,8 +70,6 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.PUT("/settings/voice", settingH.PutVoice)
 	webGroup.GET("/settings/runtime", settingH.GetRuntime)
 	webGroup.PUT("/settings/runtime", settingH.PutRuntime)
-	webGroup.GET("/settings/senders", settingH.GetSenders)
-	webGroup.PUT("/settings/senders", settingH.PutSenders)
 	// 认证配置：请求头名读写与密钥重新生成，改动需重启生效
 	webGroup.GET("/settings/auth", settingH.GetAuthSettings)
 	webGroup.PUT("/settings/auth", settingH.PutAuthSettings)

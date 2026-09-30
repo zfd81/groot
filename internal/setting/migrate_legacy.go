@@ -90,14 +90,6 @@ func (s *Settings) ImportLegacy(ctx context.Context, lb *config.LegacyBusiness) 
 	addStr(KeyAuthSecret, lb.Auth.Secret)
 	addStr(KeyAuthHeaderName, lb.Auth.HeaderName)
 
-	for name, conf := range lb.Senders {
-		if name != SenderWebhook {
-			continue // 注册表里没有实现的渠道不迁移
-		}
-		addTrue(senderKey(name, fieldEnabled), conf.Enabled)
-		addStr(senderKey(name, fieldURL), conf.URL)
-	}
-
 	if len(rows) == 0 {
 		return nil
 	}

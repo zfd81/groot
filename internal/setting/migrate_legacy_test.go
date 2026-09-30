@@ -25,9 +25,6 @@ func TestImportLegacy_WritesNonZero(t *testing.T) {
 			DefaultQPS: 25,
 		},
 		ScheduleEnabled: true,
-		Senders: map[string]config.SenderConf{
-			"webhook": {Enabled: true, URL: "https://hook.example.com"},
-		},
 	}
 	if err := s.ImportLegacy(ctx, lb); err != nil {
 		t.Fatalf("ImportLegacy: %v", err)
@@ -56,10 +53,6 @@ func TestImportLegacy_WritesNonZero(t *testing.T) {
 	sch, _ := s.Schedule(ctx)
 	if !sch.Enabled {
 		t.Error("schedule.enabled 未迁入")
-	}
-	msg, _ := s.Message(ctx)
-	if w := msg.Senders["webhook"]; !w.Enabled || w.URL != "https://hook.example.com" {
-		t.Errorf("webhook = %+v", w)
 	}
 }
 
@@ -239,21 +232,5 @@ message:
 	}
 	if !sch.Enabled {
 		t.Error("schedule.enabled 未迁入")
-	}
-
-	msg, err := s.Message(ctx)
-	if err != nil {
-		t.Fatalf("Message: %v", err)
-	}
-	w := msg.Senders[SenderWebhook]
-	if !w.Enabled || w.URL != "https://hook.example.com" {
-		t.Errorf("webhook = %+v", w)
-	}
-	// 老 config.yaml 里的 email 段没有对应实现，不应迁入配置表
-	if _, ok := msg.Senders["email"]; ok {
-		t.Errorf("已下线的 email 渠道被迁入: %+v", msg.Senders)
-	}
-	if len(msg.Senders) != 1 {
-		t.Errorf("Senders = %+v, 只应迁入 webhook", msg.Senders)
 	}
 }

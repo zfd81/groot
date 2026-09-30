@@ -5,9 +5,9 @@ import (
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/repo/apikeydb"
+	"github.com/zfd81/groot/internal/repo/clustermsgdb"
 	"github.com/zfd81/groot/internal/repo/memberdb"
 	"github.com/zfd81/groot/internal/repo/memorydb"
-	"github.com/zfd81/groot/internal/repo/messagedb"
 	"github.com/zfd81/groot/internal/repo/modeldb"
 	"github.com/zfd81/groot/internal/repo/resourcedb"
 	"github.com/zfd81/groot/internal/repo/resourcelocal"
@@ -19,15 +19,15 @@ import (
 
 // Repos holds all domain repositories constructed from one DB connection.
 type Repos struct {
-	Member   repo.MemberRepo
-	Schedule schedule.ScheduleRepo
-	Memory   repo.MemoryRepo
-	Resource repo.ResourceRepo
-	User     repo.UserRepo
-	Model    repo.ModelRepo
-	APIKey   repo.APIKeyRepo
-	Message  repo.MessageRepo
-	Setting  repo.SettingRepo
+	Member         repo.MemberRepo
+	Schedule       schedule.ScheduleRepo
+	Memory         repo.MemoryRepo
+	Resource       repo.ResourceRepo
+	User           repo.UserRepo
+	Model          repo.ModelRepo
+	APIKey         repo.APIKeyRepo
+	ClusterMessage repo.ClusterMessageRepo
+	Setting        repo.SettingRepo
 
 	// SyncResource 是配置同步(push/pull/diff)要比较的远端仓储。
 	// SQLite 单机模式下没有可比较的远端(Resource 指向本地文件系统,
@@ -49,15 +49,15 @@ func NewRepos(sqlxDB *sqlx.DB, dialect db.Dialect, homeDir string) *Repos {
 		syncResourceRepo = resourceRepo
 	}
 	return &Repos{
-		Member:   memberdb.New(sqlxDB, dialect),
-		Schedule: scheduledb.New(sqlxDB, dialect),
-		Memory:   memorydb.New(sqlxDB, dialect),
-		Resource: resourceRepo,
-		User:     userdb.New(sqlxDB, dialect),
-		Model:    modeldb.New(sqlxDB, dialect),
-		APIKey:   apikeydb.New(sqlxDB, dialect),
-		Message:  messagedb.New(sqlxDB, dialect),
-		Setting:  settingdb.New(sqlxDB, dialect),
+		Member:         memberdb.New(sqlxDB, dialect),
+		Schedule:       scheduledb.New(sqlxDB, dialect),
+		Memory:         memorydb.New(sqlxDB, dialect),
+		Resource:       resourceRepo,
+		User:           userdb.New(sqlxDB, dialect),
+		Model:          modeldb.New(sqlxDB, dialect),
+		APIKey:         apikeydb.New(sqlxDB, dialect),
+		ClusterMessage: clustermsgdb.New(sqlxDB, dialect),
+		Setting:        settingdb.New(sqlxDB, dialect),
 
 		SyncResource: syncResourceRepo,
 	}

@@ -33,7 +33,7 @@ var (
 // MessageService 负责集群消息的发送、处理器注册、轮询处理和清理。
 // 它是纯内部 API：只由 Groot 代码调用，不暴露 HTTP 端点。
 type MessageService struct {
-	repo   repo.MessageRepo
+	repo   repo.ClusterMessageRepo
 	log    *logger.Logger
 	selfID func() string // 返回当前实例的 reg_id；未注册时返回空串
 
@@ -42,7 +42,7 @@ type MessageService struct {
 }
 
 // NewMessageService 创建消息服务。selfID 通常传 Cluster.RegID。
-func NewMessageService(msgRepo repo.MessageRepo, log *logger.Logger, selfID func() string) *MessageService {
+func NewMessageService(msgRepo repo.ClusterMessageRepo, log *logger.Logger, selfID func() string) *MessageService {
 	return &MessageService{
 		repo:     msgRepo,
 		log:      log,

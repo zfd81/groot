@@ -34,8 +34,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | **多 Agent 协作** | 支持声明子 Agent，主 Agent 自动编排调度，也可直连指定子 Agent（Solo 模式） |
 | **多模型切换** | 支持创建多个 LLM 模型（Web UI 管理），按请求通过 `X-Model-Name` 指定，Web 界面可视化切换 |
 | **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
-| **定时任务调度** | 通过对话创建定时任务，系统在指定时间自动执行并推送通知 |
-| **消息通知** | 支持 Webhook 通知，任务完成/失败自动推送 |
+| **定时任务调度** | 通过对话创建定时任务，系统在指定时间自动执行，结果由 LLM 调用 MCP 工具（邮件、Webhook、IM 等）通知 |
 | **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
 | **数据库后端** | 运行数据统一存储在数据库中，默认 SQLite 零配置，可切换 MySQL/PostgreSQL 支持多实例集群部署 |
 | **集群管理** | 多实例共享数据库自动组成集群并选举 Leader；Web 界面查看成员状态、远程重启任意实例，MySQL/PostgreSQL 模式下可在实例间同步配置资源 |
@@ -84,11 +83,6 @@ Session（会话）
 │  │ Memory 存储 │  │ Skills 注册 │  │ 定时调度    │          │
 │  │ (数据库)    │  │             │  │ (gocron)    │          │
 │  └─────────────┘  └─────────────┘  └─────────────┘          │
-│                                           ↓                  │
-│                          ┌─────────────────────┐            │
-│                          │ 消息通知层           │            │
-│                          │ (webhook)           │            │
-│                          └─────────────────────┘            │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -270,7 +264,7 @@ export DEEPSEEK_API_KEY="sk-xxxx"
 
 `bootstrap.yaml` 中所有配置项均已注释并标注默认值，按需取消注释即可；改动本文件需重启服务生效。
 
-> **业务配置不在配置文件中**：模型、限流、通知渠道、附件限制、记忆、推理循环、子 Agent、定时任务开关等业务配置存放在数据库配置表中，登录 Web 界面后在设置面板中维护，保存即生效。模型配置在 设置 → 模型，其余业务配置在 设置 → 配置。
+> **业务配置不在配置文件中**：模型、限流、附件限制、记忆、推理循环、子 Agent、定时任务开关等业务配置存放在数据库配置表中，登录 Web 界面后在设置面板中维护，保存即生效。模型配置在 设置 → 模型，其余业务配置在 设置 → 配置。
 
 > 完整配置项说明见 [四、配置详解](#四配置详解)，数据库配置见 [4.7 数据库配置（bootstrap.yaml）](#47-数据库配置bootstrapyaml)。
 
@@ -287,7 +281,6 @@ kill -SIGTERM <pid>
 - 停止接受新请求
 - 等待当前对话完成（超时 30 秒）
 - 停止统一调度器（gocron）
-- 停止消息通知层
 - 关闭 MCP 连接
 - 刷新日志
 - 退出程序
@@ -384,9 +377,10 @@ curl -X POST http://localhost:8080/chat \
 老版本使用 `config.yaml` + `env.yaml` 两个配置文件。升级到当前版本无需手工迁移，新版本服务在原工作目录上**首次启动时自动完成迁移**：
 
 - `config.yaml` 中的启动项（server、logging 等）与 `env.yaml` 中的 `database` 节合并生成 `bootstrap.yaml`
-- 业务配置项（记忆、推理循环、子 Agent、附件、限流、通知渠道、定时任务开关等）与 JWT 签名密钥迁入数据库配置表，此后经 Web 设置面板维护
+- 业务配置项（记忆、推理循环、子 Agent、附件、限流、定时任务开关等）与 JWT 签名密钥迁入数据库配置表，此后经 Web 设置面板维护
 - 老文件 `config.yaml`、`env.yaml` 原地保留但不再生效（文件面板中以只读展示），确认迁移无误后可自行删除
 - JWT 签名密钥原样迁入配置表，**已签发的 API Key 不受影响**，无需重新创建
+- 老配置中的 `message` 节（队列参数与 webhook / email 渠道）不再使用，迁移时忽略；定时任务改由 LLM 调用 MCP 发送通知，通知配置为 `["webhook"]` 这类渠道列表的老任务升级后视为不通知，需重新描述通知要求（见 [Q11](#q11-如何让定时任务发通知)）
 
 如迁移结果不符合预期，删除生成的 `bootstrap.yaml` 后重启服务即可重新触发文件侧迁移（配置表中已有的键不会被覆盖）。
 
@@ -402,7 +396,7 @@ curl -X POST http://localhost:8080/chat \
 
 未初始化直接启动会报错并提示先运行 `groot init`。
 
-业务配置（模型、记忆、推理循环、子 Agent、附件、限流、通知渠道、定时任务开关等）不在配置文件中，存放于数据库配置表，登录 Web 界面后在设置面板中维护，保存即生效（见 [4.3 配置字段详解](#43-配置字段详解)）。
+业务配置（模型、记忆、推理循环、子 Agent、附件、限流、定时任务开关等）不在配置文件中，存放于数据库配置表，登录 Web 界面后在设置面板中维护，保存即生效（见 [4.3 配置字段详解](#43-配置字段详解)）。
 
 ### 4.2 完整配置文件示例
 
@@ -430,11 +424,6 @@ logging:
     directory: logs                # 日志文件目录（相对路径以 GROOT_HOME 为基准）
     filename_pattern: groot-{date}.log  # 文件名模式，{date} 替换为 YYYY-MM-DD
     max_age: 7                     # 日志保留天数
-
-# 消息层构造参数（Webhook 通知渠道的地址在 Web 设置面板中配置）
-message:
-  queue_size: 256                  # 消息队列容量
-  workers: 2                       # 消息发送 worker 数量
 
 # 调度器构造参数（是否允许模型创建定时任务，在 Web 设置面板中开关）
 schedule:
@@ -511,17 +500,6 @@ security:
 
 > 「是否允许在对话中创建定时任务」的开关在 Web 设置面板中维护，见下文 [业务配置（Web 设置面板）](#业务配置web-设置面板)。
 
-#### Message 配置
-
-`bootstrap.yaml` 中承载消息层的构造参数：
-
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `queue_size` | 否 | 消息队列容量，队列满时发布方返回 `ErrQueueFull`，默认 `256` |
-| `workers` | 否 | 消息发送 worker 数量，默认 `2` |
-
-> Webhook 通知渠道的地址在 Web 设置面板中维护，见下文 [业务配置（Web 设置面板）](#业务配置web-设置面板)。
-
 #### Security 配置
 
 `bootstrap.yaml` 中只承载限流后台协程的定时参数：
@@ -568,7 +546,7 @@ security:
 
 #### 业务配置（Web 设置面板）
 
-记忆、推理循环、子 Agent、附件、限流、认证、定时任务开关与通知渠道等业务配置存放在数据库配置表中，登录 Web 界面后在 **设置 → 配置** 中按分组维护，**保存即生效**，无需重启（「认证」分组例外：启动时读取一次，改动需重启生效）。集群部署时各节点共享同一数据库，业务配置天然共享同一份值。
+记忆、推理循环、子 Agent、附件、限流、认证与定时任务开关等业务配置存放在数据库配置表中，登录 Web 界面后在 **设置 → 配置** 中按分组维护，**保存即生效**，无需重启（「认证」分组例外：启动时读取一次，改动需重启生效）。集群部署时各节点共享同一数据库，业务配置天然共享同一份值。
 
 | 面板分组 | 面板项 | 默认值 | 说明 |
 |------|------|------|------|
@@ -592,11 +570,9 @@ security:
 | 认证 | 请求头名称 | `X-API-Key` | 对外 API 读取 API Key 的请求头，清空则恢复默认；**改动需重启生效** |
 | 认证 | 签名密钥 | 首次启动自动生成 | 只展示脱敏值；「重新生成」更换密钥（带二次确认），所有已签发的 API Key 立即失效；**改动需重启生效** |
 | 定时任务 | 允许创建定时任务 | 关 | 开启后模型可在对话中创建与管理定时任务（系统级清理和同步不受影响），保存后下一次对话生效 |
-| Webhook 通知 | 推送地址 | 空 | 接收通知的 HTTP 地址（任务完成/失败时 POST JSON），启用前必须填写 |
-| Webhook 通知 | 启用 Webhook | 关 | 定时任务结果等事件推送到上述地址 |
 
 > **说明：**
-> - 定时任务的 `notify_on_success` / `notify_on_failure` 字段指定通知渠道，目前可填 `webhook`
+> - 定时任务的通知不在设置面板中配置：创建任务时用自然语言描述通知要求，由 LLM 调用已配置的 MCP 工具发送，见 [Q11](#q11-如何让定时任务发通知)
 > - 子 Agent 的目录、`agent.md` 与专属 mcp/skills 配置放在 `{GROOT_HOME}/subagents/<name>/` 下，详见 [五、扩展能力](#五扩展能力) 中的「5.3 多 Agent」
 > - 语音输入（转录模型、话筒开关等）在 **设置 → 通用** 的「语音输入」分组中维护，同样存放于配置表
 
@@ -654,13 +630,13 @@ logging:
 
 **支持热更新的配置：**
 - 模型配置：存储在数据库中，Web 界面（设置 → 模型）增删改立即生效
-- 业务配置（记忆、推理循环、子 Agent、附件、限流、定时任务开关、Webhook 通知渠道）：在 Web 设置面板「配置」分区调整，保存即生效
+- 业务配置（记忆、推理循环、子 Agent、附件、限流、定时任务开关）：在 Web 设置面板「配置」分区调整，保存即生效
 - Skills 配置：修改 SKILL.md 文件自动生效
 - GROOT.md：每次对话按需读取，修改后下次对话自动生效
 - API Key：创建后立即可用，删除后立即失效
 
 **不支持热更新的配置：**
-- `bootstrap.yaml` 的全部配置项（Agent 元信息、Server、Logging、数据库连接、Message 的 `queue_size` / `workers`、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`）需重启服务
+- `bootstrap.yaml` 的全部配置项（Agent 元信息、Server、Logging、数据库连接、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`）需重启服务
 - JWT 签名密钥与 API Key 请求头名称（设置面板 **设置 → 配置 → 认证** 分组维护，存于数据库配置表，启动时读取一次）需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
 - 子 Agent 定义（`subagents/<name>/agent.md`）及其专属 MCP 需重启服务
@@ -2055,14 +2031,16 @@ X-API-Key: 在Web界面创建的APIKey
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
 ```
-用户：「每天早上 9 点帮我生成销售报表并通过 webhook 通知我」
+用户：「每天早上 9 点帮我生成销售报表，生成后用邮件发给 sales@example.com」
 
 Agent 自动调用 schedule_create 工具创建任务：
 - name: "每日销售报表"
 - schedule: "0 9 * * *"
-- instruction: "生成销售报表并通过 webhook 通知我"
-- notify_on_success: ["webhook"]
+- instruction: "生成销售报表"
+- notify_on_success: "用邮件把报表内容发给 sales@example.com"
 ```
+
+`notify_on_success` / `notify_on_failure` 是自然语言描述的通知要求，留空表示不通知。任务结束后，系统在该任务的会话中再执行一轮"收尾通知"，由 LLM 按要求调用已配置的 MCP 工具发送，详见 [Q11](#q11-如何让定时任务发通知)。
 
 内置的 8 个调度工具（`schedule_create`、`schedule_list`、`schedule_inspect`、`schedule_history`、`schedule_delete`、`schedule_disable`、`schedule_enable`、`schedule_archive`）在 `schedule.enabled: true` 时自动注册到 Agent。
 
@@ -2143,9 +2121,23 @@ result3 = client.execute_chat("写单元测试代码", session_id=sid)
 
 通过对话创建定时任务，让 Agent 在指定时间自动执行并推送结果。
 
-**1. 配置消息通知（Web 设置面板）：**
+**1. 配置发送通知用的 MCP：**
 
-登录 Web 界面，进入 **设置 → 配置**，在「Webhook 通知」分组中填写推送地址（如 `https://hooks.slack.com/services/xxx`）并打开启用开关，保存即生效。
+在 `{GROOT_HOME}/mcp/` 下添加一个具备发送能力的 MCP（邮件、Webhook、IM 等均可，从开源社区任选），然后重启服务。配置格式见 [5.2 MCP 工具配置](#52-mcp-工具配置)，例如：
+
+```json
+{
+  "name": "notifier",
+  "type": "stdio",
+  "description": "发送邮件 / Webhook 通知",
+  "isActive": true,
+  "command": "<你选用的通知类 MCP 命令>",
+  "args": [],
+  "env": {
+    "SMTP_PASSWORD": "${SMTP_PASSWORD}"
+  }
+}
+```
 
 **2. 通过对话创建任务：**
 
@@ -2153,7 +2145,7 @@ result3 = client.execute_chat("写单元测试代码", session_id=sid)
 client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
 
 # 创建定时任务
-client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报表，结果发送到 webhook")
+client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报表，成功后把结果 POST 到 https://hooks.example.com/xxx，失败时发邮件给 ops@example.com")
 
 # Agent 会自动调用 schedule_create 工具，创建 cron 任务
 # 任务定义保存到数据库并自动注册到调度器
@@ -2168,9 +2160,11 @@ curl -X POST http://localhost:8080/schedule/daily-sales-report/disable   -H "X-A
 
 **4. 执行结果通知：**
 
-任务执行完成后，系统自动向配置的通知渠道推送结果：
-- **成功** → `notify_on_success` 列表中的渠道
-- **失败** → `notify_on_failure` 列表中的渠道
+任务执行结束后，系统在同一会话中执行一轮收尾通知，由 LLM 调用 MCP 工具完成发送：
+- **成功**（`completed`）→ 按 `notify_on_success` 的要求通知
+- **失败或取消**（`failed` / `cancelled`）→ 按 `notify_on_failure` 的要求通知
+
+通知轮会作为该会话的一轮对话保存，可在会话历史中查看调用了哪些工具、是否发送成功。
 
 ---
 
@@ -2277,26 +2271,33 @@ export OPENAI_API_KEY="your-api-key"
 
 ---
 
-### Q11: 通知渠道如何配置
+### Q11: 如何让定时任务发通知
 
-1. 登录 Web 界面，在 **设置 → 配置** 的「Webhook 通知」分组中填写推送地址并启用，保存即生效
-2. 创建任务时通过 `notify_on_success` / `notify_on_failure` 指定渠道
+Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
-示例：任务成功和失败时都推送到 webhook
+1. 在 `{GROOT_HOME}/mcp/` 下配置一个具备发送能力的 MCP（邮件、Webhook、IM 等），重启服务
+2. 创建任务时在对话里说明通知要求，Agent 会把它写入 `notify_on_success` / `notify_on_failure`
+
+示例：
 
 ```json
 {
-  "notify_on_success": ["webhook"],
-  "notify_on_failure": ["webhook"]
+  "notify_on_success": "用邮件把执行结果发给 a@example.com",
+  "notify_on_failure": "把错误信息 POST 到 https://hooks.example.com/alert"
 }
 ```
+
+说明：
+- 任务结束后，系统在同一会话中执行一轮收尾通知（2 分钟超时），指令包含任务名称、状态、耗时、结果或错误信息以及通知要求
+- 任务本身失败时同样会通知；仅当 LLM 服务不可用时通知发不出去，此时日志中记录「任务通知失败」
+- 升级前创建的任务如果通知配置为 `["webhook"]` 这类渠道列表，升级后视为不通知，需要重新创建任务并描述通知要求
 
 ---
 
 ### Q12: 配置修改后需要重启吗
 
 **需要重启的配置：**
-- `bootstrap.yaml` 的全部配置项：Agent 元信息、Server、Logging、数据库连接、Message 的 `queue_size` / `workers`、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`
+- `bootstrap.yaml` 的全部配置项：Agent 元信息、Server、Logging、数据库连接、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`
 - JWT 签名密钥与 API Key 请求头名称（数据库配置表，启动时读取一次）
 - MCP 配置文件（`mcp/*.json`）
 - 子 Agent 定义（`subagents/<name>/agent.md`）
@@ -2305,7 +2306,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **不需要重启的配置：**
 - 模型配置：通过 Web UI（设置 → 模型）管理，存储在数据库中，增删改立即生效
-- 业务配置（记忆、推理循环、子 Agent、附件、限流、定时任务开关、Webhook 通知渠道）：在 Web 设置面板「配置」分区调整，保存即生效
+- 业务配置（记忆、推理循环、子 Agent、附件、限流、定时任务开关）：在 Web 设置面板「配置」分区调整，保存即生效
 - Skills（`SKILL.md`）：支持热加载
 - GROOT.md：支持热加载
 - 定时任务：存储在数据库中，由 sync 机制自动同步到调度器，无需重启

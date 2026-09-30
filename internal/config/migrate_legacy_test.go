@@ -98,8 +98,9 @@ database:
 	if b.Logging.Level != "debug" || b.Logging.File.Directory != "/var/log/groot" || b.Logging.File.MaxAge != 30 {
 		t.Errorf("logging = %+v", b.Logging)
 	}
-	if b.Message.QueueSize != 512 || b.Message.Workers != 4 {
-		t.Errorf("message = %+v", b.Message)
+	// 老文件的 message 节已无对应配置，不应带进 bootstrap.yaml
+	if data, _ := os.ReadFile(filepath.Join(dir, BootstrapFileName)); strings.Contains(string(data), "message:") {
+		t.Errorf("bootstrap.yaml 不应包含 message 节:\n%s", data)
 	}
 	if b.Schedule.MaxConcurrentTasks != 8 || b.Schedule.SyncInterval != "15s" {
 		t.Errorf("schedule = %+v", b.Schedule)
@@ -170,10 +171,6 @@ message:
 	if !lb.RateLimit.Enabled || lb.RateLimit.DefaultQPS != 25 {
 		t.Errorf("rate_limit 未交出: %+v", lb.RateLimit)
 	}
-	w, ok := lb.Senders["webhook"]
-	if !ok || !w.Enabled || w.URL != "https://hook.example.com" {
-		t.Errorf("senders 未交出: %+v", lb.Senders)
-	}
 
 	// 业务项不得出现在 bootstrap.yaml 中
 	data, _ := os.ReadFile(filepath.Join(dir, BootstrapFileName))
@@ -205,9 +202,9 @@ func TestMigrateLegacy_AllCommentedLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadBootstrap: %v", err)
 	}
-	if b.Server.Port != 8080 || b.Logging.Level != "info" || b.Message.QueueSize != 256 {
-		t.Errorf("全注释迁移后应为缺省值: port=%d level=%q queue=%d",
-			b.Server.Port, b.Logging.Level, b.Message.QueueSize)
+	if b.Server.Port != 8080 || b.Logging.Level != "info" || b.Schedule.MaxConcurrentTasks != 3 {
+		t.Errorf("全注释迁移后应为缺省值: port=%d level=%q max_concurrent=%d",
+			b.Server.Port, b.Logging.Level, b.Schedule.MaxConcurrentTasks)
 	}
 	if b.Database != nil {
 		t.Errorf("env.yaml 全注释时 database 应为 nil, got %+v", b.Database)

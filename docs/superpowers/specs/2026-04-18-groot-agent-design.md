@@ -18,7 +18,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 - 多 Agent 编排：主 Agent 通过 `call_agent` 工具调度子 Agent 完成专项任务
 - 热插拔扩展：Skills 支持动态添加，无需重启服务
 - 定时任务调度：通过对话创建定时任务，系统定时自动执行并推送结果
-- 消息通知推送：执行结果通过消息层统一路由到 Webhook / Email / Stdout 渠道
+- 任务结果通知：定时任务结束后，LLM 按自然语言通知要求调用 MCP 工具（邮件、Webhook、IM 等）发送结果
 
 ### 1.2 技术栈
 
@@ -138,13 +138,13 @@ llm:
 │  └───────────────────────┘└───────────────────────┘└───────────────────┘ │
 │                                                                           │
 │  ┌───────────────────────┐┌───────────────────────┐┌───────────────────┐ │
-│  │      Sub-Agents       ││       Schedule        ││       Message     │ │
+│  │      Sub-Agents       ││       Schedule        ││       Notify      │ │
 │  ├───────────────────────┤├───────────────────────┤├───────────────────┤ │
-│  │  agent.md 注册表      ││  任务 CRUD（DB）      ││  事件发布         │ │
-│  │  call_agent 工具      ││  gocron 调度引擎      ││  渠道过滤+并发    │ │
-│  │  独立 MCP / Skills    ││  Task Runner          ││  Webhook/Email/   │ │
-│  │  semaphore 并发控制   ││  active/disabled/     ││  Stdout senders   │ │
-│  │                       ││  archive 状态        ││  结果记录         │ │
+│  │  agent.md 注册表      ││  任务 CRUD（DB）      ││  自然语言通知要求 │ │
+│  │  call_agent 工具      ││  gocron 调度引擎      ││  收尾通知轮       │ │
+│  │  独立 MCP / Skills    ││  Task Runner          ││  LLM 调用 MCP     │ │
+│  │  semaphore 并发控制   ││  active/disabled/     ││  同会话落库       │ │
+│  │                       ││  archive 状态        ││                   │ │
 │  └───────────────────────┘└───────────────────────┘└───────────────────┘ │
 │                                                                           │
 └───────────────────────────────────────────────────────────────────────────┘
@@ -190,7 +190,7 @@ llm:
 | Memory（[internal/memory/](internal/memory)） | Session 元数据 / 单轮 ChatRecord 持久化（`memory_sessions` / `memory_chats`），按需聚合历史消息，注入 `session_rules.md` 嵌入规则，`Cleanup` 定时清理 |
 | Runtime State（[runtime_state.go](internal/agent/runtime_state.go)） | 活跃对话注册 / 并发互斥（`sync.Map`）、子 Agent 运行状态快照 |
 | Schedule（[internal/schedule/](internal/schedule)） | 任务 CRUD（DB）、gocron 调度引擎、Task Runner（复用 Executor）、状态切换（active/disabled/archive） |
-| Message（[internal/message/](internal/message)） | 事件发布、渠道过滤 + 并发发送（webhook / email / stdout senders）、SendResult 返回 |
+| Notify（[internal/schedule/notify.go](internal/schedule/notify.go)） | 任务结束后按通知要求在同一会话执行收尾通知轮，由 LLM 调用 MCP 工具发送 |
 
 **System Layer（系统层）**
 
@@ -214,7 +214,7 @@ llm:
 - Executor → Memory：写入 `ChatRecord` 与历史 Message
 - Executor → RuntimeState：注册活跃对话、子 Agent 状态记账
 - Schedule.Runner → Executor：定时触发时构造 Task 调用 `Executor.Execute`
-- Schedule.Runner → Message：执行结果通过消息层路由到外部渠道
+- Schedule.Runner → Executor：任务结束后以通知要求构造收尾通知轮，复用 `Executor.Execute` 在同一会话执行
 - Schedule.Engine → Memory：注册 `Cleanup` 定时任务
 
 **工具注册机制：**
@@ -827,21 +827,20 @@ POST /chat（已知 sessionID）:
 
 > 详细设计见 [定时任务调度系统设计](2026-05-11-schedule-design.md)。
 
-### 4.8 Message（消息层）
+### 4.8 Notify（定时任务通知）
 
-消息通知层，所有需要通知的场景统一通过消息层发布事件，由消息层负责路由分发，不经过 LLM。
+定时任务的通知由 LLM 完成：用户以自然语言描述通知要求，任务结束后系统在同一会话中执行一轮收尾通知，LLM 调用已配置的 MCP 工具发送。
 
 **核心能力：**
 
 | 能力 | 说明 |
 |------|------|
-| 事件发布 | 调用方构造 Event 入队，由 worker 异步路由 |
-| 渠道过滤 | 仅向 `senders.*.enabled=true` 的渠道分发 |
-| 并发发送 | 每个渠道独立 goroutine 调用 Sender |
-| 内置 Sender | `webhook` / `email` / `stdout`（[internal/message/senders/](internal/message/senders)） |
-| 结果记录 | 各渠道返回 `SendResult`，由调用方写入执行记录或日志 |
+| 自然语言要求 | `on_success` / `on_failure` 各为一段通知要求，留空不通知 |
+| 收尾通知轮 | 指令包含任务名称、状态、耗时、结果或错误与通知要求，2 分钟超时 |
+| 渠道即 MCP | 邮件、Webhook、IM 等发送能力均来自 `{GROOT_HOME}/mcp/` 中配置的 MCP |
+| 过程可追溯 | 通知轮作为会话的一轮对话落库，可在会话日志中查看工具调用 |
 
-> 详细设计见 [消息层设计](2026-05-11-message-design.md)。
+> 详细设计见 [定时任务通知设计](2026-09-30-schedule-notification-design.md)。
 
 ---
 
@@ -1042,11 +1041,10 @@ LLM 瞬时错误重试由 `react.error_retry` 控制，由 eino `ModelRetryConfi
 
 1. 集群离线（`cluster.Leave`），把当前节点从 `cluster_members` 移除并触发 leader 重选
 2. 停止 HTTP 服务，等待飞行中的请求完成（30 秒上限）
-3. 关闭消息层 worker（停止队列消费）
-4. 关闭 MCP 客户端连接
-5. 关闭子 Agent 注册表（释放每个子 Agent 自带的 MCP）
-6. 调度器（若是 Leader）通过 `stopLeaderTasks` 回调关闭
-7. zap logger Sync，进程退出
+3. 关闭 MCP 客户端连接
+4. 关闭子 Agent 注册表（释放每个子 Agent 自带的 MCP）
+5. 调度器（若是 Leader）通过 `stopLeaderTasks` 回调关闭
+6. zap logger Sync，进程退出
 
 ---
 
@@ -1140,22 +1138,6 @@ schedule:
   max_concurrent_tasks: 3          # 最大并发执行数
   sync_interval: 30s               # 任务列表同步间隔
 
-# 消息通知配置
-message:
-  queue_size: 256                  # 发送队列容量
-  workers: 2                       # 发送工作协程数
-  senders:
-    webhook:
-      enabled: false
-      url: ""
-    email:
-      enabled: false
-      smtp_host: ""
-      smtp_port: 587
-      username: ""
-      password: ""
-      from: ""
-
 # 日志配置
 logging:
   level: info                      # 日志级别：debug/info/warn/error
@@ -1204,6 +1186,12 @@ logging:
 
 - `groot --help` 中 `push` / `pull` / `diff` 的说明由"MinIO（minio 模式）"改为"数据库（MySQL/PG 模式）"，与实际行为一致。
 - README 目录说明移除会话数据文件目录表项，明确会话、对话历史、附件内容均存于数据库。
+
+### 9.2 定时任务通知改由 LLM + MCP 完成（2026-09-30）
+
+- 移除：消息层 `internal/message`（队列、worker、webhook sender）及配置模板中的 `message` 节，关闭流程去掉"关闭消息层 worker"一步。
+- 新增：4.8 节 Notify，定时任务结束后的收尾通知轮，由 LLM 按自然语言通知要求调用 MCP 工具发送。
+- 调整：架构图与组件表中的 Message 模块替换为 Notify；依赖关系改为 Schedule.Runner 复用 Executor 执行通知轮。
 
 ---
 

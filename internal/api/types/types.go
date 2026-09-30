@@ -352,17 +352,6 @@ type ScheduleSettings struct {
 	Enabled bool `json:"enabled"` // 是否允许在对话中创建定时任务
 }
 
-// SendersPayload 是 /web/settings/senders 的请求与响应体，读写同构。
-type SendersPayload struct {
-	Senders map[string]SenderSettings `json:"senders"`
-}
-
-// SenderSettings 单个发送渠道的参数。webhook 只用 url。
-type SenderSettings struct {
-	Enabled bool   `json:"enabled"`
-	URL     string `json:"url"`
-}
-
 // AuthSettingsPayload 是 /web/settings/auth 系列接口的响应体。
 // 密钥只以脱敏形式返回，界面据 secret_set 判断密钥是否已设置。
 type AuthSettingsPayload struct {

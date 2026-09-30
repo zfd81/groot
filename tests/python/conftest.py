@@ -338,13 +338,6 @@ def server():
             "max_concurrent_tasks": 10,
             "sync_interval": "30s"
         },
-        "message": {
-            "queue_size": 10,
-            "workers": 1,
-            "senders": {
-                "webhook": {"enabled": False, "url": ""}
-            }
-        },
         "logging": {"level": "debug", "format": "json", "output": ["stdout"]},
         "attachment": {
             "max_size": 50,

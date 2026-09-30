@@ -13,7 +13,6 @@ import (
 func TestAssembleConfig(t *testing.T) {
 	b := config.Bootstrap{}
 	b.Server = config.ServerConfig{Host: "127.0.0.1", Port: 9090}
-	b.Message = config.MessageBootstrap{QueueSize: 512, Workers: 4}
 	b.Schedule = config.ScheduleBootstrap{MaxConcurrentTasks: 8, SyncInterval: "15s"}
 	b.Security.RateLimit.CleanupInterval = "2m"
 
@@ -32,8 +31,8 @@ func TestAssembleConfig(t *testing.T) {
 		t.Fatalf("AssembleConfig: %v", err)
 	}
 	// 静态项
-	if cfg.Server.Port != 9090 || cfg.Message.QueueSize != 512 || cfg.Message.Workers != 4 {
-		t.Errorf("静态项未透传: %+v %+v", cfg.Server, cfg.Message)
+	if cfg.Server.Port != 9090 {
+		t.Errorf("静态项未透传: %+v", cfg.Server)
 	}
 	if cfg.Schedule.MaxConcurrentTasks != 8 || cfg.Schedule.SyncInterval != "15s" {
 		t.Errorf("schedule 静态项未透传: %+v", cfg.Schedule)
