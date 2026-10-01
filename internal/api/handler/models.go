@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
@@ -80,9 +81,33 @@ func toModelInfo(m *repo.Model) types.ModelInfo {
 		Seed:                m.Seed,
 		Stop:                stop,
 		Thinking:            m.Thinking,
-		IsDefault:           m.IsDefault,
+		DefaultTypes:        defaultTypes(m),
 		Enabled:             m.Enabled,
 	}
+}
+
+// defaultTypes 返回模型持有的默认类型标识，未持有时返回空切片（序列化为 []）
+func defaultTypes(m *repo.Model) []string {
+	out := []string{}
+	for _, f := range repo.AllDefaultFlags {
+		if m.Has(f) {
+			out = append(out, f.String())
+		}
+	}
+	return out
+}
+
+// parseDefaultType 解析查询参数 type；省略时为 chat，非法取值返回 false
+func parseDefaultType(rc *app.RequestContext) (repo.DefaultFlag, bool) {
+	s := strings.TrimSpace(rc.Query("type"))
+	if s == "" {
+		return repo.DefaultChat, true
+	}
+	return repo.ParseDefaultFlag(s)
+}
+
+func writeInvalidDefaultType(rc *app.RequestContext) {
+	rc.JSON(400, utils.H{"status": "invalid_request", "message": "type 取值无效，可选 chat、voice、vision"})
 }
 
 // writeModelError 把 ModelService 错误映射为 HTTP 状态码与错误码。
@@ -96,6 +121,8 @@ func (h *ModelsHandler) writeModelError(rc *app.RequestContext, err error) {
 		status, code = 409, "model_name_exists"
 	case errors.Is(err, llm.ErrDefaultProtected):
 		status, code = 409, "default_model_protected"
+	case errors.Is(err, llm.ErrChatDefaultRequired):
+		status, code = 400, "default_chat_required"
 	case errors.Is(err, llm.ErrModelDisabled):
 		status, code = 400, "model_disabled"
 	case errors.Is(err, llm.ErrNoDefaultModel):
@@ -118,14 +145,20 @@ func (h *ModelsHandler) List(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 	models := make([]types.ModelInfo, 0, len(list))
-	defaultName := ""
+	var defaults types.DefaultModels
 	for _, m := range list {
-		if m.IsDefault {
-			defaultName = m.Name
+		if m.Has(repo.DefaultChat) {
+			defaults.Chat = m.Name
+		}
+		if m.Has(repo.DefaultVoice) {
+			defaults.Voice = m.Name
+		}
+		if m.Has(repo.DefaultVision) {
+			defaults.Vision = m.Name
 		}
 		models = append(models, toModelInfo(m))
 	}
-	rc.JSON(200, types.ModelsResponse{Models: models, Default: defaultName, Total: len(models)})
+	rc.JSON(200, types.ModelsResponse{Models: models, Defaults: defaults, Total: len(models)})
 }
 
 // Create 处理 POST /web/models
@@ -175,9 +208,29 @@ func (h *ModelsHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 	rc.JSON(200, utils.H{"status": "ok"})
 }
 
-// SetDefault 处理 PUT /web/models/:name/default
+// SetDefault 处理 PUT /web/models/:name/default?type=chat|voice|vision（type 省略为 chat）
 func (h *ModelsHandler) SetDefault(ctx context.Context, rc *app.RequestContext) {
-	if err := h.models.SetDefault(ctx, rc.Param("name")); err != nil {
+	flag, ok := parseDefaultType(rc)
+	if !ok {
+		writeInvalidDefaultType(rc)
+		return
+	}
+	if err := h.models.SetDefault(ctx, rc.Param("name"), flag); err != nil {
+		h.writeModelError(rc, err)
+		return
+	}
+	rc.JSON(200, utils.H{"status": "ok"})
+}
+
+// ClearDefault 处理 DELETE /web/models/:name/default?type=voice|vision。
+// type 为 chat（或省略）时由业务层返回 default_chat_required。
+func (h *ModelsHandler) ClearDefault(ctx context.Context, rc *app.RequestContext) {
+	flag, ok := parseDefaultType(rc)
+	if !ok {
+		writeInvalidDefaultType(rc)
+		return
+	}
+	if err := h.models.ClearDefault(ctx, rc.Param("name"), flag); err != nil {
 		h.writeModelError(rc, err)
 		return
 	}

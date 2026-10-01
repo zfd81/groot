@@ -6,10 +6,9 @@ package setting
 import "github.com/zfd81/groot/internal/config"
 
 // defaultVoice 返回语音配置的默认值。
-// 默认关闭：话筒按钮需要使用者先指定转录模型才有意义。
+// 默认不启用：识别模型为空时界面不显示话筒按钮。
 func defaultVoice() VoiceSettings {
 	return VoiceSettings{
-		Enabled:  false,
 		Model:    "",
 		AutoSend: false,
 	}

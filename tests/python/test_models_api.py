@@ -10,11 +10,12 @@
 
 用例点：
 - 模型 CRUD（创建/列表/更新/删除）
-- 首个模型自动默认
-- 默认模型删除/禁用保护（409）
+- 首个模型自动成为默认对话模型
+- 默认模型删除/禁用保护（持有任一默认类型，409）
 - 重名冲突（409）
 - api_key 脱敏与留空不改
-- 设默认 / 禁用模型不可设默认
+- 按类型设默认（chat / voice / vision）/ 禁用模型不可设默认
+- 取消默认（voice / vision 可取消，chat 不可取消）/ 非法 type（400）
 - 连接测试（不可达地址返回 unhealthy）
 - chat 引用不存在/禁用模型报错（400）
 """
@@ -109,25 +110,28 @@ class TestModelsCRUD:
 
 class TestDefaultModel:
     def test_first_model_becomes_default(self, web, model_name):
-        """首个模型自动默认：库中已有模型时验证 default 字段非空且指向存在的模型"""
+        """首个模型自动成为默认对话模型：库中已有模型时验证 defaults.chat 非空且指向存在的模型"""
         web.post(f"{BASE_URL}/web/models", json=model_body(model_name))
         data = web.get(f"{BASE_URL}/web/models").json()
-        assert data["default"], "存在模型时必须有默认模型"
+        default_chat = data["defaults"]["chat"]
+        assert default_chat, "存在模型时必须有默认对话模型"
         names = [m["name"] for m in data["models"]]
-        assert data["default"] in names
-        default_model = next(m for m in data["models"] if m["name"] == data["default"])
-        assert default_model["is_default"] is True
+        assert default_chat in names
+        default_model = next(m for m in data["models"] if m["name"] == default_chat)
+        assert "chat" in default_model["default_types"]
+        for m in data["models"]:
+            assert isinstance(m["default_types"], list)
 
     def test_set_default_and_protection(self, web):
         a = f"t-{uuid.uuid4().hex[:8]}"
         b = f"t-{uuid.uuid4().hex[:8]}"
-        orig_default = web.get(f"{BASE_URL}/web/models").json().get("default", "")
+        orig_default = web.get(f"{BASE_URL}/web/models").json().get("defaults", {}).get("chat", "")
         try:
             web.post(f"{BASE_URL}/web/models", json=model_body(a))
             web.post(f"{BASE_URL}/web/models", json=model_body(b))
 
             assert web.put(f"{BASE_URL}/web/models/{a}/default").status_code == 200
-            assert web.get(f"{BASE_URL}/web/models").json()["default"] == a
+            assert web.get(f"{BASE_URL}/web/models").json()["defaults"]["chat"] == a
 
             # 默认模型禁止删除 / 禁用
             assert web.delete(f"{BASE_URL}/web/models/{a}").status_code == 409
@@ -142,6 +146,55 @@ class TestDefaultModel:
                 web.put(f"{BASE_URL}/web/models/{orig_default}/default")
             web.delete(f"{BASE_URL}/web/models/{a}")
             web.delete(f"{BASE_URL}/web/models/{b}")
+
+    def test_voice_default_set_clear_and_protection(self, web, model_name):
+        """默认语音模型：设置后受删除保护，取消后可删除；取消不影响默认对话模型"""
+        before = web.get(f"{BASE_URL}/web/models").json()["defaults"]
+        orig_voice = before.get("voice", "")
+        assert web.post(f"{BASE_URL}/web/models", json=model_body(model_name)).status_code == 200
+        try:
+            resp = web.put(f"{BASE_URL}/web/models/{model_name}/default?type=voice")
+            assert resp.status_code == 200, resp.text
+            data = web.get(f"{BASE_URL}/web/models").json()
+            assert data["defaults"]["voice"] == model_name
+            assert data["defaults"]["chat"] == before["chat"], "设置语音默认不应改变对话默认"
+            m = next(x for x in data["models"] if x["name"] == model_name)
+            assert "voice" in m["default_types"]
+
+            # 持有语音默认同样不可删除 / 禁用
+            assert web.delete(f"{BASE_URL}/web/models/{model_name}").status_code == 409
+            assert web.put(f"{BASE_URL}/web/models/{model_name}",
+                           json=model_body(model_name, api_key="", enabled=False)).status_code == 409
+
+            resp = web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=voice")
+            assert resp.status_code == 200, resp.text
+            data = web.get(f"{BASE_URL}/web/models").json()
+            assert data["defaults"]["voice"] == ""
+            m = next(x for x in data["models"] if x["name"] == model_name)
+            assert "voice" not in m["default_types"]
+
+            assert web.delete(f"{BASE_URL}/web/models/{model_name}").status_code == 200
+        finally:
+            if orig_voice:
+                web.put(f"{BASE_URL}/web/models/{orig_voice}/default?type=voice")
+            else:
+                web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=voice")
+
+    def test_invalid_default_type(self, web, model_name):
+        web.post(f"{BASE_URL}/web/models", json=model_body(model_name))
+        for method in (web.put, web.delete):
+            resp = method(f"{BASE_URL}/web/models/{model_name}/default?type=audio")
+            assert resp.status_code == 400, resp.text
+            assert resp.json()["status"] == "invalid_request"
+
+    def test_clear_chat_default_rejected(self, web):
+        default_chat = web.get(f"{BASE_URL}/web/models").json()["defaults"]["chat"]
+        if not default_chat:
+            pytest.skip("库中无默认对话模型")
+        resp = web.delete(f"{BASE_URL}/web/models/{default_chat}/default?type=chat")
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["status"] == "default_chat_required"
+        assert web.get(f"{BASE_URL}/web/models").json()["defaults"]["chat"] == default_chat
 
 
 class TestConnection:
@@ -169,7 +222,7 @@ class TestChatModelErrors:
     def test_chat_with_disabled_model(self, web):
         a = f"t-{uuid.uuid4().hex[:8]}"
         b = f"t-{uuid.uuid4().hex[:8]}"
-        orig_default = web.get(f"{BASE_URL}/web/models").json().get("default", "")
+        orig_default = web.get(f"{BASE_URL}/web/models").json().get("defaults", {}).get("chat", "")
         try:
             # 保证 b 不是默认模型：先建 a（空库时 a 抢占默认），再建 b 并禁用
             web.post(f"{BASE_URL}/web/models", json=model_body(a))

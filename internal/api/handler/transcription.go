@@ -14,6 +14,7 @@ import (
 
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
+	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/setting"
 )
 
@@ -80,22 +81,17 @@ func (h *TranscriptionHandler) Serve(ctx context.Context, rc *app.RequestContext
 		return
 	}
 
-	modelName, err := h.resolveModelName(ctx, rc)
+	// Resolve 按「显式模型名 → 默认语音模型」解析并校验 enabled：
+	// 显式指定的模型不存在或禁用时直接报错，不回落到默认语音模型；
+	// 三类错误对调用方都是「模型不可用」，统一映射为 invalid_model，错误原文已含模型名或类型。
+	m, err := h.models.Resolve(ctx, explicitModelName(rc), repo.DefaultVoice)
 	if err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
-		return
-	}
-
-	// GetByName 自身已校验 enabled：模型不存在返回 ErrModelNotFound，
-	// 已禁用返回 ErrModelDisabled，两者对调用方都是「模型不可用」，
-	// 统一映射为 invalid_model，错误原文已含模型名。
-	m, err := h.models.GetByName(ctx, modelName)
-	if err != nil {
-		if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) {
+		if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) ||
+			errors.Is(err, llm.ErrNoDefaultModel) {
 			rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
 			return
 		}
-		h.log.Error("查询语音模型失败", zap.String("model", modelName), zap.Error(err))
+		h.log.Error("查询语音模型失败", zap.Error(err))
 		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
 		return
 	}
@@ -114,30 +110,19 @@ func (h *TranscriptionHandler) Serve(ctx context.Context, rc *app.RequestContext
 			rc.JSON(400, utils.H{"status": "invalid_request", "message": err.Error()})
 			return
 		}
-		h.log.Warn("转录失败", zap.String("model", modelName), zap.Error(err))
+		h.log.Warn("转录失败", zap.String("model", m.Name), zap.Error(err))
 		rc.JSON(502, utils.H{"status": "upstream_error", "message": err.Error()})
 		return
 	}
 
-	rc.JSON(200, utils.H{"text": text, "model": modelName})
+	rc.JSON(200, utils.H{"text": text, "model": m.Name})
 }
 
-// resolveModelName 按「表单 model → 请求头 X-Model-Name → 配置表 voice.model」
-// 的顺序取模型名。请求头形式与 /chat 的既有约定一致。
-func (h *TranscriptionHandler) resolveModelName(ctx context.Context, rc *app.RequestContext) (string, error) {
+// explicitModelName 按「表单 model → 请求头 X-Model-Name」取调用方显式指定的模型名，
+// 均未给出返回空串。请求头形式与 /chat 的既有约定一致。
+func explicitModelName(rc *app.RequestContext) string {
 	if v := strings.TrimSpace(rc.PostForm("model")); v != "" {
-		return v, nil
+		return v
 	}
-	if v := strings.TrimSpace(string(rc.GetHeader("X-Model-Name"))); v != "" {
-		return v, nil
-	}
-	voice, err := h.settings.Voice(ctx)
-	if err != nil {
-		h.log.Error("读取语音配置失败", zap.Error(err))
-		return "", errors.New("读取语音配置失败")
-	}
-	if strings.TrimSpace(voice.Model) == "" {
-		return "", errors.New("未配置语音模型，请前往设置页指定用于转录的模型")
-	}
-	return voice.Model, nil
+	return strings.TrimSpace(string(rc.GetHeader("X-Model-Name")))
 }

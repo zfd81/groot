@@ -18,7 +18,7 @@ const emit = defineEmits<{
 }>()
 
 const meta = useMetaStore()
-const { models, defaultModel, agents } = storeToRefs(meta)
+const { models, defaultModel, agents, loaded: metaLoaded } = storeToRefs(meta)
 const { t } = useI18n()
 
 // 主 Agent 的哨兵值：与后端 agent.MainAgentName 一致。用非空值而非空串，
@@ -29,21 +29,28 @@ const MAIN_AGENT = 'groot'
 const text = ref('')
 const selectedModel = ref('')
 
-// 语音输入状态。配置在组件挂载时读一次；未启用则不渲染话筒按钮。
-// 语音配置来自 store，与设置面板共享。设置里改动后这里立即跟随，无需刷新页面。
+// 语音输入状态。语音配置来自 store，与设置面板共享，
+// 设置里改动后这里立即跟随，无需刷新页面。
 const voiceStore = useVoiceStore()
 const voice = computed(() => voiceStore.settings)
 const transcribing = ref(false)
 const { recording, duration, start, stop, cancel } = useRecorder()
 const recordSupported = isRecordingSupported()
 
-// 话筒按钮的显示条件：后端启用 + 浏览器支持。
+// 话筒按钮的显示条件：设置中选了识别模型 + 浏览器支持。
 // 两者缺一就不渲染，而不是渲染成禁用态，避免留下一个永远点不动的按钮。
-const showMic = computed(() => voice.value.enabled && recordSupported)
+const showMic = computed(() => !!voice.value.model && recordSupported)
 
-// 开关已开但没选模型：话筒显示警告态，点击只提示、不录音。
-// 这种状态只有管理员改了设置才会出现，提示里直接指向设置页。
-const micWarn = computed(() => voice.value.enabled && !voice.value.model)
+// 所选识别模型已被禁用或删除：话筒显示警告态，点击只提示、不录音。
+// 隐藏会让使用者误以为语音输入消失却无从得知原因，警告态直接指向设置页。
+// 模型列表未加载或拉取失败（列表为空）时不判定，避免误报；真正失效时由转录接口报错提示。
+const micWarn = computed(
+  () =>
+    metaLoaded.value &&
+    models.value.length > 0 &&
+    !!voice.value.model &&
+    !models.value.some((m) => m.enabled && m.name === voice.value.model)
+)
 
 // 麦克风权限被拒后置灰。浏览器会记住拒绝结果，再点也只会立刻失败，
 // 置灰比反复弹同一条提示更明确。
@@ -98,8 +105,8 @@ async function stopRecording() {
       ElMessage.info(t('chat.recordEmpty'))
       return
     }
-    // 不传 model，由服务端回落到当前配置的语音模型，避免页面缓存的旧模型名失效
-    const res = await voiceApi.transcribe(rec.blob, rec.filename)
+    // 总是经 X-Model-Name 传递设置中选定的识别模型
+    const res = await voiceApi.transcribe(rec.blob, rec.filename, voice.value.model)
     const piece = res.text.trim()
     if (!piece) {
       ElMessage.info(t('chat.recordEmpty'))
@@ -550,7 +557,7 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
   font-variant-numeric: tabular-nums;
   margin-right: 4px;
 }
-/* 开关已开但未选模型：话筒按警告色显示，提醒去设置页补配置 */
+/* 所选识别模型不可用：话筒按警告色显示，提醒去设置页重新选择 */
 .mic-warn {
   color: var(--el-color-warning);
   border-color: var(--el-color-warning);

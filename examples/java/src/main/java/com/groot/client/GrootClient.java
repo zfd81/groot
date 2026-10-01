@@ -243,7 +243,7 @@ public class GrootClient implements AutoCloseable {
      * 音频转文字。
      *
      * @param audioFile 音频文件（webm / mp3 / wav 等）
-     * @param model     转录模型名；null 或空串表示使用服务端设置中配置的语音模型
+     * @param model     转录模型名；null 或空串表示使用服务端的默认语音模型
      * @param language  语种提示（如 "zh"）；null 或空串表示不指定
      * @return 含 text（识别文本）与 model（实际使用的模型）的 JSON
      */

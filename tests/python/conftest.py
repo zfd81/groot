@@ -104,8 +104,9 @@ def ensure_default_model(base_url, username=None, password=None):
     if resp.status_code != 200:
         raise RuntimeError(f"获取模型列表失败 ({resp.status_code}): {resp.text}")
     data = resp.json()
-    if data.get("default"):
-        return data["default"]
+    default_chat = (data.get("defaults") or {}).get("chat")
+    if default_chat:
+        return default_chat
 
     # 无默认模型：创建测试模型（首个模型会自动成为默认）
     model_name = "qwen-local"
@@ -122,14 +123,15 @@ def ensure_default_model(base_url, username=None, password=None):
     if resp.status_code not in (200, 409):  # 409 = 重名，视为已存在
         raise RuntimeError(f"创建模型失败 ({resp.status_code}): {resp.text}")
 
-    # 若仍无默认（如已有模型但默认为空），显式设为默认
+    # 若仍无默认对话模型（如已有模型但默认为空），显式设为默认对话模型
     data = session.get(f"{base_url}/web/models", timeout=10).json()
-    if not data.get("default"):
-        r = session.put(f"{base_url}/web/models/{model_name}/default", timeout=10)
+    default_chat = (data.get("defaults") or {}).get("chat")
+    if not default_chat:
+        r = session.put(f"{base_url}/web/models/{model_name}/default?type=chat", timeout=10)
         if r.status_code != 200:
             raise RuntimeError(f"设置默认模型失败 ({r.status_code}): {r.text}")
         return model_name
-    return data["default"]
+    return default_chat
 
 
 def bootstrap_api_key(base_url, name="pytest-all", permissions=None, expires_in="1d",

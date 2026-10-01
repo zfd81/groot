@@ -8,7 +8,7 @@ import i18n from '../i18n'
 const t = i18n.global.t
 
 export interface VoiceSettings {
-  enabled: boolean
+  // Web 界面语音输入使用的识别模型，空串表示不启用语音输入
   model: string
   auto_send: boolean
 }
@@ -19,15 +19,16 @@ export interface TranscriptionResult {
 }
 
 export const voiceApi = {
-  // transcribe 上传音频并返回识别文本。model 省略时由后端按配置表取。
-  async transcribe(blob: Blob, filename: string, model?: string): Promise<TranscriptionResult> {
+  // transcribe 上传音频并返回识别文本。识别模型经请求头 X-Model-Name 传递，
+  // 由设置中选定的模型决定，不依赖服务端的默认语音模型。
+  async transcribe(blob: Blob, filename: string, model: string): Promise<TranscriptionResult> {
     const fd = new FormData()
     fd.append('file', blob, filename)
-    if (model) fd.append('model', model)
 
     const resp = await fetch('/web/audio/transcriptions', {
       method: 'POST',
       body: fd,
+      headers: { 'X-Model-Name': model },
       credentials: 'same-origin',
     })
     if (resp.status === 401) {

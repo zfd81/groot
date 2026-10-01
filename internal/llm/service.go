@@ -16,13 +16,30 @@ import (
 )
 
 var (
-	ErrModelNotFound    = errors.New("模型不存在")
-	ErrModelDisabled    = errors.New("模型已禁用")
-	ErrNoDefaultModel   = errors.New("尚未配置模型，请在设置中创建模型")
-	ErrNameExists       = errors.New("模型名称已存在")
-	ErrDefaultProtected = errors.New("默认模型不允许删除或禁用，请先将其他模型设为默认")
-	ErrInvalidModel     = errors.New("模型配置无效")
+	ErrModelNotFound       = errors.New("模型不存在")
+	ErrModelDisabled       = errors.New("模型已禁用")
+	ErrNoDefaultModel      = errors.New("尚未配置模型，请在设置中创建模型")
+	ErrNameExists          = errors.New("模型名称已存在")
+	ErrDefaultProtected    = errors.New("默认模型不允许删除或禁用，请先取消其默认标记")
+	ErrChatDefaultRequired = errors.New("默认对话模型不能取消，请将其他模型设为默认对话模型")
+	ErrInvalidModel        = errors.New("模型配置无效")
 )
+
+// noDefaultError 某一类型尚无默认模型。错误信息按类型区分；
+// errors.Is(err, ErrNoDefaultModel) 对所有类型成立，调用方无需逐类判断。
+type noDefaultError struct{ flag repo.DefaultFlag }
+
+func (e noDefaultError) Error() string {
+	switch e.flag {
+	case repo.DefaultVoice:
+		return "未配置默认语音模型，请在模型管理中设置"
+	case repo.DefaultVision:
+		return "未配置默认视觉模型，请在模型管理中设置"
+	}
+	return ErrNoDefaultModel.Error()
+}
+
+func (e noDefaultError) Is(target error) bool { return target == ErrNoDefaultModel }
 
 // ModelService 模型配置业务层
 type ModelService struct {
@@ -33,15 +50,17 @@ func NewModelService(r repo.ModelRepo) *ModelService {
 	return &ModelService{repo: r}
 }
 
-// GetByName 按名称获取可用模型；name 为空时返回默认模型。
-// APIKey 中的 ${ENV_VAR} 引用会被展开。禁用的模型返回 ErrModelDisabled。
-func (s *ModelService) GetByName(ctx context.Context, name string) (*repo.Model, error) {
+// Resolve 按用途解析可用模型：name 非空按名称取，为空取 flag 类型的默认模型。
+// 模型不存在返回 ErrModelNotFound，禁用返回 ErrModelDisabled，
+// 该类型无默认返回可被 errors.Is 识别为 ErrNoDefaultModel 的错误（信息区分类型）。
+// APIKey 中的 ${ENV_VAR} 引用会被展开。
+func (s *ModelService) Resolve(ctx context.Context, name string, flag repo.DefaultFlag) (*repo.Model, error) {
 	var m *repo.Model
 	var err error
 	if name == "" {
-		m, err = s.repo.GetDefault(ctx)
+		m, err = s.repo.GetDefault(ctx, flag)
 		if errors.Is(err, repo.ErrNotFound) {
-			return nil, ErrNoDefaultModel
+			return nil, noDefaultError{flag}
 		}
 	} else {
 		m, err = s.repo.GetByName(ctx, name)
@@ -57,6 +76,11 @@ func (s *ModelService) GetByName(ctx context.Context, name string) (*repo.Model,
 	}
 	m.APIKey = config.ExpandEnv(m.APIKey)
 	return m, nil
+}
+
+// GetByName 按名称获取可用模型；name 为空时返回默认对话模型。供对话与子 Agent 使用。
+func (s *ModelService) GetByName(ctx context.Context, name string) (*repo.Model, error) {
+	return s.Resolve(ctx, name, repo.DefaultChat)
 }
 
 // GetStored 按名称获取模型（不检查 enabled，APIKey 展开环境变量）。
@@ -78,7 +102,7 @@ func (s *ModelService) List(ctx context.Context) ([]*repo.Model, error) {
 	return s.repo.List(ctx)
 }
 
-// Create 创建模型。库中没有任何模型时，新模型自动成为默认模型并强制启用。
+// Create 创建模型。库中没有任何模型时，新模型自动成为默认对话模型并强制启用。
 // 不修改调用方传入的 m（内部拷贝后写库），因此调用方拿不到写入后的时间戳/默认标记。
 func (s *ModelService) Create(ctx context.Context, m *repo.Model) error {
 	if err := validateModel(m); err != nil {
@@ -94,8 +118,10 @@ func (s *ModelService) Create(ctx context.Context, m *repo.Model) error {
 		return err
 	}
 	rec := *m
+	// 默认类型只经 SetDefault / ClearDefault 变更，调用方传入的值一律忽略
+	rec.DefaultFlags = 0
 	if n == 0 {
-		rec.IsDefault = true
+		rec.DefaultFlags = repo.DefaultChat
 		rec.Enabled = true
 	}
 	now := time.Now()
@@ -106,7 +132,7 @@ func (s *ModelService) Create(ctx context.Context, m *repo.Model) error {
 
 // Update 按原名称 name 更新模型。m.APIKey 为空表示保持库中原值；
 // 允许重命名（m.Name != name），新名称冲突返回 ErrNameExists；
-// 默认模型不允许禁用（is_default 本身不通过 Update 修改）。
+// 持有任一默认类型的模型不允许禁用（default_flags 本身不通过 Update 修改）。
 // 不修改调用方传入的 m（内部拷贝后写库），避免明文 APIKey 回流到调用方对象。
 func (s *ModelService) Update(ctx context.Context, name string, m *repo.Model) error {
 	existing, err := s.repo.GetByName(ctx, name)
@@ -120,11 +146,11 @@ func (s *ModelService) Update(ctx context.Context, name string, m *repo.Model) e
 	if upd.APIKey == "" {
 		upd.APIKey = existing.APIKey
 	}
-	upd.IsDefault = existing.IsDefault
+	upd.DefaultFlags = existing.DefaultFlags
 	if err := validateModel(&upd); err != nil {
 		return err
 	}
-	if existing.IsDefault && !upd.Enabled {
+	if existing.DefaultFlags != 0 && !upd.Enabled {
 		return ErrDefaultProtected
 	}
 	if upd.Name != name {
@@ -137,7 +163,7 @@ func (s *ModelService) Update(ctx context.Context, name string, m *repo.Model) e
 	return s.repo.Update(ctx, name, &upd)
 }
 
-// Delete 删除模型；默认模型返回 ErrDefaultProtected。
+// Delete 删除模型；持有任一默认类型的模型返回 ErrDefaultProtected。
 func (s *ModelService) Delete(ctx context.Context, name string) error {
 	existing, err := s.repo.GetByName(ctx, name)
 	if errors.Is(err, repo.ErrNotFound) {
@@ -146,14 +172,15 @@ func (s *ModelService) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if existing.IsDefault {
+	if existing.DefaultFlags != 0 {
 		return ErrDefaultProtected
 	}
 	return s.repo.Delete(ctx, name)
 }
 
-// SetDefault 把指定模型设为默认；禁用的模型返回 ErrModelDisabled。
-func (s *ModelService) SetDefault(ctx context.Context, name string) error {
+// SetDefault 把指定模型设为 flag 类型的默认，原持有者自动失去该类型；
+// 禁用的模型返回 ErrModelDisabled。
+func (s *ModelService) SetDefault(ctx context.Context, name string, flag repo.DefaultFlag) error {
 	m, err := s.repo.GetByName(ctx, name)
 	if errors.Is(err, repo.ErrNotFound) {
 		return fmt.Errorf("%w: %s", ErrModelNotFound, name)
@@ -164,7 +191,27 @@ func (s *ModelService) SetDefault(ctx context.Context, name string) error {
 	if !m.Enabled {
 		return fmt.Errorf("%w: %s", ErrModelDisabled, name)
 	}
-	return s.repo.SetDefault(ctx, name)
+	return s.repo.SetDefault(ctx, name, flag)
+}
+
+// ClearDefault 取消指定模型的 flag 类型默认。对话默认必须始终存在，
+// 只能通过把其他模型设为默认来转移，返回 ErrChatDefaultRequired；
+// 模型未持有该类型时直接成功。
+func (s *ModelService) ClearDefault(ctx context.Context, name string, flag repo.DefaultFlag) error {
+	if flag == repo.DefaultChat {
+		return ErrChatDefaultRequired
+	}
+	m, err := s.repo.GetByName(ctx, name)
+	if errors.Is(err, repo.ErrNotFound) {
+		return fmt.Errorf("%w: %s", ErrModelNotFound, name)
+	}
+	if err != nil {
+		return err
+	}
+	if !m.Has(flag) {
+		return nil
+	}
+	return s.repo.ClearDefault(ctx, name, flag)
 }
 
 // validateModel 校验必填字段与参数范围。

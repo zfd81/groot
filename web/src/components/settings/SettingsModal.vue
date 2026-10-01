@@ -60,10 +60,11 @@ const voiceStore = useVoiceStore()
 const voice = ref<VoiceSettings>({ ...voiceStore.settings })
 const voiceSaving = ref(false)
 
-// 可选的识别模型来自模型列表；语音接口要求模型已启用
-const voiceModelOptions = computed(() =>
-  (models.value || []).filter((m) => m.enabled).map((m) => ({ label: m.name, value: m.name }))
-)
+// 首项为空值「未选择」，供键盘使用者关闭语音输入（清空图标不可聚焦）；其余为全部启用的模型（转录接口要求模型已启用）
+const voiceModelOptions = computed(() => [
+  { label: t('settings.voiceModelPlaceholder'), value: '' },
+  ...(models.value || []).filter((m) => m.enabled).map((m) => ({ label: m.name, value: m.name })),
+])
 
 async function loadVoice() {
   await voiceStore.reload()
@@ -213,15 +214,9 @@ async function confirmRegenerateSecret() {
   }
 }
 
-// saveVoice 保存整个分区。开关打开但未选模型时拒绝保存，并从 store 回滚，
-// 避免本地状态与服务端脱节（否则会存下一个话筒一按就报错的状态）。
+// saveVoice 保存整个分区。失败时提示并从服务端重新读取，界面回到真实值。
 // 保存成功不弹提示，与通用面板的语言、外观行为一致。
 async function saveVoice() {
-  if (voice.value.enabled && !voice.value.model) {
-    ElMessage.warning(t('settings.voiceModelRequired'))
-    voice.value = { ...voiceStore.settings }
-    return
-  }
   voiceSaving.value = true
   try {
     // 写 store 而非直接调接口：成功后聊天输入框共享同一份状态，话筒随即显示或隐藏
@@ -454,7 +449,7 @@ async function openAgentTools(a: AgentInfo) {
           </div>
           <!-- 语音输入：影响聊天页话筒按钮的行为，属于界面交互偏好，
                故放在通用而非配置分区（后者承载 Agent 运行参数）。
-               其中 model 同时被对外的 /audio/transcriptions 用作缺省模型。 -->
+               识别模型仅供 Web 界面使用，空串表示不启用语音输入。 -->
           <div class="config-group">
             <div class="group-title">{{ t('settings.configVoice') }}</div>
             <div class="row">
@@ -462,11 +457,13 @@ async function openAgentTools(a: AgentInfo) {
                 <div class="label-title">{{ t('settings.voiceModel') }}</div>
                 <div class="label-desc">{{ t('settings.voiceModelDesc') }}</div>
               </div>
+              <!-- 清空时取空串而非 undefined，与后端「空串 = 不启用」一致 -->
               <el-select
                 v-model="voice.model"
                 style="width: 220px"
                 clearable
                 :placeholder="t('settings.voiceModelPlaceholder')"
+                :value-on-clear="''"
                 @change="saveVoice"
               >
                 <el-option
@@ -479,17 +476,16 @@ async function openAgentTools(a: AgentInfo) {
             </div>
             <div class="row">
               <div class="row-label">
-                <div class="label-title">{{ t('settings.voiceEnabled') }}</div>
-                <div class="label-desc">{{ t('settings.voiceEnabledDesc') }}</div>
-              </div>
-              <el-switch v-model="voice.enabled" :loading="voiceSaving" @change="saveVoice" />
-            </div>
-            <div class="row">
-              <div class="row-label">
                 <div class="label-title">{{ t('settings.voiceAutoSend') }}</div>
                 <div class="label-desc">{{ t('settings.voiceAutoSendDesc') }}</div>
               </div>
-              <el-switch v-model="voice.auto_send" :loading="voiceSaving" @change="saveVoice" />
+              <!-- 识别模型为空时保留原值，仅置为不可操作 -->
+              <el-switch
+                v-model="voice.auto_send"
+                :loading="voiceSaving"
+                :disabled="!voice.model"
+                @change="saveVoice"
+              />
             </div>
           </div>
 

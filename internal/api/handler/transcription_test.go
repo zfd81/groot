@@ -23,9 +23,10 @@ import (
 )
 
 // newTranscriptionHandlerForTest 建一套真实的仓库与配置对象，
-// cfg 作为静态配置传入 setting.New；upstreamURL 非空时创建名为 whisper-1 的模型，
-// 其 base_url 指向 httptest 假上游；voiceModel 非空时写入配置表 voice.model。
-func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstreamURL, voiceModel string) *TranscriptionHandler {
+// cfg 作为静态配置传入 setting.New；upstreamURL 非空时创建名为 whisper-1 的模型
+// （库中首个模型，自动成为默认对话模型），其 base_url 指向 httptest 假上游；
+// defaultVoice 为 true 时把 whisper-1 设为默认语音模型。
+func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstreamURL string, defaultVoice bool) *TranscriptionHandler {
 	t.Helper()
 	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
 	if err != nil {
@@ -33,9 +34,10 @@ func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstream
 	}
 	t.Cleanup(func() { sqlxDB.Close() })
 
+	ctx := context.Background()
 	models := llm.NewModelService(modeldb.New(sqlxDB, dialect))
 	if upstreamURL != "" {
-		err := models.Create(context.Background(), &repo.Model{
+		err := models.Create(ctx, &repo.Model{
 			Name: "whisper-1", Model: "whisper-1",
 			BaseURL: upstreamURL, APIKey: "sk-test-1234abcd",
 			Enabled: true, Stop: []string{},
@@ -43,17 +45,14 @@ func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstream
 		if err != nil {
 			t.Fatalf("创建测试模型: %v", err)
 		}
+		if defaultVoice {
+			if err := models.SetDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+				t.Fatalf("设置默认语音模型: %v", err)
+			}
+		}
 	}
 
 	settings := setting.New(cfg, settingdb.New(sqlxDB, dialect))
-	if voiceModel != "" {
-		err := settings.SetVoice(context.Background(), setting.VoiceSettings{
-			Enabled: true, Model: voiceModel,
-		})
-		if err != nil {
-			t.Fatalf("SetVoice: %v", err)
-		}
-	}
 	return NewTranscriptionHandler(settings, models, logger.NewNop())
 }
 
@@ -126,7 +125,7 @@ var fakeAudio = []byte("FAKE-AUDIO-BYTES")
 
 func TestTranscriptionHandler_Success(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	h.Serve(context.Background(), rc)
@@ -151,7 +150,7 @@ func TestTranscriptionHandler_Success(t *testing.T) {
 
 func TestTranscriptionHandler_MissingFile(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
 	rc := audioCtx(t, nil, "", "")
 	h.Serve(context.Background(), rc)
@@ -166,8 +165,8 @@ func TestTranscriptionHandler_MissingFile(t *testing.T) {
 
 func TestTranscriptionHandler_NoVoiceModelConfigured(t *testing.T) {
 	up := fakeUpstream(t)
-	// 建了模型但没配 voice.model，且请求不带 model 字段
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "")
+	// 建了模型但未设默认语音模型，且请求不带 model 字段
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	h.Serve(context.Background(), rc)
@@ -178,11 +177,14 @@ func TestTranscriptionHandler_NoVoiceModelConfigured(t *testing.T) {
 	if s := bodyStatus(t, rc); s != "invalid_model" {
 		t.Errorf("status = %q, want invalid_model", s)
 	}
+	if !bytes.Contains(rc.Response.Body(), []byte("未配置默认语音模型")) {
+		t.Errorf("错误信息应提示未配置默认语音模型: %s", rc.Response.Body())
+	}
 }
 
 func TestTranscriptionHandler_ModelNotFound(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "nonexistent-model")
 	h.Serve(context.Background(), rc)
@@ -198,11 +200,26 @@ func TestTranscriptionHandler_ModelNotFound(t *testing.T) {
 	}
 }
 
-// TestTranscriptionHandler_FormModelWinsOverSetting 配置表指向一个不存在的模型，
-// 表单显式指定 whisper-1，应以表单为准并成功。
-func TestTranscriptionHandler_FormModelWinsOverSetting(t *testing.T) {
+// TestTranscriptionHandler_DefaultVoiceUsed 请求不指定模型时使用默认语音模型。
+func TestTranscriptionHandler_DefaultVoiceUsed(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "no-such-model")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
+
+	rc := audioCtx(t, fakeAudio, "rec.webm", "")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if m := bodyModel(t, rc); m != "whisper-1" {
+		t.Errorf("model = %q, want whisper-1（默认语音模型）", m)
+	}
+}
+
+// TestTranscriptionHandler_FormModelWithoutDefault 未设默认语音模型，表单显式指定时照常转录。
+func TestTranscriptionHandler_FormModelWithoutDefault(t *testing.T) {
+	up := fakeUpstream(t)
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "whisper-1")
 	h.Serve(context.Background(), rc)
@@ -211,32 +228,69 @@ func TestTranscriptionHandler_FormModelWinsOverSetting(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	if m := bodyModel(t, rc); m != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1（表单应优先于配置表）", m)
+		t.Errorf("model = %q, want whisper-1", m)
 	}
 }
 
-// TestTranscriptionHandler_HeaderModelWinsOverSetting 配置表指向不存在的模型，
-// 请求头 X-Model-Name 指定 whisper-1 且不带表单 model，应以请求头为准。
-func TestTranscriptionHandler_HeaderModelWinsOverSetting(t *testing.T) {
+// TestTranscriptionHandler_HeaderModelWithoutDefault 未设默认语音模型，请求头显式指定时照常转录。
+func TestTranscriptionHandler_HeaderModelWithoutDefault(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "no-such-model")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	rc.Request.Header.Set("X-Model-Name", "whisper-1")
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s（请求头应优先于配置表）", rc.Response.StatusCode(), rc.Response.Body())
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	if m := bodyModel(t, rc); m != "whisper-1" {
 		t.Errorf("model = %q, want whisper-1", m)
 	}
 }
 
+// TestTranscriptionHandler_ExplicitUnknownNoFallback 显式指定的模型不存在时报错，不回落到默认语音模型。
+func TestTranscriptionHandler_ExplicitUnknownNoFallback(t *testing.T) {
+	up := fakeUpstream(t)
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
+
+	rc := audioCtx(t, fakeAudio, "rec.webm", "")
+	rc.Request.Header.Set("X-Model-Name", "no-such-model")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("status=%d, want 400（不应回落到默认语音模型）", rc.Response.StatusCode())
+	}
+	if s := bodyStatus(t, rc); s != "invalid_model" {
+		t.Errorf("status = %q, want invalid_model", s)
+	}
+}
+
+// TestTranscriptionHandler_IgnoresVoiceSetting 服务端不读取配置表 voice.model：
+// 配置表选了 whisper-1 但无默认语音模型、请求也不指定时，仍报未配置。
+func TestTranscriptionHandler_IgnoresVoiceSetting(t *testing.T) {
+	up := fakeUpstream(t)
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
+	err := h.settings.SetVoice(context.Background(), setting.VoiceSettings{Model: "whisper-1"})
+	if err != nil {
+		t.Fatalf("SetVoice: %v", err)
+	}
+
+	rc := audioCtx(t, fakeAudio, "rec.webm", "")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("status=%d, want 400（不应读取配置表 voice.model）", rc.Response.StatusCode())
+	}
+	if s := bodyStatus(t, rc); s != "invalid_model" {
+		t.Errorf("status = %q, want invalid_model", s)
+	}
+}
+
 // TestTranscriptionHandler_FormWinsOverHeader 表单与请求头同时给出时，表单优先。
 func TestTranscriptionHandler_FormWinsOverHeader(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "whisper-1")
 	rc.Request.Header.Set("X-Model-Name", "no-such-model")
@@ -252,7 +306,7 @@ func TestTranscriptionHandler_FormWinsOverHeader(t *testing.T) {
 
 func TestTranscriptionHandler_HeaderModelUsed(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	rc.Request.Header.Set("X-Model-Name", "whisper-1")
@@ -265,7 +319,7 @@ func TestTranscriptionHandler_HeaderModelUsed(t *testing.T) {
 
 func TestTranscriptionHandler_UnsupportedExtension(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
 	rc := audioCtx(t, fakeAudio, "notes.txt", "")
 	h.Serve(context.Background(), rc)
@@ -281,7 +335,7 @@ func TestTranscriptionHandler_UnsupportedExtension(t *testing.T) {
 // TestTranscriptionHandler_NoExtension 文件名没有扩展名时应给出「缺少扩展名」的提示。
 func TestTranscriptionHandler_NoExtension(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
 	rc := audioCtx(t, fakeAudio, "blob", "")
 	h.Serve(context.Background(), rc)
@@ -304,7 +358,7 @@ func TestTranscriptionHandler_UpstreamError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, true)
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	h.Serve(context.Background(), rc)
 
@@ -327,7 +381,7 @@ func TestTranscriptionHandler_EmptyTranscript(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, true)
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	h.Serve(context.Background(), rc)
 
@@ -343,7 +397,7 @@ func TestTranscriptionHandler_EmptyTranscript(t *testing.T) {
 // 验证按 MB 换算后的超限判断。
 func TestTranscriptionHandler_FileTooLarge(t *testing.T) {
 	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, "whisper-1")
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
 	// 附件上限的基准层是代码默认值（50MB），把 1MB 写进配置表以触发超限
 	rt := h.settings.RuntimeStatic()

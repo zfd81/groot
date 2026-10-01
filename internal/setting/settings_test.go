@@ -70,13 +70,15 @@ func (f *fakeSettingRepo) Delete(ctx context.Context, scope repo.Scope, scopeID,
 func TestSettings_VoiceDefaults(t *testing.T) {
 	s := New(config.Bootstrap{}, newFakeRepo())
 
-	v, err := s.Voice(context.Background())
+	v, modelSet, err := s.Voice(context.Background())
 	if err != nil {
 		t.Fatalf("Voice: %v", err)
 	}
-	want := defaultVoice()
-	if v != want {
+	if want := defaultVoice(); v != want {
 		t.Errorf("Voice = %+v, want %+v（表为空时应返回默认值）", v, want)
+	}
+	if modelSet {
+		t.Error("表为空时 modelSet 应为 false")
 	}
 }
 
@@ -85,15 +87,32 @@ func TestSettings_VoicePartialOverride(t *testing.T) {
 	f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)] = "whisper-1"
 
 	s := New(config.Bootstrap{}, f)
-	v, err := s.Voice(context.Background())
+	v, modelSet, err := s.Voice(context.Background())
 	if err != nil {
 		t.Fatalf("Voice: %v", err)
 	}
 	if v.Model != "whisper-1" {
 		t.Errorf("Model = %q, want whisper-1", v.Model)
 	}
-	if v.Enabled != false {
-		t.Error("Enabled 未在表中，应回落到默认值 false")
+	if !modelSet {
+		t.Error("voice.model 行存在时 modelSet 应为 true")
+	}
+	if v.AutoSend {
+		t.Error("AutoSend 未在表中，应回落到默认值 false")
+	}
+}
+
+// TestSettings_VoiceEmptyModelRowIsSet voice.model 行存在但为空串，同样视为已确定。
+func TestSettings_VoiceEmptyModelRowIsSet(t *testing.T) {
+	f := newFakeRepo()
+	f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)] = ""
+
+	v, modelSet, err := New(config.Bootstrap{}, f).Voice(context.Background())
+	if err != nil {
+		t.Fatalf("Voice: %v", err)
+	}
+	if v.Model != "" || !modelSet {
+		t.Errorf("Model=%q modelSet=%v, want 空串且 modelSet=true", v.Model, modelSet)
 	}
 }
 
@@ -111,14 +130,14 @@ func TestSettings_VoiceBoolParsing(t *testing.T) {
 	}
 	for _, c := range cases {
 		f := newFakeRepo()
-		f.data[key(repo.ScopeGlobal, "", KeyVoiceEnabled)] = c.raw
+		f.data[key(repo.ScopeGlobal, "", KeyVoiceAutoSend)] = c.raw
 		s := New(config.Bootstrap{}, f)
-		v, err := s.Voice(context.Background())
+		v, _, err := s.Voice(context.Background())
 		if err != nil {
 			t.Fatalf("raw=%q Voice: %v", c.raw, err)
 		}
-		if v.Enabled != c.want {
-			t.Errorf("raw=%q Enabled = %v, want %v", c.raw, v.Enabled, c.want)
+		if v.AutoSend != c.want {
+			t.Errorf("raw=%q AutoSend = %v, want %v", c.raw, v.AutoSend, c.want)
 		}
 	}
 }
@@ -127,16 +146,33 @@ func TestSettings_SetVoiceRoundTrip(t *testing.T) {
 	s := New(config.Bootstrap{}, newFakeRepo())
 	ctx := context.Background()
 
-	in := VoiceSettings{Enabled: true, Model: "whisper-1", AutoSend: true}
+	in := VoiceSettings{Model: "whisper-1", AutoSend: true}
 	if err := s.SetVoice(ctx, in); err != nil {
 		t.Fatalf("SetVoice: %v", err)
 	}
-	out, err := s.Voice(ctx)
+	out, modelSet, err := s.Voice(ctx)
 	if err != nil {
 		t.Fatalf("Voice: %v", err)
 	}
-	if out != in {
-		t.Errorf("回读 = %+v, want %+v", out, in)
+	if out != in || !modelSet {
+		t.Errorf("回读 = %+v modelSet=%v, want %+v 且 modelSet=true", out, modelSet, in)
+	}
+}
+
+// TestSettings_SetVoiceModelOnlyWritesModel SetVoiceModel 只写 voice.model，不碰 auto_send。
+func TestSettings_SetVoiceModelOnlyWritesModel(t *testing.T) {
+	f := newFakeRepo()
+	s := New(config.Bootstrap{}, f)
+	ctx := context.Background()
+
+	if err := s.SetVoiceModel(ctx, "whisper-1"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+	if got := f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)]; got != "whisper-1" {
+		t.Errorf("voice.model = %q, want whisper-1", got)
+	}
+	if _, ok := f.data[key(repo.ScopeGlobal, "", KeyVoiceAutoSend)]; ok {
+		t.Error("SetVoiceModel 不应写入 voice.auto_send")
 	}
 }
 
@@ -168,19 +204,19 @@ func TestSettings_BootstrapCategories(t *testing.T) {
 func TestSettings_NilRepoUsesDefaults(t *testing.T) {
 	// 配置表不可用时（如仓库未装配），来自表的分类回落到默认值而非 panic
 	s := New(config.Bootstrap{}, nil)
-	v, err := s.Voice(context.Background())
+	v, modelSet, err := s.Voice(context.Background())
 	if err != nil {
 		t.Fatalf("Voice: %v", err)
 	}
-	if v != defaultVoice() {
-		t.Errorf("Voice = %+v, want 默认值", v)
+	if v != defaultVoice() || modelSet {
+		t.Errorf("Voice = %+v modelSet=%v, want 默认值且 modelSet=false", v, modelSet)
 	}
 }
 
 func TestSettings_VoiceRepoError(t *testing.T) {
 	f := newFakeRepo()
 	f.err = errors.New("boom")
-	_, err := New(config.Bootstrap{}, f).Voice(context.Background())
+	_, _, err := New(config.Bootstrap{}, f).Voice(context.Background())
 	if !errors.Is(err, f.err) {
 		t.Fatalf("err = %v, want boom", err)
 	}
@@ -197,6 +233,22 @@ func TestSettings_SetVoiceRepoError(t *testing.T) {
 	f := newFakeRepo()
 	f.err = errors.New("boom")
 	err := New(config.Bootstrap{}, f).SetVoice(context.Background(), VoiceSettings{Model: "x"})
+	if !errors.Is(err, f.err) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+}
+
+func TestSettings_SetVoiceModelNilRepo(t *testing.T) {
+	err := New(config.Bootstrap{}, nil).SetVoiceModel(context.Background(), "x")
+	if !errors.Is(err, ErrNoSettingStore) {
+		t.Fatalf("err = %v, want ErrNoSettingStore", err)
+	}
+}
+
+func TestSettings_SetVoiceModelRepoError(t *testing.T) {
+	f := newFakeRepo()
+	f.err = errors.New("boom")
+	err := New(config.Bootstrap{}, f).SetVoiceModel(context.Background(), "x")
 	if !errors.Is(err, f.err) {
 		t.Fatalf("err = %v, want boom", err)
 	}

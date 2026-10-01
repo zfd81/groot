@@ -55,6 +55,7 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.POST("/models/test", modelsH.Test)
 	webGroup.PUT("/models/:name", modelsH.Update)
 	webGroup.PUT("/models/:name/default", modelsH.SetDefault)
+	webGroup.DELETE("/models/:name/default", modelsH.ClearDefault)
 	webGroup.DELETE("/models/:name", modelsH.Delete)
 	webGroup.GET("/cluster", clusterH.Serve)
 	webGroup.POST("/cluster/:reg_id/restart", clusterH.Restart)

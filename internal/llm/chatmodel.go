@@ -14,8 +14,20 @@ import (
 	"github.com/zfd81/groot/internal/repo"
 )
 
+// openAIBaseURL 规整 base_url：去掉末尾的 /，缺少 /v1 后缀时补齐。
+// 对话、连接测试与转录共用，同一个 base_url 在三处指向同一个前缀，
+// 写不写 /v1 都能用。
+func openAIBaseURL(baseURL string) string {
+	b := strings.TrimSuffix(baseURL, "/")
+	if !strings.HasSuffix(b, "/v1") {
+		b += "/v1"
+	}
+	return b
+}
+
 // NewChatModel creates an OpenAI-compatible ChatModel using eino-ext.
 // m 为已解析的模型配置（APIKey 已展开环境变量，由 ModelService 保证）。
+// base_url 缺少 /v1 后缀时自动补齐，见 openAIBaseURL。
 // timeout: per-call timeout for LLM API requests (0 means no timeout)
 // 采样参数只透传 temperature、max_completion_tokens、thinking 三项；
 // 其余字段（top_p、penalty、seed、stop 等）保留在数据模型中供以后扩展，暂不下发。
@@ -25,7 +37,7 @@ func NewChatModel(ctx context.Context, m *repo.Model, timeout time.Duration) (mo
 	chatCfg := &openai.ChatModelConfig{
 		Model:       m.Model,
 		APIKey:      m.APIKey,
-		BaseURL:     m.BaseURL,
+		BaseURL:     openAIBaseURL(m.BaseURL),
 		Temperature: &temperature,
 		Timeout:     timeout,
 	}
@@ -51,14 +63,8 @@ func NewChatModel(ctx context.Context, m *repo.Model, timeout time.Duration) (mo
 // CheckConnection checks if LLM API is reachable and properly configured
 // Returns (status, errorMessage) where status is "healthy" or "unhealthy"
 func CheckConnection(m *repo.Model) (status string, errorMsg string) {
-	// Ensure base_url ends with /v1 for OpenAI-compatible APIs
-	baseURL := m.BaseURL
-	if !strings.HasSuffix(baseURL, "/v1") && !strings.HasSuffix(baseURL, "/v1/") {
-		baseURL = strings.TrimSuffix(baseURL, "/") + "/v1"
-	}
-
 	// Test connection by calling the models endpoint (lightweight, no token cost)
-	modelsURL := strings.TrimSuffix(baseURL, "/") + "/models"
+	modelsURL := openAIBaseURL(m.BaseURL) + "/models"
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", modelsURL, nil)

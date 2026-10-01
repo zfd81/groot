@@ -104,7 +104,7 @@ class MockGrootHandler(BaseHTTPRequestHandler):
         if b'name="file"' not in body:
             self._json_response(400, {"status": "invalid_request", "message": "缺少 file 字段"})
             return
-        # 从表单里取 model；客户端没传时模拟服务端回落到配置表里的值
+        # 从表单里取 model；客户端没传时模拟服务端回落到默认语音模型
         model = "whisper-1"
         marker = b'name="model"\r\n\r\n'
         if marker in body:
@@ -245,7 +245,7 @@ class TestGrootClient(unittest.TestCase):
     def test_transcribe_default_model(self):
         result = self.client.transcribe(self._tmp_audio())
         self.assertEqual(result["text"], "你好，世界")
-        # 未指定 model 时由服务端回落到配置的语音模型
+        # 未指定 model 时由服务端回落到默认语音模型
         self.assertEqual(result["model"], "whisper-1")
 
     def test_transcribe_explicit_model(self):

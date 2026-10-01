@@ -63,55 +63,150 @@ func newSettingHandlerForTest(t *testing.T, withModel string, enabled bool) *Set
 	})
 }
 
-func TestSettingHandler_GetVoiceDefaults(t *testing.T) {
-	h := newSettingHandlerForTest(t, "", false)
-
+// getVoice 调 GET /web/settings/voice 并解析响应。
+func getVoice(t *testing.T, h *SettingHandler) types.VoiceSettingsResponse {
+	t.Helper()
 	rc := callJSON(h.GetVoice, consts.MethodGet, "", nil)
 	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+		t.Fatalf("GetVoice status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	var out types.VoiceSettingsResponse
 	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
 		t.Fatalf("解析响应: %v", err)
 	}
-	if out.Enabled || out.Model != "" || out.AutoSend {
-		t.Errorf("表为空时应返回默认值，得到 %+v", out)
+	return out
+}
+
+// voiceModelSet 读配置表中是否已存在 voice.model 一行。
+func voiceModelSet(t *testing.T, h *SettingHandler) bool {
+	t.Helper()
+	_, set, err := h.settings.Voice(context.Background())
+	if err != nil {
+		t.Fatalf("Voice: %v", err)
+	}
+	return set
+}
+
+func TestSettingHandler_GetVoiceDefaults(t *testing.T) {
+	h := newSettingHandlerForTest(t, "", false)
+
+	out := getVoice(t, h)
+	if out.Model != "" || out.AutoSend {
+		t.Errorf("表为空且无默认语音模型时应返回默认值，得到 %+v", out)
+	}
+	if voiceModelSet(t, h) {
+		t.Error("无默认语音模型时不应写入 voice.model")
+	}
+}
+
+// TestSettingHandler_GetVoiceInitFromDefaultVoice 首次读取以默认语音模型为初值并写入，
+// 之后取消默认语音模型不影响已写入的识别模型。
+func TestSettingHandler_GetVoiceInitFromDefaultVoice(t *testing.T) {
+	h := newSettingHandlerForTest(t, "whisper-1", true)
+	ctx := context.Background()
+	if err := h.models.SetDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+		t.Fatalf("SetDefault: %v", err)
+	}
+
+	if out := getVoice(t, h); out.Model != "whisper-1" {
+		t.Fatalf("Model = %q, want 默认语音模型 whisper-1", out.Model)
+	}
+	if !voiceModelSet(t, h) {
+		t.Fatal("取到默认语音模型后应写入 voice.model")
+	}
+
+	if err := h.models.ClearDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+		t.Fatalf("ClearDefault: %v", err)
+	}
+	if out := getVoice(t, h); out.Model != "whisper-1" {
+		t.Errorf("取消默认语音模型后 Model = %q, want 仍为 whisper-1", out.Model)
+	}
+}
+
+// TestSettingHandler_GetVoiceLaterDefaultVoice 首次读取时无默认语音模型，
+// 之后设置了默认语音模型，再读取时取其作为初值。
+func TestSettingHandler_GetVoiceLaterDefaultVoice(t *testing.T) {
+	h := newSettingHandlerForTest(t, "whisper-1", true)
+
+	if out := getVoice(t, h); out.Model != "" {
+		t.Fatalf("Model = %q, want 空串", out.Model)
+	}
+	if err := h.models.SetDefault(context.Background(), "whisper-1", repo.DefaultVoice); err != nil {
+		t.Fatalf("SetDefault: %v", err)
+	}
+	if out := getVoice(t, h); out.Model != "whisper-1" {
+		t.Errorf("Model = %q, want whisper-1", out.Model)
+	}
+	if !voiceModelSet(t, h) {
+		t.Error("取到默认语音模型后应写入 voice.model")
+	}
+}
+
+// TestSettingHandler_GetVoiceEmptyRowNoAutofill voice.model 行为空串时视为已确定，不自动填充。
+func TestSettingHandler_GetVoiceEmptyRowNoAutofill(t *testing.T) {
+	h := newSettingHandlerForTest(t, "whisper-1", true)
+	ctx := context.Background()
+	if err := h.settings.SetVoiceModel(ctx, ""); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+	if err := h.models.SetDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+		t.Fatalf("SetDefault: %v", err)
+	}
+
+	if out := getVoice(t, h); out.Model != "" {
+		t.Errorf("Model = %q, want 空串（已确定的空值不应被默认语音模型覆盖）", out.Model)
 	}
 }
 
 func TestSettingHandler_PutVoiceRoundTrip(t *testing.T) {
 	h := newSettingHandlerForTest(t, "whisper-1", true)
 
-	body := `{"enabled":true,"model":"whisper-1","auto_send":true}`
-	rc := callJSON(h.PutVoice, consts.MethodPut, body, nil)
+	rc := callJSON(h.PutVoice, consts.MethodPut, `{"model":"whisper-1","auto_send":true}`, nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("PutVoice status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-
-	rc = callJSON(h.GetVoice, consts.MethodGet, "", nil)
-	var out types.VoiceSettingsResponse
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
-	}
-	if !out.Enabled || out.Model != "whisper-1" || !out.AutoSend {
+	if out := getVoice(t, h); out.Model != "whisper-1" || !out.AutoSend {
 		t.Errorf("回读 = %+v, want 全部生效", out)
 	}
 }
 
-func TestSettingHandler_PutVoiceEmptyModelAllowed(t *testing.T) {
-	// model 为空串表示「尚未指定」，允许保存：使用者可以先开开关再选模型
+// TestSettingHandler_PutVoiceEmptyModel model 为空表示关闭语音输入，无需任何默认语音模型。
+func TestSettingHandler_PutVoiceEmptyModel(t *testing.T) {
 	h := newSettingHandlerForTest(t, "", false)
 
-	rc := callJSON(h.PutVoice, consts.MethodPut, `{"enabled":true,"model":"","auto_send":false}`, nil)
+	rc := callJSON(h.PutVoice, consts.MethodPut, `{"model":"","auto_send":true}`, nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if !voiceModelSet(t, h) {
+		t.Error("保存后应写入 voice.model 行")
+	}
+	if out := getVoice(t, h); out.Model != "" || !out.AutoSend {
+		t.Errorf("回读 = %+v, want model 为空、auto_send 为 true", out)
+	}
+}
+
+// TestSettingHandler_PutVoiceClearStaleModel 所选模型已禁用时，清空识别模型不应被拦截。
+func TestSettingHandler_PutVoiceClearStaleModel(t *testing.T) {
+	h := newSettingHandlerForTest(t, "whisper-1", false)
+	// 识别模型指向已禁用的 whisper-1，构造「所选模型已失效」状态
+	if err := h.settings.SetVoiceModel(context.Background(), "whisper-1"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	rc := callJSON(h.PutVoice, consts.MethodPut, `{"model":"","auto_send":false}`, nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d body=%s, want 200", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if out := getVoice(t, h); out.Model != "" {
+		t.Errorf("Model = %q, want 清空后为空串", out.Model)
 	}
 }
 
 func TestSettingHandler_PutVoiceUnknownModel(t *testing.T) {
 	h := newSettingHandlerForTest(t, "whisper-1", true)
 
-	rc := callJSON(h.PutVoice, consts.MethodPut, `{"enabled":true,"model":"nope","auto_send":false}`, nil)
+	rc := callJSON(h.PutVoice, consts.MethodPut, `{"model":"nope","auto_send":false}`, nil)
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
@@ -126,9 +221,9 @@ func TestSettingHandler_PutVoiceUnknownModel(t *testing.T) {
 func TestSettingHandler_PutVoiceDisabledModel(t *testing.T) {
 	h := newSettingHandlerForTest(t, "whisper-1", false)
 
-	rc := callJSON(h.PutVoice, consts.MethodPut, `{"enabled":true,"model":"whisper-1","auto_send":false}`, nil)
+	rc := callJSON(h.PutVoice, consts.MethodPut, `{"model":"whisper-1","auto_send":false}`, nil)
 	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("status=%d, want 400（已禁用的模型不应被选为语音模型）", rc.Response.StatusCode())
+		t.Fatalf("status=%d, want 400（已禁用的模型不应被选为识别模型）", rc.Response.StatusCode())
 	}
 	if s := bodyStatus(t, rc); s != "invalid_model" {
 		t.Errorf("status = %q, want invalid_model", s)
@@ -153,28 +248,12 @@ func TestSettingHandler_PutVoiceBadJSON(t *testing.T) {
 func TestSettingHandler_PutVoiceTrimsModel(t *testing.T) {
 	h := newSettingHandlerForTest(t, "whisper-1", true)
 
-	rc := callJSON(h.PutVoice, consts.MethodPut, `{"enabled":true,"model":"  whisper-1  ","auto_send":false}`, nil)
+	rc := callJSON(h.PutVoice, consts.MethodPut, `{"model":"  whisper-1  ","auto_send":false}`, nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("PutVoice status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-
-	rc = callJSON(h.GetVoice, consts.MethodGet, "", nil)
-	var out types.VoiceSettingsResponse
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
-	}
-	if out.Model != "whisper-1" {
+	if out := getVoice(t, h); out.Model != "whisper-1" {
 		t.Errorf("Model = %q, want 去除首尾空白后的 whisper-1", out.Model)
-	}
-}
-
-func TestSettingHandler_DisableWithStaleModel(t *testing.T) {
-	// 所选模型已被禁用时，关闭开关不应被拦截
-	h := newSettingHandlerForTest(t, "whisper-1", false)
-
-	rc := callJSON(h.PutVoice, consts.MethodPut, `{"enabled":false,"model":"whisper-1","auto_send":false}`, nil)
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s, want 200（关闭开关不应校验模型）", rc.Response.StatusCode(), rc.Response.Body())
 	}
 }
 

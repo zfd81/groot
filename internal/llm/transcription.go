@@ -29,7 +29,7 @@ const transcribeTimeout = 120 * time.Second
 //
 // 请求 {base_url}/audio/transcriptions，以 multipart 表单提交，
 // 与 OpenAI 的转录规范一致，鉴权沿用 repo.Model 中的 APIKey。
-// base_url 缺少 /v1 后缀时自动补齐，与 CheckConnection 的处理一致。
+// base_url 缺少 /v1 后缀时自动补齐，与对话、连接测试的处理一致。
 //
 // file 以流式写入上游请求体，不在内存中完整展开音频。
 // language 为空时不下发该字段，交由上游自行判断语种。
@@ -109,11 +109,7 @@ func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
 
 // transcriptionURL 由 base_url 推出转录端点，缺少 /v1 后缀时补齐。
 func transcriptionURL(baseURL string) string {
-	b := strings.TrimSuffix(baseURL, "/")
-	if !strings.HasSuffix(b, "/v1") {
-		b += "/v1"
-	}
-	return b + "/audio/transcriptions"
+	return openAIBaseURL(baseURL) + "/audio/transcriptions"
 }
 
 // upstreamMessage 从上游错误响应中提取可读信息。

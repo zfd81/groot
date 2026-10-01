@@ -202,38 +202,48 @@ func (s *Settings) SetRuntime(ctx context.Context, r RuntimeSettings) error {
 }
 
 // Voice 读取语音配置。表内缺失的字段由代码默认值填充。
+// modelSet 表示配置表中是否存在 voice.model 一行：不存在说明识别模型从未确定过，
+// 调用方可据此以默认语音模型作为初值；存在（含空串）则表示已确定，不再自动填充。
 // 出错时返回值无意义，调用方须先检查 error。
-func (s *Settings) Voice(ctx context.Context) (VoiceSettings, error) {
-	v := defaultVoice()
+func (s *Settings) Voice(ctx context.Context) (v VoiceSettings, modelSet bool, err error) {
+	v = defaultVoice()
 	if s.repo == nil {
-		return v, nil
+		return v, false, nil
 	}
 	vals, err := s.globalValues(ctx)
 	if err != nil {
-		return VoiceSettings{}, err
-	}
-	if raw, ok := vals[KeyVoiceEnabled]; ok {
-		v.Enabled = parseBool(raw, v.Enabled)
+		return VoiceSettings{}, false, err
 	}
 	if raw, ok := vals[KeyVoiceModel]; ok {
 		v.Model = raw
+		modelSet = true
 	}
 	if raw, ok := vals[KeyVoiceAutoSend]; ok {
 		v.AutoSend = parseBool(raw, v.AutoSend)
 	}
-	return v, nil
+	return v, modelSet, nil
 }
 
-// SetVoice 整体保存语音配置的三个字段。
-// 三个键写入后即视为明确设置，之后不再跟随代码默认值变化；恢复默认需删除对应行。
+// SetVoice 整体保存语音配置的两个字段。
+// 写入后即视为明确设置，之后不再跟随代码默认值变化；恢复默认需删除对应行。
 func (s *Settings) SetVoice(ctx context.Context, v VoiceSettings) error {
 	if s.repo == nil {
 		return ErrNoSettingStore
 	}
 	return s.repo.Upsert(ctx,
-		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeyVoiceEnabled, Value: strconv.FormatBool(v.Enabled)},
 		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeyVoiceModel, Value: v.Model},
 		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeyVoiceAutoSend, Value: strconv.FormatBool(v.AutoSend)},
+	)
+}
+
+// SetVoiceModel 只写入 voice.model，用于首次读取时写入识别模型初值。
+// 不碰 voice.auto_send，使其继续回落到代码默认值。
+func (s *Settings) SetVoiceModel(ctx context.Context, model string) error {
+	if s.repo == nil {
+		return ErrNoSettingStore
+	}
+	return s.repo.Upsert(ctx,
+		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeyVoiceModel, Value: model},
 	)
 }
 

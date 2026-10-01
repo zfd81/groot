@@ -267,3 +267,27 @@ func TestDDLStatements_SettingsTable(t *testing.T) {
 		}
 	}
 }
+
+// TestDDLStatements_ModelsHasDefaultFlags 三方言 models 建表语句统一使用整数位掩码列
+// default_flags，且不再包含 is_default。
+func TestDDLStatements_ModelsHasDefaultFlags(t *testing.T) {
+	for _, d := range []Dialect{DialectSQLite, DialectMySQL, DialectPostgres} {
+		var createStmt string
+		for _, stmt := range ddlStatements(d) {
+			if strings.Contains(stmt, "CREATE TABLE IF NOT EXISTS models") {
+				createStmt = stmt
+				break
+			}
+		}
+		if createStmt == "" {
+			t.Errorf("dialect %v: 找不到 models 建表语句", d)
+			continue
+		}
+		if !strings.Contains(createStmt, "default_flags         INTEGER NOT NULL DEFAULT 0") {
+			t.Errorf("dialect %v: models 应含 default_flags INTEGER 列:\n%s", d, createStmt)
+		}
+		if strings.Contains(createStmt, "is_default") {
+			t.Errorf("dialect %v: models 不应再含 is_default 列:\n%s", d, createStmt)
+		}
+	}
+}

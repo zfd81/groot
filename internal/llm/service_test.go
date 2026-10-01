@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/zfd81/groot/internal/db"
@@ -202,7 +203,7 @@ func TestModelService_DefaultProtection(t *testing.T) {
 		t.Errorf("禁用默认模型应被拒绝, got %v", err)
 	}
 	// 切换默认后即可删除
-	if err := s.SetDefault(ctx, "m2"); err != nil {
+	if err := s.SetDefault(ctx, "m2", repo.DefaultChat); err != nil {
 		t.Fatalf("SetDefault: %v", err)
 	}
 	if err := s.Delete(ctx, "m1"); err != nil {
@@ -227,10 +228,10 @@ func TestModelService_SetDefaultRejectsDisabled(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	if err := s.SetDefault(ctx, "m2"); !errors.Is(err, ErrModelDisabled) {
+	if err := s.SetDefault(ctx, "m2", repo.DefaultChat); !errors.Is(err, ErrModelDisabled) {
 		t.Errorf("禁用模型不可设为默认, got %v", err)
 	}
-	if err := s.SetDefault(ctx, "ghost"); !errors.Is(err, ErrModelNotFound) {
+	if err := s.SetDefault(ctx, "ghost", repo.DefaultChat); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("want ErrModelNotFound, got %v", err)
 	}
 }
@@ -315,5 +316,134 @@ func TestMaskAPIKey(t *testing.T) {
 		if got := MaskAPIKey(c.in); got != c.want {
 			t.Errorf("MaskAPIKey(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestModelService_ResolveByFlag(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	for _, n := range []string{"m1", "m2"} {
+		if err := s.Create(ctx, validModel(n)); err != nil {
+			t.Fatalf("Create %s: %v", n, err)
+		}
+	}
+
+	// 名称优先，与类型无关
+	if m, err := s.Resolve(ctx, "m2", repo.DefaultVoice); err != nil || m.Name != "m2" {
+		t.Errorf("按名称解析: %v, %+v", err, m)
+	}
+
+	// 无该类型默认：可被识别为 ErrNoDefaultModel，信息区分类型
+	_, err := s.Resolve(ctx, "", repo.DefaultVoice)
+	if !errors.Is(err, ErrNoDefaultModel) || !strings.Contains(err.Error(), "默认语音模型") {
+		t.Errorf("无语音默认应返回语音类错误, got %v", err)
+	}
+	_, err = s.Resolve(ctx, "", repo.DefaultVision)
+	if !errors.Is(err, ErrNoDefaultModel) || !strings.Contains(err.Error(), "默认视觉模型") {
+		t.Errorf("无视觉默认应返回视觉类错误, got %v", err)
+	}
+
+	// 按类型回落
+	if err := s.SetDefault(ctx, "m2", repo.DefaultVoice); err != nil {
+		t.Fatalf("SetDefault m2 voice: %v", err)
+	}
+	if m, err := s.Resolve(ctx, "", repo.DefaultVoice); err != nil || m.Name != "m2" {
+		t.Errorf("默认语音模型应为 m2: %v, %+v", err, m)
+	}
+	if m, err := s.Resolve(ctx, "", repo.DefaultChat); err != nil || m.Name != "m1" {
+		t.Errorf("默认对话模型应仍为 m1: %v, %+v", err, m)
+	}
+
+	// 一模型多默认
+	if err := s.SetDefault(ctx, "m1", repo.DefaultVision); err != nil {
+		t.Fatalf("SetDefault m1 vision: %v", err)
+	}
+	if m, err := s.Resolve(ctx, "", repo.DefaultVision); err != nil || m.Name != "m1" {
+		t.Errorf("默认视觉模型应为 m1: %v, %+v", err, m)
+	}
+}
+
+// TestModelService_NoChatDefaultMessage 空库时 GetByName("") 的错误信息保持对话类文案。
+func TestModelService_NoChatDefaultMessage(t *testing.T) {
+	s := newTestService(t)
+	_, err := s.GetByName(context.Background(), "")
+	if !errors.Is(err, ErrNoDefaultModel) || err.Error() != ErrNoDefaultModel.Error() {
+		t.Errorf("want %q, got %v", ErrNoDefaultModel, err)
+	}
+}
+
+// TestModelService_CreateIgnoresDefaultFlags 非首个模型创建时忽略调用方传入的默认类型。
+func TestModelService_CreateIgnoresDefaultFlags(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	if err := s.Create(ctx, validModel("m1")); err != nil {
+		t.Fatalf("Create m1: %v", err)
+	}
+	m2 := validModel("m2")
+	m2.DefaultFlags = repo.DefaultChat | repo.DefaultVoice
+	if err := s.Create(ctx, m2); err != nil {
+		t.Fatalf("Create m2: %v", err)
+	}
+	got, _ := s.GetStored(ctx, "m2")
+	if got.DefaultFlags != 0 {
+		t.Errorf("非首个模型 default_flags 应为 0, got %d", got.DefaultFlags)
+	}
+	first, _ := s.GetStored(ctx, "m1")
+	if first.DefaultFlags != repo.DefaultChat {
+		t.Errorf("首个模型应只持有 chat, got %d", first.DefaultFlags)
+	}
+}
+
+func TestModelService_VoiceDefaultProtection(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	for _, n := range []string{"m1", "m2"} {
+		if err := s.Create(ctx, validModel(n)); err != nil {
+			t.Fatalf("Create %s: %v", n, err)
+		}
+	}
+	if err := s.SetDefault(ctx, "m2", repo.DefaultVoice); err != nil {
+		t.Fatalf("SetDefault m2 voice: %v", err)
+	}
+
+	// 持有语音默认同样受保护
+	if err := s.Delete(ctx, "m2"); !errors.Is(err, ErrDefaultProtected) {
+		t.Errorf("删除默认语音模型应被拒绝, got %v", err)
+	}
+	upd := validModel("m2")
+	upd.APIKey = ""
+	upd.Enabled = false
+	if err := s.Update(ctx, "m2", upd); !errors.Is(err, ErrDefaultProtected) {
+		t.Errorf("禁用默认语音模型应被拒绝, got %v", err)
+	}
+
+	// 取消语音默认后可删除
+	if err := s.ClearDefault(ctx, "m2", repo.DefaultVoice); err != nil {
+		t.Fatalf("ClearDefault m2 voice: %v", err)
+	}
+	if err := s.Delete(ctx, "m2"); err != nil {
+		t.Errorf("取消默认后应可删除: %v", err)
+	}
+}
+
+func TestModelService_ClearDefault(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	if err := s.Create(ctx, validModel("m1")); err != nil {
+		t.Fatalf("Create m1: %v", err)
+	}
+
+	if err := s.ClearDefault(ctx, "m1", repo.DefaultChat); !errors.Is(err, ErrChatDefaultRequired) {
+		t.Errorf("取消对话默认应被拒绝, got %v", err)
+	}
+	if m, err := s.GetByName(ctx, ""); err != nil || m.Name != "m1" {
+		t.Errorf("拒绝后对话默认应仍为 m1: %v, %+v", err, m)
+	}
+	// 未持有该类型：直接成功
+	if err := s.ClearDefault(ctx, "m1", repo.DefaultVoice); err != nil {
+		t.Errorf("取消未持有的默认应成功, got %v", err)
+	}
+	if err := s.ClearDefault(ctx, "ghost", repo.DefaultVoice); !errors.Is(err, ErrModelNotFound) {
+		t.Errorf("want ErrModelNotFound, got %v", err)
 	}
 }

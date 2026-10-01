@@ -5,7 +5,7 @@ import { voiceApi, type VoiceSettings } from '../api/voice'
 // 语音配置：设置面板负责写，聊天输入框负责读。
 // 两处共享同一份状态，保存后话筒按钮立即跟随变化，无需刷新页面。
 export const useVoiceStore = defineStore('voice', () => {
-  const settings = ref<VoiceSettings>({ enabled: false, model: '', auto_send: false })
+  const settings = ref<VoiceSettings>({ model: '', auto_send: false })
   const loaded = ref(false)
 
   // load 首次拉取。已加载过则直接复用，避免每次挂载输入框都打一次接口。

@@ -14,6 +14,7 @@ import (
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/ratelimit"
+	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/setting"
 )
 
@@ -52,21 +53,56 @@ func NewSettingHandler(deps SettingHandlerDeps) *SettingHandler {
 }
 
 // GetVoice 处理 GET /web/settings/voice。
+// 配置表中没有 voice.model 行时，说明识别模型从未确定过：存在可用的默认语音模型就把它
+// 写入作为初值，此后识别模型与默认语音模型相互独立；不存在则返回空串且不写入，
+// 下次读取重新判定。并发的首次读取写入的是同一个模型名，结果一致，无需加锁。
+//
+// 已知竞态：首次读取的 GET 若与一次清空识别模型的 PUT 交错（GET 读到行不存在 →
+// PUT 写入空串 → GET 写入初值），GET 的初值会覆盖掉清空。窗口只存在于识别模型
+// 从未确定时的首次读取，范围很窄，予以接受；根治需要仓储层提供「不存在才插入」的接口。
 func (h *SettingHandler) GetVoice(ctx context.Context, rc *app.RequestContext) {
-	v, err := h.settings.Voice(ctx)
+	v, modelSet, err := h.settings.Voice(ctx)
 	if err != nil {
 		h.log.Error("读取语音配置失败", zap.Error(err))
 		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
 		return
 	}
+	if !modelSet {
+		model, initErr := h.initVoiceModel(ctx)
+		if initErr != nil {
+			rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+			return
+		}
+		v.Model = model
+	}
 	rc.JSON(200, types.VoiceSettingsResponse{
-		Enabled:  v.Enabled,
 		Model:    v.Model,
 		AutoSend: v.AutoSend,
 	})
 }
 
-// PutVoice 处理 PUT /web/settings/voice，整体保存三个字段。
+// initVoiceModel 识别模型从未确定时，以可用的默认语音模型为初值写入并返回；
+// 无可用默认语音模型时返回空串且不写入。错误已在内部记录日志。
+func (h *SettingHandler) initVoiceModel(ctx context.Context) (string, error) {
+	m, err := h.models.Resolve(ctx, "", repo.DefaultVoice)
+	if errors.Is(err, llm.ErrNoDefaultModel) || errors.Is(err, llm.ErrModelDisabled) {
+		// 没有可用的默认语音模型：保持空串，不写入
+		return "", nil
+	}
+	if err != nil {
+		h.log.Error("查询默认语音模型失败", zap.Error(err))
+		return "", err
+	}
+	if err = h.settings.SetVoiceModel(ctx, m.Name); err != nil {
+		h.log.Error("写入识别模型初值失败", zap.String("model", m.Name), zap.Error(err))
+		return "", err
+	}
+	return m.Name, nil
+}
+
+// PutVoice 处理 PUT /web/settings/voice，整体保存两个字段。
+// model 非空时必须是已存在且启用的模型，否则话筒一按就报错；
+// model 为空表示关闭语音输入，不做校验，这样所选模型被删除或禁用后仍能清空。
 func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 	var req types.VoiceSettingsRequest
 	if err := rc.BindJSON(&req); err != nil {
@@ -74,10 +110,8 @@ func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 仅在开关打开且 model 非空时校验：模型必须已存在且启用，否则话筒一按就报错。
-	// 关闭开关时不校验，这样所选模型被删除或禁用后仍能关闭语音输入。
 	name := strings.TrimSpace(req.Model)
-	if req.Enabled && name != "" {
+	if name != "" {
 		if _, err := h.models.GetByName(ctx, name); err != nil {
 			if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) {
 				rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
@@ -90,7 +124,6 @@ func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 	}
 
 	err := h.settings.SetVoice(ctx, setting.VoiceSettings{
-		Enabled:  req.Enabled,
 		Model:    name,
 		AutoSend: req.AutoSend,
 	})

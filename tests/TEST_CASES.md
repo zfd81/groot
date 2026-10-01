@@ -336,10 +336,10 @@
 
 - 建表：settings 表可读写、复合主键 (scope, scope_id, name) 生效、三方言 DDL 字符串检查
 - 配置表仓库：写入回读、主键冲突覆盖、未找到返回 ErrNotFound、非法输入表驱动（name 为空 / 未知作用域 / global 带 scope_id / user 缺 scope_id）、多条 Upsert 原子性、按作用域批量查询与排序、删除幂等；工厂装配 Setting 仓库
-- 配置对象：表为空回落代码默认值、部分键覆盖、布尔解析（含 parseBool 回落表）、SetVoice 回写、YAML 分类透传、仓库为 nil 时读用默认值 / 写返回 ErrNoSettingStore、仓库错误透传
+- 配置对象：表为空回落代码默认值且 modelSet 为假、voice.model 行存在（含空串）时 modelSet 为真、部分键覆盖、布尔解析（含 parseBool 回落表）、SetVoice 回写、SetVoiceModel 只写 voice.model、YAML 分类透传、仓库为 nil 时读用默认值 / 写返回 ErrNoSettingStore、仓库错误透传
 - 转录客户端：multipart 字段与文件名、`/v1` 补齐表驱动、language 为空不下发、上游错误透传原文与 upstreamMessage 表驱动、空 / 空白文本判错、200 非 JSON 判错、ctx 取消
-- 转录 handler：成功响应含 text 与 model、缺 file、模型未配置、模型不存在、表单 model / 请求头 X-Model-Name / 配置表三级优先级、扩展名白名单与无扩展名、上游 502 透传、空文本 400、按 MB 换算的大小上限
-- 设置 handler：默认值读取、整组保存回读、model 为空允许、模型不存在或已禁用拒绝且消息含模型名、非法 JSON、model 裁剪空白、关闭开关时不校验失效模型
+- 转录 handler：成功响应含 text 与 model、缺 file、未配置默认语音模型、模型不存在、模型解析顺序（表单 model → 请求头 X-Model-Name → 默认语音模型）、显式指定失效模型不回落、不读取配置表 voice.model、扩展名白名单与无扩展名、上游 502 透传、空文本 400、按 MB 换算的大小上限
+- 设置 handler：无 voice.model 行且有默认语音模型时返回该模型并写入配置表，之后取消默认语音模型仍返回该模型；无默认语音模型时返回空串且不写入，之后设置默认语音模型再读取返回该模型；voice.model 行为空串时不自动填充；保存时 model 为空直接保存（含所选模型已禁用时清空）、模型不存在或已禁用拒绝且消息含模型名、非法 JSON、model 裁剪空白
 
 ---
 
@@ -381,6 +381,32 @@
 - `PUT /web/settings/auth`：合法请求头名保存后回读生效值；非法值（不匹配 `^[A-Za-z0-9-]{1,64}$`）返回 400 `invalid_request` 且不写表；空串（含纯空白）删除配置行、回读恢复默认 `X-API-Key`
 - `POST /web/settings/auth/secret`：重新生成后 `secret_masked` 与旧值不同、`secret_set` 为 true，响应与 GET 同构且不含新密钥明文
 - 配置对象层：`SetAuthHeaderName` 的空串恢复默认与格式校验（非法返回包装 `ErrInvalidSetting` 的错误）、`RegenerateAuthSecret` 无条件生成新密钥并写表、无仓库时写操作返回 `ErrNoSettingStore`
+
+---
+
+### 1.9 模型默认类型测试
+
+位于 `internal/repo/model_test.go`、`internal/db/migrate_test.go`、`internal/repo/modeldb/model_test.go`、`internal/llm/service_test.go`、`internal/api/handler/models_test.go`。
+
+覆盖点：
+
+- 类型定义：chat=1、voice=2、vision=4；字符串标识互转，非法标识解析失败；`Has` 按位判断
+- 建表语句：三方言 models 表含 `default_flags INTEGER NOT NULL DEFAULT 0`，不含 `is_default`
+- 仓库层：无默认时 `GetDefault` 按类型返回 ErrNotFound；`SetDefault` 置位并清除原持有者（每类型唯一）；一模型多默认（chat+vision=5）；三种类型互不影响；`ClearDefault` 只清目标位、未持有时无操作；目标不存在返回 ErrNotFound 且事务回滚；`Create` 原样写入、`Update` 不改 default_flags
+- 业务层：首个模型只获得对话默认；非首个模型忽略传入的默认类型；`Resolve` 名称优先、按类型回落、无默认错误按类型区分信息且可识别为 ErrNoDefaultModel；持有语音默认的模型不可删除、不可禁用；禁用模型不可设为默认；取消对话默认返回 ErrChatDefaultRequired；取消未持有的默认直接成功；不存在模型返回 ErrModelNotFound
+- 模型接口：`type` 省略按 chat；非法 `type` 返回 400 invalid_request；列表 `default_types` 按 chat、voice、vision 排序、非默认模型为 `[]`；`defaults` 三字段未设置为空串；取消对话默认返回 400 default_chat_required；取消语音默认后可删除
+
+---
+
+### 1.10 base_url 规整测试
+
+位于 `internal/llm/chatmodel_test.go`。
+
+覆盖点：
+
+- `openAIBaseURL` 表驱动：去掉末尾 `/`，缺 `/v1` 时补齐，已带 `/v1`（含 `/api/v1`）原样使用
+- 对话：base_url 为 `host`、`host/`、`host/v1`、`host/v1/` 时请求均落到 `/v1/chat/completions`
+- 连接测试：base_url 带或不带 `/v1` 均探测 `/v1/models`
 
 ---
 
@@ -540,8 +566,9 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestTranscriptionErrors | test_transcription.py | 缺文件、扩展名、模型不存在、超大文件、未鉴权 |
+| TestTranscriptionErrors | test_transcription.py | 缺文件、扩展名、显式指定不存在的模型（400 invalid_model，不回落默认语音模型）、超大文件、未鉴权 |
 | TestTranscriptionSuccess | test_transcription.py | 真实模型转录（需 GROOT_VOICE_MODEL） |
+| TestVoiceSettings | test_voice_settings.py | `GET /web/settings/voice` 响应体只含 model、auto_send；清空 model 保存成功且回读为空串；不存在的模型 400 invalid_model 且消息含模型名；非法 JSON 400 invalid_request；未登录 401 |
 
 ### 2.15 安全测试
 
@@ -765,13 +792,15 @@ curl -X POST http://localhost:8080/chat \
 | 用例点 | 测试文件 | 测试内容 |
 |-------|---------|---------|
 | 模型 CRUD | test_models_api.py | 创建模型 → 列表可见 → 更新参数生效 → 删除后列表不可见 |
-| 首个模型自动默认 | test_models_api.py | 空库创建首个模型后自动成为默认模型（`is_default: true`，`default` 字段为其名称） |
-| 默认模型删除保护 | test_models_api.py | 删除默认模型返回 409 `default_model_protected` |
-| 默认模型禁用保护 | test_models_api.py | 更新默认模型为 `enabled: false` 返回 409 |
+| 首个模型自动默认 | test_models_api.py | 空库创建首个模型后自动成为默认对话模型（default_types 含 chat，defaults.chat 为其名称） |
+| 默认模型删除保护 | test_models_api.py | 删除持有任一默认类型的模型返回 409 default_model_protected |
+| 默认模型禁用保护 | test_models_api.py | 更新持有任一默认类型的模型为 enabled: false 返回 409 |
 | 重名冲突 | test_models_api.py | 创建同名模型返回 409 `model_name_exists` |
 | api_key 脱敏 | test_models_api.py | 列表响应中 api_key 只保留尾 4 位，不含明文原文（`${ENV_VAR}` 引用原样展示） |
 | api_key 留空不改 | test_models_api.py | 更新时 api_key 传空字符串，库中原密钥保持不变，其他字段正常更新 |
-| 设默认 | test_models_api.py | `PUT /web/models/{name}/default` 切换默认模型，全表有且只有一个默认 |
+| 设默认 | test_models_api.py | `PUT /web/models/{name}/default?type=chat\|voice\|vision` 设置对应类型默认，每类型有且只有一个持有者；type 省略按 chat |
+| 取消默认 | test_models_api.py | `DELETE /web/models/{name}/default?type=voice\|vision` 返回 200 且 `defaults` 对应字段清空，取消后可删除；`type=chat` 返回 400 `default_chat_required` |
+| 非法默认类型 | test_models_api.py | `type` 取值非 chat / voice / vision 时返回 400 `invalid_request` |
 | 启用/禁用 | test_models_api.py | 更新 `enabled` 字段生效；禁用模型不可设为默认（返回 400 `model_disabled`） |
 | 更新不存在模型 | test_models_api.py | `PUT /web/models/{不存在}` 返回 404 `model_not_found` |
 | 连接测试 | test_models_api.py | `POST /web/models/test` 对不可达地址返回 200 且 `status: unhealthy` |
@@ -847,6 +876,8 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 | 登录流程 | 未登录访问任意页面跳转登录页，登录成功进入聊天页，登出回到登录页 |
 | 修改密码 | 设置 → 账户中修改密码；原密码错误报错；成功后其他浏览器会话失效、当前会话保留 |
 | 用户重置 | `groot user reset` 后（重启服务）重新进入创建用户流程 |
+| 话筒可见性 | 设置 → 通用 → 语音中选择识别模型后，聊天输入框立即显示话筒；清空识别模型后话筒消失，「识别后自动发送」开关置灰 |
+| 识别模型失效 | 将所选识别模型禁用（需先取消其默认标记）后，话筒显示警告态，点击提示「所选识别模型不可用，请在设置中重新选择」且不录音 |
 
 ---
 
@@ -876,9 +907,9 @@ cd tests/python && pytest test_api_endpoints.py -v
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
 | Go 单元测试 | 438 个函数 | 61 |
-| Python 系统测试 | 355 个测试（pytest --collect-only） | 27 |
+| Python 系统测试 | 360 个测试（pytest --collect-only） | 28 |
 
-**总计**: 约 793 个测试点覆盖核心功能。
+**总计**: 约 798 个测试点覆盖核心功能。
 
 ---
 

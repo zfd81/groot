@@ -58,8 +58,8 @@ func TestModelRepo_CreateAndGet(t *testing.T) {
 	if len(got.Stop) != 2 || got.Stop[0] != "\n\n" {
 		t.Errorf("Stop 反序列化错误: %v", got.Stop)
 	}
-	if !got.Enabled || got.IsDefault {
-		t.Errorf("bool 字段错误: enabled=%v is_default=%v", got.Enabled, got.IsDefault)
+	if !got.Enabled || got.DefaultFlags != 0 {
+		t.Errorf("字段错误: enabled=%v default_flags=%v", got.Enabled, got.DefaultFlags)
 	}
 	if !got.Thinking {
 		t.Errorf("Thinking 应读回 true, got %v", got.Thinking)
@@ -144,48 +144,161 @@ func TestModelRepo_Delete(t *testing.T) {
 	}
 }
 
+// flagsOf 读回指定模型的默认类型位掩码
+func flagsOf(t *testing.T, r repo.ModelRepo, name string) repo.DefaultFlag {
+	t.Helper()
+	m, err := r.GetByName(context.Background(), name)
+	if err != nil {
+		t.Fatalf("GetByName %s: %v", name, err)
+	}
+	return m.DefaultFlags
+}
+
 func TestModelRepo_SetDefault(t *testing.T) {
 	r := newTestRepo(t)
 	ctx := context.Background()
-	if err := r.Create(ctx, newModel("m1")); err != nil {
-		t.Fatalf("Create m1: %v", err)
-	}
-	if err := r.Create(ctx, newModel("m2")); err != nil {
-		t.Fatalf("Create m2: %v", err)
-	}
-
-	if _, err := r.GetDefault(ctx); !errors.Is(err, repo.ErrNotFound) {
-		t.Errorf("无默认时 GetDefault 应返回 ErrNotFound, got %v", err)
+	for _, n := range []string{"m1", "m2"} {
+		if err := r.Create(ctx, newModel(n)); err != nil {
+			t.Fatalf("Create %s: %v", n, err)
+		}
 	}
 
-	if err := r.SetDefault(ctx, "m1"); err != nil {
-		t.Fatalf("SetDefault m1: %v", err)
-	}
-	d, err := r.GetDefault(ctx)
-	if err != nil || d.Name != "m1" {
-		t.Fatalf("GetDefault: %v, %+v", err, d)
+	for _, f := range repo.AllDefaultFlags {
+		if _, err := r.GetDefault(ctx, f); !errors.Is(err, repo.ErrNotFound) {
+			t.Errorf("无 %s 默认时 GetDefault 应返回 ErrNotFound, got %v", f, err)
+		}
 	}
 
-	// 切换默认：全表仍只有一个 is_default
-	if err := r.SetDefault(ctx, "m2"); err != nil {
-		t.Fatalf("SetDefault m2: %v", err)
+	if err := r.SetDefault(ctx, "m1", repo.DefaultChat); err != nil {
+		t.Fatalf("SetDefault m1 chat: %v", err)
+	}
+	if d, err := r.GetDefault(ctx, repo.DefaultChat); err != nil || d.Name != "m1" {
+		t.Fatalf("GetDefault chat: %v, %+v", err, d)
+	}
+
+	// 转移对话默认：全表仍只有一个模型持有 chat
+	if err := r.SetDefault(ctx, "m2", repo.DefaultChat); err != nil {
+		t.Fatalf("SetDefault m2 chat: %v", err)
 	}
 	list, _ := r.List(ctx)
 	count := 0
 	for _, m := range list {
-		if m.IsDefault {
+		if m.Has(repo.DefaultChat) {
 			count++
 			if m.Name != "m2" {
-				t.Errorf("默认模型应为 m2, got %s", m.Name)
+				t.Errorf("默认对话模型应为 m2, got %s", m.Name)
 			}
 		}
 	}
 	if count != 1 {
-		t.Errorf("默认模型应有且只有 1 个, got %d", count)
+		t.Errorf("默认对话模型应有且只有 1 个, got %d", count)
 	}
 
-	if err := r.SetDefault(ctx, "ghost"); !errors.Is(err, repo.ErrNotFound) {
+	// 重复设置同一类型结果不变，不会溢出到其他位
+	for i := 0; i < 2; i++ {
+		if err := r.SetDefault(ctx, "m2", repo.DefaultChat); err != nil {
+			t.Fatalf("重复 SetDefault m2 chat: %v", err)
+		}
+	}
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultChat {
+		t.Errorf("重复设置后 m2 flags = %d, want %d", got, repo.DefaultChat)
+	}
+
+	// 一模型多默认：m2 同时持有 chat 与 vision
+	if err := r.SetDefault(ctx, "m2", repo.DefaultVision); err != nil {
+		t.Fatalf("SetDefault m2 vision: %v", err)
+	}
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultChat|repo.DefaultVision {
+		t.Errorf("m2 default_flags = %d, want 5", got)
+	}
+
+	// 类型互不影响：m1 设为 voice 不动 m2 的 chat、vision
+	if err := r.SetDefault(ctx, "m1", repo.DefaultVoice); err != nil {
+		t.Fatalf("SetDefault m1 voice: %v", err)
+	}
+	if got := flagsOf(t, r, "m1"); got != repo.DefaultVoice {
+		t.Errorf("m1 default_flags = %d, want 2", got)
+	}
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultChat|repo.DefaultVision {
+		t.Errorf("m2 default_flags = %d, want 5", got)
+	}
+	if d, err := r.GetDefault(ctx, repo.DefaultVoice); err != nil || d.Name != "m1" {
+		t.Errorf("GetDefault voice: %v, %+v", err, d)
+	}
+
+	if err := r.SetDefault(ctx, "ghost", repo.DefaultChat); !errors.Is(err, repo.ErrNotFound) {
 		t.Errorf("SetDefault 不存在模型应返回 ErrNotFound, got %v", err)
+	}
+	// 目标不存在时事务回滚，原持有者不受影响
+	if d, err := r.GetDefault(ctx, repo.DefaultChat); err != nil || d.Name != "m2" {
+		t.Errorf("SetDefault 失败后对话默认应仍为 m2: %v, %+v", err, d)
+	}
+}
+
+func TestModelRepo_ClearDefault(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+	for _, n := range []string{"m1", "m2"} {
+		if err := r.Create(ctx, newModel(n)); err != nil {
+			t.Fatalf("Create %s: %v", n, err)
+		}
+	}
+	_ = r.SetDefault(ctx, "m1", repo.DefaultChat)
+	_ = r.SetDefault(ctx, "m1", repo.DefaultVision)
+	_ = r.SetDefault(ctx, "m2", repo.DefaultVoice)
+
+	// 只清目标位
+	if err := r.ClearDefault(ctx, "m1", repo.DefaultVision); err != nil {
+		t.Fatalf("ClearDefault m1 vision: %v", err)
+	}
+	if got := flagsOf(t, r, "m1"); got != repo.DefaultChat {
+		t.Errorf("m1 default_flags = %d, want 1", got)
+	}
+	if _, err := r.GetDefault(ctx, repo.DefaultVision); !errors.Is(err, repo.ErrNotFound) {
+		t.Errorf("清除后 vision 应无默认, got %v", err)
+	}
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultVoice {
+		t.Errorf("m2 不应受影响, default_flags = %d", got)
+	}
+
+	// 清除未持有的位：无操作、不报错
+	if err := r.ClearDefault(ctx, "m1", repo.DefaultVoice); err != nil {
+		t.Errorf("清除未持有的位应成功, got %v", err)
+	}
+	if got := flagsOf(t, r, "m1"); got != repo.DefaultChat {
+		t.Errorf("m1 default_flags = %d, want 1", got)
+	}
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultVoice {
+		t.Errorf("清除 m1 未持有的 voice 不应影响 m2, got %d", got)
+	}
+
+	if err := r.ClearDefault(ctx, "ghost", repo.DefaultVoice); !errors.Is(err, repo.ErrNotFound) {
+		t.Errorf("ClearDefault 不存在模型应返回 ErrNotFound, got %v", err)
+	}
+}
+
+// TestModelRepo_CreateAndUpdateDefaultFlags Create 原样写入 default_flags；Update 不改动它。
+func TestModelRepo_CreateAndUpdateDefaultFlags(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+	m := newModel("m1")
+	m.DefaultFlags = repo.DefaultChat | repo.DefaultVoice
+	if err := r.Create(ctx, m); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := flagsOf(t, r, "m1"); got != 3 {
+		t.Errorf("Create 后 default_flags = %d, want 3", got)
+	}
+
+	upd := newModel("m1")
+	upd.DefaultFlags = 0
+	upd.Model = "gpt-4o-mini"
+	if err := r.Update(ctx, "m1", upd); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, _ := r.GetByName(ctx, "m1")
+	if got.Model != "gpt-4o-mini" || got.DefaultFlags != 3 {
+		t.Errorf("Update 应改 model 且不改 default_flags: %+v", got)
 	}
 }
 

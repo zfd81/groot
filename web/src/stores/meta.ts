@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../api/client'
-import type { ModelsResp, ModelInfo } from '../api/types'
+import type { ModelsResp, ModelInfo, DefaultModels } from '../api/types'
 
-// 元数据：模型列表、子 Agent 列表，供聊天输入区的切换控件使用。
+// 元数据：模型列表、各类型默认模型、子 Agent 列表，供聊天输入区的切换控件与设置面板使用。
 export const useMetaStore = defineStore('meta', () => {
   const models = ref<ModelInfo[]>([])
-  const defaultModel = ref('')
+  const defaults = ref<DefaultModels>({ chat: '', voice: '', vision: '' })
+  // 默认对话模型，聊天输入区的模型下拉框以它标注「默认」
+  const defaultModel = computed(() => defaults.value.chat)
   const agents = ref<string[]>([])
   const loaded = ref(false)
 
@@ -15,7 +17,9 @@ export const useMetaStore = defineStore('meta', () => {
     try {
       const resp = await api.get<ModelsResp>('/web/models')
       models.value = resp.models || []
-      defaultModel.value = resp.default || ''
+      // 按 Partial 合并：响应缺字段时以空串兜底
+      const got: Partial<DefaultModels> = resp.defaults || {}
+      defaults.value = { chat: '', voice: '', vision: '', ...got }
     } catch {
       // 模型列表拉取失败不阻断聊天
     }
@@ -34,5 +38,5 @@ export const useMetaStore = defineStore('meta', () => {
     await load()
   }
 
-  return { models, defaultModel, agents, loaded, load, reload }
+  return { models, defaults, defaultModel, agents, loaded, load, reload }
 })

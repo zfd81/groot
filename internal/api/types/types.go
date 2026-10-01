@@ -194,9 +194,16 @@ type ToolsGroup struct {
 
 // ModelsResponse represents models list response
 type ModelsResponse struct {
-	Models  []ModelInfo `json:"models"`
-	Default string      `json:"default"`
-	Total   int         `json:"total"`
+	Models   []ModelInfo   `json:"models"`
+	Defaults DefaultModels `json:"defaults"`
+	Total    int           `json:"total"`
+}
+
+// DefaultModels 各默认类型当前持有者的模型名，未设置时为空串
+type DefaultModels struct {
+	Chat   string `json:"chat"`
+	Voice  string `json:"voice"`
+	Vision string `json:"vision"`
 }
 
 // ModelInfo represents model information（api_key 为脱敏后的展示值）
@@ -214,7 +221,7 @@ type ModelInfo struct {
 	Seed                int      `json:"seed"`
 	Stop                []string `json:"stop"`
 	Thinking            bool     `json:"thinking"`
-	IsDefault           bool     `json:"is_default"`
+	DefaultTypes        []string `json:"default_types"` // 持有的默认类型，按 chat、voice、vision 排列
 	Enabled             bool     `json:"enabled"`
 }
 
@@ -273,16 +280,14 @@ type RestartResponse struct {
 }
 
 // VoiceSettingsRequest 是 PUT /web/settings/voice 的请求体。
-// 三个字段整体保存，不支持部分更新：设置面板一次提交整个分区。
+// 两个字段整体保存，不支持部分更新：设置面板一次提交整个分区。
 type VoiceSettingsRequest struct {
-	Enabled  bool   `json:"enabled"`
 	Model    string `json:"model"`
 	AutoSend bool   `json:"auto_send"`
 }
 
 // VoiceSettingsResponse 是 GET /web/settings/voice 的响应体。
 type VoiceSettingsResponse struct {
-	Enabled  bool   `json:"enabled"`
 	Model    string `json:"model"`
 	AutoSend bool   `json:"auto_send"`
 }

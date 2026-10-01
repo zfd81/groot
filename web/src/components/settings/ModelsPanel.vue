@@ -6,7 +6,7 @@ import 'element-plus/es/components/message-box/style/css'
 import { MoreFilled } from '@element-plus/icons-vue'
 import { api, ApiError } from '../../api/client'
 import { useMetaStore } from '../../stores/meta'
-import type { ModelInfo, ModelsResp, ModelForm, ModelTestResp } from '../../api/types'
+import type { ModelInfo, ModelsResp, ModelForm, ModelTestResp, DefaultType } from '../../api/types'
 
 const { t } = useI18n()
 const meta = useMetaStore()
@@ -155,10 +155,31 @@ async function handleDelete(m: ModelInfo) {
   }
 }
 
-async function handleSetDefault(m: ModelInfo) {
+// 某一默认类型是否由该模型持有
+function isDef(m: ModelInfo, type: DefaultType) {
+  return m.default_types?.includes(type) ?? false
+}
+
+// 持有任一默认类型的模型不可删除、不可禁用
+function hasAnyDefault(m: ModelInfo) {
+  return (m.default_types?.length ?? 0) > 0
+}
+
+async function handleSetDefault(m: ModelInfo, type: DefaultType) {
   try {
-    await api.put(`/web/models/${encodeURIComponent(m.name)}/default`)
+    await api.put(`/web/models/${encodeURIComponent(m.name)}/default?type=${type}`)
     ElNotification.success({ title: t('settings.menuModels'), message: t('settings.defaultChanged') })
+    await refreshAll()
+  } catch (e) {
+    notifyError(e)
+  }
+}
+
+// 只有语音、视觉默认可取消；对话默认只能通过把其他模型设为默认来转移
+async function handleClearDefault(m: ModelInfo, type: DefaultType) {
+  try {
+    await api.delete(`/web/models/${encodeURIComponent(m.name)}/default?type=${type}`)
+    ElNotification.success({ title: t('settings.menuModels'), message: t('settings.defaultCleared') })
     await refreshAll()
   } catch (e) {
     notifyError(e)
@@ -214,8 +235,20 @@ async function refreshAll() {
 // "···" 菜单命令分发
 function handleMenuCommand(m: ModelInfo, command: string | number | object) {
   switch (command) {
-    case 'setDefault':
-      void handleSetDefault(m)
+    case 'setDefaultChat':
+      void handleSetDefault(m, 'chat')
+      break
+    case 'setDefaultVoice':
+      void handleSetDefault(m, 'voice')
+      break
+    case 'setDefaultVision':
+      void handleSetDefault(m, 'vision')
+      break
+    case 'clearDefaultVoice':
+      void handleClearDefault(m, 'voice')
+      break
+    case 'clearDefaultVision':
+      void handleClearDefault(m, 'vision')
       break
     case 'edit':
       openEdit(m)
@@ -248,8 +281,14 @@ onMounted(() => void loadModels())
         <div v-if="c.m" class="item-header">
           <span class="model-name" :class="{ 'is-off': !c.m.enabled }">{{ c.m.name }}</span>
           <span class="status-dot" :class="c.m.enabled ? 'dot-on' : 'dot-off'" />
-          <el-tag v-if="c.m.is_default" size="small" type="primary" effect="light" style="margin-left: 4px">
-            {{ t('settings.default') }}
+          <el-tag v-if="isDef(c.m, 'chat')" size="small" type="primary" effect="light" style="margin-left: 4px">
+            {{ t('settings.defaultChat') }}
+          </el-tag>
+          <el-tag v-if="isDef(c.m, 'voice')" size="small" type="success" effect="light" style="margin-left: 4px">
+            {{ t('settings.defaultVoice') }}
+          </el-tag>
+          <el-tag v-if="isDef(c.m, 'vision')" size="small" type="warning" effect="light" style="margin-left: 4px">
+            {{ t('settings.defaultVision') }}
           </el-tag>
           <el-tag v-if="!c.m.enabled" size="small" type="info" effect="plain" style="margin-left: 4px">
             {{ t('settings.disabledTag') }}
@@ -259,14 +298,28 @@ onMounted(() => void loadModels())
               <el-button size="small" text :icon="MoreFilled" />
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="setDefault" :disabled="c.m.is_default || !c.m.enabled">
-                    {{ t('settings.setDefault') }}
+                  <!-- 每种默认类型按当前状态只显示一项：未持有显示"设为"，已持有显示"取消"；
+                       对话默认只能转移不能取消，持有时不显示 -->
+                  <el-dropdown-item v-if="!isDef(c.m, 'chat')" command="setDefaultChat" :disabled="!c.m.enabled">
+                    {{ t('settings.setDefaultChat') }}
                   </el-dropdown-item>
-                  <el-dropdown-item command="edit">{{ t('common.edit') }}</el-dropdown-item>
-                  <el-dropdown-item command="toggle" :disabled="c.m.is_default && c.m.enabled">
+                  <el-dropdown-item v-if="isDef(c.m, 'voice')" command="clearDefaultVoice">
+                    {{ t('settings.clearDefaultVoice') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item v-else command="setDefaultVoice" :disabled="!c.m.enabled">
+                    {{ t('settings.setDefaultVoice') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="isDef(c.m, 'vision')" command="clearDefaultVision">
+                    {{ t('settings.clearDefaultVision') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item v-else command="setDefaultVision" :disabled="!c.m.enabled">
+                    {{ t('settings.setDefaultVision') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item command="edit" divided>{{ t('common.edit') }}</el-dropdown-item>
+                  <el-dropdown-item command="toggle" :disabled="hasAnyDefault(c.m) && c.m.enabled">
                     {{ c.m.enabled ? t('settings.disable') : t('settings.enable') }}
                   </el-dropdown-item>
-                  <el-dropdown-item command="delete" divided :disabled="c.m.is_default" class="menu-danger">
+                  <el-dropdown-item command="delete" divided :disabled="hasAnyDefault(c.m)" class="menu-danger">
                     {{ t('common.delete') }}
                   </el-dropdown-item>
                 </el-dropdown-menu>

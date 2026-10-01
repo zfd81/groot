@@ -36,7 +36,7 @@ type modelRow struct {
 	Seed                int     `db:"seed"`
 	Stop                string  `db:"stop"`
 	Thinking            bool    `db:"thinking"`
-	IsDefault           bool    `db:"is_default"`
+	DefaultFlags        int     `db:"default_flags"`
 	Enabled             bool    `db:"enabled"`
 	CreatedAt           int64   `db:"created_at"`
 	UpdatedAt           int64   `db:"updated_at"`
@@ -44,7 +44,7 @@ type modelRow struct {
 
 const modelColumns = `id, name, base_url, api_key, model, max_completion_tokens, max_context_tokens,
 	temperature, top_p, frequency_penalty, presence_penalty, seed, stop, thinking,
-	is_default, enabled, created_at, updated_at`
+	default_flags, enabled, created_at, updated_at`
 
 func rowToModel(row modelRow) *repo.Model {
 	var stop []string
@@ -67,7 +67,7 @@ func rowToModel(row modelRow) *repo.Model {
 		Seed:                row.Seed,
 		Stop:                stop,
 		Thinking:            row.Thinking,
-		IsDefault:           row.IsDefault,
+		DefaultFlags:        repo.DefaultFlag(row.DefaultFlags),
 		Enabled:             row.Enabled,
 		CreatedAt:           time.UnixMilli(row.CreatedAt),
 		UpdatedAt:           time.UnixMilli(row.UpdatedAt),
@@ -89,13 +89,13 @@ func (r *modelRepo) Create(ctx context.Context, m *repo.Model) error {
 	q := r.db.Rebind(`INSERT INTO models (name, base_url, api_key, model,
 		max_completion_tokens, max_context_tokens, temperature, top_p,
 		frequency_penalty, presence_penalty, seed, stop, thinking,
-		is_default, enabled, created_at, updated_at)
+		default_flags, enabled, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.ExecContext(ctx, q,
 		m.Name, m.BaseURL, m.APIKey, m.Model,
 		m.MaxCompletionTokens, m.MaxContextTokens, m.Temperature, m.TopP,
 		m.FrequencyPenalty, m.PresencePenalty, m.Seed, stopJSON(m.Stop), m.Thinking,
-		m.IsDefault, m.Enabled, m.CreatedAt.UnixMilli(), m.UpdatedAt.UnixMilli(),
+		int(m.DefaultFlags), m.Enabled, m.CreatedAt.UnixMilli(), m.UpdatedAt.UnixMilli(),
 	)
 	return err
 }
@@ -113,11 +113,11 @@ func (r *modelRepo) GetByName(ctx context.Context, name string) (*repo.Model, er
 	return rowToModel(row), nil
 }
 
-func (r *modelRepo) GetDefault(ctx context.Context) (*repo.Model, error) {
+func (r *modelRepo) GetDefault(ctx context.Context, flag repo.DefaultFlag) (*repo.Model, error) {
 	var row modelRow
-	// ORDER BY id LIMIT 1 兜底：异常数据出现多条 is_default 时取最早一条，避免 Get 报错
-	q := r.db.Rebind(`SELECT ` + modelColumns + ` FROM models WHERE is_default=? ORDER BY id LIMIT 1`)
-	err := r.db.GetContext(ctx, &row, q, true)
+	// ORDER BY id LIMIT 1 兜底：异常数据出现多条持有同一位时取最早一条，避免 Get 报错
+	q := r.db.Rebind(`SELECT ` + modelColumns + ` FROM models WHERE (default_flags & ?) <> 0 ORDER BY id LIMIT 1`)
+	err := r.db.GetContext(ctx, &row, q, int(flag))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, repo.ErrNotFound
 	}
@@ -173,18 +173,27 @@ func (r *modelRepo) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-func (r *modelRepo) SetDefault(ctx context.Context, name string) error {
+// SetDefault 清位使用减法而非 default_flags & ~flag：MySQL 的 ~ 结果为无符号 64 位整数，
+// 与 SQLite、PG 行为不一致；WHERE 已保证该位为 1，减去位值与清位等价。
+// 先清全表（含目标行）再为目标行置位，目标不存在时整个事务回滚。
+// 置位用按位或而非加法：PG READ COMMITTED 下并发 SetDefault 时，后一事务的清位语句
+// 可能看不到前一事务刚置的位，加法会把同一位加两次溢出到其他位；按位或重复执行结果不变。
+func (r *modelRepo) SetDefault(ctx context.Context, name string, flag repo.DefaultFlag) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, tx.Rebind(`UPDATE models SET is_default=? WHERE is_default=?`), false, true); err != nil {
+	f := int(flag)
+	if _, err := tx.ExecContext(ctx,
+		tx.Rebind(`UPDATE models SET default_flags = default_flags - ? WHERE (default_flags & ?) <> 0`),
+		f, f); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, tx.Rebind(`UPDATE models SET is_default=?, updated_at=? WHERE name=?`),
-		true, time.Now().UnixMilli(), name)
+	res, err := tx.ExecContext(ctx,
+		tx.Rebind(`UPDATE models SET default_flags = default_flags | ?, updated_at=? WHERE name=?`),
+		f, time.Now().UnixMilli(), name)
 	if err != nil {
 		return err
 	}
@@ -193,6 +202,18 @@ func (r *modelRepo) SetDefault(ctx context.Context, name string) error {
 		return repo.ErrNotFound
 	}
 	return tx.Commit()
+}
+
+// ClearDefault 清除目标行的 flag 位。先确认模型存在，再按「该位为 1」条件做减法，
+// 未持有该位时 UPDATE 不命中任何行，视为成功。
+func (r *modelRepo) ClearDefault(ctx context.Context, name string, flag repo.DefaultFlag) error {
+	if _, err := r.GetByName(ctx, name); err != nil {
+		return err
+	}
+	f := int(flag)
+	q := r.db.Rebind(`UPDATE models SET default_flags = default_flags - ?, updated_at=? WHERE name=? AND (default_flags & ?) <> 0`)
+	_, err := r.db.ExecContext(ctx, q, f, time.Now().UnixMilli(), name, f)
+	return err
 }
 
 func (r *modelRepo) Count(ctx context.Context) (int64, error) {

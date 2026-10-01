@@ -265,7 +265,7 @@ func sqliteDDL() []string {
 			seed                  INTEGER NOT NULL DEFAULT 0,
 			stop                  TEXT NOT NULL DEFAULT '[]',
 			thinking              INTEGER NOT NULL DEFAULT 0,
-			is_default            INTEGER NOT NULL DEFAULT 0,
+			default_flags         INTEGER NOT NULL DEFAULT 0,
 			enabled               INTEGER NOT NULL DEFAULT 1,
 			created_at            INTEGER NOT NULL,
 			updated_at            INTEGER NOT NULL
@@ -419,7 +419,7 @@ func mysqlDDL() []string {
 			seed                  INT     NOT NULL DEFAULT 0,
 			stop                  TEXT    NOT NULL,
 			thinking              TINYINT(1) NOT NULL DEFAULT 0,
-			is_default            TINYINT(1) NOT NULL DEFAULT 0,
+			default_flags         INTEGER NOT NULL DEFAULT 0,
 			enabled               TINYINT(1) NOT NULL DEFAULT 1,
 			created_at            BIGINT NOT NULL,
 			updated_at            BIGINT NOT NULL,
@@ -573,7 +573,7 @@ func postgresDDL() []string {
 			seed                  INTEGER NOT NULL DEFAULT 0,
 			stop                  TEXT NOT NULL DEFAULT '[]',
 			thinking              BOOLEAN NOT NULL DEFAULT FALSE,
-			is_default            BOOLEAN NOT NULL DEFAULT FALSE,
+			default_flags         INTEGER NOT NULL DEFAULT 0,
 			enabled               BOOLEAN NOT NULL DEFAULT TRUE,
 			created_at            BIGINT NOT NULL,
 			updated_at            BIGINT NOT NULL

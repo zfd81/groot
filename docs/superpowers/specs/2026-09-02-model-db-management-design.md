@@ -50,7 +50,7 @@ models 表（internal/db/migrate.go，sqlite/mysql/postgres 三方言 DDL）
 |------|------|------|
 | id | 自增主键 | |
 | name | text，唯一索引 | 模型逻辑名称，聊天请求按此引用 |
-| base_url | text | OpenAI 兼容接口地址 |
+| base_url | text | OpenAI 兼容接口地址；末尾缺少 `/v1` 时自动补齐，对话、连接测试、音频转录三处使用同一规整结果 |
 | api_key | text | 明文存储，支持 `${ENV_VAR}` 引用 |
 | model | text | 实际模型 ID |
 | max_completion_tokens | int | 生效参数：调用 LLM 时透传 |
@@ -130,3 +130,4 @@ models 表（internal/db/migrate.go，sqlite/mysql/postgres 三方言 DDL）
 - 新增能力：默认模型界面化切换（is_default 入库）、启用/禁用开关、连接测试。
 - 不做存量迁移：既有 `config.yaml` 中的模型配置不自动导入数据库，升级后用户在 WebUI 中手动重建。
 - 调整（参数收敛）：调用 LLM 时由透传全部采样参数（top_p、frequency_penalty、presence_penalty、seed、stop 等）收敛为只透传 temperature、max_completion_tokens、thinking 三项；创建/编辑表单的"高级参数"折叠区同步只保留这三项。数据表结构与 API 字段不变，未透传的字段保留为扩展预留。
+- 调整（base_url 规整）：对话请求的 base_url 由原样使用改为与连接测试、音频转录一致，末尾缺少 `/v1` 时自动补齐；三处共用 `openAIBaseURL`。

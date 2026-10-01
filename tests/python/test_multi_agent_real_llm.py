@@ -154,8 +154,8 @@ def _ensure_real_llm_model(base_url: str, session: requests.Session) -> None:
         raise RuntimeError(f"创建真实 LLM 模型失败 ({r.status_code}): {r.text}")
     # 首个模型自动成为默认；保险起见无默认时显式设置
     data = session.get(f"{base_url}/web/models", timeout=10).json()
-    if not data.get("default"):
-        r = session.put(f"{base_url}/web/models/real-llm/default", timeout=10)
+    if not (data.get("defaults") or {}).get("chat"):
+        r = session.put(f"{base_url}/web/models/real-llm/default?type=chat", timeout=10)
         if r.status_code != 200:
             raise RuntimeError(f"设置默认模型失败 ({r.status_code}): {r.text}")
 

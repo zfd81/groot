@@ -84,8 +84,7 @@ CREATE TABLE settings (
 
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
-| `voice.enabled` | bool | `false` | 聊天页是否显示话筒按钮 |
-| `voice.model` | string | `""` | 用于转录的模型名 |
+| `voice.model` | string | `""` | Web 界面语音输入使用的识别模型，空串表示不显示话筒按钮；首次读取时取默认语音模型作为初值，详见 `2026-10-01-voice-model-visibility-design.md` |
 | `voice.auto_send` | bool | `false` | 转录完成后是否自动发送 |
 
 ### 1.4 配置对象
@@ -143,7 +142,7 @@ func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
     filename, language string) (string, error)
 ```
 
-客户端将音频组装为 multipart 表单，请求 `{base_url}/audio/transcriptions`，以 `Authorization: Bearer` 头鉴权，与既有 Chat 模型共用 `repo.Model` 中的 `BaseURL` 与 `APIKey`。`BaseURL` 缺少 `/v1` 后缀时自动补齐，与连通性探测的处理一致。文件部分以流式写入上游请求体，不在内存中完整展开音频。
+客户端将音频组装为 multipart 表单，请求 `{base_url}/audio/transcriptions`，以 `Authorization: Bearer` 头鉴权，与既有 Chat 模型共用 `repo.Model` 中的 `BaseURL` 与 `APIKey`。`BaseURL` 缺少 `/v1` 后缀时自动补齐，与对话请求、连通性探测的处理一致。文件部分以流式写入上游请求体，不在内存中完整展开音频。
 
 #### 1.5.2 对外接口
 
@@ -155,11 +154,11 @@ Content-Type: multipart/form-data
 | 参数 | 位置 | 必填 | 说明 |
 |---|---|---|---|
 | `file` | 表单文件 | 是 | 音频文件 |
-| `model` | 表单字段 | 否 | 模型名，缺省时取 `voice.model` |
+| `model` | 表单字段 | 否 | 模型名，缺省时取默认语音模型 |
 | `language` | 表单字段 | 否 | 语言提示，如 `zh` |
 | `X-Model-Name` | 请求头 | 否 | 模型名，与 `model` 同义 |
 
-模型名的取用顺序为表单 `model`、请求头 `X-Model-Name`、配置表 `voice.model`。请求头形式与 `/chat` 的既有约定一致。
+模型名的取用顺序为表单 `model`、请求头 `X-Model-Name`、默认语音模型。请求头形式与 `/chat` 的既有约定一致。
 
 成功响应：
 
@@ -176,16 +175,16 @@ Content-Type: multipart/form-data
 | `POST /audio/transcriptions` | API Key，需 `chat` 权限（与 `/chat` 一致），含限流 | 对外调用 |
 | `POST /web/audio/transcriptions` | Web 会话 | 聊天页调用 |
 
-`voice.enabled` 只控制界面是否显示话筒按钮，不影响对外接口的可用性，接口只要求 `voice.model` 有值。
+`voice.model` 只供 Web 界面使用，对外接口不读取它。
 
 #### 1.5.3 设置接口
 
 | 路由 | 说明 |
 |---|---|
 | `GET /web/settings/voice` | 读取语音配置 |
-| `PUT /web/settings/voice` | 整体保存三个字段 |
+| `PUT /web/settings/voice` | 整体保存 `model`、`auto_send` 两个字段 |
 
-接口按分类而非按单键暴露，与设置面板中语音分组的三项一一对应。保存时若 `enabled` 为真且 `model` 非空，则 `model` 必须是已存在且启用的模型；`enabled` 为假时不校验 `model`，这样所选模型被删除或禁用后仍能关闭语音输入。
+接口按分类而非按单键暴露，与设置面板中语音分组的两项一一对应。保存时 `model` 非空则必须是已存在且启用的模型；`model` 为空直接保存，表示关闭语音输入，这样所选模型被删除或禁用后仍能关闭语音输入。
 
 ### 1.6 运行时配置
 
@@ -247,13 +246,13 @@ Content-Type: multipart/form-data
 
 #### 1.7.1 录音流程
 
-话筒按钮位于聊天输入框发送按钮的左侧，`voice.enabled` 为真时显示。
+话筒按钮位于聊天输入框发送按钮的左侧，`voice.model` 非空时显示。
 
 1. 点击话筒，浏览器原生的 `MediaRecorder` 开始采集，按钮转为红色停止态并显示录音计时。首次使用时浏览器弹出麦克风授权提示，被拒绝则按钮置灰并给出提示。
 2. 再次点击结束录音，得到 `audio/wav` 音频数据。时长不足 0.5 秒的录音直接丢弃，不发起请求。
 
    采集经 Web Audio 取原始 PCM，在浏览器内封成 16 位单声道 WAV。WAV 是未压缩格式，转录服务可直接解码；webm、m4a 等压缩容器需要服务侧装有 ffmpeg 才能读取，而该依赖不在本项目的部署范围内。
-3. 前端以 `FormData` 提交至 `/web/audio/transcriptions`，不传 `model`，由服务端回落到 `voice.model`。请求期间话筒显示加载态，输入框禁止编辑以避免竞态。
+3. 前端以 `FormData` 提交至 `/web/audio/transcriptions`，经请求头 `X-Model-Name` 携带 `voice.model`。请求期间话筒显示加载态，输入框禁止编辑以避免竞态。
 4. 转录文字追加到输入框已有内容的末尾，光标聚焦到文字尾部。
 5. `voice.auto_send` 为真时直接触发发送。
 
@@ -261,11 +260,11 @@ Content-Type: multipart/form-data
 
 #### 1.7.2 设置面板
 
-语音分组位于设置面板的「通用」分区，在外观之后，自上而下为三项：语音模型下拉、语音输入开关、转录后自动发送开关。模型下拉的数据来自已有的模型列表接口。
+语音分组位于设置面板的「通用」分区，在外观之后，自上而下为两项：可清空的识别模型下拉、转录后自动发送开关。模型下拉的数据来自已有的模型列表接口，选项为全部启用的模型。识别模型为空时自动发送开关不可操作。
 
-语音归入「通用」而非「配置」分区：这三项决定聊天页话筒按钮的可见性与转录后的行为，属于界面交互偏好，与「配置」分区承载的 Agent 运行参数（记忆窗口、ReAct 迭代上限、SubAgent 超时、附件限制）不同类。其中 `voice.model` 同时被对外的转录接口用作缺省模型，故仍存于配置表而非浏览器本地。
+语音归入「通用」而非「配置」分区：这两项决定聊天页话筒按钮的可见性与转录后的行为，属于界面交互偏好，与「配置」分区承载的 Agent 运行参数（记忆窗口、ReAct 迭代上限、SubAgent 超时、附件限制）不同类。语音配置存于配置表而非浏览器本地，使换浏览器或多节点部署时取值一致。
 
-模型下拉排在开关之前，与实际操作顺序一致：开启语音输入要求先选定模型，未选模型时开关无法保存成功。把前置条件放在上方，使这一依赖关系在界面上直接可见。
+模型下拉排在开关之前，与实际操作顺序一致：自动发送以选定识别模型为前提。
 
 语音配置在前端由一个共享状态持有，设置面板负责写、聊天输入框负责读。保存成功后话筒按钮的显示与隐藏立即生效，无需刷新页面或新建会话。
 
@@ -275,7 +274,7 @@ Content-Type: multipart/form-data
 
 | 场景 | 状态码 | 标识 | 处理 |
 |---|---|---|---|
-| `voice.model` 为空 | 400 | `invalid_model` | 提示前往设置页配置语音模型 |
+| 未指定模型且无默认语音模型 | 400 | `invalid_model` | 提示前往模型管理设置默认语音模型 |
 | 模型不存在或已禁用 | 400 | `invalid_model` | 消息中给出模型名 |
 | 缺少 `file` 参数 | 400 | `invalid_request` | 说明缺失的参数 |
 | 文件超过附件配置的单文件上限 | 400 | `file_too_large` | 沿用附件模块的状态标识 |
@@ -284,7 +283,7 @@ Content-Type: multipart/form-data
 
 错误响应沿用项目既有结构 `{"status": "...", "message": "..."}`。
 
-前端在 `voice.enabled` 为真但 `voice.model` 为空时，话筒显示警告态并在悬浮提示中引导至设置页。
+前端在 `voice.model` 所指模型已被禁用或删除时，话筒显示警告态并在悬浮提示中引导至设置页。
 
 ### 1.9 改动清单
 
@@ -322,6 +321,7 @@ Content-Type: multipart/form-data
 - 新增：设置面板「配置」分区中的四个运行时分组与统一保存按钮。
 - 新增：聊天输入框的话筒按钮与浏览器录音逻辑，设置面板「通用」分区中的语音分组。
 - 调整：语音分组由「配置」分区移入「通用」分区。「配置」分区自此只承载 Agent 运行参数。
+- 调整（2026-10-01）：移除 `voice.enabled`，话筒可见性改由 `voice.model` 是否为空决定；转录接口缺省模型改为默认语音模型。详见 `2026-10-01-voice-model-visibility-design.md`。
 - 保持不变：模型表结构、`/chat` 及其余既有接口、现有模块读取 YAML 配置的方式。
 
 ### 2.2 后续独立迭代
