@@ -78,7 +78,7 @@ func RunInit(homeDir string) error {
 		return err
 	}
 
-	// 创建默认 GROOT.md（含子 Agent 调度引导段）
+	// 创建空的 GROOT.md（主 Agent 全局指导文件）
 	if err := createGrootMdFile(homeDir); err != nil {
 		return err
 	}
@@ -143,23 +143,10 @@ func createBootstrapFile(homeDir string) error {
 	return nil
 }
 
-// defaultGrootMdContent 是 groot init 写入的默认 GROOT.md 内容；
-// 末尾「子 Agent 调度」段引导主 Agent 在拥有 call_agent 工具时如何使用子 Agent。
-const defaultGrootMdContent = `# GROOT.md
-
-本文件是主 Agent 的全局指导，每次对话都会作为 system 提示注入。请在此处填写你想让主 Agent 始终遵守的规则、风格、目标等。
-
-## 子 Agent 调度
-
-当你拥有 ` + "`call_agent`" + ` 工具时，意味着系统中注册了一些专门的子 Agent。请遵循：
-
-- **按需调用**：只在子 Agent 的 description 与子任务匹配时才调用
-- **逐个调用**：建议先调一个，确认返回足够信息后再决定是否调下一个；避免盲目并行
-- **明确传参**：task 参数必须包含完整上下文，因为子 Agent 看不到主对话历史
-- **附件引用**：如需子 Agent 访问附件，在 task 中显式写明附件路径
-`
-
-// createGrootMdFile 在 homeDir 下写入默认 GROOT.md；已存在则跳过避免覆盖用户自定义内容。
+// createGrootMdFile 在 homeDir 下创建空的 GROOT.md；已存在则跳过避免覆盖用户自定义内容。
+// 文件内容每轮作为 system 提示注入，任何预置说明都会成为模型的无效输入，
+// 因此默认不写任何内容（空文件在 grootmd.GetContent 中视为不注入）；
+// 用途说明放在 printNextSteps 的「下一步」提示里给用户看。
 func createGrootMdFile(homeDir string) error {
 	path := filepath.Join(homeDir, "GROOT.md")
 
@@ -172,7 +159,7 @@ func createGrootMdFile(homeDir string) error {
 		return fmt.Errorf("检查 GROOT.md 失败: %w", err)
 	}
 
-	if err := os.WriteFile(path, []byte(defaultGrootMdContent), 0644); err != nil {
+	if err := os.WriteFile(path, nil, 0644); err != nil {
 		return fmt.Errorf("创建 GROOT.md 失败: %w", err)
 	}
 
@@ -188,4 +175,6 @@ func printNextSteps(homeDir string) {
 	fmt.Println("  2. 启动服务")
 	fmt.Println("     groot")
 	fmt.Println("  3. 打开 Web 界面，在设置面板中配置模型与其他业务项")
+	fmt.Println("  4. （可选）编辑 GROOT.md，填写主 Agent 需始终遵守的规则、风格、目标，每轮对话作为 system 提示注入")
+	fmt.Printf("     vim %s/GROOT.md\n", shortPath)
 }

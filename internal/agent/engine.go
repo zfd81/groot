@@ -34,6 +34,46 @@ type ProgressCallback struct {
 	WriteDone       func() error
 }
 
+// AgentErrorToolName 是可恢复的节点运行错误以 tool_result 形式下发时所用的工具名。
+// OpenAI 流式语义下 error 事件意味着流终结，因此非致命错误不能走 WriteError，
+// 而是以 isError=true 的 tool_result 发出，流继续。
+const AgentErrorToolName = "agent_error"
+
+// runErrorKind 是事件循环中 event.Err 的分类结果。
+type runErrorKind int
+
+const (
+	// runErrIgnored 其他未识别错误：仅记日志，不下发任何事件，流继续。
+	runErrIgnored runErrorKind = iota
+	// runErrMCP MCP 工具执行错误（含 command_not_allowed）：以 mcp_tool 的 tool_result 下发，流继续。
+	runErrMCP
+	// runErrFatalConn LLM 服务连接类错误：返回 error 终止 Run，由 Executor 写出 error 事件。
+	runErrFatalConn
+	// runErrRecoverable 其他 NodeRunError：以 AgentErrorToolName 的 tool_result 下发，流继续。
+	runErrRecoverable
+)
+
+// classifyRunError 按错误文本把 event.Err 归类，纯函数。
+// 优先级固定为：mcp/command_not_allowed → 连接类 → NodeRunError → 其他，
+// 调用方据此决定下发 tool_result、返回 error 终止，或仅忽略。
+// 引擎自身不再写 error 事件：致命错误（runErrFatalConn）以 error 返回值上抛，
+// 由 Executor 统一负责写出唯一的 error 事件并紧跟 [DONE]。
+func classifyRunError(errStr string) runErrorKind {
+	if strings.Contains(errStr, "mcp") || strings.Contains(errStr, "command_not_allowed") {
+		return runErrMCP
+	}
+	if strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "dial tcp") ||
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "timeout") {
+		return runErrFatalConn
+	}
+	if strings.Contains(errStr, "NodeRunError") {
+		return runErrRecoverable
+	}
+	return runErrIgnored
+}
+
 // Engine wraps eino's ChatModelAgent for task execution
 type Engine struct {
 	models             *llm.ModelService
@@ -233,34 +273,33 @@ eventLoop:
 					errEventAgentName = ""
 				}
 
-				// MCP tool execution errors → send as tool_result so agent can continue
-				if strings.Contains(errStr, "mcp") || strings.Contains(errStr, "command_not_allowed") {
+				switch classifyRunError(errStr) {
+				case runErrMCP:
+					// MCP tool execution errors → send as tool_result so agent can continue
 					toolCallID := extractToolCallID(errStr)
 					if cb.WriteToolResult != nil {
 						cb.WriteToolResult(errEventAgentName, toolCallID, "mcp_tool", "MCP 工具错误: "+formatMCPError(errStr), true)
 					}
 					continue
-				}
 
-				// LLM connection errors → fatal
-				if strings.Contains(errStr, "connection refused") ||
-					strings.Contains(errStr, "dial tcp") ||
-					strings.Contains(errStr, "no such host") ||
-					strings.Contains(errStr, "timeout") {
-					if cb.WriteError != nil {
-						cb.WriteError(errEventAgentName, "LLM 服务连接失败: "+errStr)
-					}
+				case runErrFatalConn:
+					// LLM 连接类错误 → 致命，直接返回 error 终止 Run。
+					// 此处不调用 cb.WriteError：Executor 收到返回的 error 后统一写出
+					// 唯一的 error 事件并紧跟 [DONE]；若这里也写，流中会出现两条 error。
 					return nil, fmt.Errorf("LLM 服务连接失败: %w", event.Err)
-				}
 
-				// Other NodeRunError → send error event but continue
-				if strings.Contains(errStr, "NodeRunError") {
-					if cb.WriteError != nil {
-						cb.WriteError(errEventAgentName, errStr)
+				case runErrRecoverable:
+					// 其他 NodeRunError → 以 isError=true 的 tool_result 下发后继续。
+					// 不能用 WriteError：OpenAI 流式语义下 error 事件是终结事件，
+					// 发出后客户端会关闭流；用 tool_result 承载可保持流符合 OpenAI 规范。
+					if cb.WriteToolResult != nil {
+						cb.WriteToolResult(errEventAgentName, "", AgentErrorToolName, errStr, true)
 					}
 					continue
+
+				default:
+					continue
 				}
-				continue
 			}
 
 			if event.Output == nil || event.Output.MessageOutput == nil {

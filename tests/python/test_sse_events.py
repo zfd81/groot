@@ -12,6 +12,93 @@ from conftest import (
 )
 
 
+class TestSSEClientFlatten:
+    """SSEClient.flatten_chunk 单元断言（不依赖服务器）
+
+    验证 OpenAI chat.completion.chunk 外层结构被正确摊平为旧式扁平事件对象，
+    且摊平结果能被 _infer_event_type 正确分类。
+    """
+
+    @staticmethod
+    def _chunk(delta, finish_reason=None):
+        return {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+
+    def test_flatten_message(self):
+        """TC-SSE-FLAT-001: message chunk 摊平为 delta 本身"""
+        raw = self._chunk({"role": "assistant", "content": "hi"})
+        assert SSEClient.flatten_chunk(raw) == {"role": "assistant", "content": "hi"}
+        assert SSEClient._infer_event_type(SSEClient.flatten_chunk(raw)) == "message"
+
+    def test_flatten_finish(self):
+        """TC-SSE-FLAT-002: finish chunk 摊平后含 finish_reason，类型为 finish"""
+        raw = self._chunk({}, finish_reason="stop")
+        assert SSEClient.flatten_chunk(raw) == {"finish_reason": "stop"}
+        assert SSEClient._infer_event_type(SSEClient.flatten_chunk(raw)) == "finish"
+
+    def test_flatten_finish_with_agent(self):
+        """TC-SSE-FLAT-003: 带 agent_name 的 finish chunk 同时保留 agent_name 与 finish_reason"""
+        raw = self._chunk({"agent_name": "coder"}, finish_reason="tool_calls")
+        assert SSEClient.flatten_chunk(raw) == {
+            "agent_name": "coder",
+            "finish_reason": "tool_calls",
+        }
+
+    def test_flatten_error_passthrough(self):
+        """TC-SSE-FLAT-004: error chunk 转换为 event=error 扁平对象"""
+        raw = {"error": {"message": "boom", "type": "server_error"}}
+        flat = SSEClient.flatten_chunk(raw)
+        assert flat == {"event": "error", "message": "boom", "error": raw["error"]}
+        assert SSEClient._infer_event_type(flat) == "error"
+
+    def test_flatten_tool_result(self):
+        """TC-SSE-FLAT-005: role=tool 的 delta 原样返回，类型为 tool_result"""
+        delta = {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "tool_name": "skill",
+            "content": "ok",
+            "error": False,
+        }
+        raw = self._chunk(delta)
+        flat = SSEClient.flatten_chunk(raw)
+        assert flat == delta
+        assert flat is not delta  # 应为拷贝
+        assert SSEClient._infer_event_type(flat) == "tool_result"
+
+    def test_flatten_no_choices_no_error_passthrough(self):
+        """TC-SSE-FLAT-006: 无 choices 且无 error 的对象原样返回"""
+        raw = {"foo": "bar"}
+        assert SSEClient.flatten_chunk(raw) is raw
+
+    def test_flatten_empty_choices_passthrough(self):
+        """TC-SSE-FLAT-008: choices 为空列表时原样返回，不抛 IndexError"""
+        raw = {"id": "c", "object": "chat.completion.chunk", "choices": []}
+        assert SSEClient.flatten_chunk(raw) is raw
+
+    def test_parse_events_keeps_raw(self):
+        """TC-SSE-FLAT-007: _parse_events 的 data 为摊平对象，raw 为原始 chunk"""
+
+        class _FakeResp:
+            text = (
+                "data: " + json.dumps(self._chunk({"role": "assistant", "content": "hi"})) + "\n\n"
+                "data: " + json.dumps(self._chunk({}, finish_reason="stop")) + "\n\n"
+                "data: [DONE]\n\n"
+            )
+
+        sse = SSEClient(_FakeResp())
+        assert sse.get_event_order() == ["message", "finish"]
+        assert sse.events[0]["data"] == {"role": "assistant", "content": "hi"}
+        assert sse.events[0]["raw"]["object"] == "chat.completion.chunk"
+        assert sse.events[1]["data"] == {"finish_reason": "stop"}
+        assert "choices" in sse.events[1]["raw"]
+
+
 class TestSSEEventOrder:
     """SSE 事件顺序测试"""
 
@@ -337,7 +424,7 @@ class TestSSEEventFields:
 
         if finish_events:
             event = finish_events[0]["data"]
-            assert event.get("role") == "assistant"
+            # finish chunk 的 delta 为空（子代理场景仅含 agent_name），不断言 role
             assert "finish_reason" in event
             assert event["finish_reason"] in ["stop", "tool_calls", "length"]
 
@@ -358,12 +445,71 @@ class TestSSEEventFields:
         assert completed is not None
         data = completed["data"]
 
-        # finish 事件必填字段
-        assert data.get("role") == "assistant"
+        # finish 事件必填字段（delta 为空，不含 role，只断言 finish_reason）
         assert "finish_reason" in data
 
         # 验证 finish_reason 可选值
         assert data["finish_reason"] in ["stop", "tool_calls", "length"]
+
+    def test_chunk_envelope_fields(self, server, api_headers):
+        """TC-SSE-030: 每条非 error 事件的原始 chunk 含 OpenAI 外层字段"""
+        payload = {"instruction": "你好"}
+
+        response = requests.post(
+            f"{BASE_URL}/chat",
+            headers=api_headers,
+            json=payload,
+            stream=True
+        )
+
+        assert response.status_code == 200
+        chat_id = response.headers.get("X-Chat-ID")
+        assert chat_id
+
+        sse = SSEClient(response)
+        chunk_events = [e for e in sse.events if "choices" in e["raw"]]
+        assert chunk_events, "流中应至少有一条含 choices 的 chunk"
+
+        created_values = set()
+        for e in chunk_events:
+            raw = e["raw"]
+            assert raw["object"] == "chat.completion.chunk"
+            assert raw["id"] == chat_id
+            assert isinstance(raw["created"], int)
+            assert isinstance(raw["model"], str) and raw["model"]
+            assert raw["choices"][0]["index"] == 0
+            created_values.add(raw["created"])
+
+        # 同一流内所有 chunk 的 created 相同
+        assert len(created_values) == 1
+
+    def test_error_is_terminal(self, server, api_headers):
+        """TC-SSE-031: error 事件之后不再有含 choices 的事件
+
+        用常规请求难以稳定触发致命错误，因此退而断言：若流中存在 error 事件，
+        其索引之后的所有事件均为 error 类型（即不再出现含 choices 的 chunk）。
+        流中没有 error 事件时本用例自然通过。
+        """
+        payload = {"instruction": "你好"}
+
+        response = requests.post(
+            f"{BASE_URL}/chat",
+            headers=api_headers,
+            json=payload,
+            stream=True
+        )
+
+        assert response.status_code == 200
+        sse = SSEClient(response)
+
+        order = sse.get_event_order()
+        if "error" not in order:
+            return
+
+        first_error = order.index("error")
+        for e in sse.events[first_error:]:
+            assert e["event"] == "error"
+            assert "choices" not in e["raw"]
 
 
 class TestSSECancelledEvent:
@@ -402,9 +548,11 @@ class TestSSECancelledEvent:
 
         if error_events:
             data = error_events[0]["data"]
-            assert data.get("event") == "error"
-            # error 事件应包含错误信息
-            assert "message" in data or "error" in data
+            # 摊平后的 error 事件：event=error 且含 message
+            assert data.get("event") == "error" and "message" in data
+            # 原始 chunk 为 {"error": {...}}，不含 choices
+            assert "choices" not in error_events[0]["raw"]
+            assert "error" in error_events[0]["raw"]
         elif finish_events:
             data = finish_events[0]["data"]
             # 如果是正常 finish，finish_reason 应为 stop
@@ -431,8 +579,8 @@ class TestSSEMultipleRounds:
 
         completed1 = sse1.get_completed_event()
         assert completed1 is not None
-        assert completed1["data"].get("role") == "assistant"
         assert "finish_reason" in completed1["data"]
+        assert completed1["data"]["finish_reason"] in ["stop", "tool_calls", "length"]
 
         # 第二轮（使用相同 session_id）
         headers2 = api_headers.copy()
@@ -451,8 +599,8 @@ class TestSSEMultipleRounds:
 
         completed2 = sse2.get_completed_event()
         assert completed2 is not None
-        assert completed2["data"].get("role") == "assistant"
         assert "finish_reason" in completed2["data"]
+        assert completed2["data"]["finish_reason"] in ["stop", "tool_calls", "length"]
 
     def test_round_field_after_invalid_session(self, server, api_headers):
         """TC-SSE-018: 无效 session_id 仍可正常响应（finish 不含 round）"""
@@ -472,5 +620,5 @@ class TestSSEMultipleRounds:
         completed = sse.get_completed_event()
 
         assert completed is not None
-        assert completed["data"].get("role") == "assistant"
         assert "finish_reason" in completed["data"]
+        assert completed["data"]["finish_reason"] in ["stop", "tool_calls", "length"]

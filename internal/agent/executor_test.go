@@ -84,7 +84,7 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 	)
 
 	buf := &bufFlusher{}
-	sse := NewSSEWriter(buf, sessionID, "chat_exec_001", 1)
+	sse := NewSSEWriter(buf, sessionID, "chat_exec_001", 1, "test-model", 1760947200)
 
 	task := &Task{
 		ID:          "chat_exec_001",
@@ -119,5 +119,19 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "保存对话记录失败") {
 		t.Errorf("期望捕获到「保存对话记录失败」日志，实际: %s", joined)
+	}
+}
+
+// TestSSEAgentName 主 Agent 名映射为空串（SSE 事件不带 agent_name），其余原样返回。
+func TestSSEAgentName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{MainAgentName, ""},
+		{"coder", "coder"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := sseAgentName(c.in); got != c.want {
+			t.Errorf("sseAgentName(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

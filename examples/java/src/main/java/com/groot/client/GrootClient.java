@@ -19,6 +19,7 @@ package com.groot.client;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import okhttp3.*;
 
 import java.io.IOException;
@@ -67,15 +68,20 @@ public class GrootClient implements AutoCloseable {
         private String chatId;
         private String status;
         private String result;
+        private String error;
 
         public String getSessionId() { return sessionId; }
         public void setSessionId(String sessionId) { this.sessionId = sessionId; }
         public String getChatId() { return chatId; }
         public void setChatId(String chatId) { this.chatId = chatId; }
+        /** 流中出现 error 事件时为 "error"，否则为 null。 */
         public String getStatus() { return status; }
         public void setStatus(String status) { this.status = status; }
         public String getResult() { return result; }
         public void setResult(String result) { this.result = result; }
+        /** error 事件的 message 文本（无错误时为 null）。 */
+        public String getError() { return error; }
+        public void setError(String error) { this.error = error; }
     }
 
     /** 附件 */
@@ -100,9 +106,16 @@ public class GrootClient implements AutoCloseable {
     /**
      * 执行对话（SSE 流式返回）。
      *
+     * <p>服务端以 OpenAI {@code chat.completion.chunk} 格式逐条推送 {@code data:} 行，
+     * 以 {@code data: [DONE]} 结束。客户端把每个 chunk 摊平为扁平事件对象
+     * （{@code choices[0].delta} 的内容，附带非空的 {@code finish_reason}；
+     * 顶层 {@code error} 对象则摊平为 {@code {event:"error", message, error}}），
+     * 据此推断事件类型后回调。
+     *
      * @param instruction 用户任务指令
-     * @param callback    事件回调 callback(eventType, jsonString)
-     * @return ChatResult 包含 sessionId、chatId、status 等
+     * @param callback    事件回调 callback(eventType, flatJsonString)，
+     *                    eventType 取值：thinking / message / tool_calls / tool_result / finish / error / unknown
+     * @return ChatResult 包含 sessionId、chatId；出现 error 事件时 status 为 "error"
      */
     public ChatResult executeChat(String instruction,
                                    BiConsumer<String, String> callback) throws IOException {
@@ -176,16 +189,15 @@ public class GrootClient implements AutoCloseable {
                 continue;
             }
 
+            // 摊平 chunk 为扁平事件对象后推断事件类型
+            parsed = flattenChunk(parsed);
             String eventType = classifyEvent(parsed);
-            if (callback != null) callback.accept(eventType, data);
+            if (callback != null) callback.accept(eventType, parsed.toString());
 
-            if ("completed".equals(eventType)) {
-                result.setStatus(parsed.has("status") ? parsed.get("status").asText() : null);
-                if ("success".equals(result.getStatus()) && parsed.has("result")) {
-                    result.setResult(parsed.get("result").asText());
-                }
-            } else if ("error".equals(eventType)) {
+            if ("error".equals(eventType)) {
                 result.setStatus("error");
+                JsonNode msg = parsed.get("message");
+                result.setError(msg != null && !msg.isNull() ? msg.asText() : data);
             }
         }
 
@@ -305,17 +317,73 @@ public class GrootClient implements AutoCloseable {
         }
     }
 
+    /**
+     * 将 OpenAI {@code chat.completion.chunk} 摊平为扁平事件对象。
+     *
+     * <ul>
+     *   <li>含 {@code error} 字段：返回 {@code {event:"error", message:<error.message>, error:<error 对象>}}</li>
+     *   <li>含非空 {@code choices} 数组：返回 {@code choices[0].delta} 的深拷贝；
+     *       {@code finish_reason} 非 null 时并入</li>
+     *   <li>两者皆无：原样返回</li>
+     * </ul>
+     */
+    static JsonNode flattenChunk(JsonNode raw) {
+        if (raw == null || !raw.isObject()) return raw;
+
+        if (raw.has("error")) {
+            JsonNode err = raw.get("error");
+            ObjectNode flat = MAPPER.createObjectNode();
+            flat.put("event", "error");
+            String message = "";
+            if (err != null && err.isObject() && err.has("message") && !err.get("message").isNull()) {
+                message = err.get("message").asText();
+            }
+            flat.put("message", message);
+            flat.set("error", err);
+            return flat;
+        }
+
+        JsonNode choices = raw.get("choices");
+        if (choices != null && choices.isArray() && choices.size() > 0) {
+            JsonNode choice = choices.get(0);
+            JsonNode delta = choice.get("delta");
+            ObjectNode flat = (delta != null && delta.isObject())
+                    ? ((ObjectNode) delta).deepCopy()
+                    : MAPPER.createObjectNode();
+            JsonNode finishReason = choice.get("finish_reason");
+            if (finishReason != null && !finishReason.isNull()) {
+                flat.set("finish_reason", finishReason);
+            }
+            return flat;
+        }
+
+        return raw;
+    }
+
+    /**
+     * 根据摊平后的事件对象推断 SSE 事件类型。
+     *
+     * <ul>
+     *   <li>{@code event == "error"} → error</li>
+     *   <li>{@code role == "tool"} → tool_result</li>
+     *   <li>含 {@code tool_calls} → tool_calls</li>
+     *   <li>含 {@code finish_reason} → finish（finish 事件不带 role）</li>
+     *   <li>{@code role == "assistant"} 且含 {@code reasoning_content} → thinking；含 {@code content} → message</li>
+     *   <li>其他 → unknown</li>
+     * </ul>
+     */
     static String classifyEvent(JsonNode data) {
-        if (!data.isObject()) return "unknown";
+        if (data == null || !data.isObject()) return "unknown";
+        JsonNode event = data.get("event");
+        if (event != null && "error".equals(event.asText())) return "error";
         JsonNode role = data.get("role");
         if (role != null && "tool".equals(role.asText())) return "tool_result";
+        if (data.has("tool_calls")) return "tool_calls";
+        if (data.has("finish_reason")) return "finish";
         if (role != null && "assistant".equals(role.asText())) {
-            if (data.has("tool_calls")) return "tool_calls";
-            if (data.has("finish_reason")) return "finish";
             if (data.has("reasoning_content")) return "thinking";
             if (data.has("content")) return "message";
         }
-        if (data.has("status")) return "completed";
         return "unknown";
     }
 }

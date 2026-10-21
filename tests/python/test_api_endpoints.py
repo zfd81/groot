@@ -71,7 +71,6 @@ class TestChatAPI:
         # 验证 finish 事件
         completed = sse.get_completed_event()
         assert completed is not None
-        assert completed["data"]["role"] == "assistant"
         assert "finish_reason" in completed["data"]
 
     def test_new_session_with_attachment(self, server, api_headers, test_file_base64):
@@ -115,7 +114,6 @@ class TestChatAPI:
 
         completed = sse.get_completed_event()
         assert completed is not None
-        assert completed["data"]["role"] == "assistant"
         assert "finish_reason" in completed["data"]
 
     def test_multi_attachments(self, server, api_headers, test_file_base64, pdf_file_base64):
@@ -140,7 +138,6 @@ class TestChatAPI:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
         assert completed is not None
-        assert completed["data"]["role"] == "assistant"
         assert "finish_reason" in completed["data"]
 
     def test_with_custom_prompt(self, server, api_headers, pdf_file_base64):
@@ -165,7 +162,6 @@ class TestChatAPI:
         sse = SSEClient(response)
         completed = sse.get_completed_event()
         assert completed is not None
-        assert completed["data"]["role"] == "assistant"
         assert "finish_reason" in completed["data"]
 
     def test_continue_session(self, server, api_headers):

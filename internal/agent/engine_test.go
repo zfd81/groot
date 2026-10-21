@@ -202,3 +202,38 @@ func TestStripThinkingTags(t *testing.T) {
 		})
 	}
 }
+
+// TestClassifyRunError 验证事件循环的错误分类纯函数，优先级与原 if-chain 顺序一致：
+// mcp/command_not_allowed → 连接类 → NodeRunError → 其他。
+func TestClassifyRunError(t *testing.T) {
+	cases := []struct {
+		in   string
+		want runErrorKind
+	}{
+		{"mcp tool failed", runErrMCP},
+		{"command_not_allowed: rm", runErrMCP},
+		{"dial tcp 1.2.3.4: connection refused", runErrFatalConn},
+		{"no such host", runErrFatalConn},
+		{"request timeout", runErrFatalConn},
+		{"NodeRunError: something broke", runErrRecoverable},
+		{"unknown garbage", runErrIgnored},
+		{"", runErrIgnored},
+		{"mcp NodeRunError", runErrMCP},                     // mcp 优先于 NodeRunError
+		{"mcp dial tcp connection refused", runErrMCP},      // mcp 优先于连接类
+		{"NodeRunError: dial tcp timeout", runErrFatalConn}, // 连接类优先于 NodeRunError
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := classifyRunError(c.in); got != c.want {
+				t.Errorf("classifyRunError(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAgentErrorToolName 锁定可恢复错误 tool_result 所用的工具名常量。
+func TestAgentErrorToolName(t *testing.T) {
+	if AgentErrorToolName != "agent_error" {
+		t.Errorf("AgentErrorToolName = %q, want %q", AgentErrorToolName, "agent_error")
+	}
+}

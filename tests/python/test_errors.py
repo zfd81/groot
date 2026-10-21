@@ -205,11 +205,9 @@ class TestSSEErrorHandling:
 
         completed = sse.get_completed_event()
         if completed:
-            # 如果失败，completed 应包含 error
-            if completed["data"].get("finish_reason") not in ("stop", "tool_calls"):
-                assert "error" in completed["data"]
-                assert "code" in completed["data"]["error"]
-                assert "message" in completed["data"]["error"]
+            # finish 事件只承载 finish_reason（原样透传上游取值），不携带 error 对象；
+            # 致命错误以独立的 error 事件 + [DONE] 下发
+            assert "finish_reason" in completed["data"]
 
     def test_thinking_error_on_failure(self, server, api_headers):
         """TC-ERR-012: 失败场景下 SSE 事件流仍然完整

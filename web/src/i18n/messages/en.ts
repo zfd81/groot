@@ -324,6 +324,7 @@ export default {
     thinking: 'Thinking',
     callAgent: 'Call agent',
     callSkill: 'Call skill',
+    agentError: 'Execution error',
     tool: 'Tool',
     arguments: 'Arguments',
     result: 'Result',

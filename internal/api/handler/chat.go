@@ -304,12 +304,14 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		// 日志属于会话内日志，派生携带 session_id 的 logger 便于按会话检索
 		sessionLog := h.log.With(zap.String("session_id", sessionID))
 
-		sseWriter := agent.NewSSEWriter(pipeFlushWriter{pw}, sessionID, chatID, round)
+		sseWriter := agent.NewSSEWriter(pipeFlushWriter{pw}, sessionID, chatID, round, mdl.Name, task.StartTime.Unix())
 
 		defer func() {
 			if r := recover(); r != nil {
 				sessionLog.Error(fmt.Sprintf("Agent 执行异常(panic): %v", r))
 				task.Status = agent.StatusFailed
+				// panic 也必须以 error 事件到达客户端，再紧跟 [DONE]，否则表现为静默空回复
+				sseWriter.WriteError("", fmt.Sprintf("Agent 执行异常: %v", r))
 				sseWriter.WriteDone()
 			}
 		}()

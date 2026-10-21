@@ -366,9 +366,13 @@ export const useChatStore = defineStore('chat', () => {
       }
       return
     }
-    // 工具结果：role=tool 且带 tool_call_id，回填到对应调用并结算耗时。
-    if (ev.role === 'tool' && ev.tool_call_id) {
-      const inv = msg.tools.find((t) => t.id === ev.tool_call_id)
+    // 工具结果：role=tool。带 tool_call_id 时回填到对应调用并结算耗时；
+    // tool_call_id 为空（如引擎可恢复错误 agent_error）或匹配不到时新建一条工具步，
+    // 避免错误文本落入下方正文分支被当作助手回复追加。
+    if (ev.role === 'tool') {
+      const inv = ev.tool_call_id
+        ? msg.tools.find((t) => t.id === ev.tool_call_id)
+        : undefined
       if (inv) {
         inv.result = ev.content || ''
         inv.isError = ev.error
@@ -377,7 +381,7 @@ export const useChatStore = defineStore('chat', () => {
         stepClockAt = now()
       } else {
         const created: ToolInvocation = {
-          id: ev.tool_call_id,
+          id: ev.tool_call_id || '',
           name: ev.tool_name || '',
           arguments: '',
           result: ev.content || '',

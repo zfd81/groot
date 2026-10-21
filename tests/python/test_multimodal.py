@@ -11,7 +11,7 @@ import zlib
 import math
 import json
 import os
-from conftest import BASE_URL
+from conftest import BASE_URL, SSEClient
 
 # 语义类用例（要求 LLM 真正"看懂"图片/文件内容）依赖真实多模态 LLM，
 # Mock LLM 无法通过；默认跳过，设置 GROOT_TEST_REAL_LLM=1 启用
@@ -102,7 +102,7 @@ def make_test_wav(duration=0.5, sample_rate=8000, frequency=440):
 
 
 def parse_sse_stream(response):
-    """解析当前 SSE 格式的流式响应（只有 data: 行，无 event: 行）
+    """解析 OpenAI chat.completion.chunk 格式的 SSE 流（只有 data: 行，无 event: 行）
 
     返回 (result_text, tool_calls, finish_reason, tool_results)
     """
@@ -121,9 +121,12 @@ def parse_sse_stream(response):
         if data_str == "[DONE]":
             break
         try:
-            event = json.loads(data_str)
+            chunk = json.loads(data_str)
         except json.JSONDecodeError:
             continue
+
+        # OpenAI chat.completion.chunk → 摊平为 delta（含 finish_reason）/ error 扁平对象
+        event = SSEClient.flatten_chunk(chunk)
 
         role = event.get("role", "")
         if "content" in event and role == "assistant":

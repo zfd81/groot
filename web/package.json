@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "build": "vite build && node -e \"require('fs').writeFileSync('dist/.gitkeep','')\" && vue-tsc -b",
     "preview": "vite preview"
   },
   "dependencies": {

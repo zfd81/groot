@@ -583,11 +583,19 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 
 ### 2.16 SSE 流测试
 
+`POST /chat` 的 SSE 以 OpenAI `chat.completion.chunk` 外层结构输出（见
+`docs/superpowers/specs/2026-10-20-openai-sse-format-design.md`）。
+`conftest.SSEClient.flatten_chunk` 将每条 chunk 摊平为 `choices[0].delta`
+（附 `finish_reason`）或 `{"event":"error","message":...,"error":{...}}`，
+`events[i]["data"]` 为摊平对象、`events[i]["raw"]` 为原始 chunk；
+`test_multimodal.parse_sse_stream` 复用同一摊平函数。
+
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
+| TestSSEClientFlatten | test_sse_events.py | `SSEClient.flatten_chunk` 单元断言（不依赖服务器）：message / finish / 带 agent_name 的 finish / error 透传 / tool_result / 无 choices 原样返回 / `_parse_events` 保留 raw/ 空 choices 原样返回（TC-SSE-FLAT-001～008） |
 | TestSSEEventOrder | test_sse_events.py | SSE 事件顺序 |
-| TestSSEEventFields | test_sse_events.py | SSE 事件字段 |
-| TestSSECancelledEvent | test_sse_events.py | SSE 取消事件 |
+| TestSSEEventFields | test_sse_events.py | SSE 事件字段；TC-SSE-030 原始 chunk 外层字段（object/id=X-Chat-ID/created 为 int 且全流一致/model 非空/choices[0].index=0）；TC-SSE-031 error 为终态（error 之后不再出现含 choices 的事件，无 error 时自然通过） |
+| TestSSECancelledEvent | test_sse_events.py | SSE 取消事件；TC-SSE-016 error 分支断言调整为摊平后 `event=="error" and "message" in data`，并断言 `raw` 不含 choices、含 error |
 | TestSSEMultipleRounds | test_sse_events.py | SSE 多轮 |
 | TestSSEFlowIntegrity | test_sse_events.py | SSE 流完整性 |
 

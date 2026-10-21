@@ -55,6 +55,7 @@ type CallAgentTool struct {
 	tokenAccumulators *TokenAccumulators
 	log               *logger.Logger
 	parentRound       int
+	sse               *SSEWriter // 可为 nil；用于在子 Agent 运行期间登记其实际模型名
 }
 
 // CallAgentToolConfig 是 NewCallAgentTool 的命名参数集合。
@@ -71,6 +72,7 @@ type CallAgentToolConfig struct {
 	TokenAccumulators *TokenAccumulators
 	Log               *logger.Logger
 	ParentRound       int
+	SSE               *SSEWriter // 可为 nil
 }
 
 // NewCallAgentTool 构造一个请求级 CallAgentTool。
@@ -88,6 +90,7 @@ func NewCallAgentTool(cfg CallAgentToolConfig) *CallAgentTool {
 		tokenAccumulators: cfg.TokenAccumulators,
 		log:               cfg.Log,
 		parentRound:       cfg.ParentRound,
+		sse:               cfg.SSE,
 	}
 }
 
@@ -98,7 +101,7 @@ func (t *CallAgentTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 		Desc: t.registry.BuildDescription(),
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"agent_name": {Desc: "子 Agent 名称", Required: true, Type: schema.String},
-			"task":       {Desc: "任务描述", Required: true, Type: schema.String},
+			"task":       {Desc: "任务描述。子 Agent 看不到主对话历史，task 必须自带完成任务所需的完整上下文", Required: true, Type: schema.String},
 		}),
 	}, nil
 }
@@ -151,6 +154,14 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// 把本次实际选用的 model 名提前写入累加器，结束时随 token / steps 一起 PopAndDelete。
 	if t.tokenAccumulators != nil && resolvedModel != "" {
 		t.tokenAccumulators.SetModel(childChatID, resolvedModel)
+	}
+
+	// 向 SSEWriter 登记该子 Agent 的模型名，让其 chunk.model 反映实际模型。
+	// 映射在请求生命周期内保留、不在此处清除：SSEWriter 按请求创建，且一次请求内
+	// 子 Agent 的模型固定；引擎在另一 goroutine 上转发子 Agent 事件，InvokableRun
+	// 返回后仍可能写出该子 Agent 的尾部 content/finish chunk，提前清除会使其误标为主模型。
+	if t.sse != nil && resolvedModel != "" {
+		t.sse.SetAgentModel(input.AgentName, resolvedModel)
 	}
 
 	result, runErr := subTool.InvokableRun(execCtx, string(params), opts...)

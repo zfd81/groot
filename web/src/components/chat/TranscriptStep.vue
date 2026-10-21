@@ -30,13 +30,19 @@ const isSubAgent = computed(
 const isSkill = computed(
   () => props.step.kind === 'tool' && props.step.tool.name === 'skill'
 )
+// 是否为引擎可恢复错误步（后端以 tool_name=agent_error、error=true 的工具结果下发，
+// 无对应 tool_call，arguments 为空）。
+const isAgentError = computed(
+  () => props.step.kind === 'tool' && props.step.tool.name === 'agent_error'
+)
 
-// 行首标签：思考步固定为「思考」；子 Agent / 技能步给出更友好的中文标签；
+// 行首标签：思考步固定为「思考」；子 Agent / 技能 / 执行错误步给出更友好的标签；
 // 其余工具步取工具名。
 const label = computed(() => {
   if (props.step.kind === 'reasoning') return t('transcript.thinking')
   if (isSubAgent.value) return t('transcript.callAgent')
   if (isSkill.value) return t('transcript.callSkill')
+  if (isAgentError.value) return t('transcript.agentError')
   return props.step.tool.name || t('transcript.tool')
 })
 

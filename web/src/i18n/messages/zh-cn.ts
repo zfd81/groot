@@ -324,6 +324,7 @@ export default {
     thinking: '思考',
     callAgent: '调用 Agent',
     callSkill: '调用技能',
+    agentError: '执行错误',
     tool: '工具',
     arguments: '参数',
     result: '结果',

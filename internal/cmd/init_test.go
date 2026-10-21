@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/zfd81/groot/internal/config"
@@ -160,22 +159,21 @@ func TestRunInit_CreatesSubAgentsDir(t *testing.T) {
 	}
 }
 
-// TestRunInit_WritesGrootMdWithSchedulingHint 验证 init 写入默认 GROOT.md，
-// 内容包含「子 Agent 调度」段与 call_agent 工具引导（设计 10.2 节）。
-func TestRunInit_WritesGrootMdWithSchedulingHint(t *testing.T) {
+// TestRunInit_WritesEmptyGrootMd 验证 init 创建的默认 GROOT.md 是空文件：
+// 该文件内容每轮注入 system 提示，任何占位说明都会成为模型的无效输入；
+// 空文件在 grootmd.GetContent 中被视为「不注入」。
+func TestRunInit_WritesEmptyGrootMd(t *testing.T) {
 	home := t.TempDir()
 	if err := RunInit(home); err != nil {
 		t.Fatalf("RunInit failed: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, "GROOT.md"))
+	info, err := os.Stat(filepath.Join(home, "GROOT.md"))
 	if err != nil {
 		t.Fatalf("GROOT.md 未创建: %v", err)
 	}
-	got := string(data)
-	for _, want := range []string{"子 Agent 调度", "call_agent", "按需调用", "逐个调用", "明确传参", "附件引用"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("GROOT.md 缺少关键词 %q\n实际内容:\n%s", want, got)
-		}
+	if info.Size() != 0 {
+		data, _ := os.ReadFile(filepath.Join(home, "GROOT.md"))
+		t.Errorf("GROOT.md 应为空文件，实际 %d 字节:\n%s", info.Size(), data)
 	}
 }
 

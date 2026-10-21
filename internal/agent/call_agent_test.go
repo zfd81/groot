@@ -58,6 +58,30 @@ func newFakeEntry(name string, tool *fakeAgentTool) *SubAgentEntry {
 	return e
 }
 
+// TestCallAgentTool_InfoTaskDescMentionsNoHistory 验证 task 参数描述提醒主 Agent：
+// 子 Agent 看不到主对话历史，task 必须自带完整上下文（该约束原先放在 GROOT.md 模板中）。
+func TestCallAgentTool_InfoTaskDescMentionsNoHistory(t *testing.T) {
+	reg := newEmptyRegistry(1)
+	tl := newTestCallAgentTool(reg, 0, 0)
+	info, err := tl.Info(context.Background())
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	js, err := info.ParamsOneOf.ToJSONSchema()
+	if err != nil {
+		t.Fatalf("ToJSONSchema: %v", err)
+	}
+	taskParam, ok := js.Properties.Get("task")
+	if !ok {
+		t.Fatalf("missing task param in schema")
+	}
+	for _, want := range []string{"完整上下文", "对话历史"} {
+		if !strings.Contains(taskParam.Description, want) {
+			t.Errorf("task desc 缺少 %q，实际: %q", want, taskParam.Description)
+		}
+	}
+}
+
 // TestCallAgentTool_UnknownAgent 验证调用未知子 Agent 时返回带有该名称的错误。
 func TestCallAgentTool_UnknownAgent(t *testing.T) {
 	reg := NewRegistryForTest(2)
@@ -163,5 +187,87 @@ func TestCallAgentTool_ExecTimeoutFires(t *testing.T) {
 	// 给 50ms 余量；如果远超 200ms，说明 execTimeout 没生效
 	if elapsed > 100*time.Millisecond {
 		t.Errorf("expected execTimeout to fire within ~20ms+overhead, but took %v", elapsed)
+	}
+}
+
+// sseProbeTool 测试桩：运行时向 SSEWriter 写一条子 Agent 消息，用于检查 model 登记。
+type sseProbeTool struct {
+	sse *SSEWriter
+}
+
+func (p *sseProbeTool) Info(_ context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: "probe", Desc: "probe"}, nil
+}
+func (p *sseProbeTool) InvokableRun(_ context.Context, _ string, _ ...tool.Option) (string, error) {
+	if err := p.sse.WriteMessage("coder", "hi"); err != nil {
+		return "", err
+	}
+	return "done", nil
+}
+
+// TestCallAgentTool_RegistersResolvedModelOnSSE 子 Agent 运行期间其 SSE 事件 model 为解析出的
+// 子模型；InvokableRun 返回后登记仍保留（SSEWriter 按请求生命周期存活），
+// 保证引擎在另一 goroutine 上继续转发的子 Agent 尾部 chunk 不会回退到主模型名。
+func TestCallAgentTool_RegistersResolvedModelOnSSE(t *testing.T) {
+	buf := &bufFlusher{}
+	sse := NewSSEWriter(buf, "sess_x", "chat_p", 1, "qwen-max", 0)
+
+	reg := NewRegistryForTest(2)
+	entry := &SubAgentEntry{Name: "coder", AgentMdModel: "deepseek-r1"}
+	entry.SetToolForTest(&sseProbeTool{sse: sse})
+	reg.SetEntryForTest("coder", entry)
+
+	ct := NewCallAgentTool(CallAgentToolConfig{
+		Registry:          reg,
+		ParentChatID:      "chat_p",
+		SessionID:         "sess_x",
+		ExecTimeout:       2 * time.Second,
+		TokenAccumulators: NewTokenAccumulators(),
+		Log:               logger.NewNop(),
+		SSE:               sse,
+	})
+
+	out, err := ct.InvokableRun(context.Background(), `{"agent_name":"coder","task":"t"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("unexpected result: %q", out)
+	}
+	if got := decodeChunk(t, buf.String())["model"]; got != "deepseek-r1" {
+		t.Errorf("in-flight chunk model = %v, want deepseek-r1", got)
+	}
+
+	buf.Reset()
+	if err := sse.WriteMessage("coder", "bye"); err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeChunk(t, buf.String())["model"]; got != "deepseek-r1" {
+		t.Errorf("post-run chunk model = %v, want deepseek-r1 (mapping retained for request lifetime)", got)
+	}
+}
+
+// TestCallAgentTool_NilSSEIsSafe cfg.SSE 为 nil 时 InvokableRun 正常返回。
+func TestCallAgentTool_NilSSEIsSafe(t *testing.T) {
+	reg := NewRegistryForTest(2)
+	entry := &SubAgentEntry{Name: "coder", AgentMdModel: "deepseek-r1"}
+	entry.SetToolForTest(&fakeAgentTool{result: "ok"})
+	reg.SetEntryForTest("coder", entry)
+
+	ct := NewCallAgentTool(CallAgentToolConfig{
+		Registry:          reg,
+		ParentChatID:      "chat_p",
+		SessionID:         "sess_x",
+		ExecTimeout:       2 * time.Second,
+		TokenAccumulators: NewTokenAccumulators(),
+		Log:               logger.NewNop(),
+		SSE:               nil,
+	})
+	out, err := ct.InvokableRun(context.Background(), `{"agent_name":"coder","task":"t"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("unexpected result: %q", out)
 	}
 }

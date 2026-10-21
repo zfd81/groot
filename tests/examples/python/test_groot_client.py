@@ -21,6 +21,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../examples/py
 from groot_client import GrootClient
 
 
+# ---- 测试辅助 ----
+
+def _chunk(delta: dict, finish_reason=None) -> dict:
+    """构造一条 OpenAI chat.completion.chunk 对象。"""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "test-model",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+
+
 # ---- Mock Groot Server ----
 
 class MockGrootHandler(BaseHTTPRequestHandler):
@@ -82,13 +95,21 @@ class MockGrootHandler(BaseHTTPRequestHandler):
         self.send_header("X-Chat-ID", cid)
         self.end_headers()
 
-        events = [
-            'data: {"role":"assistant","reasoning_content":"让我思考一下..."}\n\n',
-            'data: {"role":"assistant","content":"分析结果如下：' + body.get("instruction", "")[:20] + '"}\n\n',
-            'data: {"role":"assistant","finish_reason":"stop"}\n\n',
-            'data: {"status":"success","result":"分析完成"}\n\n',
-            'data: [DONE]\n\n',
+        # 以 OpenAI chat.completion.chunk 格式输出事件，最后以 [DONE] 结束
+        chunks = [
+            _chunk({"role": "assistant", "reasoning_content": "让我思考一下..."}),
+            _chunk({"role": "assistant", "content": "分析结果如下：" + body.get("instruction", "")[:20]}),
+            _chunk({
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "tool_name": "test_skill",
+                "content": "工具输出",
+                "error": False,
+            }),
+            _chunk({}, finish_reason="stop"),
         ]
+        events = ["data: " + json.dumps(c, ensure_ascii=False) + "\n\n" for c in chunks]
+        events.append("data: [DONE]\n\n")
         payload = "".join(events)
         self.wfile.write(payload.encode())
         self.wfile.flush()
@@ -182,10 +203,59 @@ class TestGrootClient(unittest.TestCase):
 
         self.assertIsNotNone(result["session_id"])
         self.assertIsNotNone(result["chat_id"])
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(result["result"], "分析完成")
+        # 正常结束时不设置 status / error
+        self.assertNotIn("status", result)
+        self.assertNotIn("error", result)
         event_types = [e[0] for e in events]
         self.assertIn("message", event_types)
+
+    def test_execute_chat_event_types(self):
+        events = []
+
+        def collect(event_type, data):
+            events.append((event_type, data))
+
+        self.client.execute_chat("测试指令", callback=collect)
+
+        event_types = [e[0] for e in events]
+        self.assertEqual(event_types, ["thinking", "message", "tool_result", "finish"])
+        self.assertNotIn("completed", event_types)
+        self.assertNotIn("unknown", event_types)
+
+        # 回调收到的 data 已摊平为 delta 本身
+        message_data = next(d for t, d in events if t == "message")
+        self.assertNotIn("choices", message_data)
+        self.assertTrue(message_data["content"].startswith("分析结果如下"))
+        tool_data = next(d for t, d in events if t == "tool_result")
+        self.assertEqual(tool_data["tool_call_id"], "call_1")
+        finish_data = next(d for t, d in events if t == "finish")
+        self.assertEqual(finish_data, {"finish_reason": "stop"})
+
+    def test_flatten_chunk_message(self):
+        raw = _chunk({"role": "assistant", "content": "hi"})
+        flat = GrootClient._flatten_chunk(raw)
+        self.assertEqual(flat, {"role": "assistant", "content": "hi"})
+        self.assertEqual(GrootClient._classify_event(flat), "message")
+        # 返回的是拷贝，不影响原始 delta
+        self.assertIsNot(flat, raw["choices"][0]["delta"])
+
+    def test_flatten_chunk_finish(self):
+        raw = _chunk({}, finish_reason="stop")
+        flat = GrootClient._flatten_chunk(raw)
+        self.assertEqual(flat, {"finish_reason": "stop"})
+        self.assertEqual(GrootClient._classify_event(flat), "finish")
+        # delta 为 None 时视为 {}
+        raw_none = _chunk(None, finish_reason="stop")
+        self.assertEqual(GrootClient._flatten_chunk(raw_none), {"finish_reason": "stop"})
+
+    def test_flatten_chunk_error(self):
+        raw = {"error": {"message": "boom", "type": "server_error", "code": None, "param": None}}
+        flat = GrootClient._flatten_chunk(raw)
+        self.assertEqual(flat, {"event": "error", "message": "boom", "error": raw["error"]})
+        self.assertEqual(GrootClient._classify_event(flat), "error")
+        # 无 error / choices 的对象原样返回
+        other = {"foo": "bar"}
+        self.assertIs(GrootClient._flatten_chunk(other), other)
 
     def test_execute_chat_with_session(self):
         result = self.client.execute_chat("继续分析", session_id="existing_sid")

@@ -9,13 +9,27 @@ Usage:
     # 新会话
     def on_event(event_type, data):
         if event_type == "message":
-            print(data, end="")
+            print(data["content"], end="")
 
     result = client.execute_chat("帮我分析数据", callback=on_event)
     print(f"会话ID: {result['session_id']}")
 
     # 继续会话（多轮对话）
     result2 = client.execute_chat("生成图表", session_id=result["session_id"])
+
+SSE 格式说明:
+    POST /chat 以 OpenAI chat.completion.chunk 格式流式返回，每条 data 行形如：
+
+        data: {"id":"...","object":"chat.completion.chunk","created":...,"model":"...",
+               "choices":[{"index":0,"delta":{"role":"assistant","content":"..."},"finish_reason":null}]}
+
+    出错时为 {"error":{"message":"...","type":"...","code":null,"param":null}}，
+    流末尾为 data: [DONE]。
+
+    客户端会把每条 chunk 摊平后再交给 callback(event_type, data)：
+    data 即 choices[0].delta（finish_reason 非 null 时并入），错误时为
+    {"event":"error","message":"...","error":{...}}。event_type 取值：
+    thinking / message / tool_calls / tool_result / finish / error / unknown。
 """
 
 import json
@@ -58,7 +72,8 @@ class GrootClient:
             callback: 回调函数 callback(event_type, data)，event_type 见 README API 事件类型表。
 
         Returns:
-            {"session_id": "...", "chat_id": "...", "result": ..., "status": "success|error"}
+            {"session_id": "...", "chat_id": "..."}；
+            出错时额外包含 "status": "error" 与 "error": 错误信息。
         """
         body = {"instruction": instruction}
         if prompt:
@@ -97,24 +112,21 @@ class GrootClient:
             if data == "[DONE]":
                 break
 
-            # 解析事件 JSON，推断事件类型
+            # 解析 chunk JSON，摊平为扁平事件对象后推断事件类型
             try:
                 parsed = json.loads(data)
             except json.JSONDecodeError:
                 continue
 
-            event_type = self._classify_event(parsed)
+            flat = self._flatten_chunk(parsed)
+            event_type = self._classify_event(flat)
 
             if callback:
-                callback(event_type, parsed)
+                callback(event_type, flat)
 
-            if event_type == "completed":
-                result["status"] = parsed.get("status")
-                if parsed.get("status") == "success":
-                    result["result"] = parsed.get("result")
-            elif event_type == "error":
+            if event_type == "error":
                 result["status"] = "error"
-                result["error"] = parsed.get("message", data)
+                result["error"] = flat.get("message", data)
 
         return result
 
@@ -154,21 +166,47 @@ class GrootClient:
     # ---- 内部方法 ----
 
     @staticmethod
+    def _flatten_chunk(raw: dict) -> dict:
+        """将 OpenAI chat.completion.chunk 摊平为扁平事件对象。
+
+        - 含 "error" 键：返回 {"event": "error", "message": <error.message>, "error": <error 对象>}
+        - 含 "choices" 键：返回 choices[0].delta 的拷贝；finish_reason 非 None 时并入
+        - 两者皆无：原样返回
+        """
+        if "error" in raw:
+            err = raw["error"]
+            return {
+                "event": "error",
+                "message": err.get("message", "") if isinstance(err, dict) else "",
+                "error": err,
+            }
+
+        if raw.get("choices"):
+            choice = raw["choices"][0]
+            delta = dict(choice.get("delta") or {})
+            finish_reason = choice.get("finish_reason")
+            if finish_reason is not None:
+                delta["finish_reason"] = finish_reason
+            return delta
+
+        return raw
+
+    @staticmethod
     def _classify_event(data: dict) -> str:
-        """根据 JSON 内容推断 SSE 事件类型。"""
+        """根据摊平后的事件对象推断 SSE 事件类型。"""
+        if data.get("event") == "error":
+            return "error"
         if data.get("role") == "tool":
             return "tool_result"
+        if "tool_calls" in data:
+            return "tool_calls"
+        if "finish_reason" in data:
+            return "finish"
         if data.get("role") == "assistant":
-            if "tool_calls" in data:
-                return "tool_calls"
-            if "finish_reason" in data:
-                return "finish"
             if "reasoning_content" in data:
                 return "thinking"
             if "content" in data:
                 return "message"
-        if "status" in data:
-            return "completed"
         return "unknown"
 
     # ---- 查询接口 ----

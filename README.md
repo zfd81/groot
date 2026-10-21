@@ -1165,7 +1165,7 @@ groot init
 | `subagents/` | 子 Agent 定义目录 |
 | `logs/` | 日志文件目录 |
 | `bootstrap.yaml` | 配置文件（全注释模板，权限 0600；默认全注释即 SQLite 本地模式） |
-| `GROOT.md` | 项目规范文件（含子 Agent 调度引导段） |
+| `GROOT.md` | 主 Agent 全局指导文件（初始为空，内容每轮作为 system 提示注入，按需填写规则、风格、目标） |
 
 > 会话、定时任务、集群等运行时数据存储在数据库中，init 不创建对应目录。init 不生成 JWT 签名密钥——密钥由服务首次启动时自动生成并存入数据库配置表。
 
@@ -1336,57 +1336,94 @@ Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web �
 
 **SSE 响应格式：**
 
-所有事件使用标准 SSE `data:` 格式，流结束时发送 `[DONE]`。
+响应体为 SSE 流，每条事件使用标准 `data:` 行承载一个 JSON 对象，流结束时发送 `data: [DONE]`（非 JSON）。
 
 ```
 data: <JSON内容>\n\n
 data: [DONE]
 ```
 
+JSON 对象采用 OpenAI Chat Completions 流式分块格式（`chat.completion.chunk`），任何兼容 OpenAI 流式接口的客户端库都可以直接消费回答正文。工具执行结果（`role:"tool"` 的 delta）与子 Agent 标识（`agent_name`）是 Groot 在 `delta` 内的扩展字段，标准客户端会忽略它们，不影响正文渲染。
+
+**分块外层字段：**
+
+| 字段 | 类型 | 取值 |
+|------|------|------|
+| `id` | string | 本次对话 ID，与响应头 `X-Chat-ID` 相同，整条流内不变 |
+| `object` | string | 固定 `"chat.completion.chunk"` |
+| `created` | int | 对话开始时间的 Unix 秒，整条流内不变 |
+| `model` | string | 生成该事件的模型逻辑名称（Web 界面 设置 → 模型 中配置的名称）。主 Agent 事件为本次对话使用的主模型名；子 Agent 事件（`delta` 带 `agent_name`）为该子 Agent 实际使用的模型名 |
+| `choices` | array | 恒为单元素数组，`choices[0].index` 恒为 `0` |
+
+`choices[0]` 结构：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `index` | int | 恒为 `0` |
+| `delta` | object | 本块增量内容，事件类型由其中的字段组合判定（见下文） |
+| `finish_reason` | string \| null | 阶段结束原因，非结束块为 `null` |
+
 ---
 
 #### SSE 事件识别规则
 
-每个事件通过 JSON 中的 **`role` 字段 + 特征字段** 组合来识别。前端解析策略：
+```
+data == "[DONE]"                     → 流结束
+存在顶层 error                        → error 事件（终结性）
+d = choices[0].delta
+  d.role == "tool"                   → tool_result 事件
+  d.tool_calls 存在                   → tool_calls 事件（按 function.name 区分 skill / call_agent / 普通工具）
+  d.reasoning_content 存在            → thinking 事件
+  d.content 存在                      → message 事件
+choices[0].finish_reason 非 null      → finish 事件
+```
 
-```
-解析 data JSON →
-  role == "tool"       → tool_result 事件
-  role == "assistant":
-    有 tool_calls      → tool_calls 事件
-    有 finish_reason   → finish 事件
-    有 reasoning_content → thinking 事件
-    有 content         → message 事件
-```
+每条事件只承载一种类型，`reasoning_content` 与 `content` 不会出现在同一个 `delta` 中。事件来自子 Agent 时，`delta` 内附带 `agent_name`（string）；主 Agent 事件不带此字段。
 
 #### SSE 事件类型与处理方式
 
-| 事件 | role | 特征字段 | 内容字段 | 客户端处理 |
-|------|------|---------|---------|-----------|
-| `thinking` | `assistant` | `reasoning_content` | `reasoning_content` | 思考过程区（折叠/灰色），**不放入正文** |
-| `message` | `assistant` | `content`（无 tool_calls 无 finish） | `content` | **正文区逐字追加渲染** |
-| `tool_calls` | `assistant` | `tool_calls` | `tool_calls[].function.name` | 「正在调用 xxx」提示 |
-| `finish` | `assistant` | `finish_reason` | `finish_reason` | 阶段结束标记，不展示 |
-| `tool_result` | `tool` | — | `content` + `tool_name` | **工具调用结果区（调用详情面板）**，不放入正文 |
-| `done` | — | — | — | 对话流结束 |
+| 事件 | delta 字段 | finish_reason | 标准客户端可见 | 客户端处理 |
+|------|-----------|---------------|---------------|-----------|
+| `thinking` | `role:"assistant"`, `reasoning_content` | `null` | 可见（事实标准字段） | 思考过程区（折叠/灰色），**不放入正文** |
+| `message` | `role:"assistant"`, `content` | `null` | 可见 | **正文区逐字追加渲染** |
+| `tool_calls` | `role:"assistant"`, `tool_calls[]` | `null` | 可见 | 「正在调用 xxx」提示；skill 调用为 `function.name == "skill"`，子 Agent 调用为 `function.name == "call_agent"` |
+| `finish` | `{}`（可含 `agent_name`） | 上游模型返回的 OpenAI 结束原因，原样透传；常见为 `"stop"` / `"tool_calls"` / `"length"` / `"content_filter"` | 可见 | 阶段结束标记，位于 `choices[0].finish_reason`；一次对话可出现多次（每轮 ReAct 一次），不展示 |
+| `tool_result` | `role:"tool"`, `tool_call_id`, `tool_name`, `content`, `error` | `null` | 忽略（Groot 扩展） | **工具调用结果区（调用详情面板）**，不放入正文；`error:true` 表示工具执行失败 |
+| `error` | —（无 `choices`，顶层为 `error` 对象） | — | 可见 | **终结性**：致命错误（LLM 连接失败、Agent 执行 panic、Solo 模式子 Agent 构建失败等），之后紧跟 `[DONE]`，收到即视为对话结束 |
+| `done` | — | — | 可见 | `data: [DONE]`，对话流结束 |
 
 **关键规则：**
 
 - `message` 事件 —— **唯一放入正文区的内容**，逐 chunk 拼接
-- `tool_result` 事件 —— **不应出现在正文区**，放入独立的调用详情面板（含 tool_name、status、content）
+- `tool_result` 事件 —— **不应出现在正文区**，放入独立的调用详情面板（含 tool_name、error、content）
 - `thinking` 事件 —— 放入思考过程折叠区，用户可选展开
 - `finish` 事件 —— 只用于判断 `stop` / `tool_calls`，不展示
+- `error` 事件 —— 只用于无法继续执行的致命错误；执行过程中可恢复的错误（MCP 工具调用失败、单步节点运行错误等）以 `tool_result` 事件下发且 `error:true`，Agent 随后继续执行。节点运行错误没有对应的工具调用时，`tool_call_id` 为空字符串、`tool_name` 为 `"agent_error"`
 
 ---
 
 #### SSE 事件 JSON 结构
 
+以下每种事件均给出完整的 chunk 示例。`id/object/created/model` 在每条事件中都存在；`id` 与 `created` 整条流内不变。
+
 **thinking：**
 
 ```json
 {
-  "role": "assistant",
-  "reasoning_content": "思考内容"
+  "id": "chat_abc",
+  "object": "chat.completion.chunk",
+  "created": 1760947200,
+  "model": "qwen-max",
+  "choices": [
+    {
+      "index": 0,
+      "delta": {
+        "role": "assistant",
+        "reasoning_content": "思考内容"
+      },
+      "finish_reason": null
+    }
+  ]
 }
 ```
 
@@ -1394,8 +1431,20 @@ data: [DONE]
 
 ```json
 {
-  "role": "assistant",
-  "content": "回答内容"
+  "id": "chat_abc",
+  "object": "chat.completion.chunk",
+  "created": 1760947200,
+  "model": "qwen-max",
+  "choices": [
+    {
+      "index": 0,
+      "delta": {
+        "role": "assistant",
+        "content": "回答内容"
+      },
+      "finish_reason": null
+    }
+  ]
 }
 ```
 
@@ -1405,31 +1454,54 @@ data: [DONE]
 
 ```json
 {
-  "role": "assistant",
-  "tool_calls": [
+  "id": "chat_abc",
+  "object": "chat.completion.chunk",
+  "created": 1760947200,
+  "model": "qwen-max",
+  "choices": [
     {
-      "id": "call_xxx",
-      "type": "function",
-      "function": {
-        "name": "工具名称",
-        "arguments": "JSON 格式参数字符串"
+      "index": 0,
+      "delta": {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "index": 0,
+            "id": "call_xxx",
+            "type": "function",
+            "function": {
+              "name": "工具名称",
+              "arguments": "JSON 格式参数字符串"
+            }
+          }
+        ]
       },
-      "extra": {}
+      "finish_reason": null
     }
   ]
 }
 ```
 
-> `index` 和 `extra` 字段为 omitempty，存在多工具调用或模型附加元数据时可能出现。
+> `tool_calls[]` 元素结构与 OpenAI 一致。`index` 和 `extra` 字段为 omitempty，存在多工具调用或模型附加元数据时才出现。
 
 **finish：**
 
 ```json
 {
-  "role": "assistant",
-  "finish_reason": "stop"
+  "id": "chat_abc",
+  "object": "chat.completion.chunk",
+  "created": 1760947200,
+  "model": "qwen-max",
+  "choices": [
+    {
+      "index": 0,
+      "delta": {},
+      "finish_reason": "stop"
+    }
+  ]
 }
 ```
+
+`finish_reason` 为上游模型返回的 OpenAI 结束原因，原样透传：
 
 | finish_reason | 含义 | 后续事件 |
 |--------------|------|---------|
@@ -1437,79 +1509,143 @@ data: [DONE]
 | `stop` | 当前回答正常完成 | 可能继续下一轮 tool_calls，最终 `[DONE]` |
 | `length` | 达到最大 token 限制 | 当前回答截断，可能继续或 `[DONE]` |
 | `content_filter` | 内容被安全过滤 | 当前回答中断 |
-| `null` | 未明确结束原因 | 流式传输中的中间状态 |
+| `null` | 非结束块 | 流式传输中的中间状态（thinking / message / tool_calls / tool_result 事件） |
 
 **tool_result：**
 
 ```json
 {
-  "role": "tool",
-  "tool_call_id": "call_xxx",
-  "tool_name": "list_directory",
-  "content": "执行结果（可能是纯文本或 JSON 字符串）"
+  "id": "chat_abc",
+  "object": "chat.completion.chunk",
+  "created": 1760947200,
+  "model": "qwen-max",
+  "choices": [
+    {
+      "index": 0,
+      "delta": {
+        "role": "tool",
+        "tool_call_id": "call_xxx",
+        "tool_name": "list_directory",
+        "content": "执行结果（可能是纯文本或 JSON 字符串）",
+        "error": false
+      },
+      "finish_reason": null
+    }
+  ]
 }
 ```
 
-工具执行失败时，错误信息直接包含在 `content` 字段中。
+工具执行失败时 `error` 为 `true`，错误信息包含在 `content` 字段中。Agent 单步节点运行出错但无对应工具调用时，以 `tool_result` 下发：`tool_call_id` 为 `""`，`tool_name` 为 `"agent_error"`，`error` 为 `true`，`content` 为错误信息，Agent 随后继续执行。
+
+**error：**
+
+```json
+{
+  "error": {
+    "message": "LLM 服务连接失败: ...",
+    "type": "server_error",
+    "code": null,
+    "param": null
+  }
+}
+```
+
+错误事件不含 `choices`。事件来自子 Agent 时，在 `error` 对象内附带 `agent_name`。错误事件是**终结性**的：之后紧跟 `data: [DONE]`，没有任何 `choices` 事件，客户端收到 `error` 即可视为本次对话结束。
+
+**子 Agent 事件：**
+
+事件来自子 Agent 时，`delta` 内多一个 `"agent_name":"coder"`，`model` 为该子 Agent 实际使用的模型名。适用于 thinking / message / tool_calls / finish / tool_result 全部五种事件。
 
 ---
 
 #### SSE 事件流示例
 
+以下示例中，每个场景的首条事件给出完整外层结构；后续各行以 `{..., "choices":[...]}` 的形式省略与首条相同的 `id/object/created/model` 字段（实际流中每条事件都完整携带这四个字段）。
+
 **场景1：纯 LLM 回答（无 thinking）**
 
 ```
-data: {"role":"assistant","content":"回答内容..."}
-data: {"role":"assistant","finish_reason":"stop"}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","content":"回答内容..."},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
 ```
 
 **场景2：LLM 回答带 thinking**
 
 ```
-data: {"role":"assistant","reasoning_content":"思考过程..."}
-data: {"role":"assistant","content":"回答内容..."}
-data: {"role":"assistant","finish_reason":"stop"}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"思考过程..."},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{"role":"assistant","content":"回答内容..."},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
 ```
 
 **场景3：工具调用**
 
 ```
-data: {"role":"assistant","reasoning_content":"我需要读取文件"}
-data: {"role":"assistant","tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]}
-data: {"role":"assistant","finish_reason":"tool_calls"}
-data: {"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost"}
-data: {"role":"assistant","content":"文件内容如下：127.0.0.1 localhost"}
-data: {"role":"assistant","finish_reason":"stop"}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"我需要读取文件"},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+data: {..., "choices":[{"index":0,"delta":{"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost","error":false},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{"role":"assistant","content":"文件内容如下：127.0.0.1 localhost"},"finish_reason":null}]}
+data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 data: [DONE]
 ```
+
+子 Agent 参与时，其事件在 `delta` 内多一个 `"agent_name":"coder"`，`model` 为该子 Agent 的模型名。
 
 #### SSE 前端实现伪代码
 
 ```javascript
+// 第一步：把 chunk 摊平成扁平事件对象
+function flattenChunk(chunk) {
+  if (chunk.error) {
+    // 顶层 error → 终结性错误事件
+    return { event: "error", message: chunk.error.message, agent_name: chunk.error.agent_name };
+  }
+  const choice = chunk.choices[0];
+  // delta 字段 + finish_reason 合并为一个扁平对象
+  return { ...choice.delta, finish_reason: choice.finish_reason };
+}
+
+// 第二步：按字段分派
+const pendingTools = new Map(); // tool_call_id → 开始时间，用于统计工具环节耗时
+
 eventSource.onmessage = (e) => {
-  const data = JSON.parse(e.data);
-  
+  if (e.data === "[DONE]") { /* 流结束 */ return; }
+  const data = flattenChunk(JSON.parse(e.data));
+
+  if (data.event === "error") {
+    // error → 终结性，提示用户并结束本次对话（随后会收到 [DONE]）
+    showError(data.message);
+    return;
+  }
+
   if (data.role === "tool") {
     // tool_result → 工具调用详情面板，不放入正文
-    showToolResult(data.tool_name, data.content);
+    const startedAt = pendingTools.get(data.tool_call_id);
+    pendingTools.delete(data.tool_call_id);
+    showToolResult(data.tool_name, data.content, data.error, startedAt && Date.now() - startedAt);
   } else if (data.role === "assistant") {
     if (data.reasoning_content) {
       // thinking → 思考区折叠显示
       appendThinking(data.reasoning_content);
     } else if (data.tool_calls) {
-      // tool_calls → 工具调用中提示
-      data.tool_calls.forEach(c => showToolCalling(c.function.name));
+      // tool_calls → 工具调用中提示，记录每个 tool_call_id 的起点
+      data.tool_calls.forEach(c => {
+        pendingTools.set(c.id, Date.now());
+        showToolCalling(c.function.name);
+      });
     } else if (data.content) {
       // message → 唯一放入正文区的内容
       appendMessage(data.content);
     }
-    // finish → 内部判断，不展示
-    if (data.finish_reason === "stop") { /* 阶段结束 */ }
   }
+  // finish → 内部判断，不展示（finish 事件的 delta 为空对象，没有 role）
+  if (data.finish_reason === "stop") { /* 阶段结束 */ }
 };
 ```
+
+环节耗时由客户端自行计算：工具环节在收到 `tool_calls` 事件时记起点、收到同 `tool_call_id` 的 `tool_result` 时结算；思考环节在首个 `thinking` 块记起点、下一个非 `thinking` 事件到达时结算。
 
 **请求示例：**
 

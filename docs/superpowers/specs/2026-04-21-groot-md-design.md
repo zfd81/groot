@@ -118,7 +118,7 @@ func (e *Engine) buildSystemInstruction(prompt, sessionMdContent, agentMdContent
 
 ### 1.8 默认 GROOT.md 模板
 
-`groot init` 在 `{homeDir}/GROOT.md` 不存在时写入一份默认模板，内容包含主 Agent 全局指导说明，以及一段「子 Agent 调度」引导，提示主 Agent 在拥有 `call_agent` 工具时如何使用子 Agent（按需调用、逐个调用、明确传参、附件引用）。模板已存在则跳过，不覆盖用户内容。
+`groot init` 在 `{homeDir}/GROOT.md` 不存在时创建一个空文件。文件内容会原样进入模型上下文，因此不预置任何占位说明或行为约束；空文件在 `GetContent` 中视为「不注入」。文件的用途与填写方式由 `init` 结束时的「下一步」提示告知用户。文件已存在则跳过，不覆盖用户内容。
 
 ### 1.9 使用示例
 
@@ -132,3 +132,10 @@ func (e *Engine) buildSystemInstruction(prompt, sessionMdContent, agentMdContent
 ```
 
 groot 每次对话都会自动将这些规范注入系统指令第一段。
+
+## 二、迭代说明
+
+### 2.1 与上一版差异
+
+- **调整** `groot init` 生成的 GROOT.md 改为空文件：原模板的标题行与「请在此处填写……」说明是写给用户看的，却每轮注入 system 提示；用途说明迁移到 `init` 的「下一步」提示中
+- **移除** 原默认模板中的「子 Agent 调度」引导段。原因：「附件引用」一条依赖的附件落盘机制已删除，附件现以 base64 / 解码文本内联进用户消息，不存在可引用的路径；「按需调用」「逐个调用」已分别由 `call_agent` 工具描述中的子 Agent 列表与注册表并发信号量覆盖；「明确传参（子 Agent 看不到主对话历史）」迁移到 `call_agent` 工具的 `task` 参数描述中，只在真正挂载该工具时才进入上下文，且不会随用户改写 GROOT.md 而丢失

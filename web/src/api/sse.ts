@@ -1,32 +1,16 @@
 // SSE 流式对话解析：fetch + ReadableStream 逐行解析（EventSource 不支持 POST）。
-// 事件由 JSON 字段区分类型，与后端 internal/agent/sse.go 输出一致。
+// 后端输出 OpenAI `chat.completion.chunk` 格式（见
+// docs/superpowers/specs/2026-10-20-openai-sse-format-design.md），
+// 本层通过 flattenChunk 将其摊平为 SseEvent（= choices[0].delta + finish_reason）后交给调用方。
 
 import { notifyUnauthorized } from './client'
 import i18n from '../i18n'
+import { flattenChunk, type SseEvent, type SseToolCall } from './sseChunk'
+
+export type { SseEvent, SseToolCall }
+export { flattenChunk }
 
 const t = i18n.global.t
-
-export interface SseToolCall {
-  index?: number
-  id: string
-  type: string
-  function: { name: string; arguments: string }
-}
-
-// 解析后的单条 SSE 事件（对齐后端 payload 字段）。
-export interface SseEvent {
-  role?: string
-  content?: string
-  reasoning_content?: string
-  tool_calls?: SseToolCall[]
-  tool_call_id?: string
-  tool_name?: string
-  finish_reason?: string
-  event?: string
-  message?: string
-  error?: boolean
-  agent_name?: string
-}
 
 export interface ChatAttachment {
   type: string
@@ -139,8 +123,9 @@ function handleChunk(chunk: string, onEvent: (ev: SseEvent) => void) {
       continue
     }
     try {
-      const ev = JSON.parse(payload) as SseEvent
-      onEvent(ev)
+      // 摊平 OpenAI chunk；无法识别的 chunk（如空 choices）直接忽略
+      const ev = flattenChunk(JSON.parse(payload))
+      if (ev) onEvent(ev)
     } catch {
       // 忽略无法解析的行
     }

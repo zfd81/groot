@@ -18,6 +18,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -29,11 +30,15 @@ class GrootClientTest {
     private static MockWebServer server;
     private static GrootClient client;
 
+    private static final String CHUNK_HEAD =
+            "{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,";
+
+    /** OpenAI chat.completion.chunk 格式的 SSE 流：thinking / message / tool_result / finish(stop) / [DONE] */
     private static final String SSE_EVENTS =
-            "data: {\"role\":\"assistant\",\"reasoning_content\":\"让我思考一下...\"}\n\n" +
-            "data: {\"role\":\"assistant\",\"content\":\"分析结果\"}\n\n" +
-            "data: {\"role\":\"assistant\",\"finish_reason\":\"stop\"}\n\n" +
-            "data: {\"status\":\"success\",\"result\":\"分析完成\"}\n\n" +
+            "data: " + CHUNK_HEAD + "\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"让我思考一下...\"},\"finish_reason\":null}]}\n\n" +
+            "data: " + CHUNK_HEAD + "\"delta\":{\"role\":\"assistant\",\"content\":\"分析结果\"},\"finish_reason\":null}]}\n\n" +
+            "data: " + CHUNK_HEAD + "\"delta\":{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"tool_name\":\"skill\",\"content\":\"ok\",\"error\":false},\"finish_reason\":null}]}\n\n" +
+            "data: " + CHUNK_HEAD + "\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
             "data: [DONE]\n\n";
 
     @BeforeAll
@@ -96,12 +101,28 @@ class GrootClientTest {
 
         assertEquals("sid_test_001", result.getSessionId());
         assertEquals("chat_test_001", result.getChatId());
-        assertEquals("success", result.getStatus());
-        assertEquals("分析完成", result.getResult());
+        // 正常结束的流不含 error 事件，status / result 均为 null
+        assertNull(result.getStatus());
+        assertNull(result.getResult());
+        assertNull(result.getError());
 
-        // 验证事件类型
-        boolean hasMessage = events.stream().anyMatch(e -> "message".equals(e[0]));
-        assertTrue(hasMessage);
+        // 验证事件类型序列（已摊平）
+        List<String> types = new ArrayList<>();
+        for (String[] e : events) types.add(e[0]);
+        assertEquals(Arrays.asList("thinking", "message", "tool_result", "finish"), types);
+
+        // 回调收到的是摊平后的 JSON，而不是原始 chunk
+        JsonNode first = new com.fasterxml.jackson.databind.ObjectMapper().readTree(events.get(0)[1]);
+        assertFalse(first.has("choices"));
+        assertEquals("assistant", first.get("role").asText());
+        assertEquals("让我思考一下...", first.get("reasoning_content").asText());
+
+        JsonNode toolRes = new com.fasterxml.jackson.databind.ObjectMapper().readTree(events.get(2)[1]);
+        assertEquals("call_1", toolRes.get("tool_call_id").asText());
+        assertEquals("skill", toolRes.get("tool_name").asText());
+
+        JsonNode finish = new com.fasterxml.jackson.databind.ObjectMapper().readTree(events.get(3)[1]);
+        assertEquals("stop", finish.get("finish_reason").asText());
     }
 
     @Test
@@ -142,8 +163,37 @@ class GrootClientTest {
 
         GrootClient.ChatResult result = client.executeChat("简单指令", null);
 
-        assertEquals("success", result.getStatus());
-        assertEquals("分析完成", result.getResult());
+        assertEquals("sid_nocb", result.getSessionId());
+        assertNull(result.getStatus());
+        assertNull(result.getResult());
+    }
+
+    @Test
+    void testExecuteChatErrorEvent() throws Exception {
+        String body =
+                "data: " + CHUNK_HEAD + "\"delta\":{\"role\":\"assistant\",\"content\":\"部分\"},\"finish_reason\":null}]}\n\n" +
+                "data: {\"error\":{\"message\":\"boom\",\"type\":\"server_error\",\"code\":null,\"param\":null}}\n\n" +
+                "data: [DONE]\n\n";
+        server.enqueue(new MockResponse()
+                .setBody(body)
+                .addHeader("Content-Type", "text/event-stream")
+                .addHeader("X-Session-ID", "sid_err")
+                .addHeader("X-Chat-ID", "chat_err"));
+
+        List<String[]> events = new ArrayList<>();
+        GrootClient.ChatResult result = client.executeChat(
+                "出错指令", null, null, null, null, (t, d) -> events.add(new String[]{t, d}));
+
+        assertEquals("error", result.getStatus());
+        assertEquals("boom", result.getError());
+        assertEquals(2, events.size());
+        assertEquals("message", events.get(0)[0]);
+        assertEquals("error", events.get(1)[0]);
+
+        JsonNode err = new com.fasterxml.jackson.databind.ObjectMapper().readTree(events.get(1)[1]);
+        assertEquals("error", err.get("event").asText());
+        assertEquals("boom", err.get("message").asText());
+        assertEquals("server_error", err.get("error").get("type").asText());
     }
 
     @Test
@@ -232,23 +282,74 @@ class GrootClientTest {
         assertThrows(IOException.class, () -> client.executeChat("测试", null));
     }
 
+    /** 构造 choices[0].delta = deltaJson、finish_reason = finishReason 的 chunk 字符串。 */
+    private static String chunk(String deltaJson, String finishReason) {
+        String fr = finishReason == null ? "null" : "\"" + finishReason + "\"";
+        return CHUNK_HEAD + "\"delta\":" + deltaJson + ",\"finish_reason\":" + fr + "}]}";
+    }
+
     @Test
     void testClassifyEvent() throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper mapper =
                 new com.fasterxml.jackson.databind.ObjectMapper();
 
-        assertEquals("thinking",
-                GrootClient.classifyEvent(mapper.readTree("{\"role\":\"assistant\",\"reasoning_content\":\"x\"}")));
-        assertEquals("message",
-                GrootClient.classifyEvent(mapper.readTree("{\"role\":\"assistant\",\"content\":\"x\"}")));
-        assertEquals("tool_calls",
-                GrootClient.classifyEvent(mapper.readTree("{\"role\":\"assistant\",\"tool_calls\":[]}")));
-        assertEquals("finish",
-                GrootClient.classifyEvent(mapper.readTree("{\"role\":\"assistant\",\"finish_reason\":\"stop\"}")));
-        assertEquals("tool_result",
-                GrootClient.classifyEvent(mapper.readTree("{\"role\":\"tool\",\"content\":\"x\"}")));
-        assertEquals("completed",
-                GrootClient.classifyEvent(mapper.readTree("{\"status\":\"success\"}")));
+        assertEquals("thinking", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree(chunk("{\"role\":\"assistant\",\"reasoning_content\":\"x\"}", null)))));
+        assertEquals("message", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree(chunk("{\"role\":\"assistant\",\"content\":\"x\"}", null)))));
+        assertEquals("tool_calls", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree(chunk("{\"role\":\"assistant\",\"tool_calls\":[]}", null)))));
+        assertEquals("finish", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree(chunk("{}", "stop")))));
+        assertEquals("tool_result", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree(chunk("{\"role\":\"tool\",\"tool_call_id\":\"c1\",\"content\":\"x\"}", null)))));
+        assertEquals("error", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree("{\"error\":{\"message\":\"boom\"}}"))));
+        // 没有 choices 也没有 error 的对象原样透传，无法归类
+        assertEquals("unknown", GrootClient.classifyEvent(GrootClient.flattenChunk(
+                mapper.readTree("{\"foo\":\"bar\"}"))));
+    }
+
+    @Test
+    void testFlattenChunkFinish() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+
+        JsonNode flat = GrootClient.flattenChunk(mapper.readTree(chunk("{}", "stop")));
+        assertTrue(flat.isObject());
+        assertEquals(1, flat.size());
+        assertEquals("stop", flat.get("finish_reason").asText());
+    }
+
+    @Test
+    void testFlattenChunkError() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+
+        JsonNode flat = GrootClient.flattenChunk(mapper.readTree(
+                "{\"error\":{\"message\":\"boom\",\"type\":\"server_error\",\"code\":null,\"param\":null}}"));
+        assertEquals("error", flat.get("event").asText());
+        assertEquals("boom", flat.get("message").asText());
+        assertEquals("server_error", flat.get("error").get("type").asText());
+
+        // error 不是对象时 message 为空串
+        JsonNode flat2 = GrootClient.flattenChunk(mapper.readTree("{\"error\":\"oops\"}"));
+        assertEquals("error", flat2.get("event").asText());
+        assertEquals("", flat2.get("message").asText());
+        assertEquals("oops", flat2.get("error").asText());
+    }
+
+    @Test
+    void testFlattenChunkDeltaNotMutated() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+
+        JsonNode raw = mapper.readTree(chunk("{\"role\":\"assistant\",\"content\":\"hi\"}", "stop"));
+        JsonNode flat = GrootClient.flattenChunk(raw);
+        assertEquals("hi", flat.get("content").asText());
+        assertEquals("stop", flat.get("finish_reason").asText());
+        // 原始 delta 是深拷贝来源，不应被写入 finish_reason
+        assertFalse(raw.get("choices").get(0).get("delta").has("finish_reason"));
     }
 
     /**

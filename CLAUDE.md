@@ -45,9 +45,36 @@ groot/
 - ❌ 不要创建奇怪的目录名（如 `~/`）
 - ❌ 不要在 `examples/<语言>/` 目录下创建测试文件 - 测试一律放 `tests/examples/<语言>/`
 
+## 开发工具规范（Superpowers）
+
+**本项目所有开发活动必须使用 Superpowers 插件。** 需求讨论、方案设计、写计划、写代码、调试、代码评审、完成前验证等环节，均须先通过 `Skill` 工具加载对应的 superpowers skill 并按其流程执行，不得跳过。
+
+已安装：`superpowers@claude-plugins-official`（user 级作用域，版本 7.0.0），skill 定义位于 `~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/`。
+
+### 场景与技能对照
+
+| 开发场景 | 使用技能 |
+|---------|---------|
+| 需求澄清、方案发散 | `brainstorming` |
+| 编写实施计划 | `writing-plans` |
+| 执行计划 | `executing-plans` |
+| 按计划写代码（子代理驱动） | `subagent-driven-development`、`dispatching-parallel-agents` |
+| 单元测试（红/绿循环） | `test-driven-development` |
+| 问题排查、缺陷定位 | `systematic-debugging` |
+| 提交前代码评审 | `requesting-code-review`、`receiving-code-review` |
+| 完成前验证 | `verification-before-completion` |
+| 分支收尾、合并 | `finishing-a-development-branch`、`using-git-worktrees` |
+| 新增/修改 skill | `writing-skills` |
+
+### 约束
+
+- 每项开发任务开始时，先加载 `using-superpowers` 了解当前可用技能与使用方式
+- 若所需 skill 未安装或加载失败，须先补装/修复，再继续开发，禁止绕过流程直接编码
+- Superpowers 的流程要求与本文档冲突时，以本文档的目录结构、测试规范、Git 提交规范为准；流程本身不冲突的部分必须遵守
+
 ## 开发工作流程
 
-实施 plan 后的代码开发，遵循以下流程：
+实施 plan 后的代码开发，遵循以下流程（各环节均配合上文的 Superpowers 技能执行）：
 
 ```
 Plan → 编写/更新设计文档 → 编写代码 → 编写单元测试 → 运行单元测试 → 提交

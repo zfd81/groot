@@ -173,9 +173,15 @@ def delete_api_key(base_url, key_id, username=None, password=None):
 class SSEClient:
     """SSE 流式响应客户端
 
-    解析设计文档 3.6 节定义的 SSE 协议：
+    解析 docs/superpowers/specs/2026-10-20-openai-sse-format-design.md 定义的
+    OpenAI chat.completion.chunk 风格 SSE 协议：
     - 格式: data: <JSON>\\n\\n，无 event: 行
-    - 事件类型由 JSON 字段推断：thinking / message / tool_calls / finish / tool_result / error
+    - 每条 chunk 为 {"id","object":"chat.completion.chunk","created","model",
+      "choices":[{"index":0,"delta":{...},"finish_reason":...}]}；
+      致命错误为 {"error":{"message","type","code","param"}}（无 choices，终态）
+    - flatten_chunk 将 chunk 摊平为 delta（附 finish_reason）或 event=error 扁平对象，
+      self.events[i]["data"] 存放摊平对象，self.events[i]["raw"] 保留原始 chunk
+    - 事件类型由摊平对象字段推断：thinking / message / tool_calls / finish / tool_result / error
     - [DONE] 为流结束标记
     """
 
@@ -205,15 +211,43 @@ class SSEClient:
                 except json.JSONDecodeError:
                     continue
 
-                event_type = self._infer_event_type(data)
+                flat = self.flatten_chunk(data)
+                event_type = self._infer_event_type(flat)
                 self.events.append({
                     "event": event_type,
-                    "data": data,
+                    "data": flat,
+                    "raw": data,
                 })
 
     @staticmethod
+    def flatten_chunk(raw: dict) -> dict:
+        """将 OpenAI chat.completion.chunk 摊平为扁平事件对象
+
+        - 含 "error" 键：返回 {"event": "error", "message": <error.message>, "error": <error 对象>}
+        - 含 "choices" 键：返回 choices[0].delta 的拷贝；finish_reason 非 None 时并入
+        - 两者皆无：原样返回
+        """
+        if "error" in raw:
+            err = raw["error"]
+            return {
+                "event": "error",
+                "message": err.get("message", "") if isinstance(err, dict) else "",
+                "error": err,
+            }
+
+        if raw.get("choices"):
+            choice = raw["choices"][0]
+            delta = dict(choice.get("delta") or {})
+            finish_reason = choice.get("finish_reason")
+            if finish_reason is not None:
+                delta["finish_reason"] = finish_reason
+            return delta
+
+        return raw
+
+    @staticmethod
     def _infer_event_type(data: dict) -> str:
-        """根据 JSON 字段推断 SSE 事件类型（见 API 设计文档 3.6 节）"""
+        """根据 JSON 字段推断 SSE 事件类型（见 docs/superpowers/specs/2026-10-20-openai-sse-format-design.md 1.3.6 节）"""
         if data.get("event") == "error":
             return "error"
 
@@ -255,7 +289,11 @@ class SSEClient:
 
         # tool_calls 和 tool_result: 如果有 tool_result，前面必须有 tool_calls
         tool_calls_indices = [i for i, e in enumerate(order) if e == "tool_calls"]
-        tool_results_indices = [i for i, e in enumerate(order) if e == "tool_result"]
+        # agent_error 是服务端为可恢复的节点运行错误合成的 tool_result，没有对应的 tool_calls，跳过校验
+        tool_results_indices = [
+            i for i, e in enumerate(self.events)
+            if e["event"] == "tool_result" and e["data"].get("tool_name") != "agent_error"
+        ]
 
         # 每个 tool_result 前至少有一个 tool_calls（tool_calls 可能比 tool_result 多，比如调用失败）
         for tr_idx in tool_results_indices:

@@ -175,6 +175,8 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			// 与 BuildAgentTool 中的 AgentMdModel 优先级语义一致。
 			if entry.AgentMdModel != "" {
 				task.ModelName = entry.AgentMdModel
+				// 同步到 SSEWriter，使 Solo 模式下 chunk.model 为 agent.md 钉死的模型名
+				sse.SetModel(entry.AgentMdModel)
 			}
 			if entry.SkillBK != nil {
 				mw, err := einoskill.NewMiddleware(parentCtx, &einoskill.Config{Backend: entry.SkillBK})
@@ -213,6 +215,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				TokenAccumulators: e.tokenAccumulators,
 				Log:               sessionLog,
 				ParentRound:       task.Round,
+				SSE:               sse,
 			})
 			extraTools = append(extraTools, callAgent)
 			emitInternal = true
@@ -221,7 +224,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 
 	// Solo 校验失败时直接走错误持久化路径，不创建 engine
 	if soloErr != nil {
-		sse.WriteError(agentName, soloErr.Error())
+		sse.WriteError(sseAgentName(agentName), soloErr.Error())
 		sse.WriteDone()
 		if e.memoryManager != nil {
 			endTime := time.Now()
@@ -349,7 +352,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		sessionLog.Error("Agent execution failed: " + err.Error())
 		// 错误必须到达 SSE 流：否则用户界面表现为静默空回复
 		// （典型场景：模型配置不可用——尚未创建模型 / 模型被禁用）。
-		if writeErr := sse.WriteError(agentName, err.Error()); writeErr != nil {
+		if writeErr := sse.WriteError(sseAgentName(agentName), err.Error()); writeErr != nil {
 			sessionLog.Error("Failed to write SSE error: " + writeErr.Error())
 		}
 		if writeErr := sse.WriteDone(); writeErr != nil {
@@ -489,4 +492,13 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm", minutes)
 	}
 	return fmt.Sprintf("%dm%ds", minutes, seconds)
+}
+
+// sseAgentName 把 Executor 内部使用的 agentName 映射为 SSE 事件的 agent_name：
+// 主 Agent（编排模式）的事件不带 agent_name，故返回空串；Solo 模式的真实子 Agent 名原样返回。
+func sseAgentName(name string) string {
+	if name == MainAgentName {
+		return ""
+	}
+	return name
 }

@@ -204,7 +204,7 @@ func (r *SubAgentRegistry) BuildDescription() string {
 			fmt.Fprintf(&sb, "- %s: %s\n", n, r.entries[n].Description)
 		}
 	}
-	sb.WriteString("\n参数:\n  - agent_name: 子 Agent 名称（必填）\n  - task: 任务描述（必填）\n")
+	sb.WriteString("\n参数:\n  - agent_name: 子 Agent 名称（必填）\n  - task: 任务描述（必填）。子 Agent 看不到主对话历史，task 必须自带完成任务所需的完整上下文\n")
 	return sb.String()
 }
 

@@ -235,9 +235,8 @@ description: 数据库查询 Agent，支持 MySQL 和 PostgreSQL 的 SELECT 查�
 
 - **取消粒度**：`call_agent` 在 eino 中是同步工具 `(string, error)`，执行期间无外部信号注入点。父 ctx 取消时子 Agent 终止，但**无法在保留主 Agent 的情况下单独取消一个子 Agent**——这是 eino 同步工具模型的固有限制
 - **无状态调用**：编排模式下子 Agent 的每次 `call_agent` 调用都是全新的、无状态的。`HistoryMessages` 传入空切片，前一次调用结果不会自动带入下一次。需要上下文传递时，主 Agent 应在 `task` 参数中显式写明
-- **附件访问**：编排模式下子 Agent 仅拿到 `task` 字符串。需要读取附件时，主 Agent 应在 `task` 参数中显式写明附件路径或内容（与 eino DeepAgent `task_tool` 行为一致）。子 Agent ChatRecord 不携带任何附件元数据（`ChatRecord` 结构体本身没有附件字段）
-
-> **应对策略**：建议主 Agent 的 GROOT.md 中引导「逐个调用子 Agent，确认前一个返回足够信息后再决定是否调下一个」，避免盲目并行导致资源浪费。`groot init` 时会在默认 GROOT.md 中追加此引导段。
+- **附件访问**：编排模式下子 Agent 仅拿到 `task` 字符串。附件不落盘，而是内联在主 Agent 的用户消息中；需要子 Agent 处理附件内容时，主 Agent 应把相关内容直接写进 `task`（与 eino DeepAgent `task_tool` 行为一致）。子 Agent ChatRecord 不携带任何附件元数据（`ChatRecord` 结构体本身没有附件字段）
+- **上下文提示**：`call_agent` 工具的 `task` 参数描述明确写明「子 Agent 看不到主对话历史，task 必须自带完成任务所需的完整上下文」，由工具描述而非 GROOT.md 承载该约束，保证只在挂载了 `call_agent` 时才进入上下文
 
 ### 4.5 错误处理
 
@@ -938,3 +937,11 @@ Executor.Execute()
 - **注入风险**：用户 prompt 可能诱导主 Agent 调用不该调的子 Agent，但子 Agent 的工具集是启动期固化的，无法被诱导扩大权限
 
 初期不做额外权限控制。子 Agent 的权限由管理员通过 MCP 配置控制，这与 Groot 自身的权限模型一致。
+
+## 十三、迭代说明
+
+### 13.1 与上一版差异
+
+- **调整** 4.4 节「附件访问」：附件存储功能已移除，描述从「在 task 中写明附件路径或内容」改为「把相关内容直接写进 task」
+- **调整** 「task 必须自带完整上下文」约束的承载位置：从 `groot init` 写入的默认 GROOT.md 引导段迁移到 `call_agent` 工具的 `task` 参数描述；默认 GROOT.md 不再包含子 Agent 调度段
+- **移除** 「建议在 GROOT.md 中引导逐个调用子 Agent」的应对策略：并发已由注册表信号量硬性限制，无需靠提示词约束

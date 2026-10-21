@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // flushWriter is the minimal interface for SSE writing: Write + Flush.
@@ -14,21 +15,116 @@ type flushWriter interface {
 }
 
 // SSEWriter writes Server-Sent Events to a flushable writer.
+// 事件以 OpenAI chat.completion.chunk 外层结构输出。
 type SSEWriter struct {
 	w         flushWriter
 	sessionID string
 	chatID    string
 	round     int
+	created   int64 // 对话开始时间（Unix 秒），作为 chunk.created
+
+	mu          sync.RWMutex
+	model       string            // 主模型名，作为 chunk.model 的默认值；受 mu 保护（SetModel 可覆盖）
+	agentModels map[string]string // 子 Agent 名 → 其实际使用的模型名；由 CallAgentTool 登记，保留至请求结束
 }
 
 // NewSSEWriter creates a new SSE writer.
-func NewSSEWriter(w flushWriter, sessionID, chatID string, round int) *SSEWriter {
+// model 为本轮对话的主模型名，created 为对话开始时间的 Unix 秒。
+func NewSSEWriter(w flushWriter, sessionID, chatID string, round int, model string, created int64) *SSEWriter {
 	return &SSEWriter{
-		w:         w,
-		sessionID: sessionID,
-		chatID:    chatID,
-		round:     round,
+		w:           w,
+		sessionID:   sessionID,
+		chatID:      chatID,
+		round:       round,
+		model:       model,
+		created:     created,
+		agentModels: make(map[string]string),
 	}
+}
+
+// SetModel 覆盖主模型名（chunk.model 的默认值）。用于 Solo 模式：agent.md 钉死的模型
+// 在 Executor 中覆盖 task.ModelName 后，须同步到 SSEWriter 以保证 chunk.model 反映实际模型。
+// model 为空时不做任何修改。
+func (s *SSEWriter) SetModel(model string) {
+	if model == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.model = model
+}
+
+// SetAgentModel 登记 agentName 对应的模型名；model 为空时等价于 ClearAgentModel。
+func (s *SSEWriter) SetAgentModel(agentName, model string) {
+	if model == "" {
+		s.ClearAgentModel(agentName)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentModels == nil {
+		s.agentModels = make(map[string]string)
+	}
+	s.agentModels[agentName] = model
+}
+
+// ClearAgentModel 移除 agentName 的模型登记，后续事件回退到主模型名。
+func (s *SSEWriter) ClearAgentModel(agentName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.agentModels, agentName)
+}
+
+// chatChunk 是 OpenAI chat.completion.chunk 的外层结构。
+type chatChunk struct {
+	ID      string        `json:"id"`
+	Object  string        `json:"object"`
+	Created int64         `json:"created"`
+	Model   string        `json:"model"`
+	Choices []chunkChoice `json:"choices"`
+}
+
+// chunkChoice 是 chunk.choices 的元素；Delta 始终为非 nil map 以保证序列化为 {}，
+// FinishReason 为 nil 时序列化为 null。
+type chunkChoice struct {
+	Index        int            `json:"index"`
+	Delta        map[string]any `json:"delta"`
+	FinishReason *string        `json:"finish_reason"`
+}
+
+// modelFor 返回 agentName 对应的模型名；agentName 为空、未登记或登记值为空时回退主模型名。
+func (s *SSEWriter) modelFor(agentName string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if agentName == "" {
+		return s.model
+	}
+	if m := s.agentModels[agentName]; m != "" {
+		return m
+	}
+	return s.model
+}
+
+// writeChunk 以 chat.completion.chunk 结构写出一条事件。
+// agentName 非空时写入 delta["agent_name"]；delta 为 nil 时写入空对象 {}。
+func (s *SSEWriter) writeChunk(agentName string, delta map[string]any, finishReason *string) error {
+	if delta == nil {
+		delta = map[string]any{}
+	}
+	if agentName != "" {
+		delta["agent_name"] = agentName
+	}
+	return s.WriteData(chatChunk{
+		ID:      s.chatID,
+		Object:  "chat.completion.chunk",
+		Created: s.created,
+		Model:   s.modelFor(agentName),
+		Choices: []chunkChoice{{
+			Index:        0,
+			Delta:        delta,
+			FinishReason: finishReason,
+		}},
+	})
 }
 
 // WriteData marshals data as JSON and writes it as an SSE data line, then flushes.
@@ -44,81 +140,61 @@ func (s *SSEWriter) WriteData(data interface{}) error {
 	return s.w.Flush()
 }
 
-// WriteThinking writes thinking chunk (reasoning_content); agentName 非空时注入 agent_name。
+// WriteThinking writes thinking chunk (delta.reasoning_content); agentName 非空时注入 delta.agent_name。
 func (s *SSEWriter) WriteThinking(agentName, content string) error {
-	payload := map[string]interface{}{
+	return s.writeChunk(agentName, map[string]any{
 		"role":              "assistant",
 		"reasoning_content": content,
-	}
-	if agentName != "" {
-		payload["agent_name"] = agentName
-	}
-	return s.WriteData(payload)
+	}, nil)
 }
 
-// WriteMessage writes message chunk (content); agentName 非空时注入 agent_name。
+// WriteMessage writes message chunk (delta.content); agentName 非空时注入 delta.agent_name。
 func (s *SSEWriter) WriteMessage(agentName, content string) error {
-	payload := map[string]interface{}{
+	return s.writeChunk(agentName, map[string]any{
 		"role":    "assistant",
 		"content": content,
-	}
-	if agentName != "" {
-		payload["agent_name"] = agentName
-	}
-	return s.WriteData(payload)
+	}, nil)
 }
 
-// WriteToolCalls writes tool_calls event; agentName 非空时注入 agent_name。
+// WriteToolCalls writes tool_calls chunk (delta.tool_calls); agentName 非空时注入 delta.agent_name。
 func (s *SSEWriter) WriteToolCalls(agentName string, toolCalls []ToolCall) error {
-	payload := map[string]interface{}{
+	return s.writeChunk(agentName, map[string]any{
 		"role":       "assistant",
 		"tool_calls": toolCalls,
-	}
-	if agentName != "" {
-		payload["agent_name"] = agentName
-	}
-	return s.WriteData(payload)
+	}, nil)
 }
 
-// WriteFinish writes finish_reason event; agentName 非空时注入 agent_name。
+// WriteFinish writes finish chunk：finish_reason 位于 choices[0]，delta 为空对象；
+// agentName 非空时注入 delta.agent_name。
 func (s *SSEWriter) WriteFinish(agentName, reason string) error {
-	payload := map[string]interface{}{
-		"role":          "assistant",
-		"finish_reason": reason,
-	}
-	if agentName != "" {
-		payload["agent_name"] = agentName
-	}
-	return s.WriteData(payload)
+	return s.writeChunk(agentName, nil, &reason)
 }
 
-// WriteToolResult writes tool result event. Set isError to true for MCP tool errors
-// so the TUI can render them with error styling instead of silently dropping them.
-// agentName 非空时注入 agent_name。
+// WriteToolResult writes tool result chunk (delta.role == "tool"). Set isError to true
+// for MCP tool errors so the TUI can render them with error styling instead of silently
+// dropping them. agentName 非空时注入 delta.agent_name。
 func (s *SSEWriter) WriteToolResult(agentName, toolCallID, toolName, content string, isError bool) error {
-	payload := map[string]interface{}{
+	return s.writeChunk(agentName, map[string]any{
 		"role":         "tool",
 		"tool_call_id": toolCallID,
 		"tool_name":    toolName,
 		"content":      content,
 		"error":        isError,
-	}
-	if agentName != "" {
-		payload["agent_name"] = agentName
-	}
-	return s.WriteData(payload)
+	}, nil)
 }
 
-// WriteError writes an error SSE event; agentName 非空时注入 agent_name。
+// WriteError writes an OpenAI 风格的 error 事件（无 choices）；agentName 非空时注入 error.agent_name。
 func (s *SSEWriter) WriteError(agentName, message string) error {
-	payload := map[string]interface{}{
-		"event":   "error",
+	e := map[string]any{
 		"message": message,
+		"type":    "server_error",
+		"code":    nil,
+		"param":   nil,
 	}
 	if agentName != "" {
-		payload["agent_name"] = agentName
+		e["agent_name"] = agentName
 	}
-	return s.WriteData(payload)
+	return s.WriteData(map[string]any{"error": e})
 }
 
 // WriteDone writes [DONE] marker and flushes.
