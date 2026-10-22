@@ -90,15 +90,21 @@ func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 	}, nil
 }
 
-// ListSessions 查询会话列表，支持分页。
+// ListSessions 查询会话列表的一页。分页与总数均由 SQL 完成（LIMIT/OFFSET + COUNT），
+// 进程内不加载该归属下的全部会话。
 // owner 为 nil 时返回全部会话；非 nil 时只返回 tenant_id 与 user_id 同时匹配的会话。
 func (m *Manager) ListSessions(owner *repo.SessionOwner, limit, offset int) ([]SessionInfo, int, error) {
-	sessions, err := m.repo.ListSessions(context.Background(), owner)
+	ctx := context.Background()
+	total, err := m.repo.CountSessions(ctx, owner)
+	if err != nil {
+		return nil, 0, fmt.Errorf("统计会话总数失败: %w", err)
+	}
+	sessions, err := m.repo.ListSessions(ctx, owner, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("查询会话列表失败: %w", err)
 	}
 
-	var infos []SessionInfo
+	infos := make([]SessionInfo, 0, len(sessions))
 	for _, s := range sessions {
 		lastActiveAt := ""
 		if !s.UpdatedAt.IsZero() && s.Round > 0 {
@@ -113,16 +119,7 @@ func (m *Manager) ListSessions(owner *repo.SessionOwner, limit, offset int) ([]S
 			Path:         "",
 		})
 	}
-
-	total := len(infos)
-	if offset >= total {
-		return []SessionInfo{}, total, nil
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	return infos[offset:end], total, nil
+	return infos, total, nil
 }
 
 // GetHistory 获取会话历史（从 DB 重建 History 结构）

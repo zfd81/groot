@@ -93,3 +93,32 @@ func TestCreateSession_TitleAndRename(t *testing.T) {
 		t.Errorf("want ErrNotFound got %v", err)
 	}
 }
+
+// total 来自 COUNT 查询：越界页也应返回完整总数，且按 owner 统计。
+func TestListSessions_TotalIndependentOfPage(t *testing.T) {
+	m := newTestManager(t)
+	for i := 0; i < 4; i++ {
+		if err := m.CreateSession(GenerateSessionID(), "crm", "u1", ""); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := m.CreateSession(GenerateSessionID(), "erp", "u9", ""); err != nil {
+		t.Fatalf("CreateSession erp: %v", err)
+	}
+	owner := &repo.SessionOwner{TenantID: "crm", UserID: "u1"}
+	page, total, err := m.ListSessions(owner, 3, 3)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if total != 4 || len(page) != 1 {
+		t.Errorf("offset=3: total=%d len=%d, want 4/1", total, len(page))
+	}
+	beyond, total, err := m.ListSessions(owner, 3, 99)
+	if err != nil {
+		t.Fatalf("ListSessions beyond: %v", err)
+	}
+	if total != 4 || len(beyond) != 0 {
+		t.Errorf("offset=99: total=%d len=%d, want 4/0", total, len(beyond))
+	}
+}

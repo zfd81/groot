@@ -137,7 +137,14 @@ func (r *memoryRepo) ExistsSession(ctx context.Context, sessionID string) (bool,
 	return n > 0, err
 }
 
-func (r *memoryRepo) ListSessions(ctx context.Context, owner *repo.SessionOwner) ([]*repo.Session, error) {
+func (r *memoryRepo) ListSessions(ctx context.Context, owner *repo.SessionOwner, limit, offset int) ([]*repo.Session, error) {
+	// 三方言对 LIMIT 0/负数行为不一致，非正数直接返回空结果。
+	if limit <= 0 {
+		return []*repo.Session{}, nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	var rows []struct {
 		SessionID string `db:"session_id"`
 		TenantID  string `db:"tenant_id"`
@@ -153,7 +160,8 @@ func (r *memoryRepo) ListSessions(ctx context.Context, owner *repo.SessionOwner)
 		cond = " WHERE " + cond
 	}
 	q := r.db.Rebind(`SELECT s.session_id, s.tenant_id, s.user_id, s.title, s.prompt, s.round, s.created_at, s.updated_at
-		 FROM memory_sessions s` + cond + ` ORDER BY s.updated_at DESC`)
+		 FROM memory_sessions s` + cond + ` ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`)
+	args = append(args, limit, offset)
 	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, err
 	}
@@ -171,6 +179,19 @@ func (r *memoryRepo) ListSessions(ctx context.Context, owner *repo.SessionOwner)
 		}
 	}
 	return sessions, nil
+}
+
+func (r *memoryRepo) CountSessions(ctx context.Context, owner *repo.SessionOwner) (int, error) {
+	cond, args := ownerCond(owner)
+	if cond != "" {
+		cond = " WHERE " + cond
+	}
+	var n int
+	q := r.db.Rebind(`SELECT COUNT(*) FROM memory_sessions s` + cond)
+	if err := r.db.GetContext(ctx, &n, q, args...); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ownerCond 生成会话归属过滤条件（memory_sessions 表别名固定为 s）。

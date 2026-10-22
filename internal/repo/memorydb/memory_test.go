@@ -3,6 +3,7 @@ package memorydb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func TestListSessions(t *testing.T) {
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "ls-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 	r.CreateSession(ctx, &repo.Session{SessionID: "ls-2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-	sessions, err := r.ListSessions(ctx, nil)
+	sessions, err := r.ListSessions(ctx, nil, 100, 0)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestListSessions_TitleFromColumn(t *testing.T) {
 		t.Fatalf("SaveChat round 1: %v", err)
 	}
 
-	sessions, err := r.ListSessions(ctx, nil)
+	sessions, err := r.ListSessions(ctx, nil, 100, 0)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestListSessions_TitleEmptyWhenCreatedEmpty(t *testing.T) {
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "lt-empty", Title: "", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	sessions, err := r.ListSessions(ctx, nil)
+	sessions, err := r.ListSessions(ctx, nil, 100, 0)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestSession_TitleRoundTrip(t *testing.T) {
 	if got.Title != "第一轮问题" {
 		t.Errorf("Title=%q", got.Title)
 	}
-	list, _ := r.ListSessions(ctx, nil)
+	list, _ := r.ListSessions(ctx, nil, 100, 0)
 	if len(list) != 1 || list[0].Title != "第一轮问题" {
 		t.Errorf("list title %+v", list)
 	}
@@ -475,19 +476,130 @@ func TestListSessions_OwnerFilter(t *testing.T) {
 	mk("a2", "crm", "u2")
 	mk("b1", "erp", "u1")
 	mk("sched", "", "")
-	all, _ := r.ListSessions(ctx, nil)
+	all, _ := r.ListSessions(ctx, nil, 100, 0)
 	if len(all) != 4 {
 		t.Errorf("nil owner: want 4 got %d", len(all))
 	}
-	crmU1, _ := r.ListSessions(ctx, &repo.SessionOwner{TenantID: "crm", UserID: "u1"})
+	crmU1, _ := r.ListSessions(ctx, &repo.SessionOwner{TenantID: "crm", UserID: "u1"}, 100, 0)
 	if len(crmU1) != 1 || crmU1[0].SessionID != "a1" {
 		t.Errorf("crm/u1: %+v", crmU1)
 	}
 	if len(crmU1) == 1 && (crmU1[0].TenantID != "crm" || crmU1[0].UserID != "u1") {
 		t.Errorf("ListSessions must fill TenantID/UserID: %+v", crmU1[0])
 	}
-	empty, _ := r.ListSessions(ctx, &repo.SessionOwner{})
+	empty, _ := r.ListSessions(ctx, &repo.SessionOwner{}, 100, 0)
 	if len(empty) != 1 || empty[0].SessionID != "sched" {
 		t.Errorf("empty owner must match only sched: %+v", empty)
 	}
+}
+
+// --- SQL 分页 ---
+
+func seedSessions(t *testing.T, r repo.MemoryRepo, owner repo.SessionOwner, n int) {
+	t.Helper()
+	base := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	for i := 0; i < n; i++ {
+		ts := base.Add(time.Duration(i) * time.Second)
+		if err := r.CreateSession(context.Background(), &repo.Session{
+			SessionID: fmt.Sprintf("%s-%s-%02d", owner.TenantID, owner.UserID, i),
+			TenantID:  owner.TenantID, UserID: owner.UserID,
+			CreatedAt: ts, UpdatedAt: ts,
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+}
+
+func TestListSessions_Pagination(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	owner := repo.SessionOwner{TenantID: "crm", UserID: "u1"}
+	seedSessions(t, r, owner, 5) // 00..04，04 最新
+
+	page1, err := r.ListSessions(ctx, &owner, 2, 0)
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1) != 2 || page1[0].SessionID != "crm-u1-04" || page1[1].SessionID != "crm-u1-03" {
+		t.Errorf("page1 = %v", ids(page1))
+	}
+	page3, err := r.ListSessions(ctx, &owner, 2, 4)
+	if err != nil {
+		t.Fatalf("page3: %v", err)
+	}
+	if len(page3) != 1 || page3[0].SessionID != "crm-u1-00" {
+		t.Errorf("page3 = %v", ids(page3))
+	}
+	beyond, err := r.ListSessions(ctx, &owner, 2, 10)
+	if err != nil {
+		t.Fatalf("beyond: %v", err)
+	}
+	if len(beyond) != 0 {
+		t.Errorf("beyond = %v", ids(beyond))
+	}
+}
+
+func TestListSessions_NonPositiveLimitReturnsEmpty(t *testing.T) {
+	r := newMemRepo(t)
+	owner := repo.SessionOwner{TenantID: "crm", UserID: "u1"}
+	seedSessions(t, r, owner, 2)
+	for _, lim := range []int{0, -1} {
+		got, err := r.ListSessions(context.Background(), &owner, lim, 0)
+		if err != nil {
+			t.Fatalf("limit=%d: %v", lim, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("limit=%d: expected empty, got %v", lim, ids(got))
+		}
+	}
+}
+
+func TestListSessions_NegativeOffsetTreatedAsZero(t *testing.T) {
+	r := newMemRepo(t)
+	owner := repo.SessionOwner{TenantID: "crm", UserID: "u1"}
+	seedSessions(t, r, owner, 3)
+	got, err := r.ListSessions(context.Background(), &owner, 10, -5)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("expected 3, got %v", ids(got))
+	}
+}
+
+func TestCountSessions(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	seedSessions(t, r, repo.SessionOwner{TenantID: "crm", UserID: "u1"}, 3)
+	seedSessions(t, r, repo.SessionOwner{TenantID: "erp", UserID: "u1"}, 2)
+
+	all, err := r.CountSessions(ctx, nil)
+	if err != nil {
+		t.Fatalf("CountSessions(nil): %v", err)
+	}
+	if all != 5 {
+		t.Errorf("all = %d, want 5", all)
+	}
+	crm, err := r.CountSessions(ctx, &repo.SessionOwner{TenantID: "crm", UserID: "u1"})
+	if err != nil {
+		t.Fatalf("CountSessions(crm): %v", err)
+	}
+	if crm != 3 {
+		t.Errorf("crm = %d, want 3", crm)
+	}
+	none, err := r.CountSessions(ctx, &repo.SessionOwner{TenantID: "none", UserID: "x"})
+	if err != nil {
+		t.Fatalf("CountSessions(none): %v", err)
+	}
+	if none != 0 {
+		t.Errorf("none = %d, want 0", none)
+	}
+}
+
+func ids(ss []*repo.Session) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.SessionID
+	}
+	return out
 }

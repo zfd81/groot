@@ -88,9 +88,12 @@ type MemoryRepo interface {
 	CreateSession(ctx context.Context, s *Session) error
 	GetSession(ctx context.Context, sessionID string) (*Session, error)
 	ExistsSession(ctx context.Context, sessionID string) (bool, error)
-	// ListSessions 按 updated_at 倒序返回会话。owner 为 nil 时不过滤（全量）；
-	// 非 nil 时只返回 tenant_id 与 user_id 同时等于 owner 对应字段的会话。
-	ListSessions(ctx context.Context, owner *SessionOwner) ([]*Session, error)
+	// ListSessions 按 updated_at 倒序返回会话的一页（SQL LIMIT/OFFSET）。
+	// owner 为 nil 时不过滤（全量）；非 nil 时只返回 tenant_id 与 user_id 同时等于 owner 对应字段的会话。
+	// limit 非正数返回空切片；offset 负数按 0 处理。
+	ListSessions(ctx context.Context, owner *SessionOwner, limit, offset int) ([]*Session, error)
+	// CountSessions 返回与 ListSessions 相同过滤条件下的会话总数。
+	CountSessions(ctx context.Context, owner *SessionOwner) (int, error)
 	SaveChat(ctx context.Context, rec *ChatRecord) error
 	GetChat(ctx context.Context, chatID string) (*ChatRecord, error)
 	LoadHistory(ctx context.Context, sessionID string) ([]*ChatRecord, error)
