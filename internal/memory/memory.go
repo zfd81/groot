@@ -1,12 +1,16 @@
 package memory
 
+import "github.com/zfd81/groot/internal/repo"
+
 // Memory 接口定义
 type Memory interface {
 	// Session 管理
-	CreateSession(sessionID, userID string) error
+	CreateSession(sessionID, tenantID, userID, title string) error
+	RenameSession(sessionID, title string) error
 	ExistsSession(sessionID string) bool
+	OwnsSession(sessionID, tenantID, userID string) bool
 	GetSessionInfo(sessionID string) (*SessionInfo, error)
-	ListSessions(limit, offset int) ([]SessionInfo, int, error)
+	ListSessions(owner *repo.SessionOwner, limit, offset int) ([]SessionInfo, int, error)
 
 	// History 管理
 	AppendMessage(sessionID string, message *Message) error

@@ -4,7 +4,9 @@ Groot AI Agent Python 客户端。
 Usage:
     from groot_client import GrootClient
 
-    client = GrootClient("http://localhost:8080", api_key="your-key")
+    # user_id 作为 X-User-ID 请求头随每个请求发送，标识当前业务用户；
+    # 会话类接口（/chat、/chat/*、/sess/*）要求携带，会话按（API Key 所属租户，用户）归属
+    client = GrootClient("http://localhost:8080", api_key="your-key", user_id="alice")
 
     # 新会话
     def on_event(event_type, data):
@@ -40,14 +42,26 @@ import requests
 
 
 class GrootClient:
-    """Groot AI Agent 客户端"""
+    """
+    Groot AI Agent 客户端。
 
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    Args:
+        base_url: 服务地址，如 http://localhost:8080。
+        api_key: 在 Web 界面创建的 API Key，作为 X-API-Key 请求头发送。
+        user_id: 当前业务用户标识（1 到 64 个字符，仅限字母、数字、下划线、短横线），
+            作为 X-User-ID 请求头随每个请求发送。会话类接口（/chat、/chat/*、/sess/*）
+            要求携带，服务端以（API Key 所属租户，user_id）记录并隔离会话归属；
+            缺失时这些接口返回 400。
+    """
+
+    def __init__(self, base_url: str, api_key: Optional[str] = None, user_id: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers["Content-Type"] = "application/json"
         if api_key:
             self.session.headers["X-API-Key"] = api_key
+        if user_id:
+            self.session.headers["X-User-ID"] = user_id
 
     # ---- 核心接口 ----
 
@@ -130,12 +144,6 @@ class GrootClient:
 
         return result
 
-    def cancel_chat(self, session_id: str) -> dict:
-        """取消指定会话中正在执行的对话。"""
-        resp = self.session.delete(f"{self.base_url}/chat/{session_id}")
-        resp.raise_for_status()
-        return resp.json()
-
     def get_chat_status(self, session_id: str) -> dict:
         """查询指定会话最近一次对话的运行状态。"""
         resp = self.session.get(f"{self.base_url}/chat/status/{session_id}")
@@ -148,9 +156,42 @@ class GrootClient:
         resp.raise_for_status()
         return resp.json()
 
+    def stop_chat(self, session_id: str, chat_id: str) -> dict:
+        """中止指定会话中正在执行的对话（需要 chat 权限）。
+
+        返回体的 status 为 success（本节点已取消）或 accepted（已广播到集群）。
+        对话未在执行时服务端返回 409 chat_not_running，raise_for_status 抛出 HTTPError。
+        """
+        resp = self.session.post(f"{self.base_url}/chat/{session_id}/{chat_id}/stop")
+        resp.raise_for_status()
+        return resp.json()
+
     def get_session_detail(self, session_id: str) -> dict:
         """查询会话详情（包含完整对话历史）。"""
         resp = self.session.get(f"{self.base_url}/sess/{session_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def rename_session(self, session_id: str, title: str) -> dict:
+        """重命名会话（需要 session 权限）。
+
+        title 去首尾空白后须为 1 到 100 个字符，否则服务端返回 400 invalid_request，
+        raise_for_status 抛出 HTTPError。重命名不改变会话排序与最后活跃时间。
+        """
+        resp = self.session.patch(
+            f"{self.base_url}/sess/{session_id}",
+            json={"title": title},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_session(self, session_id: str) -> dict:
+        """删除会话及其全部对话记录（需要 delete 权限）。
+
+        会话有对话正在执行时服务端先中止再删除；等待超时返回 409 chat_still_running，
+        raise_for_status 抛出 HTTPError，此时未删除任何数据。
+        """
+        resp = self.session.delete(f"{self.base_url}/sess/{session_id}")
         resp.raise_for_status()
         return resp.json()
 

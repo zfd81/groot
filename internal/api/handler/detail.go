@@ -41,8 +41,13 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 检查会话是否存在
-	if !h.memory.ExistsSession(sessionID) {
+	owner, ok := requireOwner(rc)
+	if !ok {
+		return
+	}
+
+	// 检查会话是否存在且归属于调用者（归属不符与不存在同样返回 404）
+	if !ownsOrAdmin(h.memory, owner, sessionID) {
 		rc.SetContentType("application/json")
 		rc.SetStatusCode(404)
 		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))
@@ -76,8 +81,13 @@ func (h *DetailHandler) GetLatest(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 检查会话是否存在
-	if !h.memory.ExistsSession(sessionID) {
+	owner, ok := requireOwner(rc)
+	if !ok {
+		return
+	}
+
+	// 检查会话是否存在且归属于调用者（归属不符与不存在同样返回 404）
+	if !ownsOrAdmin(h.memory, owner, sessionID) {
 		rc.SetContentType("application/json")
 		rc.SetStatusCode(404)
 		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))

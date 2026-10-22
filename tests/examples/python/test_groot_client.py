@@ -42,6 +42,15 @@ class MockGrootHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/chat":
             self._handle_chat()
+        elif self.path.startswith("/chat/") and self.path.endswith("/stop"):
+            # POST /chat/{sid}/{cid}/stop  →  ["", "chat", sid, cid, "stop"]
+            parts = self.path.split("/")
+            self._json_response(200, {
+                "status": "success",
+                "session_id": parts[2],
+                "chat_id": parts[3],
+                "message": "对话已请求中止",
+            })
         elif self.path == "/audio/transcriptions":
             self._handle_transcription()
         else:
@@ -70,12 +79,23 @@ class MockGrootHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_DELETE(self):
-        if self.path.startswith("/chat/"):
+    def do_PATCH(self):
+        if self.path.startswith("/sess/"):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length > 0 else {}
             self._json_response(200, {
                 "status": "success",
                 "session_id": self.path.split("/")[-1],
-                "message": "对话已取消"
+                "title": body.get("title", ""),
+            })
+        else:
+            self.send_error(404)
+
+    def do_DELETE(self):
+        if self.path.startswith("/sess/"):
+            self._json_response(200, {
+                "status": "success",
+                "session_id": self.path.split("/")[-1],
             })
         else:
             self.send_error(404)
@@ -265,10 +285,6 @@ class TestGrootClient(unittest.TestCase):
         result = self.client.execute_chat("指令", prompt="你是专家")
         self.assertIsNotNone(result["session_id"])
 
-    def test_cancel_chat(self):
-        resp = self.client.cancel_chat("test_sid")
-        self.assertEqual(resp["status"], "success")
-
     def test_get_chat_status(self):
         resp = self.client.get_chat_status("test_sid")
         self.assertEqual(resp["status"], "success")
@@ -281,6 +297,23 @@ class TestGrootClient(unittest.TestCase):
     def test_get_session_detail(self):
         resp = self.client.get_session_detail("test_sid")
         self.assertEqual(resp["status"], "success")
+
+    def test_stop_chat(self):
+        resp = self.client.stop_chat("test_sid", "test_cid")
+        self.assertEqual(resp["status"], "success")
+        self.assertEqual(resp["session_id"], "test_sid")
+        self.assertEqual(resp["chat_id"], "test_cid")
+
+    def test_rename_session(self):
+        resp = self.client.rename_session("test_sid", "新标题")
+        self.assertEqual(resp["status"], "success")
+        self.assertEqual(resp["session_id"], "test_sid")
+        self.assertEqual(resp["title"], "新标题")
+
+    def test_delete_session(self):
+        resp = self.client.delete_session("test_sid")
+        self.assertEqual(resp["status"], "success")
+        self.assertEqual(resp["session_id"], "test_sid")
 
     def test_list_sessions(self):
         resp = self.client.list_sessions(limit=10)

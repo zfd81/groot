@@ -10,7 +10,7 @@ func TestDebugTokenLimitLogic(t *testing.T) {
 	mgr := newTestManager(t)
 	sessionID := "debug-session"
 
-	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+	if err := mgr.CreateSession(sessionID, "", "user1", ""); err != nil {
 		t.Fatalf("创建会话失败: %v", err)
 	}
 

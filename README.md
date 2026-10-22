@@ -361,12 +361,15 @@ export OPENAI_API_KEY="sk-xxxx"
 
 ### 3.5 第一次调用
 
-API 认证始终开启，调用前先创建 API Key：登录 Web 界面，进入 **设置 → API Keys**，创建时设置名称、过期时间与权限范围，创建后复制 Key。
+API 认证始终开启，调用前先创建 API Key：登录 Web 界面，进入 **设置 → API Keys**，创建时设置名称、租户、过期时间与权限范围，创建后复制 Key。
+
+会话类接口（`/chat`、`/chat/*`、`/sess/*`）还需要在 `X-User-ID` 请求头中声明当前用户，groot 以（Key 所属租户，用户）记录会话归属：
 
 ```bash
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice" \
   -d '{"instruction": "你好，请介绍一下你自己"}'
 ```
 
@@ -525,8 +528,9 @@ security:
 
 > **API 认证说明：**
 > - **API 认证始终开启**：对外 API 请求需在请求头（默认 `X-API-Key`）中携带 API Key
-> - **API Key 管理**：登录 Web 界面，进入 **设置 → API Keys** 创建；每个 Key 可设置名称、过期时间（1天/7天/1个月/半年/1年/10年）与权限范围，创建后可随时查看、复制，删除后立即失效
+> - **API Key 管理**：登录 Web 界面，进入 **设置 → API Keys** 创建；每个 Key 设置名称、租户、过期时间（1天/7天/1个月/半年/1年/10年）与权限范围，创建后可随时查看、复制，删除后立即失效
 > - **权限点**：`chat`、`status`、`detail`、`history`、`session`、`schedule`、`all`（各权限对应的 API 见 [4.5 权限说明](#45-权限说明)）
+> - **租户与用户**：每个 Key 绑定一个租户，会话按（租户，用户）记录归属；调用会话类接口时须在 `X-User-ID` 请求头声明用户，详见 [4.5 权限说明](#45-权限说明)
 
 > **Web 登录说明：**
 > - Web 界面登录认证始终启用，无需配置；用户名和密码保存在数据库 `users` 表中（密码 bcrypt 加密），首次访问 Web 界面时引导创建
@@ -618,16 +622,28 @@ logging:
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
-| `chat` | POST /chat | 执行对话 |
+| `chat` | POST /chat、POST /chat/{sid}/{cid}/stop | 执行对话、中止对话 |
 | `status` | GET /chat/status/{sid} | 查询对话状态 |
 | `detail` | GET /chat/{sid}、GET /chat/{sid}/{cid} | 查询对话详情 |
-| `session` | GET /sess/{sid}、GET /sess/search | 查询会话详情、搜索历史对话 |
+| `session` | GET /sess/{sid}、PATCH /sess/{sid}、GET /sess/search | 查询会话详情、重命名会话、搜索历史对话 |
 | `history` | GET /sess/history | 查询会话列表 |
+| `delete` | DELETE /sess/{sid} | 删除会话及其全部对话记录 |
 | `schedule` | GET/POST/DELETE /schedule | 管理定时任务 |
 | `all` | 以上全部 | 全部权限 |
 
 > `GET /web/health` 不需要认证和权限，可直接访问（`groot status` 也使用该端点）。
 > 权限点只作用于本章的对外 API；通过 Web 界面登录的用户即管理员，不受权限点限制。
+
+**租户与用户隔离**
+
+groot 面向多个业务系统后端提供服务，会话按（租户，用户）记录归属并隔离：
+
+- **租户由 API Key 决定**：每个 API Key 创建时绑定一个租户标识（1 到 64 个字符，仅限字母、数字、下划线、短横线），多把 Key 可以属于同一租户，便于轮换 Key 而不影响会话归属。租户不可通过请求头指定或覆盖。
+- **用户由调用方声明**：业务系统完成自身用户鉴权后，在每个请求的 `X-User-ID` 请求头中声明当前用户（格式要求同租户标识）。groot 信任持有有效 Key 的调用方对用户的声明。
+- **会话类接口**（`POST /chat`、`POST /chat/{sid}/{cid}/stop`、`GET /chat/status/{sid}`、`GET /chat/{sid}`、`GET /chat/{sid}/{cid}`、`GET /sess/{sid}`、`PATCH /sess/{sid}`、`DELETE /sess/{sid}`、`GET /sess/history`、`GET /sess/search`）要求完整归属：Key 未绑定租户返回 `403 forbidden`（消息"API Key 未绑定租户"）；`X-User-ID` 缺失或非法返回 `400 invalid_request`（消息"缺少或非法的 X-User-ID"）。
+- **归属不符等同于不存在**：读取或续写他人会话时，接口的可观测行为与会话不存在完全一致（`/chat` 续聊生成新 sid，`/chat/status` 返回 `idle`，详情、中止、重命名、删除接口返回 404），不泄漏会话 ID 是否真实存在。列表与搜索只返回当前归属的会话。
+- `/audio/transcriptions`、`/schedule/*` 与会话无关，不要求 `X-User-ID`。
+- 通过 Web 界面登录的管理员不受租户与用户隔离限制，可查看、重命名、中止、删除全部会话；定时任务产生的会话归属为空，只能由 Web 管理员查看、重命名与删除。
 
 ### 4.6 配置热更新
 
@@ -959,6 +975,7 @@ frontmatter 字段：
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice" \
   -d '{"instruction":"查询昨天的订单总金额"}'
 ```
 
@@ -969,6 +986,7 @@ curl -X POST http://localhost:8080/chat \
   -H "X-Agent-Name: db-agent" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice" \
   -d '{"instruction":"查询昨天的订单总金额"}'
 ```
 
@@ -1083,6 +1101,7 @@ groot
 curl -X POST http://localhost:8080/chat \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: 在Web界面创建的APIKey' \
+  -H 'X-User-ID: alice' \
   -d '{"instruction":"今天北京天气怎么样？"}'
 
 # Solo 模式：跳过主 Agent，直连 weather
@@ -1090,6 +1109,7 @@ curl -X POST http://localhost:8080/chat \
   -H 'X-Agent-Name: weather' \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: 在Web界面创建的APIKey' \
+  -H 'X-User-ID: alice' \
   -d '{"instruction":"今天北京天气怎么样？"}'
 ```
 
@@ -1252,8 +1272,11 @@ groot user reset -y   # 跳过确认直接执行
 | `/chat/status/{sid}` | GET | `status` | 查询最近一次对话状态 |
 | `/chat/{sid}` | GET | `detail` | 查询最近一次对话详情（完整步骤记录） |
 | `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
+| `/chat/{sid}/{cid}/stop` | POST | `chat` | 中止正在执行的对话 |
 | `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
 | `/sess/{sid}` | GET | `session` | 查询会话详情（完整对话历史） |
+| `/sess/{sid}` | PATCH | `session` | 重命名会话 |
+| `/sess/{sid}` | DELETE | `delete` | 删除会话及其全部对话记录 |
 | `/sess/history` | GET | `history` | 查询会话列表 |
 | `/sess/search` | GET | `session` | 搜索历史对话（关键词匹配指令与结果） |
 | `/schedule` | GET | `schedule` | 列出所有定时任务 |
@@ -1273,9 +1296,27 @@ API 认证始终开启，请求需在请求头携带 API Key：
 X-API-Key: 在Web界面创建的APIKey
 ```
 
-Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web 界面 **设置 → API Keys** 中创建与管理（可设置名称、过期时间与权限范围），删除后立即失效。
+Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web 界面 **设置 → API Keys** 中创建与管理（设置名称、租户、过期时间与权限范围），删除后立即失效。
 
-在浏览器中通过 Web 界面登录后，受 API 认证保护的端点也接受登录 Cookie 作为凭证，两者任一有效即可通过认证。
+会话类接口（`/chat`、`/chat/*`、`/sess/*`）还需携带 `X-User-ID` 请求头声明当前用户，会话按（Key 所属租户，用户）记录归属并隔离，规则见 [4.5 权限说明](#45-权限说明)：
+
+```http
+X-API-Key: 在Web界面创建的APIKey
+X-User-ID: alice
+```
+
+在浏览器中通过 Web 界面登录后，受 API 认证保护的端点也接受登录 Cookie 作为凭证，两者任一有效即可通过认证；Cookie 凭证代表管理员，不受租户与用户隔离限制。
+
+**创建 API Key（`POST /web/apikeys`，Web 登录 Cookie 认证）**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | 是 | Key 名称，去除首尾空白后 1 到 64 字节，唯一；`web` 为保留名 |
+| `tenant_id` | 是 | 租户标识，去除首尾空白后 1 到 64 个字符，仅限字母、数字、下划线、短横线（`^[A-Za-z0-9_-]+$`）；不唯一，创建后不可修改；不合法返回 `400 invalid_tenant` |
+| `expires_in` | 是 | 有效期：`1d` / `7d` / `1mo` / `6mo` / `1y` / `10y` |
+| `permissions` | 是 | 权限点列表，见 [4.5 权限说明](#45-权限说明) |
+
+创建响应与 `GET /web/apikeys` 列表均包含 `tenant_id` 字段。
 
 ---
 
@@ -1285,12 +1326,12 @@ Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web �
 
 | Header | 必填 | 说明 |
 |--------|------|------|
-| `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在则生成新sid |
+| `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在或不属于当前（租户，用户）则生成新sid，调用方通过响应头 `X-Session-ID` 获知实际会话 ID |
 | `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值为 Web 界面 设置 → 模型 中配置的模型名称）；为空则使用默认对话模型；指定不存在或已禁用的模型返回 400 |
 | `X-Agent-Name` | 否 | 直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 |
-| `X-User-ID` | 否 | 用户标识，新会话创建时记录归属用户；`GET /sess/search` 携带同一标识时只搜索该用户的会话，为空时不按用户过滤 |
+| `X-User-ID` | 是 | 用户标识（1 到 64 个字符，仅限字母、数字、下划线、短横线）。新会话以（API Key 所属租户，该用户）记录归属，续聊时按同一归属校验；缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录 Cookie 凭证免此头 |
 | `Content-Type` | 是 | `application/json` |
-| `X-API-Key` | 是 | API Key（在 Web 界面 设置 → API Keys 中创建） |
+| `X-API-Key` | 是 | API Key（在 Web 界面 设置 → API Keys 中创建，绑定租户） |
 
 **请求 Body：**
 
@@ -1653,6 +1694,7 @@ eventSource.onmessage = (e) => {
 ```bash
 curl -X POST http://localhost:8080/chat \
   -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice" \
   -H "Content-Type: application/json" \
   -d '{"instruction": "帮我分析这份PDF财务报告", "attachments": [{"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}]}'
 ```
@@ -1662,9 +1704,12 @@ curl -X POST http://localhost:8080/chat \
 curl -X POST http://localhost:8080/chat \
   -H "X-Session-ID: 20260419103000523_a1b2" \
   -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice" \
   -H "Content-Type: application/json" \
   -d '{"instruction": "根据刚才的分析，生成一份总结报告"}'
 ```
+
+续聊时 `X-User-ID` 须与会话创建时一致，且使用同一租户的 API Key；归属不符时按新会话处理并返回新的 `X-Session-ID`，即使该会话 ID 正有对话在运行也不返回 409。
 
 ---
 
@@ -1742,6 +1787,7 @@ curl -X POST http://localhost:8080/audio/transcriptions \
 ```
 
 > `progress.sub_agents` 仅在编排模式下主 Agent 正在调度子 Agent 时出现。
+> `chat.status` 在对话执行期间为 `running`；收到中止请求（`POST /chat/{sid}/{cid}/stop`）后、执行链路收尾完成之前为 `cancelled`。收尾完成后本接口回到 `idle`，`last_message.status` 为 `cancelled`。
 
 **无运行中对话的响应（会话存在）：**
 ```json
@@ -1758,13 +1804,17 @@ curl -X POST http://localhost:8080/audio/transcriptions \
 }
 ```
 
-会话不存在时同样返回 `200`，`status` 为 `idle`、`round_count` 为 `0`、`chat` 为 `null`（不返回 404）。
+会话不存在时同样返回 `200`，`status` 为 `idle`、`round_count` 为 `0`、`chat` 为 `null`（不返回 404）。会话不属于当前（租户，用户）时与不存在完全一致：即使该会话正有对话运行，也返回 `idle`、`round_count` 为 `0`。
+
+本接口要求 `X-User-ID` 请求头：缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
 
 ---
 
 ### 7.6 GET /chat/{sid}/{cid} - 查询对话详情
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。省略 `cid`（即 `GET /chat/{sid}`）时返回该会话最近一次对话的详情。
+
+只能查询当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`；`cid` 不属于该 `sid` 返回 `404 chat_not_found`。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
 
 **请求参数：**
 
@@ -1804,9 +1854,71 @@ curl -X POST http://localhost:8080/audio/transcriptions \
 
 ---
 
+### 7.6.1 POST /chat/{sid}/{cid}/stop - 中止对话
+
+中止会话 `sid` 中正在执行的对话 `cid`。权限点 `chat`。只能中止当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`；Web 登录的管理员可中止任意会话的对话。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sid` | string | 是 | 会话 ID（路径参数），为空返回 `400 invalid_request` |
+| `cid` | string | 是 | 对话 ID（路径参数），为空返回 `400 invalid_request` |
+
+**请求示例：**
+
+```bash
+curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523/stop \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice"
+```
+
+**响应：**
+
+对话正在本节点执行，已下发取消 → `200`：
+```json
+{
+  "status": "success",
+  "session_id": "20260419103000523_a1b2",
+  "chat_id": "20260419103000523",
+  "message": "对话已请求中止"
+}
+```
+
+本节点没有该对话，且集群中存在其他存活节点，取消指令已通过集群消息广播到所有节点 → `202`：
+```json
+{
+  "status": "accepted",
+  "session_id": "20260419103000523_a1b2",
+  "chat_id": "20260419103000523",
+  "message": "中止请求已广播到集群"
+}
+```
+
+本地未在执行，且集群中没有其他存活节点或广播失败 → `409`：
+```json
+{
+  "status": "chat_not_running",
+  "session_id": "20260419103000523_a1b2",
+  "chat_id": "20260419103000523",
+  "message": "该对话未在执行"
+}
+```
+
+已经结束的对话、`cid` 与当前活跃对话不匹配，在集群中没有其他存活节点时都返回 `409 chat_not_running`。"存活"以成员心跳为准：心跳距今 7 秒内的其他成员视为存活。
+
+**说明：**
+
+- 中止是异步的。接口返回 `200` 时执行链路正在收尾，返回 `202` 时取消指令正在集群中传播。调用方通过 `POST /chat` 的 SSE 流结束、或 `GET /chat/status/{sid}` 回到 `idle` 确认中止完成。
+- 被中止的对话 SSE 流正常收尾（以 `[DONE]` 结束），对话记录以 `status` 为 `cancelled` 落库，之后仍可通过 `GET /chat/{sid}/{cid}` 与 `GET /sess/{sid}` 查看。
+- `202` 表示广播已发出，不保证远端命中：若对话此时已经结束，或 `cid` 与各节点的活跃对话都不匹配，所有节点均为空操作。
+- 多实例集群下取消指令随心跳轮询传递（周期 3 秒），远端节点收到后在下一个检查点退出。
+
+---
+
 ### 7.7 GET /sess/{sid} - 查询会话详情
 
-查询会话详情，包括完整对话历史（所有轮次）。
+查询会话详情，包括完整对话历史（所有轮次）。只能查询当前（租户，用户）自己的会话，会话不存在或归属不符均返回 `404 session_not_found`。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
 
 **请求参数：**
 
@@ -1821,6 +1933,7 @@ curl -X POST http://localhost:8080/audio/transcriptions \
   "session_id": "20260419103000523_a1b2",
   "session": {
     "session_id": "20260419103000523_a1b2",
+    "title": "帮我分析这个数据文件",
     "created_at": "2026-04-19T10:00:00Z",
     "round_count": 2,
     "last_active_at": "2026-04-19T10:05:30Z"
@@ -1864,6 +1977,7 @@ curl -X POST http://localhost:8080/audio/transcriptions \
 
 | 字段 | 说明 |
 |------|------|
+| `session.title` | 会话标题（创建时取首轮指令前 100 个字符，可通过 `PATCH /sess/{sid}` 修改） |
 | `messages[].status` | 该轮对话状态：`completed` / `failed` / `cancelled` |
 | `messages[].duration` | 该轮耗时（秒） |
 | `messages[].duration_ms` | 该轮耗时（毫秒） |
@@ -1875,15 +1989,104 @@ curl -X POST http://localhost:8080/audio/transcriptions \
 
 ---
 
+### 7.7.1 PATCH /sess/{sid} - 重命名会话
+
+修改会话标题。权限点 `session`。只能重命名当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员可重命名任意会话，包括定时任务产生的归属为空的会话。
+
+**标题规则：**
+
+- 每个会话都有标题。会话创建时，标题取首轮对话的用户指令去首尾空白后的前 100 个字符（按 Unicode 字符计数，不加省略号）；定时任务产生的会话以任务指令按同样规则生成标题。
+- 重命名时，`title` 去首尾空白后长度须在 1 到 100 个字符之间，不限制字符集。
+- 标题是会话的元数据：重命名只修改标题，不改变会话排序与最后活跃时间。
+- `GET /sess/{sid}` 的 `session.title`、`GET /sess/history` 的 `sessions[].title`、`GET /sess/search` 的 `results[].title` 返回的都是会话当前标题，重命名后立即生效。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sid` | string | 是 | 会话 ID（路径参数），为空返回 `400 invalid_request` |
+
+**请求 Header：**
+
+| Header | 必填 | 说明 |
+|--------|------|------|
+| `X-API-Key` | 是 | 含 `session` 权限的 API Key |
+| `X-User-ID` | 是 | 用户标识，只能操作（API Key 所属租户，该用户）的会话；Web 登录 Cookie 凭证免此头 |
+| `Content-Type` | 是 | `application/json` |
+
+**请求体：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `title` | string | 是 | 会话标题，去首尾空白后 1 到 100 个字符 |
+
+**请求示例：**
+
+```bash
+curl -X PATCH http://localhost:8080/sess/20260419103000523_a1b2 \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "销售数据分析"}'
+```
+
+**响应：**
+
+重命名成功 → `200`，`title` 为去首尾空白后实际保存的标题：
+```json
+{
+  "status": "success",
+  "session_id": "20260419103000523_a1b2",
+  "title": "销售数据分析"
+}
+```
+
+请求体不是合法 JSON，或 `title` 类型不是字符串 → `400`：
+```json
+{
+  "status": "invalid_request",
+  "message": "请求参数错误"
+}
+```
+
+`title` 为空、纯空白或超过 100 个字符 → `400`：
+```json
+{
+  "status": "invalid_request",
+  "message": "标题不能为空，且长度不能超过 100 个字符"
+}
+```
+
+API Key 未绑定租户 → `403`：
+```json
+{
+  "status": "forbidden",
+  "message": "API Key 未绑定租户"
+}
+```
+
+会话不存在或归属不符 → `404`：
+```json
+{
+  "status": "session_not_found",
+  "message": "会话不存在"
+}
+```
+
+写库失败 → `500 error`，消息"重命名失败"。
+
+---
+
 ### 7.8 GET /sess/history - 查询会话列表
 
-查询所有会话列表，支持分页。参数通过 URL Query String 传递。
+查询当前（租户，用户）的会话列表，支持分页，`total` 同样按归属统计。参数通过 URL Query String 传递。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员看到全部会话。
 
 **请求示例：**
 
 ```http
 GET /sess/history?limit=10&offset=0
 X-API-Key: 在Web界面创建的APIKey
+X-User-ID: alice
 ```
 
 **Query 参数：**
@@ -1912,19 +2115,20 @@ X-API-Key: 在Web界面创建的APIKey
 }
 ```
 
-> `title` 为该会话首轮用户指令，供列表展示；无对话时为空。
+> `title` 为会话标题（创建时取首轮指令前 100 个字符，可通过 `PATCH /sess/{sid}` 修改），供列表展示。
 
 ---
 
 ### 7.9 GET /sess/search - 搜索历史对话
 
-按关键词在历史对话（主 Agent 已完成轮次）的指令与执行结果中模糊搜索，返回轮次级结果，按轮次开始时间倒序。
+按关键词在当前（租户，用户）历史对话（主 Agent 已完成轮次）的指令与执行结果中模糊搜索，返回轮次级结果，按轮次开始时间倒序。Web 登录的管理员搜索全部会话。
 
 **请求示例：**
 
 ```http
 GET /sess/search?q=销售报表&limit=20
 X-API-Key: 在Web界面创建的APIKey
+X-User-ID: alice
 ```
 
 **Query 参数：**
@@ -1938,7 +2142,7 @@ X-API-Key: 在Web界面创建的APIKey
 
 | Header | 必填 | 说明 |
 |--------|------|------|
-| `X-User-ID` | 否 | 用户标识；携带时只搜索该用户的会话（与 `/chat` 的 `X-User-ID` 对应），为空时搜索全部会话 |
+| `X-User-ID` | 是 | 用户标识（与 `/chat` 的 `X-User-ID` 对应），只搜索（API Key 所属租户，该用户）的会话；缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录 Cookie 凭证免此头 |
 
 **响应示例：**
 
@@ -1961,13 +2165,69 @@ X-API-Key: 在Web界面创建的APIKey
 
 | 字段 | 说明 |
 |------|------|
-| `title` | 该会话首轮用户指令 |
+| `title` | 会话标题（创建时取首轮指令前 100 个字符，可通过 `PATCH /sess/{sid}` 修改） |
 | `snippet` | 命中位置的上下文摘要（关键词前后各截取若干字符） |
 | `matched_field` | 命中字段：`instruction`（用户指令）/ `result`（执行结果） |
 | `timestamp` | 该轮开始时间（毫秒时间戳） |
 
 > `q` 为空（或全空白）时直接返回空结果，不视为错误。
 > Web 界面侧边栏的搜索入口（快捷键 `Ctrl`/`⌘` + `K`）即调用此接口，点击结果跳转到对应会话并定位轮次。
+
+---
+
+### 7.9.1 DELETE /sess/{sid} - 删除会话
+
+删除会话及其全部对话记录。权限点 `delete`。只能删除当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员可删除任意会话，包括定时任务产生的归属为空的会话。
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sid` | string | 是 | 会话 ID（路径参数），为空返回 `400 invalid_request` |
+
+**请求示例：**
+
+```bash
+curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "X-User-ID: alice"
+```
+
+**响应：**
+
+删除成功 → `200`：
+```json
+{
+  "status": "success",
+  "session_id": "20260419103000523_a1b2"
+}
+```
+
+对话仍在执行 → `409`，不删除任何数据：
+```json
+{
+  "status": "chat_still_running",
+  "session_id": "20260419103000523_a1b2",
+  "message": "对话仍在执行，请稍后重试"
+}
+```
+
+删除写库失败 → `500 error`，消息"删除会话失败"。
+
+**处理流程：**
+
+1. 会话正在本节点执行对话：先中止该对话，最多等待 10 秒让执行链路收尾；超时返回 `409 chat_still_running`。
+2. 本节点没有活跃对话：集群中存在其他存活节点时广播取消该会话任意活跃对话的指令并等待 5 秒，否则跳过本步。
+3. 占住该会话再删库：等待期间若有并发的 `POST /chat` 续聊抢先注册，返回 `409 chat_still_running`，不删除任何数据；占位期间到达的 `POST /chat` 续聊收到 `409 chat_limit_exceeded`。
+4. 在一个事务内删除 `memory_sessions` 与 `memory_chats` 中该会话的全部记录。
+
+删除是终态：删除后对该 `sid` 的所有读取接口按"不存在"响应（`GET /sess/{sid}`、`GET /chat/{sid}` 返回 `404 session_not_found`，`GET /chat/status/{sid}` 返回 `idle`），携带该 `sid` 的 `POST /chat` 续聊开启新会话。
+
+**已知边角：**
+
+- 定时任务的执行不经过运行时状态注册，也不是对话，其会话记录只是任务执行留下的数据。Web 管理员在任务正在执行的瞬间删除其会话时，中止与等待不生效，已落库的记录被删除；任务执行完毕后尝试写回的那条对话记录，会被对话落库时的会话存在性检查拒绝（落库在事务内先查 `memory_sessions`，不存在则返回未找到），只在服务端日志留下"保存对话记录失败"，数据库中不产生任何残留。任务本身通过 `/schedule` 接口管理。
+- 多实例集群下，远端节点收尾晚于 5 秒固定等待时，同样是该轮记录被拒绝写入并记日志，不产生残留。
+- 删除接口在等待结束到占位之间若有新的 `POST /chat` 续聊抢先注册并返回 `409 chat_still_running`，之后该节点会在下一轮消息轮询（3 秒内）消费到自己刚广播的 `chat.cancel`（chat_id 为空，匹配任意对话），把这条新对话取消。这是删除意图的自然延伸，不是数据丢失。
 
 ---
 
@@ -2194,7 +2454,8 @@ Agent 自动调用 schedule_create 工具创建任务：
 ```python
 from groot_client import GrootClient
 
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
+# user_id 作为 X-User-ID 请求头随每个请求发送，标识当前业务用户
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
 
 # 新会话
 result = client.execute_chat("分析这份财报", callback=lambda t, d: print(f"[{t}] {d}"))
@@ -2230,7 +2491,7 @@ ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), n
 ### 9.1 多轮文档分析
 
 ```python
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
 
 # 第1轮：上传文档并分析
 result1 = client.execute_chat("分析这份财报，提取营收、利润等关键指标")
@@ -2246,7 +2507,7 @@ result3 = client.execute_chat("生成一份分析报告摘要", session_id=sid)
 ### 9.2 渐进式代码开发
 
 ```python
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
 
 result1 = client.execute_chat("写一个 Python 数据处理工具类，包含 CSV 读取功能",
                               prompt="你是资深 Python 开发者")
@@ -2281,7 +2542,7 @@ result3 = client.execute_chat("写单元测试代码", session_id=sid)
 **2. 通过对话创建任务：**
 
 ```python
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey")
+client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
 
 # 创建定时任务
 client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报表，成功后把结果 POST 到 https://hooks.example.com/xxx，失败时发邮件给 ops@example.com")
@@ -2344,7 +2605,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **原因：**
 - `429 rate_limited`：请求频率超过配置的 QPS 或并发限制（启用 `rate_limit` 时）
-- `409 chat_limit_exceeded`：同一会话只能有一个活跃对话，防止执行冲突
+- `409 chat_limit_exceeded`：同一会话只能有一个活跃对话，防止执行冲突；`DELETE /sess/{sid}` 删库前的短暂占位期间也返回此码
 
 **解决：**
 - 降低请求频率，等待当前请求完成后再发起下一条
@@ -2372,8 +2633,9 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q7: 会话数据如何清理
 
-**说明：** 会话数据长期保留在数据库中，不做内置定时清理，也没有删除会话的 API。
+**说明：** 会话数据长期保留在数据库中，不做内置定时清理。
 
+- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.9.1](#791-delete-sesssid---删除会话)
 - 运维侧如需按时间批量清理，可直接对数据库执行 SQL（`memory_chats` 配有 `idx_started_at` 索引，`memory_sessions` 配有 `idx_updated_at` 索引）
 - SQLite 模式下数据库文件为 `{GROOT_HOME}/groot.db`
 
@@ -2406,7 +2668,7 @@ export OPENAI_API_KEY="your-api-key"
 
 - 调度执行的会话 ID 以 `-sched` 为后缀：`{task_id}-{timestamp}-sched`
 - 执行记录中 `trigger_type` 字段标识触发方式：`cron`/`once`/`interval`/`manual`
-- 通过 `GET /sess/history` 可查看所有会话，含定时任务产生的会话
+- 定时任务产生的会话归属为空，不属于任何业务系统用户，在 Web 界面的会话列表中查看
 
 ---
 
@@ -2523,9 +2785,12 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
 错误响应统一为 `{"status": "<错误码>", "message": "<说明>"}`。
 
+非错误但非 `success` 的状态：`202 accepted` 由 `POST /chat/{sid}/{cid}/stop` 返回，表示本节点没有该对话、中止请求已广播到集群，结果以 SSE 流结束或 `GET /chat/status/{sid}` 为准。
+
 | HTTP 状态码 | 错误码 | 说明 |
 |------------|--------|------|
-| 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失） |
+| 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失、会话类接口缺少或非法的 `X-User-ID`、`PATCH /sess/{sid}` 请求体非法或 `title` 为空/超过 100 个字符） |
+| 400 | `invalid_tenant` | 创建 API Key 时 `tenant_id` 为空或含非法字符 |
 | 400 | `invalid_model` | `X-Model-Name` 指定的模型不存在或已禁用，或未配置默认模型 |
 | 400 | `unknown_agent` | `X-Agent-Name` 指定的子 Agent 未注册 |
 | 400 | `attachment_count_exceeded` | 附件数量超限 |
@@ -2540,11 +2805,13 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 | 400 | `unsupported_type` | 转录音频扩展名不受支持（支持 webm/mp3/mp4/mpeg/mpga/m4a/wav/ogg/flac） |
 | 400 | `file_too_large` | 转录音频超过 `attachment.max_size` 单文件上限 |
 | 401 | `unauthorized` | API Key 无效、过期、已删除或缺失 |
-| 403 | `forbidden` | API Key 权限不足 |
-| 404 | `session_not_found` | 会话不存在 |
-| 404 | `chat_not_found` | 对话记录不存在 |
+| 403 | `forbidden` | API Key 权限不足，或调用会话类接口的 API Key 未绑定租户 |
+| 404 | `session_not_found` | 会话不存在或不属于当前（租户，用户） |
+| 404 | `chat_not_found` | 对话记录不存在或不属于该会话 |
 | 404 | `task_not_found` | 定时任务不存在 |
 | 409 | `chat_limit_exceeded` | 会话已有对话执行中 |
+| 409 | `chat_not_running` | `POST /chat/{sid}/{cid}/stop`：该对话未在本节点执行且无法广播（集群中没有其他存活节点、广播失败、对话已结束或 `cid` 不匹配） |
+| 409 | `chat_still_running` | `DELETE /sess/{sid}`：等待对话收尾超时，或等待期间有新对话抢先开始；未删除任何数据 |
 | 429 | `rate_limited` | 请求频率超过限制（QPS 或并发超限），稍后重试 |
 | 500 | `error` | 服务器内部错误 |
 | 500 | `config_error` | 配置错误 |

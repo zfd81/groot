@@ -9,6 +9,8 @@
 - 无 Key / 无效 Key / 已删除的 Key → 401，响应体 status=unauthorized
 - Key 有效但权限不足 → 403，响应体 status=forbidden
 - 权限点：chat / status / detail / history / session / schedule / all
+- 会话类接口（/chat、/chat/*、/sess/*）须携带 X-User-ID；认证（401）与权限（403）
+  校验先于用户标识校验，无 Key / 无效 Key 的用例无需携带
 - /web/health 免认证
 """
 
@@ -17,7 +19,7 @@ import time
 import pytest
 import requests
 
-from conftest import BASE_URL, _web_login, bootstrap_api_key, delete_api_key
+from conftest import BASE_URL, TEST_USER_ID, _web_login, bootstrap_api_key, delete_api_key
 
 
 class TestAuthenticationBasic:
@@ -159,7 +161,8 @@ class TestPermissionSystem:
         token = bootstrap_api_key(BASE_URL, name="pytest-chat-only", permissions=["chat"])
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token
+            "X-API-Key": token,
+            "X-User-ID": TEST_USER_ID,
         }
 
         # 可以调用 POST /chat（不被认证/权限拦截）
@@ -187,7 +190,8 @@ class TestPermissionSystem:
         token = bootstrap_api_key(BASE_URL, name="pytest-status-only", permissions=["status"])
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token
+            "X-API-Key": token,
+            "X-User-ID": TEST_USER_ID,
         }
 
         response = requests.post(
@@ -231,7 +235,8 @@ class TestKeyRevocation:
         token = bootstrap_api_key(BASE_URL, name=name)
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token
+            "X-API-Key": token,
+            "X-User-ID": TEST_USER_ID,
         }
 
         # 删除前：token 有效

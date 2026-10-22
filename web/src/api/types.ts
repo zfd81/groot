@@ -5,7 +5,7 @@ export interface SessionSummary {
   created_at: string
   round_count: number
   last_active_at: string
-  // 首轮用户指令，作为列表标题展示；旧版后端或无对话记录时为空
+  // 会话标题：创建时取首轮指令截取，可通过 PATCH /sess/{sid} 重命名；为空时前端以 session_id 前 8 位兜底
   title?: string
   path: string
 }
@@ -219,6 +219,7 @@ export interface AgentDefinitionResp {
 export interface ApiKeyInfo {
   id: string
   name: string
+  tenant_id: string
   permissions: string[]
   expires_at: number
   created_at: number

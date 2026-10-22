@@ -24,12 +24,13 @@ func New(sqlxDB *sqlx.DB, dialect db.Dialect) repo.APIKeyRepo {
 type apiKeyRow struct {
 	ID          string `db:"id"`
 	Name        string `db:"name"`
+	TenantID    string `db:"tenant_id"`
 	Permissions string `db:"permissions"`
 	ExpiresAt   int64  `db:"expires_at"`
 	CreatedAt   int64  `db:"created_at"`
 }
 
-const apiKeyColumns = `id, name, permissions, expires_at, created_at`
+const apiKeyColumns = `id, name, tenant_id, permissions, expires_at, created_at`
 
 func rowToAPIKey(row apiKeyRow) *repo.APIKey {
 	var perms []string
@@ -40,6 +41,7 @@ func rowToAPIKey(row apiKeyRow) *repo.APIKey {
 	return &repo.APIKey{
 		ID:          row.ID,
 		Name:        row.Name,
+		TenantID:    row.TenantID,
 		Permissions: perms,
 		ExpiresAt:   time.UnixMilli(row.ExpiresAt),
 		CreatedAt:   time.UnixMilli(row.CreatedAt),
@@ -58,10 +60,10 @@ func permsJSON(perms []string) string {
 }
 
 func (r *apiKeyRepo) Create(ctx context.Context, k *repo.APIKey) error {
-	q := r.db.Rebind(`INSERT INTO api_keys (id, name, permissions, expires_at, created_at)
-		VALUES (?, ?, ?, ?, ?)`)
+	q := r.db.Rebind(`INSERT INTO api_keys (id, name, tenant_id, permissions, expires_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.ExecContext(ctx, q,
-		k.ID, k.Name, permsJSON(k.Permissions), k.ExpiresAt.UnixMilli(), k.CreatedAt.UnixMilli())
+		k.ID, k.Name, k.TenantID, permsJSON(k.Permissions), k.ExpiresAt.UnixMilli(), k.CreatedAt.UnixMilli())
 	return err
 }
 

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -22,7 +23,7 @@ func TestRuntimeState_Register(t *testing.T) {
 	sessionID := "session_001"
 	chatID := "chat_001"
 
-	chat, err := state.Register(sessionID, chatID)
+	chat, err := state.Register(context.Background(), sessionID, chatID)
 	if err != nil {
 		t.Fatalf("Register() failed: %v", err)
 	}
@@ -46,13 +47,13 @@ func TestRuntimeState_Register_Duplicate(t *testing.T) {
 	sessionID := "session_001"
 
 	// 第一次注册
-	_, err := state.Register(sessionID, "chat_001")
+	_, err := state.Register(context.Background(), sessionID, "chat_001")
 	if err != nil {
 		t.Fatalf("First Register() failed: %v", err)
 	}
 
 	// 第二次注册同一 session 应失败
-	_, err = state.Register(sessionID, "chat_002")
+	_, err = state.Register(context.Background(), sessionID, "chat_002")
 	if err == nil {
 		t.Error("Second Register() should fail for duplicate session")
 	}
@@ -69,7 +70,7 @@ func TestRuntimeState_Get(t *testing.T) {
 
 	// 注册后获取
 	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
+	state.Register(context.Background(), sessionID, "chat_001")
 
 	chat, ok := state.Get(sessionID)
 	if !ok {
@@ -85,7 +86,7 @@ func TestRuntimeState_UpdateProgress(t *testing.T) {
 	state := NewRuntimeState()
 
 	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
+	state.Register(context.Background(), sessionID, "chat_001")
 
 	progress := &ChatProgress{
 		CurrentStep:    5,
@@ -126,7 +127,7 @@ func TestRuntimeState_Delete(t *testing.T) {
 	state := NewRuntimeState()
 
 	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
+	state.Register(context.Background(), sessionID, "chat_001")
 
 	state.Delete(sessionID)
 
@@ -153,7 +154,7 @@ func TestRuntimeState_IsRunning(t *testing.T) {
 
 	// 注册后应 running
 	sessionID := "session_001"
-	state.Register(sessionID, "chat_001")
+	state.Register(context.Background(), sessionID, "chat_001")
 
 	if !state.IsRunning(sessionID) {
 		t.Error("IsRunning() should return true for registered session")
@@ -178,7 +179,7 @@ func TestRuntimeState_RunningCount(t *testing.T) {
 	// 注册多个
 	for i := 1; i <= 5; i++ {
 		sessionID := "session_" + string(rune('0'+i))
-		state.Register(sessionID, "chat_"+string(rune('0'+i)))
+		state.Register(context.Background(), sessionID, "chat_"+string(rune('0'+i)))
 	}
 
 	if state.RunningCount() != 5 {
@@ -216,7 +217,7 @@ func TestActiveChat_Progress(t *testing.T) {
 // ChatProgress.SubAgents 列表，且对未注册的 session 是 no-op。
 func TestRuntimeState_SubAgentTracking(t *testing.T) {
 	r := NewRuntimeState()
-	_, _ = r.Register("sess", "chat")
+	_, _ = r.Register(context.Background(), "sess", "chat")
 	r.AddSubAgent("sess", "db-agent")
 	r.AddSubAgent("sess", "weather-agent")
 	c, _ := r.Get("sess")
@@ -240,7 +241,7 @@ func TestRuntimeState_SubAgentTracking(t *testing.T) {
 // 直接报错。本测试在 -race 模式下若 AddSubAgent 没有 mu.Lock 必失败。
 func TestRuntimeState_AddSubAgentConcurrent(t *testing.T) {
 	rt := NewRuntimeState()
-	if _, err := rt.Register("sess", "chat"); err != nil {
+	if _, err := rt.Register(context.Background(), "sess", "chat"); err != nil {
 		t.Fatal(err)
 	}
 	const N = 100
@@ -267,7 +268,7 @@ func TestRuntimeState_AddSubAgentConcurrent(t *testing.T) {
 // 不会被后续 Add/Remove 影响——保证 handler 在序列化期间不会读到中间状态。
 func TestRuntimeState_SnapshotIsolatesFromMutation(t *testing.T) {
 	rt := NewRuntimeState()
-	if _, err := rt.Register("sess", "chat"); err != nil {
+	if _, err := rt.Register(context.Background(), "sess", "chat"); err != nil {
 		t.Fatal(err)
 	}
 	rt.AddSubAgent("sess", "a")
@@ -307,5 +308,91 @@ func TestChatResult(t *testing.T) {
 
 	if len(result.Steps) != 1 {
 		t.Errorf("ChatResult.Steps length = %d, want 1", len(result.Steps))
+	}
+}
+
+// TestRuntimeState_Cancel 验证 Cancel 的匹配语义：chat_id 不匹配 / session 不存在时
+// 返回 false 且不触发取消；匹配时取消 ctx、把 Status 翻为 cancelled，但不删除状态
+// （状态由执行协程退出时 Delete 清理）。
+func TestRuntimeState_Cancel(t *testing.T) {
+	rt := NewRuntimeState()
+	chat, _ := rt.Register(context.Background(), "s1", "c1")
+	if rt.Cancel("s1", "other") {
+		t.Fatal("wrong cid must not cancel")
+	}
+	if rt.Cancel("missing", "c1") {
+		t.Fatal("missing session must not cancel")
+	}
+	if !rt.Cancel("s1", "c1") {
+		t.Fatal("matching cid must cancel")
+	}
+	select {
+	case <-chat.Context().Done():
+	default:
+		t.Fatal("ctx not cancelled")
+	}
+	if chat.StatusSnapshot() != "cancelled" {
+		t.Errorf("status=%q", chat.StatusSnapshot())
+	}
+	if _, ok := rt.Get("s1"); !ok {
+		t.Fatal("Cancel must not delete state")
+	}
+}
+
+// TestRuntimeState_CancelEmptyChatIDMatchesAny 验证 chat_id 为空时匹配任意活跃对话。
+func TestRuntimeState_CancelEmptyChatIDMatchesAny(t *testing.T) {
+	rt := NewRuntimeState()
+	chat, _ := rt.Register(context.Background(), "s1", "c1")
+	if !rt.Cancel("s1", "") {
+		t.Fatal("empty cid must match")
+	}
+	select {
+	case <-chat.Context().Done():
+	default:
+		t.Fatal("ctx not cancelled")
+	}
+}
+
+// TestRuntimeState_ParentCancelPropagates 验证 Register 派生的子 ctx 跟随父 ctx 取消。
+func TestRuntimeState_ParentCancelPropagates(t *testing.T) {
+	rt := NewRuntimeState()
+	parent, cancel := context.WithCancel(context.Background())
+	chat, _ := rt.Register(parent, "s1", "c1")
+	cancel()
+	select {
+	case <-chat.Context().Done():
+	default:
+		t.Fatal("child ctx must follow parent")
+	}
+}
+
+// TestRuntimeState_Wait 验证 Wait：无活跃对话立即返回 true；活跃对话超时返回 false；
+// Delete 释放等待者；二次 Delete 不 panic。
+func TestRuntimeState_Wait(t *testing.T) {
+	rt := NewRuntimeState()
+	if !rt.Wait("none", 10*time.Millisecond) {
+		t.Fatal("no active chat → true immediately")
+	}
+	rt.Register(context.Background(), "s1", "c1")
+	if rt.Wait("s1", 20*time.Millisecond) {
+		t.Fatal("active chat must time out")
+	}
+	go func() { time.Sleep(10 * time.Millisecond); rt.Delete("s1") }()
+	if !rt.Wait("s1", time.Second) {
+		t.Fatal("Delete must release Wait")
+	}
+	rt.Delete("s1") // 二次 Delete 不 panic
+}
+
+// TestRuntimeState_DeleteCancelsContext 验证 Delete 会取消 ctx（释放 context 资源），
+// 避免执行协程异常退出时派生 ctx 泄漏。
+func TestRuntimeState_DeleteCancelsContext(t *testing.T) {
+	rt := NewRuntimeState()
+	chat, _ := rt.Register(context.Background(), "s1", "c1")
+	rt.Delete("s1")
+	select {
+	case <-chat.Context().Done():
+	default:
+		t.Fatal("Delete must cancel ctx")
 	}
 }

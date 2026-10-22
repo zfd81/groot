@@ -35,7 +35,7 @@ import pytest
 import requests
 import yaml
 
-from conftest import GROOT_BIN, TEST_AUTH_SECRET, _web_login, bootstrap_api_key, ensure_default_model
+from conftest import GROOT_BIN, TEST_AUTH_SECRET, TEST_USER_ID, _web_login, bootstrap_api_key, ensure_default_model
 
 
 def _free_port() -> int:
@@ -147,6 +147,7 @@ class _Server:
         self.headers = {
             "Content-Type": "application/json",
             "X-API-Key": bootstrap_api_key(self.base_url, name="pytest-multi-agent"),
+            "X-User-ID": TEST_USER_ID,
         }
         # /web/* 端点需要 Web 登录 Cookie（X-API-Key 无效）
         self.web = _web_login(self.base_url)

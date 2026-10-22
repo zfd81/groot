@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/zfd81/groot/internal/repo"
 )
 
 // SearchResult 一条搜索结果（轮次级），字段直接对应 /sess/search 响应。
@@ -25,9 +27,9 @@ const (
 )
 
 // Search 在历史对话（主 Agent 已完成轮次）中模糊搜索 keyword。
-// userID 非空时只搜该用户的会话；keyword 去除首尾空白后为空返回空结果；
+// owner 非 nil 时只搜归属于该租户与用户的会话；keyword 去除首尾空白后为空返回空结果；
 // limit 非正数回退默认值，超上限时封顶。
-func (m *Manager) Search(userID, keyword string, limit int) ([]SearchResult, error) {
+func (m *Manager) Search(owner *repo.SessionOwner, keyword string, limit int) ([]SearchResult, error) {
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" {
 		return []SearchResult{}, nil
@@ -38,7 +40,7 @@ func (m *Manager) Search(userID, keyword string, limit int) ([]SearchResult, err
 	if limit > searchMaxLimit {
 		limit = searchMaxLimit
 	}
-	hits, err := m.repo.SearchChats(context.Background(), userID, keyword, limit)
+	hits, err := m.repo.SearchChats(context.Background(), owner, keyword, limit)
 	if err != nil {
 		return nil, fmt.Errorf("搜索对话失败: %w", err)
 	}

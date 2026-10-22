@@ -28,15 +28,34 @@ func NewManager(log *logger.Logger, memRepo repo.MemoryRepo) *Manager {
 	}
 }
 
-// CreateSession 创建新会话，userID 可为空字符串
-func (m *Manager) CreateSession(sessionID string, userID string) error {
+// CreateSession 创建新会话，tenantID、userID、title 均可为空字符串。
+// title 由调用方负责截断（见 TruncateTitle）。
+func (m *Manager) CreateSession(sessionID, tenantID, userID, title string) error {
 	now := time.Now()
 	return m.repo.CreateSession(context.Background(), &repo.Session{
 		SessionID: sessionID,
+		TenantID:  tenantID,
 		UserID:    userID,
+		Title:     title,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
+}
+
+// RenameSession 修改会话标题；会话不存在时返回 repo.ErrNotFound。
+// 标题的校验与截断由调用方负责。
+func (m *Manager) RenameSession(sessionID, title string) error {
+	return m.repo.UpdateTitle(context.Background(), sessionID, title)
+}
+
+// OwnsSession 判断会话是否归属于给定租户与用户：
+// 会话存在且 TenantID、UserID 同时等值匹配时返回 true，否则（含会话不存在）返回 false。
+func (m *Manager) OwnsSession(sessionID, tenantID, userID string) bool {
+	s, err := m.repo.GetSession(context.Background(), sessionID)
+	if err != nil {
+		return false
+	}
+	return s.TenantID == tenantID && s.UserID == userID
 }
 
 // ExistsSession 检查会话是否存在
@@ -63,6 +82,7 @@ func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 
 	return &SessionInfo{
 		SessionID:    sessionID,
+		Title:        s.Title,
 		CreatedAt:    s.CreatedAt,
 		RoundCount:   s.Round,
 		LastActiveAt: lastActiveAt,
@@ -70,9 +90,10 @@ func (m *Manager) GetSessionInfo(sessionID string) (*SessionInfo, error) {
 	}, nil
 }
 
-// ListSessions 查询会话列表，支持分页
-func (m *Manager) ListSessions(limit, offset int) ([]SessionInfo, int, error) {
-	sessions, err := m.repo.ListSessions(context.Background())
+// ListSessions 查询会话列表，支持分页。
+// owner 为 nil 时返回全部会话；非 nil 时只返回 tenant_id 与 user_id 同时匹配的会话。
+func (m *Manager) ListSessions(owner *repo.SessionOwner, limit, offset int) ([]SessionInfo, int, error) {
+	sessions, err := m.repo.ListSessions(context.Background(), owner)
 	if err != nil {
 		return nil, 0, fmt.Errorf("查询会话列表失败: %w", err)
 	}
@@ -242,10 +263,11 @@ func (m *Manager) SaveChatRecord(sessionID string, record *ChatRecord) error {
 	return m.repo.SaveChat(context.Background(), record)
 }
 
-// GetChatRecord 获取单次对话详情
+// GetChatRecord 获取单次对话详情。
+// 记录不存在或不属于 sessionID 时均视为未找到。
 func (m *Manager) GetChatRecord(sessionID string, chatID string) (*ChatRecord, error) {
 	rec, err := m.repo.GetChat(context.Background(), chatID)
-	if err != nil {
+	if err != nil || rec.SessionID != sessionID {
 		return nil, fmt.Errorf("对话记录不存在: %s", chatID)
 	}
 	return rec, nil

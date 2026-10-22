@@ -36,12 +36,16 @@ func TestSearchChats_MatchInstructionAndResult(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
 	base := time.Now().Add(-time.Hour)
-	seedSession(t, r, "s1", "")
+	if err := r.CreateSession(ctx, &repo.Session{
+		SessionID: "s1", Title: "排序会话", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateSession s1: %v", err)
+	}
 	seedChat(t, r, "s1", "c1", "怎么写快速排序", "快排代码如下……", base)
 	seedChat(t, r, "s1", "c2", "换个话题", "冒泡排序更简单", base.Add(time.Minute))
 	seedChat(t, r, "s1", "c3", "今天天气如何", "晴天", base.Add(2*time.Minute))
 
-	hits, err := r.SearchChats(ctx, "", "排序", 20)
+	hits, err := r.SearchChats(ctx, nil, "排序", 20)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}
@@ -52,8 +56,8 @@ func TestSearchChats_MatchInstructionAndResult(t *testing.T) {
 	if hits[0].ChatID != "c2" || hits[1].ChatID != "c1" {
 		t.Errorf("expected order [c2 c1], got [%s %s]", hits[0].ChatID, hits[1].ChatID)
 	}
-	if hits[0].Title != "怎么写快速排序" {
-		t.Errorf("expected title from first main chat, got %q", hits[0].Title)
+	if hits[0].Title != "排序会话" || hits[1].Title != "排序会话" {
+		t.Errorf("expected title from session column, got %q / %q", hits[0].Title, hits[1].Title)
 	}
 	if hits[1].Round != 1 || hits[0].Round != 2 {
 		t.Errorf("unexpected rounds: c1=%d c2=%d", hits[1].Round, hits[0].Round)
@@ -81,7 +85,7 @@ func TestSearchChats_ExcludesSubAgentAndUncompleted(t *testing.T) {
 		t.Fatalf("SaveChat failed-status: %v", err)
 	}
 
-	hits, err := r.SearchChats(ctx, "", "特殊关键词xyz", 20)
+	hits, err := r.SearchChats(ctx, nil, "特殊关键词xyz", 20)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}
@@ -100,7 +104,7 @@ func TestSearchChats_EscapesLikeSpecials(t *testing.T) {
 	seedChat(t, r, "s3", "e4", "变量 aXb 的含义", "", time.Now().Add(3*time.Second))
 
 	// "100%" 若不转义，% 会通配匹配到 e2
-	hits, err := r.SearchChats(ctx, "", "100%", 20)
+	hits, err := r.SearchChats(ctx, nil, "100%", 20)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}
@@ -108,7 +112,7 @@ func TestSearchChats_EscapesLikeSpecials(t *testing.T) {
 		t.Fatalf("expected only e1, got %d hits", len(hits))
 	}
 	// "a_b" 若不转义，_ 会通配匹配到 e4
-	hits, err = r.SearchChats(ctx, "", "a_b", 20)
+	hits, err = r.SearchChats(ctx, nil, "a_b", 20)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}
@@ -117,7 +121,7 @@ func TestSearchChats_EscapesLikeSpecials(t *testing.T) {
 	}
 	// 转义符本身：搜 "!" 不应报错、不应误匹配
 	seedChat(t, r, "s3", "e5", "感叹号!在这里", "", time.Now().Add(4*time.Second))
-	hits, err = r.SearchChats(ctx, "", "号!在", 20)
+	hits, err = r.SearchChats(ctx, nil, "号!在", 20)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}
@@ -126,29 +130,48 @@ func TestSearchChats_EscapesLikeSpecials(t *testing.T) {
 	}
 }
 
-func TestSearchChats_UserFilter(t *testing.T) {
+// seedOwnedSession 建带租户归属的会话。
+func seedOwnedSession(t *testing.T, r repo.MemoryRepo, sid, tenantID, userID string) {
+	t.Helper()
+	err := r.CreateSession(context.Background(), &repo.Session{
+		SessionID: sid, TenantID: tenantID, UserID: userID, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession %s: %v", sid, err)
+	}
+}
+
+func TestSearchChats_OwnerFilter(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
-	seedSession(t, r, "u1s", "u1")
-	seedSession(t, r, "u2s", "u2")
-	seedChat(t, r, "u1s", "uc1", "共同关键词abc", "", time.Now())
-	seedChat(t, r, "u2s", "uc2", "共同关键词abc", "", time.Now())
+	seedOwnedSession(t, r, "crm-s", "crm", "u1")
+	seedOwnedSession(t, r, "erp-s", "erp", "u1")
+	seedChat(t, r, "crm-s", "oc1", "租户过滤测试", "", time.Now())
+	seedChat(t, r, "erp-s", "oc2", "租户过滤测试", "", time.Now())
 
-	// userID 非空：只搜该用户
-	hits, err := r.SearchChats(ctx, "u1", "共同关键词abc", 20)
-	if err != nil {
-		t.Fatalf("SearchChats: %v", err)
-	}
-	if len(hits) != 1 || hits[0].SessionID != "u1s" {
-		t.Fatalf("expected only u1s, got %d hits", len(hits))
-	}
-	// userID 空串：不过滤
-	hits, err = r.SearchChats(ctx, "", "共同关键词abc", 20)
+	// owner nil：不过滤
+	hits, err := r.SearchChats(ctx, nil, "租户过滤", 20)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}
 	if len(hits) != 2 {
-		t.Fatalf("expected 2 hits without user filter, got %d", len(hits))
+		t.Fatalf("expected 2 hits without owner filter, got %d", len(hits))
+	}
+	// 同 user 不同 tenant：只命中 crm
+	hits, err = r.SearchChats(ctx, &repo.SessionOwner{TenantID: "crm", UserID: "u1"}, "租户过滤", 20)
+	if err != nil {
+		t.Fatalf("SearchChats: %v", err)
+	}
+	if len(hits) != 1 || hits[0].SessionID != "crm-s" {
+		t.Fatalf("expected only crm-s, got %+v", hits)
+	}
+	// 同 tenant 不同 user：无命中
+	hits, err = r.SearchChats(ctx, &repo.SessionOwner{TenantID: "crm", UserID: "u2"}, "租户过滤", 20)
+	if err != nil {
+		t.Fatalf("SearchChats: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("expected 0 hits for crm/u2, got %d", len(hits))
 	}
 }
 
@@ -161,7 +184,7 @@ func TestSearchChats_Limit(t *testing.T) {
 	seedChat(t, r, "s4", "l2", "限流测试词", "", base.Add(time.Second))
 	seedChat(t, r, "s4", "l3", "限流测试词", "", base.Add(2*time.Second))
 
-	hits, err := r.SearchChats(ctx, "", "限流测试词", 2)
+	hits, err := r.SearchChats(ctx, nil, "限流测试词", 2)
 	if err != nil {
 		t.Fatalf("SearchChats: %v", err)
 	}

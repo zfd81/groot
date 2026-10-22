@@ -36,7 +36,7 @@ import pytest
 import requests
 import yaml
 
-from conftest import GROOT_BIN, TEST_AUTH_SECRET, SSEClient, _web_login, bootstrap_api_key
+from conftest import GROOT_BIN, TEST_AUTH_SECRET, TEST_USER_ID, SSEClient, _web_login, bootstrap_api_key
 
 
 # 真实 LLM 端点；与 test_real_llm.py / conftest.py 中默认值保持一致
@@ -211,6 +211,7 @@ class _Server:
         self.headers = {
             "Content-Type": "application/json",
             "X-API-Key": bootstrap_api_key(self.base_url, name="pytest-multi-agent-llm"),
+            "X-User-ID": TEST_USER_ID,
         }
         # /web/* 端点需要 Web 登录 Cookie（X-API-Key 无效）
         self.web = _web_login(self.base_url)

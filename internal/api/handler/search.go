@@ -29,10 +29,12 @@ func (h *SessionHandler) SearchSessions(ctx context.Context, rc *app.RequestCont
 		return
 	}
 
-	// 与 /chat 端点一致：调用方可用 X-User-ID 标识用户；为空时不按用户过滤
-	userID := string(rc.GetHeader("X-User-ID"))
+	owner, ok := requireOwner(rc)
+	if !ok {
+		return
+	}
 
-	results, err := h.memory.Search(userID, q, limit)
+	results, err := h.memory.Search(owner, q, limit)
 	if err != nil {
 		rc.SetContentType("application/json")
 		rc.SetStatusCode(500)

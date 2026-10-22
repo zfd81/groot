@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/zfd81/groot/internal/db"
-	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/repo"
 )
 
@@ -70,7 +69,7 @@ func TestListSessions(t *testing.T) {
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "ls-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 	r.CreateSession(ctx, &repo.Session{SessionID: "ls-2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-	sessions, err := r.ListSessions(ctx)
+	sessions, err := r.ListSessions(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -79,13 +78,13 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
-func TestListSessions_TitleFromFirstMainChat(t *testing.T) {
+func TestListSessions_TitleFromColumn(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
-	r.CreateSession(ctx, &repo.Session{SessionID: "lt-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	r.CreateSession(ctx, &repo.Session{SessionID: "lt-1", Title: "列标题", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	// 第 1 轮主 Agent（其指令应成为 title）
-	if err := r.SaveChat(ctx, &memory.ChatRecord{
+	// 存一条主 Agent 对话；其指令不应再被当作 title（title 来自列而非现算）
+	if err := r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:      "20260901100000001",
 		SessionID:   "lt-1",
 		Instruction: "你是谁?",
@@ -94,47 +93,25 @@ func TestListSessions_TitleFromFirstMainChat(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveChat round 1: %v", err)
 	}
-	// 子 Agent 记录不应参与 title 选取
-	if err := r.SaveChat(ctx, &memory.ChatRecord{
-		ChatID:      "20260901100000001_sub",
-		SessionID:   "lt-1",
-		Instruction: "查询天气",
-		Status:      "completed",
-		StartedAt:   time.Now(),
-		AgentName:   "weather",
-		Round:       1,
-	}); err != nil {
-		t.Fatalf("SaveChat sub: %v", err)
-	}
-	// 第 2 轮主 Agent（不应覆盖首轮 title）
-	if err := r.SaveChat(ctx, &memory.ChatRecord{
-		ChatID:      "20260901100000002",
-		SessionID:   "lt-1",
-		Instruction: "帮我写个函数",
-		Status:      "completed",
-		StartedAt:   time.Now(),
-	}); err != nil {
-		t.Fatalf("SaveChat round 2: %v", err)
-	}
 
-	sessions, err := r.ListSessions(ctx)
+	sessions, err := r.ListSessions(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	if sessions[0].Title != "你是谁?" {
-		t.Errorf("expected title=你是谁?, got %q", sessions[0].Title)
+	if sessions[0].Title != "列标题" {
+		t.Errorf("expected title=列标题, got %q", sessions[0].Title)
 	}
 }
 
-func TestListSessions_TitleEmptyWithoutChats(t *testing.T) {
+func TestListSessions_TitleEmptyWhenCreatedEmpty(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
-	r.CreateSession(ctx, &repo.Session{SessionID: "lt-empty", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	r.CreateSession(ctx, &repo.Session{SessionID: "lt-empty", Title: "", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	sessions, err := r.ListSessions(ctx)
+	sessions, err := r.ListSessions(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -146,12 +123,57 @@ func TestListSessions_TitleEmptyWithoutChats(t *testing.T) {
 	}
 }
 
+func TestSession_TitleRoundTrip(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	s := &repo.Session{SessionID: "s-t", TenantID: "crm", UserID: "u1", Title: "第一轮问题", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := r.CreateSession(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.GetSession(ctx, "s-t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "第一轮问题" {
+		t.Errorf("Title=%q", got.Title)
+	}
+	list, _ := r.ListSessions(ctx, nil)
+	if len(list) != 1 || list[0].Title != "第一轮问题" {
+		t.Errorf("list title %+v", list)
+	}
+}
+
+func TestUpdateTitle(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	created := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	_ = r.CreateSession(ctx, &repo.Session{SessionID: "s1", Title: "old", CreatedAt: created, UpdatedAt: created})
+	if err := r.UpdateTitle(ctx, "s1", "new"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := r.GetSession(ctx, "s1")
+	if got.Title != "new" {
+		t.Errorf("Title=%q", got.Title)
+	}
+	if !got.UpdatedAt.Equal(created) {
+		t.Errorf("updated_at must not change: %v vs %v", got.UpdatedAt, created)
+	}
+	// 相同标题再写一次：MySQL 的 RowsAffected 只计"变更"行，会返回 0，
+	// 实现须靠存在性检查兜底，仍返回 nil 而非 ErrNotFound。
+	if err := r.UpdateTitle(ctx, "s1", "new"); err != nil {
+		t.Errorf("identical title must be a no-op success, got %v", err)
+	}
+	if err := r.UpdateTitle(ctx, "missing", "x"); !errors.Is(err, repo.ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
 func TestSaveChatIncreasesRound(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	rec := &memory.ChatRecord{
+	rec := &repo.ChatRecord{
 		ChatID:      "20260610143022001",
 		SessionID:   "s1",
 		Instruction: "hello",
@@ -173,7 +195,7 @@ func TestSaveChat_SubAgentDoesNotAdvanceRound(t *testing.T) {
 	r.CreateSession(ctx, &repo.Session{SessionID: "s-sub", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
 	// 主 Agent 第 1 轮
-	if err := r.SaveChat(ctx, &memory.ChatRecord{
+	if err := r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:    "20260610143022100",
 		SessionID: "s-sub",
 		Status:    "completed",
@@ -182,7 +204,7 @@ func TestSaveChat_SubAgentDoesNotAdvanceRound(t *testing.T) {
 		t.Fatalf("main SaveChat: %v", err)
 	}
 	// 子 Agent，挂在父轮次 1 上
-	if err := r.SaveChat(ctx, &memory.ChatRecord{
+	if err := r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:    "20260610143022100_143022500_aaaa_db-agent",
 		SessionID: "s-sub",
 		Status:    "completed",
@@ -193,7 +215,7 @@ func TestSaveChat_SubAgentDoesNotAdvanceRound(t *testing.T) {
 		t.Fatalf("child SaveChat: %v", err)
 	}
 	// 主 Agent 第 2 轮
-	if err := r.SaveChat(ctx, &memory.ChatRecord{
+	if err := r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:    "20260610143023000",
 		SessionID: "s-sub",
 		Status:    "completed",
@@ -223,7 +245,7 @@ func TestSaveChat_ModelRoundTrip(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s-mod", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-	rec := &memory.ChatRecord{
+	rec := &repo.ChatRecord{
 		ChatID:    "20260610143022200",
 		SessionID: "s-mod",
 		Status:    "completed",
@@ -246,7 +268,7 @@ func TestSaveChat_TokensRoundTrip(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s-tok", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-	rec := &memory.ChatRecord{
+	rec := &repo.ChatRecord{
 		ChatID:           "20260610143022300",
 		SessionID:        "s-tok",
 		Status:           "completed",
@@ -274,7 +296,7 @@ func TestSaveChat_TokensRoundTrip(t *testing.T) {
 func TestSaveChat_SessionNotFound(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
-	rec := &memory.ChatRecord{
+	rec := &repo.ChatRecord{
 		ChatID:    "20260610143022099",
 		SessionID: "no-such-session",
 		Status:    "completed",
@@ -290,7 +312,7 @@ func TestGetChat(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s-gc", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-	rec := &memory.ChatRecord{
+	rec := &repo.ChatRecord{
 		ChatID:      "20260610143022010",
 		SessionID:   "s-gc",
 		Instruction: "test instruction",
@@ -328,7 +350,7 @@ func TestLoadHistory_ExcludesSubAgents(t *testing.T) {
 	r.CreateSession(ctx, &repo.Session{SessionID: "s2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
 	// main agent chat (agent_name="")
-	r.SaveChat(ctx, &memory.ChatRecord{
+	r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:      "20260610143022002",
 		SessionID:   "s2",
 		Instruction: "main",
@@ -349,13 +371,13 @@ func TestLoadHistory_ExcludesFailedChats(t *testing.T) {
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s-lh", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	r.SaveChat(ctx, &memory.ChatRecord{
+	r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:    "20260610143022020",
 		SessionID: "s-lh",
 		Status:    "completed",
 		StartedAt: time.Now(),
 	})
-	r.SaveChat(ctx, &memory.ChatRecord{
+	r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:    "20260610143022021",
 		SessionID: "s-lh",
 		Status:    "failed",
@@ -375,7 +397,7 @@ func TestDeleteSession(t *testing.T) {
 	r := newMemRepo(t)
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s3", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-	r.SaveChat(ctx, &memory.ChatRecord{
+	r.SaveChat(ctx, &repo.ChatRecord{
 		ChatID:    "20260610143022003",
 		SessionID: "s3",
 		Status:    "completed",
@@ -395,14 +417,14 @@ func TestSaveChat_WithErrorAndSteps(t *testing.T) {
 	ctx := context.Background()
 	r.CreateSession(ctx, &repo.Session{SessionID: "s-err", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	rec := &memory.ChatRecord{
+	rec := &repo.ChatRecord{
 		ChatID:    "20260610143022030",
 		SessionID: "s-err",
 		Status:    "failed",
 		StartedAt: time.Now(),
 		EndedAt:   time.Now().Add(time.Second),
-		Error:     &memory.Error{Code: "ERR_001", Message: "something went wrong"},
-		Steps: []memory.Step{
+		Error:     &repo.Error{Code: "ERR_001", Message: "something went wrong"},
+		Steps: []repo.Step{
 			{StepID: "step-1", Type: "tool", Name: "my_tool", Status: "success"},
 		},
 	}
@@ -427,5 +449,45 @@ func TestSaveChat_WithErrorAndSteps(t *testing.T) {
 	}
 	if got.EndedAt.IsZero() {
 		t.Error("EndedAt should not be zero")
+	}
+}
+
+func TestSession_TenantRoundTrip(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	s := &repo.Session{SessionID: "s-t1", TenantID: "crm", UserID: "u1", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := r.CreateSession(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := r.GetSession(ctx, "s-t1")
+	if got.TenantID != "crm" || got.UserID != "u1" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestListSessions_OwnerFilter(t *testing.T) {
+	r := newMemRepo(t)
+	ctx := context.Background()
+	mk := func(id, tenant, user string) {
+		_ = r.CreateSession(ctx, &repo.Session{SessionID: id, TenantID: tenant, UserID: user, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	}
+	mk("a1", "crm", "u1")
+	mk("a2", "crm", "u2")
+	mk("b1", "erp", "u1")
+	mk("sched", "", "")
+	all, _ := r.ListSessions(ctx, nil)
+	if len(all) != 4 {
+		t.Errorf("nil owner: want 4 got %d", len(all))
+	}
+	crmU1, _ := r.ListSessions(ctx, &repo.SessionOwner{TenantID: "crm", UserID: "u1"})
+	if len(crmU1) != 1 || crmU1[0].SessionID != "a1" {
+		t.Errorf("crm/u1: %+v", crmU1)
+	}
+	if len(crmU1) == 1 && (crmU1[0].TenantID != "crm" || crmU1[0].UserID != "u1") {
+		t.Errorf("ListSessions must fill TenantID/UserID: %+v", crmU1[0])
+	}
+	empty, _ := r.ListSessions(ctx, &repo.SessionOwner{})
+	if len(empty) != 1 || empty[0].SessionID != "sched" {
+		t.Errorf("empty owner must match only sched: %+v", empty)
 	}
 }

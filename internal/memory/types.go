@@ -18,7 +18,7 @@ type SessionInfo struct {
 	CreatedAt    time.Time `json:"created_at"`
 	RoundCount   int       `json:"round_count"`
 	LastActiveAt string    `json:"last_active_at"` // 最后活跃时间
-	Title        string    `json:"title"`          // 首轮用户指令，供列表展示；无对话时为空
+	Title        string    `json:"title"`          // 会话标题（memory_sessions.title）：创建时取首轮指令截取前 100 个字符，可通过重命名修改
 	Path         string    `json:"path"`
 }
 

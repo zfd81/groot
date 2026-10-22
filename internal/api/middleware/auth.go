@@ -83,7 +83,12 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			return
 		}
 
+		// 注入调用方身份：租户来自 Key 所属租户；用户标识来自请求头，非法或缺失归一为空串，
+		// 中间件不因此拒绝请求，是否必须提供由各 handler 自行决定
 		rc.Set("caller", key.Name)
+		rc.Set("tenant_id", key.TenantID)
+		userID, _ := ValidIdentifier(string(rc.GetHeader(UserIDHeader)))
+		rc.Set("user_id", userID)
 		rc.Next(ctx)
 	}
 }
@@ -120,6 +125,11 @@ func getRequiredPermission(path, method string) string {
 		return "chat"
 	}
 
+	// Stop endpoint (POST /chat/:sid/:cid/stop)：中止对话与发起对话同属 chat 权限
+	if strings.HasPrefix(path, "/chat/") && strings.HasSuffix(path, "/stop") && method == "POST" {
+		return "chat"
+	}
+
 	// Status endpoint (GET /chat/status/:sid)
 	if strings.HasPrefix(path, "/chat/status/") {
 		return "status"
@@ -133,6 +143,11 @@ func getRequiredPermission(path, method string) string {
 	// Session history endpoint (must come before /sess/ prefix check)
 	if path == "/sess/history" {
 		return "history"
+	}
+
+	// Session delete endpoint (DELETE /sess/:sid) 单独的 delete 权限
+	if strings.HasPrefix(path, "/sess/") && method == "DELETE" {
+		return "delete"
 	}
 
 	// Session endpoints

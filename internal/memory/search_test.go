@@ -4,13 +4,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zfd81/groot/internal/repo"
 )
 
-// seedManagerChat 通过 Manager 落一条主 Agent 轮次。
+// seedManagerChat 通过 Manager 落一条主 Agent 轮次；新建会话时标题取首条指令（与 chat handler 一致）。
 func seedManagerChat(t *testing.T, m *Manager, sid, chatID, instruction, result string) {
 	t.Helper()
 	if !m.ExistsSession(sid) {
-		if err := m.CreateSession(sid, ""); err != nil {
+		if err := m.CreateSession(sid, "", "", TruncateTitle(instruction)); err != nil {
 			t.Fatalf("CreateSession: %v", err)
 		}
 	}
@@ -26,7 +28,7 @@ func seedManagerChat(t *testing.T, m *Manager, sid, chatID, instruction, result 
 func TestSearch_EmptyKeyword(t *testing.T) {
 	m := newTestManager(t)
 	for _, kw := range []string{"", "   ", "\t\n"} {
-		results, err := m.Search("", kw, 20)
+		results, err := m.Search(nil, kw, 20)
 		if err != nil {
 			t.Fatalf("Search(%q): %v", kw, err)
 		}
@@ -40,7 +42,7 @@ func TestSearch_ResultFields(t *testing.T) {
 	m := newTestManager(t)
 	seedManagerChat(t, m, "sr-1", "c1", "如何部署 groot 服务", "使用 systemd 部署即可")
 
-	results, err := m.Search("", "部署", 20)
+	results, err := m.Search(nil, "部署", 20)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestSearch_MatchedFieldResult(t *testing.T) {
 	m := newTestManager(t)
 	seedManagerChat(t, m, "sr-2", "c2", "随便聊聊", "冒泡排序是最基础的排序算法")
 
-	results, err := m.Search("", "冒泡", 20)
+	results, err := m.Search(nil, "冒泡", 20)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -88,7 +90,7 @@ func TestSearch_LimitFallback(t *testing.T) {
 
 	// limit<=0 与超上限都不报错，正常返回
 	for _, limit := range []int{0, -1, 999} {
-		results, err := m.Search("", "限值回退", limit)
+		results, err := m.Search(nil, "限值回退", limit)
 		if err != nil {
 			t.Fatalf("Search(limit=%d): %v", limit, err)
 		}
@@ -101,7 +103,7 @@ func TestSearch_LimitFallback(t *testing.T) {
 func TestSearch_UserIDFilter(t *testing.T) {
 	m := newTestManager(t)
 	sid := "sr-user"
-	if err := m.CreateSession(sid, "some-user"); err != nil {
+	if err := m.CreateSession(sid, "", "some-user", ""); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	err := m.SaveChatRecord(sid, &ChatRecord{
@@ -113,7 +115,7 @@ func TestSearch_UserIDFilter(t *testing.T) {
 	}
 
 	// 其他用户搜不到
-	results, err := m.Search("other-user", "用户过滤关键词", 20)
+	results, err := m.Search(&repo.SessionOwner{UserID: "other-user"}, "用户过滤关键词", 20)
 	if err != nil {
 		t.Fatalf("Search(other-user): %v", err)
 	}
@@ -122,7 +124,7 @@ func TestSearch_UserIDFilter(t *testing.T) {
 	}
 
 	// 会话所属用户能搜到
-	results, err = m.Search("some-user", "用户过滤关键词", 20)
+	results, err = m.Search(&repo.SessionOwner{UserID: "some-user"}, "用户过滤关键词", 20)
 	if err != nil {
 		t.Fatalf("Search(some-user): %v", err)
 	}

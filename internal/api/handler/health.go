@@ -101,7 +101,7 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	// Get memory stats
 	var sessionCount int
 	if h.memoryManager != nil {
-		sessions, total, _ := h.memoryManager.ListSessions(1, 0)
+		sessions, total, _ := h.memoryManager.ListSessions(nil, 1, 0)
 		sessionCount = total
 		_ = sessions
 	}

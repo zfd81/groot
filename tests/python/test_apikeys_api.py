@@ -6,16 +6,17 @@ GET /web/apikeys/:id/token 任意次重取结果都应与创建时返回的 toke
 
 校验规则（apikeys.go Create）：
 - 名称：TrimSpace 后非空、≤64 字节、不得为保留名 "web" → 违反 400 invalid_request
+- tenant：TrimSpace 后非空、≤64 字符、仅字母/数字/下划线/短横线 → 违反 400 invalid_tenant
 - expires_in：仅 1d/7d/1mo/6mo/1y/10y → 非法 400 invalid_expires_in
 - permissions：非空且都在 ValidPermissions（chat/status/detail/history/
-  session/schedule/all）内 → 违反 400 invalid_permissions
+  session/delete/schedule/all）内 → 违反 400 invalid_permissions
 - 名称重复 → 409 name_exists
 - token/delete 目标 id 不存在 → 404 not_found
 
 用例点：
 - TC-KEY-001 无 Cookie 访问四端点均 401
 - TC-KEY-002 创建成功：响应字段齐全（id 14 位数字、token 三段 JWT、
-  permissions/expires_at 回显、expired=false），List 可见
+  tenant/permissions/expires_at 回显、expired=false），List 可见
 - TC-KEY-003 名称校验：空名 / 纯空白 / 超 64 字节 / 保留名 "web" → 400
 - TC-KEY-004 权限校验：非法权限点 / 空权限 → 400
 - TC-KEY-005 expires_in 校验：非法枚举值 → 400
@@ -30,7 +31,7 @@ import uuid
 import pytest
 import requests
 
-from conftest import BASE_URL, TEST_WEB_PASS, TEST_WEB_USER
+from conftest import BASE_URL, TEST_TENANT, TEST_USER_ID, TEST_WEB_PASS, TEST_WEB_USER
 
 WEB_USER = os.environ.get("GROOT_WEB_USER", TEST_WEB_USER)
 WEB_PASS = os.environ.get("GROOT_WEB_PASS", TEST_WEB_PASS)
@@ -57,10 +58,11 @@ def _key_name() -> str:
     return f"tkey-{uuid.uuid4().hex[:8]}"
 
 
-def _create_key(web, name, expires_in="1d", permissions=None):
+def _create_key(web, name, expires_in="1d", permissions=None, tenant=TEST_TENANT):
     """创建 API Key，返回 Response（不校验状态码，由用例断言）"""
     return web.post(f"{BASE_URL}/web/apikeys", json={
         "name": name,
+        "tenant_id": tenant,
         "expires_in": expires_in,
         "permissions": permissions if permissions is not None else ["all"],
     }, timeout=10)
@@ -89,7 +91,7 @@ class TestApiKeysAuth:
 
     def test_create_without_cookie(self, server):
         r = requests.post(f"{BASE_URL}/web/apikeys", json={
-            "name": "x", "expires_in": "1d", "permissions": ["all"],
+            "name": "x", "tenant_id": TEST_TENANT, "expires_in": "1d", "permissions": ["all"],
         }, timeout=5)
         assert r.status_code == 401
 
@@ -124,6 +126,7 @@ class TestApiKeysCreate:
             assert data["token"].startswith("eyJ"), "JWT header 应为 Base64 JSON"
             # 请求参数回显
             assert data["name"] == name
+            assert data["tenant_id"] == TEST_TENANT
             assert data["permissions"] == ["chat", "status"]
             # expires_at/created_at 为毫秒时间戳，1d 的 Key 尚未过期
             assert data["expires_at"] > data["created_at"] > 0
@@ -134,6 +137,7 @@ class TestApiKeysCreate:
             listed = next((k for k in keys if k["id"] == key_id), None)
             assert listed is not None, "新建 Key 应出现在列表中"
             assert listed["name"] == name
+            assert listed["tenant_id"] == TEST_TENANT
             assert listed["permissions"] == ["chat", "status"]
             assert listed["expired"] is False
             assert "token" not in listed, "列表不应回显 token"
@@ -252,9 +256,9 @@ class TestApiKeyDelete:
             key_id = resp.json()["id"]
             token = resp.json()["token"]
 
-            # 删除前 token 可用（all 权限访问 API 组端点）
+            # 删除前 token 可用（all 权限访问 API 组端点；会话类接口须带 X-User-ID）
             r = requests.get(f"{BASE_URL}/sess/history",
-                             headers={"X-API-Key": token}, timeout=10)
+                             headers={"X-API-Key": token, "X-User-ID": TEST_USER_ID}, timeout=10)
             assert r.status_code == 200, f"删除前 token 应可用: {r.text}"
 
             r = web.delete(f"{BASE_URL}/web/apikeys/{key_id}", timeout=10)
@@ -265,7 +269,7 @@ class TestApiKeyDelete:
 
             # 删除即吊销：JWT 签名仍有效但元数据已不在库中 → 401
             r = requests.get(f"{BASE_URL}/sess/history",
-                             headers={"X-API-Key": token}, timeout=10)
+                             headers={"X-API-Key": token, "X-User-ID": TEST_USER_ID}, timeout=10)
             assert r.status_code == 401, "删除后原 token 应立即失效"
         finally:
             if key_id:

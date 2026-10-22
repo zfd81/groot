@@ -41,7 +41,7 @@ func setParamID(rc *app.RequestContext, id string) {
 // TestAPIKeys_CreateAndVerify 创建成功返回可验证的 token，且库存元数据能还原出同一 token。
 func TestAPIKeys_CreateAndVerify(t *testing.T) {
 	h, keys := newAPIKeysHandler(t)
-	rc := postJSON(h.Create, `{"name":"svc-a","expires_in":"7d","permissions":["chat","status"]}`)
+	rc := postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat","status"]}`)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("Create status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
@@ -77,12 +77,12 @@ func TestAPIKeys_CreateAndVerify(t *testing.T) {
 func TestAPIKeys_CreateValidation(t *testing.T) {
 	h, _ := newAPIKeysHandler(t)
 	cases := []string{
-		`{"name":"","expires_in":"7d","permissions":["chat"]}`,                                // 空名称
-		`{"name":"a","expires_in":"3d","permissions":["chat"]}`,                               // 非法 expires_in
-		`{"name":"a","expires_in":"7d","permissions":[]}`,                                     // 空权限
-		`{"name":"a","expires_in":"7d","permissions":["superuser"]}`,                          // 非法权限点
-		`{"name":"web","expires_in":"7d","permissions":["chat"]}`,                             // 系统保留名称
-		`{"name":"` + strings.Repeat("a", 65) + `","expires_in":"7d","permissions":["chat"]}`, // 名称超过 64 字符
+		`{"name":"","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`,                                // 空名称
+		`{"name":"a","tenant_id":"t1","expires_in":"3d","permissions":["chat"]}`,                               // 非法 expires_in
+		`{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":[]}`,                                     // 空权限
+		`{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":["superuser"]}`,                          // 非法权限点
+		`{"name":"web","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`,                             // 系统保留名称
+		`{"name":"` + strings.Repeat("a", 65) + `","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`, // 名称超过 64 字符
 	}
 	for _, body := range cases {
 		if rc := postJSON(h.Create, body); rc.Response.StatusCode() != 400 {
@@ -94,8 +94,8 @@ func TestAPIKeys_CreateValidation(t *testing.T) {
 // TestAPIKeys_CreateDuplicateName 重名返回 409。
 func TestAPIKeys_CreateDuplicateName(t *testing.T) {
 	h, _ := newAPIKeysHandler(t)
-	postJSON(h.Create, `{"name":"svc-a","expires_in":"7d","permissions":["chat"]}`)
-	rc := postJSON(h.Create, `{"name":"svc-a","expires_in":"1d","permissions":["all"]}`)
+	postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`)
+	rc := postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"1d","permissions":["all"]}`)
 	if rc.Response.StatusCode() != 409 {
 		t.Fatalf("duplicate name status=%d, want 409", rc.Response.StatusCode())
 	}
@@ -109,10 +109,10 @@ func TestAPIKeys_CreateSameSecondRetry(t *testing.T) {
 	apiKeyNow = func() time.Time { return fixed }
 	t.Cleanup(func() { apiKeyNow = origNow })
 
-	if rc := postJSON(h.Create, `{"name":"a","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 200 {
+	if rc := postJSON(h.Create, `{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 200 {
 		t.Fatalf("first create: %d", rc.Response.StatusCode())
 	}
-	if rc := postJSON(h.Create, `{"name":"b","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 200 {
+	if rc := postJSON(h.Create, `{"name":"b","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 200 {
 		t.Fatalf("second create same second: %d %s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	list, err := keys.List(context.Background())
@@ -169,13 +169,13 @@ func TestAPIKeys_DeleteNotFound(t *testing.T) {
 // TestAPIKeys_CreateTrimsName 名称去除首尾空白后入库，重名判定基于去空白后的名称。
 func TestAPIKeys_CreateTrimsName(t *testing.T) {
 	h, keys := newAPIKeysHandler(t)
-	if rc := postJSON(h.Create, `{"name":"  svc-a  ","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 200 {
+	if rc := postJSON(h.Create, `{"name":"  svc-a  ","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 200 {
 		t.Fatalf("create with padded name: %d %s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	if _, err := keys.GetByName(context.Background(), "svc-a"); err != nil {
 		t.Fatalf("GetByName(svc-a) after trimmed create: %v", err)
 	}
-	if rc := postJSON(h.Create, `{"name":"svc-a","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 409 {
+	if rc := postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 409 {
 		t.Errorf("create with same trimmed name = %d, want 409", rc.Response.StatusCode())
 	}
 }
@@ -191,7 +191,7 @@ func TestAPIKeys_CreateMalformedJSON(t *testing.T) {
 // TestAPIKeys_TokenAndDelete 查看 token 与删除端点。
 func TestAPIKeys_TokenAndDelete(t *testing.T) {
 	h, _ := newAPIKeysHandler(t)
-	rcCreate := postJSON(h.Create, `{"name":"svc-a","expires_in":"7d","permissions":["chat"]}`)
+	rcCreate := postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`)
 	var created struct {
 		ID    string `json:"id"`
 		Token string `json:"token"`
@@ -229,5 +229,48 @@ func TestAPIKeys_TokenAndDelete(t *testing.T) {
 	h.Token(context.Background(), rcGone)
 	if rcGone.Response.StatusCode() != 404 {
 		t.Errorf("token after delete = %d, want 404", rcGone.Response.StatusCode())
+	}
+}
+
+// TestAPIKeys_CreateRequiresTenant 租户缺失、空白或含非法字符时返回 400 invalid_tenant。
+func TestAPIKeys_CreateRequiresTenant(t *testing.T) {
+	h, _ := newAPIKeysHandler(t)
+	for _, body := range []string{
+		`{"name":"a","expires_in":"7d","permissions":["chat"]}`,
+		`{"name":"a","tenant_id":"  ","expires_in":"7d","permissions":["chat"]}`,
+		`{"name":"a","tenant_id":"bad tenant","expires_in":"7d","permissions":["chat"]}`,
+	} {
+		rc := postJSON(h.Create, body)
+		if rc.Response.StatusCode() != 400 || !strings.Contains(string(rc.Response.Body()), "invalid_tenant") {
+			t.Errorf("%s → %d %s", body, rc.Response.StatusCode(), rc.Response.Body())
+		}
+	}
+}
+
+// TestAPIKeys_TenantPersistedAndListed 租户去空白后入库，并在创建响应中返回。
+func TestAPIKeys_TenantPersistedAndListed(t *testing.T) {
+	h, keys := newAPIKeysHandler(t)
+	rc := postJSON(h.Create, `{"name":"a","tenant_id":" crm ","expires_in":"7d","permissions":["chat"]}`)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("%d %s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	k, err := keys.GetByName(context.Background(), "a")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if k.TenantID != "crm" {
+		t.Errorf("TenantID=%q", k.TenantID)
+	}
+	if !strings.Contains(string(rc.Response.Body()), `"tenant_id":"crm"`) {
+		t.Errorf("body: %s", rc.Response.Body())
+	}
+}
+
+// TestAPIKeys_CreateWithDeletePermission delete 是合法权限点，仅含 delete 的 Key 可创建。
+func TestAPIKeys_CreateWithDeletePermission(t *testing.T) {
+	h, _ := newAPIKeysHandler(t)
+	rc := postJSON(h.Create, `{"name":"svc-del","tenant_id":"t1","expires_in":"7d","permissions":["delete"]}`)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Create status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 }

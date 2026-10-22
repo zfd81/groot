@@ -410,6 +410,61 @@
 
 ---
 
+### 1.11 会话租户与用户隔离测试
+
+位于 `internal/db/migrate_test.go`、`internal/repo/apikeydb/apikey_test.go`、`internal/repo/memorydb/memory_test.go`、`internal/repo/memorydb/search_test.go`、`internal/memory/manager_test.go`、`internal/api/middleware/identity_test.go`、`internal/api/middleware/auth_test.go`、`internal/api/handler/owner_test.go`、`internal/api/handler/chat_test.go`、`internal/api/handler/status_test.go`、`internal/api/handler/detail_test.go`、`internal/api/handler/session_test.go`、`internal/api/handler/search_test.go`、`internal/api/handler/apikeys_test.go`。
+
+覆盖点：
+
+- 建表语句（`TestDDLStatements_TenantColumnsOrder`、`TestMigrate_FreshDBHasTenantColumns`）：三方言 `api_keys` 含 `tenant_id` 列（位于 `name` 与 `permissions` 之间）、`memory_sessions` 含 `tenant_id` 列（位于 `session_id` 与 `user_id` 之间）及 `idx_ms_tenant_user` 联合索引；新库建表即带租户列与索引
+- 仓库层（`TestAPIKey_TenantRoundTrip`、`TestSession_TenantRoundTrip`、`TestListSessions_OwnerFilter`、`TestSearchChats_OwnerFilter`）：API Key 的 `TenantID`、会话的 `TenantID`/`UserID` 写入后原样读回；`ListSessions`/`SearchChats` 传 `SessionOwner` 时按 (tenant_id, user_id) 等值过滤（空串是合法匹配值），传 nil 时不过滤
+- 业务层（`TestOwnsSession`、`TestListSessions_ByOwner`、`TestGetChatRecord_RejectsForeignChat`）：`OwnsSession` 仅在会话存在且归属完全匹配时为 true（租户或用户任一不符为 false）；`ListSessions` 按归属过滤并统计 total；`GetChatRecord` 对属于其他 sid 的 cid 视为未找到
+- 标识校验（`TestValidIdentifier`）：去首尾空白后长度 1..64 且仅含字母、数字、下划线、短横线；空串、纯空白、含空格、含 `/`、65 字符均不合法
+- 鉴权中间件（`TestAuth_InjectsTenantAndUserID`、`TestAuth_InvalidUserIDBecomesEmpty`、`TestAuth_WebCookieHasNoTenant`）：API Key 通过后注入 Key 所属租户与去空白的 `X-User-ID`；非法 `X-User-ID` 归一为空串且不拒绝请求；Web Cookie 凭证为 web 调用方，不注入 tenant_id/user_id
+- 归属前置检查（`TestRequireOwner`、`TestOwnsOrAdmin`）：web 调用方放行且 owner 为 nil；租户为空 → 403 `forbidden`"API Key 未绑定租户"；用户为空 → 400 `invalid_request`"缺少或非法的 X-User-ID"；完整身份返回 owner；`ownsOrAdmin` 对 nil owner 仅看存在性，对非 nil owner 要求租户与用户同时匹配
+- `POST /chat`（`TestChatHandler_MissingUserIDReturns400`、`TestChatHandler_EmptyTenantReturns403`）：缺 `X-User-ID` → 400；Key 未绑定租户 → 403
+- `GET /chat/status/{sid}`（`TestStatus_ForeignRunningSessionLooksIdle`、`TestStatus_OwnerSeesRunningSession`、`TestStatus_MissingUserID400`、`TestStatus_MissingTenant403`）：他人正在运行的会话返回 200 `idle`、`round_count=0`；本人会话正常返回 running；缺用户 400、缺租户 403
+- `GET /chat/{sid}`、`GET /chat/{sid}/{cid}`（`TestDetail_ForeignSessionIs404`、`TestDetail_ForeignUserIs404`、`TestDetail_ForeignChatIs404`、`TestDetail_OwnerOK`、`TestDetail_MissingTenantIs403`、`TestGetLatest_ForeignSessionIs404`、`TestGetLatest_OwnerOK`、`TestGetLatest_WebAdminOK`）：租户不符或用户不符 → 404 `session_not_found`；cid 属于其他 sid → 404；本人正常；缺租户 403；Web 管理员可查任意会话
+- `GET /sess/{sid}`（`TestGetSession_ForeignTenantIs404`、`TestGetSession_ForeignUserIs404`、`TestGetSession_OwnerOK`、`TestGetSession_WebAdminBypasses`、`TestGetSession_WebAdminMissingIs404`、`TestGetSession_MissingUserID400`、`TestGetSession_MissingTenant403`）：租户/用户不符 → 404；本人正常；Web 管理员跳过归属校验但不存在仍 404；缺用户 400、缺租户 403
+- `GET /sess/history`（`TestListSessions_FilteredByOwner`、`TestListSessions_WebAdminSeesAll`、`TestListSessions_MissingUserID400`）：只返回本归属会话且 total 按归属统计；Web 管理员看到全部；缺用户 400
+- `GET /sess/search`（`TestSearchSessions_ForeignTenantEmpty`、`TestSearchSessions_MissingUserID400`、`TestSearchSessions_WebAdminSeesAll`）：其他租户的同名用户搜索结果为空；缺用户 400；Web 管理员搜索全部
+- API Key 创建（`TestAPIKeys_CreateRequiresTenant`、`TestAPIKeys_TenantPersistedAndListed`）：`tenant_id` 缺失、纯空白、含非法字符 → 400 `invalid_tenant`；合法租户去空白后入库并在创建响应中回显
+
+---
+
+### 1.12 对话中止与会话删除测试
+
+位于 `internal/agent/runtime_state_test.go`、`internal/agent/canceller_test.go`、`internal/agent/cluster_handler_test.go`、`internal/api/handler/stop_test.go`、`internal/api/handler/session_test.go`、`internal/api/handler/chat_test.go`、`internal/api/handler/apikeys_test.go`、`internal/api/middleware/auth_test.go`。
+
+覆盖点：
+
+- 运行时取消（`TestRuntimeState_Cancel`、`TestRuntimeState_CancelEmptyChatIDMatchesAny`、`TestRuntimeState_ParentCancelPropagates`、`TestRuntimeState_Wait`、`TestRuntimeState_Delete`、`TestRuntimeState_Delete_Nonexistent`、`TestRuntimeState_DeleteCancelsContext`）：`Cancel` 命中时关闭子 ctx 并把状态置为 `cancelled`、cid 不匹配与无活跃对话返回 false、空 cid 匹配该会话任意活跃对话；父 ctx 取消传播到子 ctx；`Wait` 无活跃对话立即返回 true、有活跃对话等待 `Delete` 后返回 true、超时返回 false；`Delete` 关闭 `done` 并取消 ctx，删除不存在的会话无操作
+- 跨节点取消发送方（`TestClusterCanceller_LocalHitDoesNotBroadcast`、`TestClusterCanceller_MissBroadcasts`、`TestClusterCanceller_ChatIDMismatchBroadcasts`、`TestClusterCanceller_NilSenderDoesNotBroadcast`、`TestClusterCanceller_NoOthersAliveDoesNotBroadcast`、`TestClusterCanceller_OthersAliveBroadcasts`、`TestClusterCanceller_SendError`、`TestCancelResult_String`）：本地命中返回 `CancelLocal` 且不发消息；本地未命中（含 cid 不匹配）且集群中有其他存活节点时发送一条 `chat.cancel` 广播并返回 `CancelBroadcast`；`send` 为 nil、存活探测为 nil 或返回 false 时返回 `CancelNotRunning` 且 err 为 nil、不发消息；`send` 失败返回 `CancelNotRunning` 与非 nil err
+- 存活探测（`TestOthersAliveProbe`，`internal/api/alive_test.go`）：成员列表仅本机 → false；本机 + 心跳 1 秒前的其他成员 → true；本机 + 心跳 10 秒前的其他成员 → false；空列表 → false；`ListAll` 出错 → false
+- 跨节点取消接收方（`TestClusterHandler_CancelsLocal`、`TestClusterHandler_MissIsNotError`、`TestClusterHandler_ChatIDMismatchIsNotError`、`TestClusterHandler_EmptyChatIDMatchesAny`、`TestClusterHandler_BadPayload`、`TestClusterHandler_NilLoggerDefaultsToNop`）：`chat` 模块处理器解析 `chat.cancel` 载荷并调用本地 `Cancel`，命中时关闭执行 ctx 且状态为 `cancelled`；未命中、cid 不匹配均不返回错误；chat_id 为空按会话取消任意活跃对话；载荷非法返回 error；logger 为 nil 时使用空日志器
+- `POST /chat/{sid}/{cid}/stop`（`TestStop_LocalHit200`、`TestStop_MissBroadcast202`、`TestStop_MissNoBroadcast409`、`TestStop_ForeignIs404`、`TestStop_MissingSession404`、`TestStop_MissingUser400`、`TestStop_EmptyTenant403`、`TestStop_WebAdminBypasses`、`TestStop_MissingParams400`）：本地命中 → 200 `success` 且执行 ctx 关闭；本地未命中且已广播 → 202 `accepted`；本地未命中且无法广播 → 409 `chat_not_running`；归属不符 / 会话不存在 → 404 `session_not_found`；缺用户 400、缺租户 403；Web 管理员放行；`sid` 或 `cid` 为空 → 400
+- `DELETE /sess/{sid}`（`TestDeleteSession_OwnerOK`、`TestDeleteSession_ForeignIs404`、`TestDeleteSession_MissingIs404`、`TestDeleteSession_WebAdminDeletesScheduledSession`、`TestDeleteSession_RunningCancelledThenDeleted`、`TestDeleteSession_RunningWaitTimeout409`、`TestDeleteSession_ConcurrentChatBlockedByPlaceholder`、`TestDeleteSession_PlaceholderRaceReturns409`、`TestDeleteSession_OthersAliveBroadcastsWhenIdle`、`TestDeleteSession_NoOthersAliveDoesNotBroadcast`、`TestDeleteSession_MissingUser400`、`TestDeleteSession_MissingSid400`）：本人删除 → 200 且会话与对话记录全部清空；归属不符 / 不存在 → 404；Web 管理员可删除归属为空的定时任务会话；运行中会话先取消再删除；等待超时 → 409 `chat_still_running` 且数据未删；占位期间并发 `POST /chat` 续聊收到 409；占位被抢先 → 409 且数据未删；本地无活跃对话且集群中有其他存活节点时广播 `chat.cancel`，没有其他存活节点时不广播也不等待宽限期；缺用户 400、`sid` 为空 400
+- `/chat` 处理器清理（`TestChatHandler_RegisterStateCleanedOnCreateSessionFailure`）：`Register` 之后创建会话失败返回 500 时运行时状态被删除（`RunningCount` 为 0），后续 `Wait` 立即返回
+- 权限点（`TestGetRequiredPermission_StopAndDelete`、`TestAPIKeys_CreateWithDeletePermission`）：`/chat/{sid}/{cid}/stop` POST 映射到 `chat`，`/sess/{sid}` DELETE 映射到 `delete`，`/sess/{sid}` GET 仍为 `session`；`delete` 在 `ValidPermissions` 内，可用于创建 API Key
+
+---
+
+### 1.13 会话标题测试
+
+位于 `internal/db/migrate_test.go`、`internal/repo/memorydb/memory_test.go`、`internal/repo/memorydb/search_test.go`、`internal/memory/title_test.go`、`internal/memory/manager_test.go`、`internal/api/handler/chat_test.go`、`internal/api/handler/session_test.go`。
+
+覆盖点：
+
+- 建表语句（`TestDDLStatements_TitleColumnOrder`、`TestMigrate_FreshDBHasTenantColumns`）：三方言 `memory_sessions` 含 `title` 列，位于 `user_id` 与 `prompt` 之间；新库建表即带 `title` 列
+- 仓库层（`TestSession_TitleRoundTrip`、`TestListSessions_TitleFromColumn`、`TestListSessions_TitleEmptyWhenCreatedEmpty`、`TestSearchChats_MatchInstructionAndResult`、`TestUpdateTitle`）：`CreateSession` 写入的 `Title` 由 `GetSession`、`ListSessions` 原样读回；列表与搜索结果的 `Title` 来自会话表 `title` 列，与首轮对话 instruction 无关，无对话的会话标题为创建会话时写入的值；`UpdateTitle` 命中返回 nil 且 `updated_at` 不变，标题与原值相同仍返回 nil，会话不存在返回 `ErrNotFound`
+- 截取函数（`TestTruncateTitle`）：去首尾空白；恰好 100 字符不截；101 字符截到 100；多字节字符按 Unicode 字符计数（100 个中文不截、101 个截到 100）；空串返回空串
+- 业务层（`TestCreateSession_TitleAndRename`）：`CreateSession` 传入的标题由 `GetSessionInfo` 读到；`RenameSession` 后读到新标题；重命名不存在的会话返回 `ErrNotFound`
+- `POST /chat`（`TestChatHandler_NewSessionGetsTruncatedTitle`）：以 101 字符指令新建会话后，`GetSessionInfo` 的 `Title` 为前 100 个字符
+- `PATCH /sess/{sid}`（`TestRenameSession_OK`、`TestRenameSession_RoundZeroSession`、`TestRenameSession_Validation400`、`TestRenameSession_MaxLengthOK`、`TestRenameSession_ForeignIs404`、`TestRenameSession_MissingIs404`、`TestRenameSession_WebAdminOK`、`TestRenameSession_MissingUser400`、`TestRenameSession_MissingSid400`、`TestRenameSession_DoesNotTouchUpdatedAt`）：本人重命名 → 200 `{"status":"success","session_id":...,"title":...}` 且 `GetSession` 读到新标题；无对话的会话可重命名且 `/sess/history` 立即显示新标题；`title` 为空 / 纯空白 / 超过 100 字符 / 缺失 → 400 "标题不能为空，且长度不能超过 100 个字符"，`title` 非字符串 → 400 "请求参数错误"，失败时原标题不变；恰好 100 个中文字符 → 200 且完整保存；归属不符 / 不存在 → 404 `session_not_found`；Web 管理员放行；缺用户 400、`sid` 为空 400；重命名后 `updated_at` 与列表排序不变
+- `GET /sess/{sid}`（`TestGetSession_IncludesTitle`）：响应的 `session` 对象含 `title`，值为会话表当前标题
+
+---
+
 ## 二、系统测试（Python）
 
 位于 `tests/python/` 目录，使用 pytest 框架。
@@ -837,7 +892,7 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 | TC-KEY-009 | test_apikeys_api.py | 删除后 List 不含、原 token 立即失效（401）；删不存在的 id → 404 |
 
 说明：系统测试无法预置已过期的 Key，expired=true 分支由 Go 单元测试
-（TestAPIKeys_ListAndExpired）覆盖。
+（TestAPIKeys_ListAndExpired）覆盖。创建请求须携带 `tenant_id`（系统测试统一使用 `pytest`）。
 
 ### 2.25 CLI 命令组测试
 
@@ -863,6 +918,57 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 - 安全：groot.db* 列表隐藏 + 直接访问 404；穿越归一化；config.yaml（迁移遗留文件）只读 403
 - CRUD 全流程：scaffold → 新建 → 保存 → 读取 → 改名 → 删除（含非空目录 409）
 - 上传：mcp/ 允许、logs/ 403
+
+### 2.27 会话租户与用户隔离（待运行）
+
+系统测试统一以租户 `pytest`、用户 `pytest-user` 调用会话类接口（`conftest.py` 的
+`bootstrap_api_key` 创建 Key 时携带 `tenant_id`，`api_headers` fixture 携带 `X-User-ID`）。
+以下覆盖点由用户在真实服务上运行验证（用两把不同租户的 Key、或同一把 Key 换 `X-User-ID`）：
+
+| 用例编号 | 测试内容 |
+|---------|---------|
+| TC-TENANT-001 | 续聊归属不符：用户 A 创建会话，用户 B 携带该 sid 调 `POST /chat` → 响应头 `X-Session-ID` 为新 sid，A 的会话轮次不变 |
+| TC-TENANT-002 | 归属不符的运行中会话：A 的会话正在执行时，B 携带该 sid 调 `POST /chat` → 不返回 409，直接开启新会话 |
+| TC-TENANT-003 | `GET /chat/status/{sid}`：B 查询 A 正在运行的会话 → 200 `idle`、`round_count=0`、`chat=null` |
+| TC-TENANT-004 | 跨租户同名用户互不可见：两把不同租户的 Key 使用相同 `X-User-ID`，各自的 `/sess/history`、`/sess/search`、`/sess/{sid}` 互不可见（`/sess/{sid}` 返回 404） |
+| TC-TENANT-005 | 无租户 Key 调用会话类接口 → 403 `forbidden`"API Key 未绑定租户"（需直接向 `api_keys` 表写入 `tenant_id=''` 的 Key 构造） |
+| TC-TENANT-006 | 缺少或非法 `X-User-ID`（空、含空格、超 64 字符）调用 `/chat`、`/chat/status/x`、`/sess/history`、`/sess/search?q=a` → 400 `invalid_request`；`/audio/transcriptions`、`/schedule` 不受影响 |
+| TC-TENANT-007 | Web 登录 Cookie 调用 `/sess/history`、`/sess/{sid}` 不带 `X-User-ID` → 200，且可见全部租户的会话 |
+| TC-TENANT-008 | `POST /web/apikeys` 缺 `tenant_id` / 纯空白 / 含非法字符 → 400 `invalid_tenant`；创建响应与列表含 `tenant_id` |
+
+---
+
+### 2.28 对话中止与会话删除（待运行）
+
+以下覆盖点由用户在真实服务上运行验证（stop 用例需要一条执行时间足够长的指令；集群用例需要两个共用 MySQL/PostgreSQL 的节点）：
+
+| 用例编号 | 测试内容 |
+|---------|---------|
+| TC-STOP-001 | 中止运行中对话：发起 `POST /chat`（长任务），读取响应头 `X-Session-ID`/`X-Chat-ID` 后调 `POST /chat/{sid}/{cid}/stop` → 200 `success`；SSE 流以 `[DONE]` 正常收尾；`GET /chat/{sid}/{cid}` 的 `chat.status` 为 `cancelled`；`GET /chat/status/{sid}` 回到 `idle` 且 `last_message.status` 为 `cancelled` |
+| TC-STOP-002 | 中止已结束对话（集群中没有其他存活节点时）：对已完成的 `cid` 调 stop → 409 `chat_not_running`；`cid` 与活跃对话不匹配同样 409 |
+| TC-STOP-003 | 中止归属不符或不存在的会话 → 404 `session_not_found`，响应体与 `GET /sess/{sid}` 的 404 一致；缺 `X-User-ID` → 400；无租户 Key → 403 |
+| TC-STOP-004 | 集群两节点：对话在节点 A 执行，向节点 B 发送 stop → 202 `accepted`；数秒内节点 A 的 SSE 流收尾，记录状态为 `cancelled` |
+| TC-DEL-001 | 删除空闲会话：`DELETE /sess/{sid}` → 200 `{"status":"success","session_id":...}`；随后 `GET /sess/{sid}`、`GET /chat/{sid}` → 404；`GET /chat/status/{sid}` → `idle`、`round_count=0`；`/sess/history` 不含该会话 |
+| TC-DEL-002 | 删除运行中会话：会话正在执行对话时调 DELETE → 对话被中止，SSE 流收尾后接口返回 200；会话与对话记录全部清空 |
+| TC-DEL-003 | 删除归属不符或不存在的会话 → 404 `session_not_found`；缺 `X-User-ID` → 400；无租户 Key → 403 |
+| TC-DEL-004 | 权限点隔离：仅含 `delete` 权限的 Key 可 `DELETE /sess/{sid}` → 200，但 `GET /sess/{sid}` → 403 `forbidden`；仅含 `session` 权限的 Key 调 DELETE → 403 |
+| TC-DEL-005 | Web 登录 Cookie 删除定时任务产生的会话（归属为空）→ 200 |
+| TC-DEL-006 | `POST /web/apikeys` 以 `permissions: ["delete"]` 创建 Key → 200，列表中回显 `delete` |
+
+---
+
+### 2.29 会话标题（待运行）
+
+以下覆盖点由用户在真实服务上运行验证（跨租户用例需要两把不同租户的 Key）：
+
+| 用例编号 | 测试内容 |
+|---------|---------|
+| TC-TITLE-001 | 新建会话标题：以 150 字符的指令调 `POST /chat` 新建会话，`GET /sess/history` 中该会话的 `title` 为指令去首尾空白后的前 100 个字符（按 Unicode 字符计数，无省略号）；`GET /sess/{sid}` 的 `session.title` 与之相同 |
+| TC-TITLE-002 | 重命名生效：`PATCH /sess/{sid}` 携带 `{"title": "新标题"}` → 200 `{"status":"success","session_id":...,"title":"新标题"}`；随后 `GET /sess/history`、`GET /sess/{sid}`、`GET /sess/search?q=<该会话指令关键词>` 返回的 `title` 均为 `新标题` |
+| TC-TITLE-003 | 标题校验：`title` 为空串 / 纯空白 / 101 个字符 → 400 `invalid_request`"标题不能为空，且长度不能超过 100 个字符"；请求体非 JSON 或 `title` 为数字 → 400 "请求参数错误"；失败后 `GET /sess/{sid}` 的 `title` 不变 |
+| TC-TITLE-004 | 跨租户重命名：租户 B 的 Key（或同租户不同 `X-User-ID`）对租户 A 的 sid 调 PATCH → 404 `session_not_found`，响应体与 `GET /sess/{sid}` 的 404 一致；A 的标题不变；缺 `X-User-ID` → 400；无租户 Key → 403 |
+| TC-TITLE-005 | 不改变排序：创建两个会话后对较早的会话调 PATCH，`GET /sess/history` 的顺序与 `last_active_at` 均不变 |
+| TC-TITLE-006 | 权限点：仅含 `session` 权限的 Key 调 PATCH → 200；仅含 `history` 或 `delete` 权限的 Key 调 PATCH → 403 `forbidden` |
 
 ---
 

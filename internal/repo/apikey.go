@@ -10,6 +10,7 @@ import (
 type APIKey struct {
 	ID          string   // 主键，yyyyMMddHHmmss 格式（如 "20260902153045"），同时作为 JWT 的 jti
 	Name        string   // 全局唯一
+	TenantID    string   // 所属租户，非唯一
 	Permissions []string // 权限点集合，创建时校验非空
 	ExpiresAt   time.Time
 	CreatedAt   time.Time // 秒级精度（签发 JWT 时取 Unix 秒）
@@ -17,7 +18,7 @@ type APIKey struct {
 
 // ValidPermissions API Key 可用的权限点全集，
 // 与 middleware.getRequiredPermission 的路径映射保持一致。
-var ValidPermissions = []string{"chat", "status", "detail", "history", "session", "schedule", "all"}
+var ValidPermissions = []string{"chat", "status", "detail", "history", "session", "delete", "schedule", "all"}
 
 // APIKeyRepo API Key 元数据存储接口
 type APIKeyRepo interface {

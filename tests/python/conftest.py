@@ -134,13 +134,20 @@ def ensure_default_model(base_url, username=None, password=None):
     return default_chat
 
 
+# 系统测试统一使用的租户与用户标识：API Key 绑定租户 TEST_TENANT，
+# 会话类接口（/chat、/chat/*、/sess/*）请求头 X-User-ID 携带 TEST_USER_ID
+TEST_TENANT = "pytest"
+TEST_USER_ID = "pytest-user"
+
+
 def bootstrap_api_key(base_url, name="pytest-all", permissions=None, expires_in="1d",
-                      username=None, password=None):
+                      username=None, password=None, tenant=TEST_TENANT):
     """确保 Web 用户存在并登录，创建（或重名时重取）API Key，返回 JWT token 字符串"""
     session = _web_login(base_url, username, password)
 
     payload = {
         "name": name,
+        "tenant_id": tenant,
         "expires_in": expires_in,
         "permissions": permissions if permissions is not None else ["all"],
     }
@@ -446,10 +453,11 @@ def api_key(server):
 
 @pytest.fixture
 def api_headers(api_key):
-    """标准 API Headers（携带 JWT API Key）"""
+    """标准 API Headers（携带 JWT API Key 与会话类接口必需的 X-User-ID）"""
     return {
         "Content-Type": "application/json",
-        "X-API-Key": api_key
+        "X-API-Key": api_key,
+        "X-User-ID": TEST_USER_ID,
     }
 
 

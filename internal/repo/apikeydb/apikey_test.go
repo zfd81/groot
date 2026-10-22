@@ -155,3 +155,29 @@ func TestAPIKeyRepo_CorruptPermissions(t *testing.T) {
 		t.Errorf("corrupt permissions should degrade to empty slice, got %+v", got.Permissions)
 	}
 }
+
+func TestAPIKey_TenantRoundTrip(t *testing.T) {
+	r := newTestRepo(t)
+	k := &repo.APIKey{ID: "20260902120001", Name: "svc-t", TenantID: "crm", Permissions: []string{"chat"}, ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now().Truncate(time.Second)}
+	if err := r.Create(context.Background(), k); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.GetByID(context.Background(), k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TenantID != "crm" {
+		t.Errorf("TenantID=%q want crm", got.TenantID)
+	}
+	byName, err := r.GetByName(context.Background(), k.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byName.TenantID != "crm" {
+		t.Errorf("GetByName TenantID=%q want crm", byName.TenantID)
+	}
+	list, _ := r.List(context.Background())
+	if list[0].TenantID != "crm" {
+		t.Errorf("List TenantID=%q", list[0].TenantID)
+	}
+}

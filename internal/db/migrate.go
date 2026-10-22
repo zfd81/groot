@@ -199,13 +199,16 @@ func sqliteDDL() []string {
 		`CREATE INDEX IF NOT EXISTS idx_se_started_at ON schedule_executions(started_at)`,
 		`CREATE TABLE IF NOT EXISTS memory_sessions (
 			session_id TEXT NOT NULL PRIMARY KEY,
+			tenant_id  TEXT NOT NULL DEFAULT '',
 			user_id    TEXT NOT NULL DEFAULT '',
+			title      TEXT NOT NULL DEFAULT '',
 			prompt     TEXT NOT NULL DEFAULT '',
 			round      INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ms_user_id ON memory_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ms_tenant_user ON memory_sessions(tenant_id, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ms_updated_at ON memory_sessions(updated_at)`,
 		`CREATE TABLE IF NOT EXISTS memory_chats (
 			chat_id           TEXT NOT NULL PRIMARY KEY,
@@ -282,6 +285,7 @@ func sqliteDDL() []string {
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id          TEXT NOT NULL PRIMARY KEY,
 			name        TEXT NOT NULL,
+			tenant_id      TEXT NOT NULL DEFAULT '',
 			permissions TEXT NOT NULL DEFAULT '[]',
 			expires_at  INTEGER NOT NULL,
 			created_at  INTEGER NOT NULL
@@ -353,12 +357,15 @@ func mysqlDDL() []string {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS memory_sessions (
 			session_id VARCHAR(64)  NOT NULL PRIMARY KEY,
+			tenant_id  VARCHAR(64)  NOT NULL DEFAULT '',
 			user_id    VARCHAR(64)  NOT NULL DEFAULT '',
+			title      VARCHAR(100) NOT NULL DEFAULT '',
 			prompt     LONGTEXT     NOT NULL,
 			round      INT          NOT NULL DEFAULT 0,
 			created_at BIGINT       NOT NULL,
 			updated_at BIGINT       NOT NULL,
 			KEY idx_user_id (user_id),
+			KEY idx_tenant_user (tenant_id, user_id),
 			KEY idx_updated_at (updated_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS memory_chats (
@@ -436,6 +443,7 @@ func mysqlDDL() []string {
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id          VARCHAR(14)  NOT NULL PRIMARY KEY,
 			name        VARCHAR(64)  NOT NULL,
+			tenant_id      VARCHAR(64)  NOT NULL DEFAULT '',
 			permissions TEXT         NOT NULL,
 			expires_at  BIGINT       NOT NULL,
 			created_at  BIGINT       NOT NULL,
@@ -507,13 +515,16 @@ func postgresDDL() []string {
 		`CREATE INDEX IF NOT EXISTS idx_se_started_at ON schedule_executions(started_at)`,
 		`CREATE TABLE IF NOT EXISTS memory_sessions (
 			session_id VARCHAR(64)  NOT NULL PRIMARY KEY,
+			tenant_id  VARCHAR(64)  NOT NULL DEFAULT '',
 			user_id    VARCHAR(64)  NOT NULL DEFAULT '',
+			title      VARCHAR(100) NOT NULL DEFAULT '',
 			prompt     TEXT         NOT NULL DEFAULT '',
 			round      INTEGER      NOT NULL DEFAULT 0,
 			created_at BIGINT       NOT NULL,
 			updated_at BIGINT       NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ms_user_id ON memory_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ms_tenant_user ON memory_sessions(tenant_id, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ms_updated_at ON memory_sessions(updated_at)`,
 		`CREATE TABLE IF NOT EXISTS memory_chats (
 			chat_id           VARCHAR(64)  NOT NULL PRIMARY KEY,
@@ -590,6 +601,7 @@ func postgresDDL() []string {
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id          VARCHAR(14)  NOT NULL PRIMARY KEY,
 			name        VARCHAR(64)  NOT NULL,
+			tenant_id      VARCHAR(64)  NOT NULL DEFAULT '',
 			permissions TEXT         NOT NULL DEFAULT '[]',
 			expires_at  BIGINT       NOT NULL,
 			created_at  BIGINT       NOT NULL

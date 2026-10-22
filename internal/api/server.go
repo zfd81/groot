@@ -87,7 +87,14 @@ func NewServer(
 	chatH := handler.NewChatHandler(mem, runtime, exec, mcpMgr, subAgentReg, models, settings, log)
 	statusH := handler.NewStatusHandler(runtime, mem)
 	detailH := handler.NewDetailHandler(mem)
-	sessionH := handler.NewSessionHandler(mem)
+	// 集群消息服务未挂接时 sender 必须是 nil 接口，而不是包着 nil 指针的非空接口
+	var cancelSender agent.MessageSender
+	if ms := clusterInst.MessageService(); ms != nil {
+		cancelSender = ms
+	}
+	canceller := agent.NewClusterCanceller(runtime, cancelSender, othersAliveProbe(members, clusterInst.RegID, memberAliveTimeout))
+	stopH := handler.NewStopHandler(canceller, mem, log)
+	sessionH := handler.NewSessionHandler(mem, runtime, canceller)
 	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log, role.ProcessMode())
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
@@ -125,7 +132,7 @@ func NewServer(
 
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
-		chatH, statusH, detailH, sessionH,
+		chatH, statusH, detailH, stopH, sessionH,
 		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, settingH)
 
 	return &Server{

@@ -40,6 +40,17 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
+	// 归属判定必须先于活跃状态查询：非本租户/用户的会话对调用者而言等同于不存在，
+	// 统一返回 idle 响应，避免通过活跃 chat_id 泄露他人会话的存在。
+	owner, ok := requireOwner(rc)
+	if !ok {
+		return
+	}
+	if owner != nil && !h.memory.OwnsSession(sessionID, owner.TenantID, owner.UserID) {
+		writeIdleNotFound(rc, sessionID)
+		return
+	}
+
 	// 获取活跃对话状态
 	activeChat, ok := h.runtimeState.Get(sessionID)
 	if !ok {
@@ -65,13 +76,7 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		}
 
 		// 会话不存在，返回 chat=None (不返回 404)
-		rc.JSON(200, utils.H{
-			"status":       "idle",
-			"session_id":   sessionID,
-			"round_count":  0,
-			"last_message": nil,
-			"chat":         nil,
-		})
+		writeIdleNotFound(rc, sessionID)
 		return
 	}
 
@@ -92,7 +97,7 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		"session_id": sessionID,
 		"chat": utils.H{
 			"chat_id":      activeChat.ChatID,
-			"status":       activeChat.Status,
+			"status":       activeChat.StatusSnapshot(),
 			"started_at":   activeChat.StartTime.Format(time.RFC3339),
 			"elapsed_time": duration,
 			"round":        round,
@@ -100,6 +105,18 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			// AddSubAgent/RemoveSubAgent 等并发写者修改底层 SubAgents slice。
 			"progress": h.runtimeState.SnapshotProgress(sessionID),
 		},
+	})
+}
+
+// writeIdleNotFound 写出"会话不存在"的 idle 响应（200、round_count 0、chat null）。
+// 归属不匹配与会话确实不存在共用此响应，二者对外不可区分。
+func writeIdleNotFound(rc *app.RequestContext, sessionID string) {
+	rc.JSON(200, utils.H{
+		"status":       "idle",
+		"session_id":   sessionID,
+		"round_count":  0,
+		"last_message": nil,
+		"chat":         nil,
 	})
 }
 

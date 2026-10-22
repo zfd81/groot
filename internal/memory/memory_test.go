@@ -139,7 +139,7 @@ func TestManager_CreateSession(t *testing.T) {
 
 	t.Run("空 userID", func(t *testing.T) {
 		sessionID := "test_session_001"
-		if err := mgr.CreateSession(sessionID, ""); err != nil {
+		if err := mgr.CreateSession(sessionID, "", "", ""); err != nil {
 			t.Fatalf("CreateSession() 失败: %v", err)
 		}
 		if !mgr.ExistsSession(sessionID) {
@@ -150,7 +150,7 @@ func TestManager_CreateSession(t *testing.T) {
 	t.Run("带 userID", func(t *testing.T) {
 		sessionID := "test_session_002"
 		userID := "user-abc"
-		if err := mgr.CreateSession(sessionID, userID); err != nil {
+		if err := mgr.CreateSession(sessionID, "", userID, ""); err != nil {
 			t.Fatalf("CreateSession() with userID 失败: %v", err)
 		}
 		if !mgr.ExistsSession(sessionID) {
@@ -200,7 +200,7 @@ func TestManager_ExistsSession(t *testing.T) {
 	}
 
 	// 创建后应存在
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 	if !mgr.ExistsSession(sessionID) {
 		t.Error("ExistsSession() 应返回 true 已创建会话")
 	}
@@ -210,7 +210,7 @@ func TestManager_GetHistory(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_003"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	history, err := mgr.GetHistory(sessionID)
 	if err != nil {
@@ -240,7 +240,7 @@ func TestManager_GetHistory_TokensAndDuration(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_tokens"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	rec := &ChatRecord{
 		ChatID:           "chat_tok_001",
@@ -290,7 +290,7 @@ func TestManager_AppendMessage(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_004"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	// AppendMessage 在 DB 模式下是空操作，不影响 GetHistory 结果
 	// (轮次数据由 SaveChatRecord 维护)
@@ -313,7 +313,7 @@ func TestManager_GetRoundCount(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_005"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	// 初始应为 0
 	if mgr.GetRoundCount(sessionID) != 0 {
@@ -342,7 +342,7 @@ func TestManager_SaveChatRecord(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_006"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	record := &ChatRecord{
 		ChatID:      "20260611100000001",
@@ -375,7 +375,7 @@ func TestManager_GetChatRecord(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_007"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	record := &ChatRecord{
 		ChatID:      "20260611100000002",
@@ -400,7 +400,7 @@ func TestManager_GetChatRecord(t *testing.T) {
 func TestManager_GetChatRecord_NotExist(t *testing.T) {
 	mgr := newTestManager(t)
 
-	if err := mgr.CreateSession("test-session", ""); err != nil {
+	if err := mgr.CreateSession("test-session", "", "", ""); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	_, err := mgr.GetChatRecord("test-session", "nonexistent-chat-id")
@@ -418,11 +418,11 @@ func TestManager_ListSessions(t *testing.T) {
 	// 创建多个会话
 	for i := 1; i <= 5; i++ {
 		sessionID := GenerateSessionID()
-		mgr.CreateSession(sessionID, "")
+		mgr.CreateSession(sessionID, "", "", "")
 		time.Sleep(1 * time.Millisecond) // 确保时间不同
 	}
 
-	sessions, total, err := mgr.ListSessions(10, 0)
+	sessions, total, err := mgr.ListSessions(nil, 10, 0)
 	if err != nil {
 		t.Fatalf("ListSessions() 失败: %v", err)
 	}
@@ -442,18 +442,18 @@ func TestManager_ListSessions_Pagination(t *testing.T) {
 	// 创建 10 个会话
 	for i := 1; i <= 10; i++ {
 		sessionID := GenerateSessionID()
-		mgr.CreateSession(sessionID, "")
+		mgr.CreateSession(sessionID, "", "", "")
 		time.Sleep(1 * time.Millisecond)
 	}
 
 	// 第一页
-	sessions, _, _ := mgr.ListSessions(3, 0)
+	sessions, _, _ := mgr.ListSessions(nil, 3, 0)
 	if len(sessions) != 3 {
 		t.Errorf("ListSessions(limit=3, offset=0) 应返回 3 条, got %d", len(sessions))
 	}
 
 	// 第二页
-	sessions2, _, _ := mgr.ListSessions(3, 3)
+	sessions2, _, _ := mgr.ListSessions(nil, 3, 3)
 	if len(sessions2) != 3 {
 		t.Errorf("ListSessions(limit=3, offset=3) 应返回 3 条, got %d", len(sessions2))
 	}
@@ -464,7 +464,7 @@ func TestManager_ListSessions_Pagination(t *testing.T) {
 	}
 
 	// 超出范围
-	sessions3, _, _ := mgr.ListSessions(3, 100)
+	sessions3, _, _ := mgr.ListSessions(nil, 3, 100)
 	if len(sessions3) != 0 {
 		t.Errorf("ListSessions(offset=100) 应返回空, got %d", len(sessions3))
 	}
@@ -474,7 +474,7 @@ func TestManager_GetContextMessages(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_context"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	// 保存 5 条成功的 chat record（只有 completed + agent_name="" 才进 LoadHistory）
 	for i := 1; i <= 5; i++ {
@@ -549,7 +549,7 @@ func TestManager_GetLatestChatRecord(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_latest"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	// 无记录时应返回 nil, nil
 	rec, err := mgr.GetLatestChatRecord(sessionID)
@@ -587,7 +587,7 @@ func TestManager_DeleteSession(t *testing.T) {
 	mgr := newTestManager(t)
 
 	sessionID := "test_session_delete"
-	mgr.CreateSession(sessionID, "")
+	mgr.CreateSession(sessionID, "", "", "")
 
 	// 保存一条记录
 	mgr.SaveChatRecord(sessionID, &ChatRecord{
@@ -616,7 +616,7 @@ func TestManager_GetContextMessagesWithTokenLimit_OnlyTokenLimit(t *testing.T) {
 	mgr := newTestManager(t)
 	sessionID := "test-session-token-limit"
 
-	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+	if err := mgr.CreateSession(sessionID, "", "user1", ""); err != nil {
 		t.Fatalf("创建会话失败: %v", err)
 	}
 
@@ -667,7 +667,7 @@ func TestManager_GetContextMessagesWithTokenLimit_BothLimits(t *testing.T) {
 	mgr := newTestManager(t)
 	sessionID := "test-session-both-limits"
 
-	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+	if err := mgr.CreateSession(sessionID, "", "user1", ""); err != nil {
 		t.Fatalf("创建会话失败: %v", err)
 	}
 
@@ -702,7 +702,7 @@ func TestManager_GetContextMessagesWithTokenLimit_MinGuarantee(t *testing.T) {
 	mgr := newTestManager(t)
 	sessionID := "test-session-min-guarantee"
 
-	if err := mgr.CreateSession(sessionID, "user1"); err != nil {
+	if err := mgr.CreateSession(sessionID, "", "user1", ""); err != nil {
 		t.Fatalf("创建会话失败: %v", err)
 	}
 

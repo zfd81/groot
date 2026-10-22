@@ -87,10 +87,10 @@ const chatSelectCols = `chat_id, session_id, round, agent_name, caller, prompt, 
 // --- Session methods ---
 
 func (r *memoryRepo) CreateSession(ctx context.Context, s *repo.Session) error {
-	q := r.db.Rebind(`INSERT INTO memory_sessions (session_id, user_id, prompt, round, created_at, updated_at)
-		 VALUES (?, ?, ?, 0, ?, ?)`)
+	q := r.db.Rebind(`INSERT INTO memory_sessions (session_id, tenant_id, user_id, title, prompt, round, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?, ?)`)
 	_, err := r.db.ExecContext(ctx, q,
-		s.SessionID, s.UserID, s.Prompt,
+		s.SessionID, s.TenantID, s.UserID, s.Title, s.Prompt,
 		s.CreatedAt.UnixMilli(), s.UpdatedAt.UnixMilli(),
 	)
 	if err != nil {
@@ -102,13 +102,15 @@ func (r *memoryRepo) CreateSession(ctx context.Context, s *repo.Session) error {
 func (r *memoryRepo) GetSession(ctx context.Context, sessionID string) (*repo.Session, error) {
 	var row struct {
 		SessionID string `db:"session_id"`
+		TenantID  string `db:"tenant_id"`
 		UserID    string `db:"user_id"`
+		Title     string `db:"title"`
 		Prompt    string `db:"prompt"`
 		Round     int    `db:"round"`
 		CreatedAt int64  `db:"created_at"`
 		UpdatedAt int64  `db:"updated_at"`
 	}
-	q := r.db.Rebind(`SELECT session_id, user_id, prompt, round, created_at, updated_at FROM memory_sessions WHERE session_id=?`)
+	q := r.db.Rebind(`SELECT session_id, tenant_id, user_id, title, prompt, round, created_at, updated_at FROM memory_sessions WHERE session_id=?`)
 	err := r.db.GetContext(ctx, &row, q, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, repo.ErrNotFound
@@ -118,7 +120,9 @@ func (r *memoryRepo) GetSession(ctx context.Context, sessionID string) (*repo.Se
 	}
 	return &repo.Session{
 		SessionID: row.SessionID,
+		TenantID:  row.TenantID,
 		UserID:    row.UserID,
+		Title:     row.Title,
 		Prompt:    row.Prompt,
 		Round:     row.Round,
 		CreatedAt: time.UnixMilli(row.CreatedAt),
@@ -133,9 +137,10 @@ func (r *memoryRepo) ExistsSession(ctx context.Context, sessionID string) (bool,
 	return n > 0, err
 }
 
-func (r *memoryRepo) ListSessions(ctx context.Context) ([]*repo.Session, error) {
+func (r *memoryRepo) ListSessions(ctx context.Context, owner *repo.SessionOwner) ([]*repo.Session, error) {
 	var rows []struct {
 		SessionID string `db:"session_id"`
+		TenantID  string `db:"tenant_id"`
 		UserID    string `db:"user_id"`
 		Prompt    string `db:"prompt"`
 		Round     int    `db:"round"`
@@ -143,20 +148,20 @@ func (r *memoryRepo) ListSessions(ctx context.Context) ([]*repo.Session, error) 
 		CreatedAt int64  `db:"created_at"`
 		UpdatedAt int64  `db:"updated_at"`
 	}
-	// title 取会话首轮主 Agent 对话（agent_name='' 排除子 Agent 记录）的用户指令，
-	// 供列表界面直接展示，避免前端为每个会话再拉一次详情。
-	if err := r.db.SelectContext(ctx, &rows,
-		`SELECT s.session_id, s.user_id, s.prompt, s.round, s.created_at, s.updated_at,
-			COALESCE((SELECT c.instruction FROM memory_chats c
-				WHERE c.session_id = s.session_id AND c.agent_name = ''
-				ORDER BY c.round ASC LIMIT 1), '') AS title
-		 FROM memory_sessions s ORDER BY s.updated_at DESC`); err != nil {
+	cond, args := ownerCond(owner)
+	if cond != "" {
+		cond = " WHERE " + cond
+	}
+	q := r.db.Rebind(`SELECT s.session_id, s.tenant_id, s.user_id, s.title, s.prompt, s.round, s.created_at, s.updated_at
+		 FROM memory_sessions s` + cond + ` ORDER BY s.updated_at DESC`)
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, err
 	}
 	sessions := make([]*repo.Session, len(rows))
 	for i, row := range rows {
 		sessions[i] = &repo.Session{
 			SessionID: row.SessionID,
+			TenantID:  row.TenantID,
 			UserID:    row.UserID,
 			Prompt:    row.Prompt,
 			Round:     row.Round,
@@ -166,6 +171,16 @@ func (r *memoryRepo) ListSessions(ctx context.Context) ([]*repo.Session, error) 
 		}
 	}
 	return sessions, nil
+}
+
+// ownerCond 生成会话归属过滤条件（memory_sessions 表别名固定为 s）。
+// owner 为 nil 时返回空串与 nil；非 nil 时返回 tenant_id 与 user_id 的等值条件
+// 及对应参数（占位符为 ?，由调用方 Rebind），空串同样参与匹配。
+func ownerCond(owner *repo.SessionOwner) (string, []interface{}) {
+	if owner == nil {
+		return "", nil
+	}
+	return "s.tenant_id = ? AND s.user_id = ?", []interface{}{owner.TenantID, owner.UserID}
 }
 
 // --- Chat methods ---
@@ -286,6 +301,32 @@ func (r *memoryRepo) LoadHistory(ctx context.Context, sessionID string) ([]*repo
 	return chats, nil
 }
 
+func (r *memoryRepo) UpdateTitle(ctx context.Context, sessionID, title string) error {
+	// 只更新 title，不碰 updated_at：ListSessions 按 updated_at 倒序，
+	// 且 last_active_at 由其派生，改标题不应改变会话的活跃时间。
+	q := r.db.Rebind(`UPDATE memory_sessions SET title=? WHERE session_id=?`)
+	res, err := r.db.ExecContext(ctx, q, title, sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// MySQL 默认只统计"实际变更"的行：标题与原值相同时也返回 0，
+		// 不能据此判定会话不存在，需再查一次存在性兜底。
+		exists, err := r.ExistsSession(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return repo.ErrNotFound
+		}
+	}
+	return nil
+}
+
 func (r *memoryRepo) DeleteSession(ctx context.Context, sessionID string) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -312,7 +353,7 @@ func escapeLike(s string) string {
 	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
 }
 
-func (r *memoryRepo) SearchChats(ctx context.Context, userID, keyword string, limit int) ([]*repo.SearchHit, error) {
+func (r *memoryRepo) SearchChats(ctx context.Context, owner *repo.SessionOwner, keyword string, limit int) ([]*repo.SearchHit, error) {
 	// 三方言对 LIMIT 0/负数行为不一致，非正数直接返回空结果。
 	if limit <= 0 {
 		return []*repo.SearchHit{}, nil
@@ -327,20 +368,22 @@ func (r *memoryRepo) SearchChats(ctx context.Context, userID, keyword string, li
 		Result      string `db:"result"`
 		StartedAt   int64  `db:"started_at"`
 	}
-	// title 子查询与 ListSessions 的口径一致：首轮主 Agent 的 instruction。
-	// (? = '' OR s.user_id = ?)：userID 为空串时不按用户过滤，与 ListSessions 行为一致。
+	// title 直接取所属会话的 memory_sessions.title（已 JOIN s）。
+	// owner 非 nil 时追加 tenant_id/user_id 等值过滤，与 ListSessions 行为一致。
+	cond, ownerArgs := ownerCond(owner)
+	if cond != "" {
+		cond = " AND " + cond
+	}
 	q := r.db.Rebind(`SELECT c.session_id, c.chat_id, c.round, c.instruction, c.result, c.started_at,
-			COALESCE((SELECT c2.instruction FROM memory_chats c2
-				WHERE c2.session_id = c.session_id AND c2.agent_name = ''
-				ORDER BY c2.round ASC LIMIT 1), '') AS title
+			s.title AS title
 		 FROM memory_chats c
 		 JOIN memory_sessions s ON s.session_id = c.session_id
-		 WHERE c.agent_name = '' AND c.status = 'completed'
-		   AND (? = '' OR s.user_id = ?)
+		 WHERE c.agent_name = '' AND c.status = 'completed'` + cond + `
 		   AND (c.instruction LIKE ? ESCAPE '!' OR c.result LIKE ? ESCAPE '!')
 		 ORDER BY c.started_at DESC, c.round DESC
 		 LIMIT ?`)
-	if err := r.db.SelectContext(ctx, &rows, q, userID, userID, pattern, pattern, limit); err != nil {
+	args := append(ownerArgs, pattern, pattern, limit)
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, err
 	}
 	hits := make([]*repo.SearchHit, len(rows))

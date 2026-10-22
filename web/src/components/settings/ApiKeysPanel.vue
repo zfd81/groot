@@ -16,11 +16,11 @@ const loading = ref(false)
 // 不可编辑，故无编辑态）。formCardEl 用于展开后滚动到可见。
 const formVisible = ref(false)
 const creating = ref(false)
-const form = ref({ name: '', expires_in: '1y', permissions: ['all'] as string[] })
+const form = ref({ name: '', tenant_id: '', expires_in: '1y', permissions: ['all'] as string[] })
 const formCardEl = ref<HTMLElement | null>(null)
 
 const expiresOptions = ['1d', '7d', '1mo', '6mo', '1y', '10y'] as const
-const permissionOptions = ['chat', 'status', 'detail', 'history', 'session', 'schedule', 'all'] as const
+const permissionOptions = ['chat', 'status', 'detail', 'history', 'session', 'delete', 'schedule', 'all'] as const
 
 // 行内查看面板：openKeyId 为当前展开的 Key id（空串 = 未展开），
 // 同一时刻最多展开一个，且与创建表单互斥。处于 v-for 内，用函数 ref。
@@ -101,7 +101,7 @@ function closeView() {
 
 function openCreate() {
   closeView() // 查看面板与创建表单互斥
-  form.value = { name: '', expires_in: '1y', permissions: ['all'] }
+  form.value = { name: '', tenant_id: '', expires_in: '1y', permissions: ['all'] }
   formVisible.value = true
   void revealEl(() => formCardEl.value)
 }
@@ -115,6 +115,10 @@ async function handleCreate() {
     ElNotification.warning({ title: t('apikeys.title'), message: t('apikeys.nameRequired') })
     return
   }
+  if (!form.value.tenant_id.trim()) {
+    ElNotification.warning({ title: t('apikeys.title'), message: t('apikeys.tenantRequired') })
+    return
+  }
   if (!form.value.permissions.length) {
     ElNotification.warning({ title: t('apikeys.title'), message: t('apikeys.permissionsRequired') })
     return
@@ -123,6 +127,7 @@ async function handleCreate() {
   try {
     await api.post<ApiKeyCreateResp>('/web/apikeys', {
       name: form.value.name.trim(),
+      tenant_id: form.value.tenant_id.trim(),
       expires_in: form.value.expires_in,
       permissions: form.value.permissions,
     })
@@ -248,6 +253,7 @@ onMounted(() => void load())
         </div>
       </div>
       <div class="item-meta">
+        <span>{{ t('apikeys.tenant') }}: {{ k.tenant_id }}</span>
         <span>{{ t('apikeys.createdAt') }}: {{ fmtTime(k.created_at) }}</span>
         <span>{{ t('apikeys.expiresAt') }}: {{ fmtTime(k.expires_at) }}</span>
       </div>
@@ -260,6 +266,9 @@ onMounted(() => void load())
         <el-form label-position="top">
           <el-form-item :label="t('apikeys.name')">
             <el-input :model-value="k.name" disabled />
+          </el-form-item>
+          <el-form-item :label="t('apikeys.tenant')">
+            <el-input :model-value="k.tenant_id" disabled />
           </el-form-item>
           <el-form-item :label="t('apikeys.expiresIn')">
             <el-select :model-value="inferValidity(k) ?? undefined" disabled style="width: 100%">
@@ -286,6 +295,9 @@ onMounted(() => void load())
         <el-form label-position="top" @submit.prevent>
           <el-form-item :label="t('apikeys.name')" required>
             <el-input v-model="form.name" :placeholder="t('apikeys.namePlaceholder')" maxlength="64" />
+          </el-form-item>
+          <el-form-item :label="t('apikeys.tenant')" required>
+            <el-input v-model="form.tenant_id" :placeholder="t('apikeys.tenantPlaceholder')" maxlength="64" />
           </el-form-item>
           <el-form-item :label="t('apikeys.expiresIn')">
             <el-select v-model="form.expires_in" style="width: 100%">

@@ -38,6 +38,7 @@ func newTestMiddleware(t *testing.T) (*AuthMiddleware, repo.APIKeyRepo, *repo.AP
 	k := &repo.APIKey{
 		ID:          "20260902120000",
 		Name:        "svc-a",
+		TenantID:    "crm",
 		Permissions: []string{"chat", "history"},
 		ExpiresAt:   created.AddDate(0, 0, 7),
 		CreatedAt:   created,
@@ -211,6 +212,73 @@ func TestGetRequiredPermission(t *testing.T) {
 		{"/sess/x", consts.MethodGet, "session"},
 		{"/schedule/1", consts.MethodDelete, "schedule"},
 		{"/unknown", consts.MethodGet, "all"},
+	}
+	for _, tt := range tests {
+		if got := getRequiredPermission(tt.path, tt.method); got != tt.want {
+			t.Errorf("getRequiredPermission(%q, %q) = %q, want %q", tt.path, tt.method, got, tt.want)
+		}
+	}
+}
+
+// TestAuth_InjectsTenantAndUserID JWT 分支注入 Key 所属租户与 trim 后的 X-User-ID。
+func TestAuth_InjectsTenantAndUserID(t *testing.T) {
+	m, _, _, token := newTestMiddleware(t)
+	rc := serveAuth(m, consts.MethodPost, "/chat", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set(UserIDHeader, " u1 ")
+	})
+	if GetTenant(rc) != "crm" || GetUserID(rc) != "u1" {
+		t.Errorf("tenant=%q user=%q", GetTenant(rc), GetUserID(rc))
+	}
+}
+
+// TestAuth_InvalidUserIDBecomesEmpty 非法 X-User-ID 归一为空串，中间件不因此拒绝请求。
+func TestAuth_InvalidUserIDBecomesEmpty(t *testing.T) {
+	m, _, _, token := newTestMiddleware(t)
+	rc := serveAuth(m, consts.MethodPost, "/chat", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set(UserIDHeader, "bad id")
+	})
+	if rc.Response.StatusCode() == 401 {
+		t.Fatal("must still pass auth")
+	}
+	if GetUserID(rc) != "" {
+		t.Errorf("user=%q want empty", GetUserID(rc))
+	}
+}
+
+// TestAuth_WebCookieHasNoTenant Cookie 分支为 web 调用方，即使带 X-User-ID 也不设置 tenant 与 user_id。
+func TestAuth_WebCookieHasNoTenant(t *testing.T) {
+	m, _, _, _ := newTestMiddleware(t)
+	token := m.webStore.Create("u1")
+	rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Cookie", websession.CookieName+"="+token)
+		rc.Request.Header.Set(UserIDHeader, "u1")
+	})
+	if rc.Response.StatusCode() == 401 {
+		t.Fatal("valid cookie should pass auth")
+	}
+	if !IsWebCaller(rc) {
+		t.Errorf("caller should be web, got %q", GetCaller(rc))
+	}
+	if GetTenant(rc) != "" || GetUserID(rc) != "" {
+		t.Errorf("web caller must not have tenant/user_id, got tenant=%q user=%q", GetTenant(rc), GetUserID(rc))
+	}
+}
+
+// TestGetRequiredPermission_StopAndDelete 中止对话与删除会话的权限映射，
+// 且不影响既有的 session / status 映射。
+func TestGetRequiredPermission_StopAndDelete(t *testing.T) {
+	tests := []struct {
+		path   string
+		method string
+		want   string
+	}{
+		{"/chat/s/c/stop", consts.MethodPost, "chat"},
+		{"/sess/s", consts.MethodDelete, "delete"},
+		{"/sess/s", consts.MethodGet, "session"},
+		{"/sess/s", consts.MethodPatch, "session"},
+		{"/chat/status/s", consts.MethodGet, "status"},
 	}
 	for _, tt := range tests {
 		if got := getRequiredPermission(tt.path, tt.method); got != tt.want {

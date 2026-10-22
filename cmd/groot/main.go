@@ -473,6 +473,8 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	clusterInst.SetMessageService(clusterMsg)
 	// 生命周期指令处理器（重启）：模块名 lifecycle，早于 startedAt 的指令被忽略
 	clusterMsg.RegisterHandler(lifecycle.ModuleName, lifecycle.NewClusterHandler(ctrl, startedAt, log))
+	// 对话指令处理器（跨节点取消）：模块名 chat，本地未命中不算错误
+	clusterMsg.RegisterHandler(agent.ClusterModuleName, agent.NewClusterHandler(runtimeState, log))
 
 	if err := clusterInst.Join(context.Background()); err != nil {
 		log.Error("加入集群失败", zap.Error(err))

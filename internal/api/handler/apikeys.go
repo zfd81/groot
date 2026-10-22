@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/auth"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
@@ -41,6 +42,7 @@ var expiresInOptions = map[string]func(t time.Time) time.Time{
 
 type apiKeyCreateRequest struct {
 	Name        string   `json:"name"`
+	TenantID    string   `json:"tenant_id"`
 	ExpiresIn   string   `json:"expires_in"`
 	Permissions []string `json:"permissions"`
 }
@@ -48,6 +50,7 @@ type apiKeyCreateRequest struct {
 type apiKeyInfo struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
+	TenantID    string   `json:"tenant_id"`
 	Permissions []string `json:"permissions"`
 	ExpiresAt   int64    `json:"expires_at"`
 	CreatedAt   int64    `json:"created_at"`
@@ -64,6 +67,7 @@ func toAPIKeyInfo(k *repo.APIKey, now time.Time) apiKeyInfo {
 	return apiKeyInfo{
 		ID:          k.ID,
 		Name:        k.Name,
+		TenantID:    k.TenantID,
 		Permissions: k.Permissions,
 		ExpiresAt:   k.ExpiresAt.UnixMilli(),
 		CreatedAt:   k.CreatedAt.UnixMilli(),
@@ -126,6 +130,13 @@ func (h *APIKeysHandler) Create(ctx context.Context, rc *app.RequestContext) {
 		rc.JSON(400, utils.H{"status": "invalid_request", "message": "web 为系统保留名称"})
 		return
 	}
+	// 租户是会话隔离的边界，由 API Key 记录绑定、不可通过请求头指定；
+	// 标识规则与 X-User-ID 请求头相同（middleware.ValidIdentifier）
+	tenant, ok := middleware.ValidIdentifier(req.TenantID)
+	if !ok {
+		rc.JSON(400, utils.H{"status": "invalid_tenant", "message": "租户标识不能为空，且只能包含字母、数字、下划线、短横线，长度不超过 64"})
+		return
+	}
 	expFn, ok := expiresInOptions[req.ExpiresIn]
 	if !ok {
 		rc.JSON(400, utils.H{"status": "invalid_expires_in", "message": "过期时间只支持 1d/7d/1mo/6mo/1y/10y"})
@@ -154,6 +165,7 @@ func (h *APIKeysHandler) Create(ctx context.Context, rc *app.RequestContext) {
 		k = &repo.APIKey{
 			ID:          created.Format("20060102150405"),
 			Name:        req.Name,
+			TenantID:    tenant,
 			Permissions: req.Permissions,
 			ExpiresAt:   expFn(created),
 			CreatedAt:   created,

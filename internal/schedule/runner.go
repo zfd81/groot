@@ -56,7 +56,7 @@ func (r *Runner) Run(taskID string) func() {
 		sessionID := fmt.Sprintf("%s-%s-sched", task.ID, startTime.Format("20060102T150405"))
 
 		// Create session
-		if err := r.memoryMgr.CreateSession(sessionID, ""); err != nil {
+		if err := r.memoryMgr.CreateSession(sessionID, "", "", memory.TruncateTitle(task.TaskDef.Instruction)); err != nil {
 			r.log.Error("创建 session 失败", zap.String("session_id", sessionID), zap.Error(err))
 			return
 		}
@@ -137,7 +137,7 @@ func (r *Runner) RunImmediate(task *Task) error {
 	startTime := time.Now()
 	sessionID := fmt.Sprintf("%s-%s-sched", task.ID, startTime.Format("20060102T150405"))
 
-	if err := r.memoryMgr.CreateSession(sessionID, ""); err != nil {
+	if err := r.memoryMgr.CreateSession(sessionID, "", "", memory.TruncateTitle(task.TaskDef.Instruction)); err != nil {
 		return err
 	}
 

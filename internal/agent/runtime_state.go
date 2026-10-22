@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -12,9 +13,11 @@ import (
 //
 // 字段并发模型：
 //   - SessionID / ChatID / StartTime：Register 时一次性写入，之后只读，无需保护
-//   - Status：当前路径上只在 Register 时写一次（"running"），cancel/complete 走 Delete
-//     而非状态翻转，所以 handler 直读不会竞态。**未来若需要在运行中翻转 Status，
-//     必须把它纳入 mu 保护范围**，否则会出现 race。
+//   - Status：Register 时写入 "running"，Cancel 时在 mu 保护下翻为 "cancelled"；
+//     读取请走 StatusSnapshot()（带读锁），不要直读字段，否则与 Cancel 并发会 race。
+//   - ctx / cancel / done：Register 时一次性写入，之后只读。ctx 由 parentCtx 派生，
+//     cancel 可被多次调用（context 保证幂等）；done 只由 Delete 关闭一次
+//     （LoadAndDelete 保证只有一个调用者命中），Wait 通过它感知对话结束。
 //   - Progress（含 SubAgents slice）：多个 call_agent 子工具并发 Add/RemoveSubAgent
 //     与 status handler 序列化并发，必须由 mu 串行化。AddSubAgent 用 copy+append
 //     而非原地 append，目的是让 SnapshotProgress 之前快照持有的旧底层数组不被污染。
@@ -29,6 +32,25 @@ type ActiveChat struct {
 	StartTime time.Time     `json:"start_time"`
 
 	mu sync.RWMutex `json:"-"`
+
+	// ctx 是本次对话的执行上下文（由 Register 的 parentCtx 派生），
+	// 执行器全程使用它，外部通过 Cancel 触发取消。
+	ctx    context.Context
+	cancel context.CancelFunc
+	// done 在 Delete 时关闭，表示执行协程已退出、状态已清理。
+	done chan struct{}
+}
+
+// Context 返回本次对话的可取消上下文，供执行器使用。
+func (c *ActiveChat) Context() context.Context {
+	return c.ctx
+}
+
+// StatusSnapshot 在读锁保护下返回当前 Status，可与 Cancel 并发调用。
+func (c *ActiveChat) StatusSnapshot() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Status
 }
 
 // ChatProgress 对话进度
@@ -65,13 +87,20 @@ func NewRuntimeState() *RuntimeState {
 }
 
 // Register 注册活跃对话（原子操作，防止并发冲突）
-func (r *RuntimeState) Register(sessionID, chatID string) (*ActiveChat, error) {
+//
+// 会从 parentCtx 派生一个可取消的子上下文挂到 ActiveChat 上：父上下文取消
+// （如请求断开）或外部调用 Cancel 都会让执行器收到取消信号。
+func (r *RuntimeState) Register(parentCtx context.Context, sessionID, chatID string) (*ActiveChat, error) {
+	ctx, cancel := context.WithCancel(parentCtx)
 	chat := &ActiveChat{
 		SessionID: sessionID,
 		ChatID:    chatID,
 		Status:    "running",
 		Progress:  &ChatProgress{},
 		StartTime: time.Now(),
+		ctx:       ctx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
 
 	// 使用 LoadOrStore 确保原子性
@@ -79,7 +108,8 @@ func (r *RuntimeState) Register(sessionID, chatID string) (*ActiveChat, error) {
 	// 如果不存在，存储新值并返回 stored 和 loaded=false
 	existing, loaded := r.activeChats.LoadOrStore(sessionID, chat)
 	if loaded {
-		// 已有活跃对话，返回错误
+		// 已有活跃对话：释放刚派生的 ctx，返回错误
+		cancel()
 		return nil, fmt.Errorf("session %s already has running chat", sessionID)
 	}
 
@@ -109,9 +139,60 @@ func (r *RuntimeState) UpdateProgress(sessionID string, progress *ChatProgress) 
 	return nil
 }
 
-// Delete removes active chat state for a session
+// Cancel 请求取消 session 当前的活跃对话。
+//
+// chatID 为空时匹配任意活跃对话；非空时必须与 ActiveChat.ChatID 一致，否则返回 false
+// （避免误停下一轮对话）。session 不存在返回 false。
+//
+// 命中时在 mu 保护下把 Status 翻为 "cancelled" 并取消 ctx，但**不删除**状态：
+// 状态由执行协程感知取消后退出时调用 Delete 清理，调用方可通过 Wait 等待该时刻。
+func (r *RuntimeState) Cancel(sessionID, chatID string) bool {
+	v, ok := r.activeChats.Load(sessionID)
+	if !ok {
+		return false
+	}
+	chat := v.(*ActiveChat)
+	if chatID != "" && chat.ChatID != chatID {
+		return false
+	}
+	chat.mu.Lock()
+	chat.Status = "cancelled"
+	chat.mu.Unlock()
+	chat.cancel()
+	return true
+}
+
+// Wait 阻塞直到 session 的活跃对话被 Delete（执行协程退出）或超时。
+// 无活跃对话立即返回 true；超时返回 false。
+func (r *RuntimeState) Wait(sessionID string, timeout time.Duration) bool {
+	v, ok := r.activeChats.Load(sessionID)
+	if !ok {
+		return true
+	}
+	chat := v.(*ActiveChat)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-chat.done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// Delete 移除 session 的活跃对话状态，并取消 ctx（释放 context 资源）、关闭 done
+// 唤醒所有 Wait 调用者。
+//
+// 使用 LoadAndDelete 保证同一个 ActiveChat 只会被一个调用者命中，因此重复 Delete
+// 不会二次 close(done)；session 不存在时是 no-op。
 func (r *RuntimeState) Delete(sessionID string) {
-	r.activeChats.Delete(sessionID)
+	v, ok := r.activeChats.LoadAndDelete(sessionID)
+	if !ok {
+		return
+	}
+	chat := v.(*ActiveChat)
+	chat.cancel()
+	close(chat.done)
 }
 
 // SnapshotProgress 返回 Progress 的深拷贝；handler 拿到的 SubAgents slice 与

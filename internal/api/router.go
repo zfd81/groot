@@ -16,6 +16,7 @@ func RegisterRoutes(h *server.Hertz,
 	chatH *handler.ChatHandler,
 	statusH *handler.StatusHandler,
 	detailH *handler.DetailHandler,
+	stopH *handler.StopHandler,
 	sessionH *handler.SessionHandler,
 	healthH *handler.HealthHandler,
 	skillsH *handler.SkillsHandler,
@@ -104,8 +105,9 @@ func RegisterRoutes(h *server.Hertz,
 	// Chat endpoints - 多轮对话
 	apiGroup.POST("/chat", chatH.Serve)
 	apiGroup.GET("/chat/status/:sid", statusH.Serve)
-	apiGroup.GET("/chat/:sid", detailH.GetLatest)  // 获取最近一次对话详情
-	apiGroup.GET("/chat/:sid/:cid", detailH.Serve) // 获取指定对话详情
+	apiGroup.GET("/chat/:sid", detailH.GetLatest)      // 获取最近一次对话详情
+	apiGroup.GET("/chat/:sid/:cid", detailH.Serve)     // 获取指定对话详情
+	apiGroup.POST("/chat/:sid/:cid/stop", stopH.Serve) // 中止正在生成的对话
 
 	// 对外转录接口：与 /chat 同组，API Key 鉴权并计入限流
 	apiGroup.POST("/audio/transcriptions", transcriptionH.Serve)
@@ -113,6 +115,8 @@ func RegisterRoutes(h *server.Hertz,
 	// Session endpoints - 会话管理
 	// 静态路由（/sess/history、/sess/search）优先级高于命名参数路由（/sess/:sid），可共存
 	apiGroup.GET("/sess/:sid", sessionH.GetSession)
+	apiGroup.DELETE("/sess/:sid", sessionH.DeleteSession)
+	apiGroup.PATCH("/sess/:sid", sessionH.RenameSession)
 	apiGroup.GET("/sess/history", sessionH.ListSessions)
 	apiGroup.GET("/sess/search", sessionH.SearchSessions)
 

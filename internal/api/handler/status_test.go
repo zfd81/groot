@@ -33,7 +33,7 @@ func newStatusTestContext(sid string) *app.RequestContext {
 // 且能反映 AddSubAgent 注册的子 Agent 名字。这是 Plan Task 19 的核心验收点。
 func TestStatusHandler_IncludesSubAgents(t *testing.T) {
 	rt := agent.NewRuntimeState()
-	if _, err := rt.Register("sess", "chat"); err != nil {
+	if _, err := rt.Register(context.Background(), "sess", "chat"); err != nil {
 		t.Fatal(err)
 	}
 	rt.AddSubAgent("sess", "db-agent")
@@ -46,6 +46,7 @@ func TestStatusHandler_IncludesSubAgents(t *testing.T) {
 	h := NewStatusHandler(rt, mem)
 
 	rc := newStatusTestContext("sess")
+	setIdentity(rc, "web", "", "")
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 200 {
@@ -110,6 +111,7 @@ func TestStatusHandler_IdleNoActiveChat(t *testing.T) {
 	h := NewStatusHandler(rt, mem)
 
 	rc := newStatusTestContext("missing-sess")
+	setIdentity(rc, "web", "", "")
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 200 {
@@ -139,5 +141,96 @@ func TestStatusHandler_MissingSidReturns400(t *testing.T) {
 
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+}
+
+// TestStatus_ForeignRunningSessionLooksIdle 验证归属判定先于活跃状态：
+// 其他租户的调用者查询一个正在运行的会话，必须得到与"会话不存在"完全一致的
+// idle 响应（200、round_count 0、chat null），绝不能泄露活跃 chat_id。
+func TestStatus_ForeignRunningSessionLooksIdle(t *testing.T) {
+	rt := agent.NewRuntimeState()
+	if _, err := rt.Register(context.Background(), "s1", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	sqlxDB, dialect, _ := db.Open(nil, t.TempDir())
+	t.Cleanup(func() { sqlxDB.Close() })
+	mem := memory.NewManager(logger.NewNop(), memorydb.New(sqlxDB, dialect))
+	if err := mem.CreateSession("s1", "crm", "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	h := NewStatusHandler(rt, mem)
+
+	rc := newStatusTestContext("s1")
+	setIdentity(rc, "svc", "erp", "u1")
+	h.Serve(context.Background(), rc)
+
+	body := string(rc.Response.Body())
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("expected 200, got %d body=%s", rc.Response.StatusCode(), body)
+	}
+	if !strings.Contains(body, `"status":"idle"`) || !strings.Contains(body, `"round_count":0`) ||
+		!strings.Contains(body, `"chat":null`) || !strings.Contains(body, `"last_message":null`) {
+		t.Fatalf("foreign caller must see idle/0/null: %s", body)
+	}
+	if strings.Contains(body, "c1") {
+		t.Fatalf("foreign caller must not see active chat id: %s", body)
+	}
+}
+
+// TestStatus_OwnerSeesRunningSession 验证归属匹配的 API Key 调用者仍能看到活跃状态。
+func TestStatus_OwnerSeesRunningSession(t *testing.T) {
+	rt := agent.NewRuntimeState()
+	if _, err := rt.Register(context.Background(), "s1", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	sqlxDB, dialect, _ := db.Open(nil, t.TempDir())
+	t.Cleanup(func() { sqlxDB.Close() })
+	mem := memory.NewManager(logger.NewNop(), memorydb.New(sqlxDB, dialect))
+	if err := mem.CreateSession("s1", "crm", "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	h := NewStatusHandler(rt, mem)
+
+	rc := newStatusTestContext("s1")
+	setIdentity(rc, "svc", "crm", "u1")
+	h.Serve(context.Background(), rc)
+
+	body := string(rc.Response.Body())
+	if rc.Response.StatusCode() != 200 || !strings.Contains(body, `"status":"success"`) || !strings.Contains(body, `"chat_id":"c1"`) {
+		t.Fatalf("owner must see active chat: %d %s", rc.Response.StatusCode(), body)
+	}
+}
+
+// TestStatus_MissingUserID400 验证 API Key 调用者缺少 X-User-ID 时返回 400。
+func TestStatus_MissingUserID400(t *testing.T) {
+	rt := agent.NewRuntimeState()
+	sqlxDB, dialect, _ := db.Open(nil, t.TempDir())
+	t.Cleanup(func() { sqlxDB.Close() })
+	mem := memory.NewManager(logger.NewNop(), memorydb.New(sqlxDB, dialect))
+	h := NewStatusHandler(rt, mem)
+
+	rc := newStatusTestContext("s1")
+	setIdentity(rc, "svc", "crm", "")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+}
+
+// TestStatus_MissingTenant403 验证 API Key 未绑定租户时返回 403。
+func TestStatus_MissingTenant403(t *testing.T) {
+	rt := agent.NewRuntimeState()
+	sqlxDB, dialect, _ := db.Open(nil, t.TempDir())
+	t.Cleanup(func() { sqlxDB.Close() })
+	mem := memory.NewManager(logger.NewNop(), memorydb.New(sqlxDB, dialect))
+	h := NewStatusHandler(rt, mem)
+
+	rc := newStatusTestContext("s1")
+	setIdentity(rc, "svc", "", "u1")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 403 {
+		t.Fatalf("expected 403, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 }

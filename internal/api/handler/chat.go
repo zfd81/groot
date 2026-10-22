@@ -108,10 +108,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// 2.7. 提取 X-User-ID header
-	userID := string(rc.GetHeader("X-User-ID"))
-
-	// 2.8. 提取 X-Agent-Name header（Solo 模式入口）
+	// 2.7. 提取 X-Agent-Name header（Solo 模式入口）
 	// 不传或传 "groot" → 编排模式（task.AgentName 为空）
 	// 传非主 Agent 名 → 校验注册表，未注册则 400
 	requestedAgent := string(rc.GetHeader("X-Agent-Name"))
@@ -134,8 +131,21 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		}
 	}
 
+	// 2.8. 归属前置检查：Web 调用者为管理员（owner 为 nil），API Key 调用者必须带租户与用户，
+	// 否则 requireOwner 已写出 403/400 响应。
+	owner, ok := requireOwner(rc)
+	if !ok {
+		return
+	}
+
 	// 3. 提取 X-Session-ID
 	sessionID := string(rc.GetHeader("X-Session-ID"))
+
+	// 3.1. 续聊归属校验：会话不存在或不属于当前调用者时，视为未传 session_id，静默新建会话。
+	// 此检查必须先于下方并发检查，避免非归属方通过 409 探知会话是否正在运行。
+	if sessionID != "" && !ownsOrAdmin(h.memory, owner, sessionID) {
+		sessionID = ""
+	}
 
 	// 4. 提前检查并发冲突：如果提供了 session_id，先检查是否已有活跃对话
 	// 这避免了竞态条件：第二个请求可能在第一个请求 Register 之前到达
@@ -184,7 +194,8 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 	var round int
 	var historyMessages []memory.Message
 
-	if sessionID == "" || !h.memory.ExistsSession(sessionID) {
+	// 走到这里 sessionID 非空即已由 ownsOrAdmin 证明存在且归属合法
+	if sessionID == "" {
 		// 新会话
 		sessionID = memory.GenerateSessionID()
 		isNew = true
@@ -212,7 +223,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 	// 8. 立即注册活跃状态 - 在创建 session 或获取历史之后立即执行
 	// 这确保了同一 session 的并发请求只有一个能成功注册
-	_, err = h.runtimeState.Register(sessionID, chatID)
+	active, err := h.runtimeState.Register(ctx, sessionID, chatID)
 	if err != nil {
 		// Register 返回错误表示有冲突（已有活跃对话）
 		rc.JSON(409, utils.H{
@@ -222,11 +233,14 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		})
 		return
 	}
-	// 活跃状态在 agent goroutine 结束时清理
+	// 活跃状态在 agent goroutine 结束时清理；从这里到 go func() 之间的每条失败返回
+	// 都必须先 Delete，否则该会话会一直表现为"正在运行"，后续 Wait 只能等到超时
 
-	// 9. 注册成功后，再创建 session（如果是新会话）
+	// 9. 注册成功后，再创建 session（如果是新会话），写入归属；Web 管理员新建的会话归属为空
+	tenantID, userID := ownerFields(owner)
 	if isNew {
-		if err := h.memory.CreateSession(sessionID, userID); err != nil {
+		if err := h.memory.CreateSession(sessionID, tenantID, userID, memory.TruncateTitle(req.Instruction)); err != nil {
+			h.runtimeState.Delete(sessionID)
 			rc.JSON(500, utils.H{"status": "error", "message": "创建会话失败"})
 			return
 		}
@@ -239,12 +253,14 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 			switch att.Type {
 			case "file", "image", "audio", "video":
 				if att.Content == "" {
+					h.runtimeState.Delete(sessionID)
 					rc.JSON(400, utils.H{"status": "attachment_missing_content", "message": "附件缺少内容: " + att.Name})
 					return
 				}
 				// Base64 解码
 				content, err := base64.StdEncoding.DecodeString(att.Content)
 				if err != nil {
+					h.runtimeState.Delete(sessionID)
 					rc.JSON(400, utils.H{"status": "attachment_decode_error", "message": "附件解码失败: " + att.Name + ", error: " + err.Error()})
 					return
 				}
@@ -262,6 +278,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 				multimodalContents = append(multimodalContents, mc)
 
 			default:
+				h.runtimeState.Delete(sessionID)
 				rc.JSON(400, utils.H{"status": "attachment_invalid_type", "message": "无效的附件类型: " + att.Type})
 				return
 			}
@@ -302,7 +319,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 
 		// 此处 sessionID 已最终确定（新会话已生成 ID），goroutine 内的
 		// 日志属于会话内日志，派生携带 session_id 的 logger 便于按会话检索
-		sessionLog := h.log.With(zap.String("session_id", sessionID))
+		sessionLog := h.log.With(zap.String("session_id", sessionID), zap.String("tenant_id", tenantID), zap.String("user_id", userID))
 
 		sseWriter := agent.NewSSEWriter(pipeFlushWriter{pw}, sessionID, chatID, round, mdl.Name, task.StartTime.Unix())
 
@@ -315,7 +332,7 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 				sseWriter.WriteDone()
 			}
 		}()
-		h.agentExecutor.Execute(ctx, sessionID, task, sseWriter)
+		h.agentExecutor.Execute(active.Context(), sessionID, task, sseWriter)
 
 		// 记录日志
 		statusText := string(task.Status)
