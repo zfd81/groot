@@ -98,8 +98,9 @@ class TestSSEFlowIntegrity:
         # 必须有 completed 事件
         assert len(completed_events) >= 1, "缺少 completed 事件"
 
-        # completed 必须是最后一个事件
-        assert sse.get_event_order()[-1] == "finish", "completed 不是最后一个事件"
+        # finish 之后仅剩 usage chunk：finish 倒数第二，usage 最后
+        order = sse.get_event_order()
+        assert order[-1] == "usage" and order[-2] == "finish", f"finish/usage 收尾顺序错误: {order}"
 
     def test_message_sequence_exists(self, server, api_headers):
         """TC-Flow-004: message 事件序列验证
@@ -495,5 +496,5 @@ class TestSSEPrintDebug:
         # 基本验证 — 首事件可能是 message/tool_calls/thinking
         first_event = sse.get_event_order()[0]
         assert first_event in ("message", "tool_calls", "thinking")
-        # 最后事件为 finish 或 error（终态）
-        assert sse.get_event_order()[-1] in ("finish", "error")
+        # 最后事件为 usage（正常收尾，紧随 finish）或 error（终态）
+        assert sse.get_event_order()[-1] in ("usage", "error")

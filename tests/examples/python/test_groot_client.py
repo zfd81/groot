@@ -277,6 +277,17 @@ class TestGrootClient(unittest.TestCase):
         other = {"foo": "bar"}
         self.assertIs(GrootClient._flatten_chunk(other), other)
 
+    def test_flatten_usage_chunk(self):
+        raw = {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m",
+               "choices": [], "usage": {"prompt_tokens": 120, "completion_tokens": 45, "total_tokens": 165}}
+        flat = GrootClient._flatten_chunk(raw)
+        self.assertEqual(flat, {"event": "usage", "usage": raw["usage"]})
+        self.assertEqual(GrootClient._classify_event(flat), "usage")
+
+    def test_flatten_empty_choices_without_usage_passthrough(self):
+        raw = {"choices": [], "usage": None}
+        self.assertIs(GrootClient._flatten_chunk(raw), raw)
+
     def test_execute_chat_with_session(self):
         result = self.client.execute_chat("继续分析", session_id="existing_sid")
         self.assertEqual(result["session_id"], "existing_sid")

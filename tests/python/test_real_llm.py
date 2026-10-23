@@ -556,8 +556,8 @@ class TestRealLLMSSEReliability:
         assert "message" in event_types
         assert "finish" in event_types
 
-        # completed 应是最后一个
-        assert event_types[-1] == "finish"
+        # finish 倒数第二，usage chunk 最后
+        assert event_types[-1] == "usage" and event_types[-2] == "finish"
 
     def test_real_llm_no_duplicate_message(self, server, api_headers):
         """TC-REAL-018: 真实 LLM message 不应重复"""

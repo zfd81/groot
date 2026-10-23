@@ -231,8 +231,9 @@ class SSEClient:
         """将 OpenAI chat.completion.chunk 摊平为扁平事件对象
 
         - 含 "error" 键：返回 {"event": "error", "message": <error.message>, "error": <error 对象>}
-        - 含 "choices" 键：返回 choices[0].delta 的拷贝；finish_reason 非 None 时并入
-        - 两者皆无：原样返回
+        - 含非空 "choices"：返回 choices[0].delta 的拷贝；finish_reason 非 None 时并入
+        - "choices" 为空列表且顶层 "usage" 为对象：返回 {"event": "usage", "usage": <usage 对象>}
+        - 其他：原样返回
         """
         if "error" in raw:
             err = raw["error"]
@@ -250,6 +251,10 @@ class SSEClient:
                 delta["finish_reason"] = finish_reason
             return delta
 
+        usage = raw.get("usage")
+        if isinstance(raw.get("choices"), list) and isinstance(usage, dict):
+            return {"event": "usage", "usage": usage}
+
         return raw
 
     @staticmethod
@@ -257,6 +262,8 @@ class SSEClient:
         """根据 JSON 字段推断 SSE 事件类型（见 docs/superpowers/specs/2026-10-20-openai-sse-format-design.md 1.3.6 节）"""
         if data.get("event") == "error":
             return "error"
+        if data.get("event") == "usage":
+            return "usage"
 
         role = data.get("role", "")
 
@@ -289,8 +296,8 @@ class SSEClient:
         if not order:
             return False
 
-        # 至少有一个有意义的事件（message / tool_calls / thinking / finish / error）
-        valid_events = {"message", "tool_calls", "thinking", "finish", "error"}
+        # 至少有一个有意义的事件（message / tool_calls / thinking / finish / error / usage）
+        valid_events = {"message", "tool_calls", "thinking", "finish", "error", "usage"}
         if not any(e in order for e in valid_events):
             return False
 

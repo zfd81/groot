@@ -473,7 +473,7 @@
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestChatAPI | test_api_endpoints.py | 聊天 API 基础功能 |
+| TestChatAPI | test_api_endpoints.py | 聊天 API 基础功能；TC-001 末尾事件为 usage，其前一个为 finish |
 | TestDeleteChatAPI | test_api_endpoints.py | 删除聊天 API |
 | TestChatStatusAPI | test_api_endpoints.py | 聊天状态 API |
 | TestChatDetailAPI | test_api_endpoints.py | 聊天详情 API |
@@ -604,7 +604,7 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 | TestRealLLMErrorHandling | test_real_llm.py | 错误处理 |
 | TestRealLLMPerformance | test_real_llm.py | 性能测试 |
 | TestRealLLMHistory | test_real_llm.py | 历史记录 |
-| TestRealLLMSSEReliability | test_real_llm.py | SSE 可靠性 |
+| TestRealLLMSSEReliability | test_real_llm.py | SSE 可靠性；TC-REAL-017 末尾事件为 usage，其前一个为 finish |
 
 ### 2.13 运行状态测试
 
@@ -642,14 +642,16 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 `docs/superpowers/specs/2026-10-20-openai-sse-format-design.md`）。
 `conftest.SSEClient.flatten_chunk` 将每条 chunk 摊平为 `choices[0].delta`
 （附 `finish_reason`）或 `{"event":"error","message":...,"error":{...}}`，
+`choices:[]` 且 `usage` 非 null 的 chunk 摊平为 `{"event":"usage","usage":{...}}`，
 `events[i]["data"]` 为摊平对象、`events[i]["raw"]` 为原始 chunk；
 `test_multimodal.parse_sse_stream` 复用同一摊平函数。
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
-| TestSSEClientFlatten | test_sse_events.py | `SSEClient.flatten_chunk` 单元断言（不依赖服务器）：message / finish / 带 agent_name 的 finish / error 透传 / tool_result / 无 choices 原样返回 / `_parse_events` 保留 raw/ 空 choices 原样返回（TC-SSE-FLAT-001～008） |
-| TestSSEEventOrder | test_sse_events.py | SSE 事件顺序 |
+| TestSSEClientFlatten | test_sse_events.py | `SSEClient.flatten_chunk` 单元断言（不依赖服务器）：message / finish / 带 agent_name 的 finish / error 透传 / tool_result / 无 choices 原样返回 / `_parse_events` 保留 raw/ 空 choices 原样返回（TC-SSE-FLAT-001～008）/ usage chunk 摊平为 `{"event":"usage","usage":{...}}`（TC-SSE-FLAT-009） |
+| TestSSEEventOrder | test_sse_events.py | SSE 事件顺序；TC-SSE-001/003 末尾事件为 usage，其前一个为 finish |
 | TestSSEEventFields | test_sse_events.py | SSE 事件字段；TC-SSE-030 原始 chunk 外层字段（object/id=X-Chat-ID/created 为 int 且全流一致/model 非空/choices[0].index=0）；TC-SSE-031 error 为终态（error 之后不再出现含 choices 的事件，无 error 时自然通过） |
+| TestSSEUsageEvent | test_sse_events.py | TC-SSE-040 usage 事件：choices 为 []、usage 三字段均为非负 int 且 total == prompt + completion、位于 [DONE] 前且在最后一个 finish 之后 |
 | TestSSECancelledEvent | test_sse_events.py | SSE 取消事件；TC-SSE-016 error 分支断言调整为摊平后 `event=="error" and "message" in data`，并断言 `raw` 不含 choices、含 error |
 | TestSSEMultipleRounds | test_sse_events.py | SSE 多轮 |
 | TestSSEFlowIntegrity | test_sse_events.py | SSE 流完整性 |
@@ -658,9 +660,10 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
+| TestSSEFlowIntegrity | test_sse_flow.py | SSE 流完整性；TC-Flow-003 末尾事件为 usage，其前一个为 finish |
 | TestSSEToolCallStrict | test_sse_flow.py | SSE 工具调用严格验证 |
 | TestSSEStreamingOutput | test_sse_flow.py | SSE 流式输出 |
-| TestSSEPrintDebug | test_sse_flow.py | SSE 调试输出 |
+| TestSSEPrintDebug | test_sse_flow.py | SSE 调试输出；TC-Debug-001 末尾事件为 usage 或 error |
 
 ### 2.18 调度 API 测试
 

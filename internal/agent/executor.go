@@ -332,6 +332,9 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			WriteError: func(agentName, message string) error {
 				return sse.WriteError(agentName, message)
 			},
+			WriteUsage: func(u TokenUsage) error {
+				return sse.WriteUsage(u)
+			},
 			WriteDone: func() error {
 				return sse.WriteDone()
 			},

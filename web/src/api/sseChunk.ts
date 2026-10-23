@@ -11,6 +11,7 @@ export interface SseToolCall {
 
 // 解析后的单条 SSE 事件：即 `choices[0].delta` 摊平后再合并顶层 `finish_reason`。
 // 错误 chunk（`{"error":{...}}`）被映射为 `{ event: 'error', message, agent_name? }`。
+// 用量 chunk（`choices` 为 []、顶层 `usage` 为对象）被映射为 `{ event: 'usage', usage }`。
 export interface SseEvent {
   role?: string
   content?: string
@@ -23,6 +24,7 @@ export interface SseEvent {
   message?: string
   error?: boolean
   agent_name?: string
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -32,6 +34,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 // 将一条已 JSON.parse 的 chunk 摊平为 SseEvent：
 // - `error` 为对象 → `{ event: 'error', message, agent_name? }`
 // - `choices[0]` 存在 → `{ ...delta, finish_reason? }`
+// - `choices` 为空数组且 `usage` 为对象 → `{ event: 'usage', usage }`
 // - 其他（含非对象输入）→ null，调用方应忽略
 export function flattenChunk(raw: unknown): SseEvent | null {
   if (!isRecord(raw)) return null
@@ -47,7 +50,14 @@ export function flattenChunk(raw: unknown): SseEvent | null {
   }
 
   const choices = raw.choices
-  if (!Array.isArray(choices) || choices.length === 0) return null
+  if (!Array.isArray(choices)) return null
+  if (choices.length === 0) {
+    const usage = raw.usage
+    if (isRecord(usage)) {
+      return { event: 'usage', usage: usage as SseEvent['usage'] }
+    }
+    return null
+  }
   const first: unknown = choices[0]
   if (!isRecord(first)) return null
 

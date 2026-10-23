@@ -324,7 +324,9 @@ public class GrootClient implements AutoCloseable {
      *   <li>含 {@code error} 字段：返回 {@code {event:"error", message:<error.message>, error:<error 对象>}}</li>
      *   <li>含非空 {@code choices} 数组：返回 {@code choices[0].delta} 的深拷贝；
      *       {@code finish_reason} 非 null 时并入</li>
-     *   <li>两者皆无：原样返回</li>
+     *   <li>{@code choices} 为空数组且顶层 {@code usage} 为对象：返回
+     *       {@code {event:"usage", usage:<usage 对象>}}</li>
+     *   <li>其他：原样返回</li>
      * </ul>
      */
     static JsonNode flattenChunk(JsonNode raw) {
@@ -357,6 +359,14 @@ public class GrootClient implements AutoCloseable {
             return flat;
         }
 
+        JsonNode usage = raw.get("usage");
+        if (choices != null && choices.isArray() && usage != null && usage.isObject()) {
+            ObjectNode flat = MAPPER.createObjectNode();
+            flat.put("event", "usage");
+            flat.set("usage", usage);
+            return flat;
+        }
+
         return raw;
     }
 
@@ -365,6 +375,7 @@ public class GrootClient implements AutoCloseable {
      *
      * <ul>
      *   <li>{@code event == "error"} → error</li>
+     *   <li>{@code event == "usage"} → usage</li>
      *   <li>{@code role == "tool"} → tool_result</li>
      *   <li>含 {@code tool_calls} → tool_calls</li>
      *   <li>含 {@code finish_reason} → finish（finish 事件不带 role）</li>
@@ -376,6 +387,7 @@ public class GrootClient implements AutoCloseable {
         if (data == null || !data.isObject()) return "unknown";
         JsonNode event = data.get("event");
         if (event != null && "error".equals(event.asText())) return "error";
+        if (event != null && "usage".equals(event.asText())) return "usage";
         JsonNode role = data.get("role");
         if (role != null && "tool".equals(role.asText())) return "tool_result";
         if (data.has("tool_calls")) return "tool_calls";

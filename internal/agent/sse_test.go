@@ -409,3 +409,64 @@ func TestSSEWriter_SetModel(t *testing.T) {
 		t.Errorf("after SetModel(\"\") chunk model = %v, want deepseek-r1 (no-op)", got)
 	}
 }
+
+func TestSSEWriter_OrdinaryChunkHasNullUsage(t *testing.T) {
+	buf := &bufFlusher{}
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	if err := w.WriteMessage("", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	chunk := decodeChunk(t, buf.String())
+	u, ok := chunk["usage"]
+	if !ok || u != nil {
+		t.Fatalf("usage should be present and null, got %v (present=%v)", u, ok)
+	}
+}
+
+func TestSSEWriter_WriteUsage(t *testing.T) {
+	buf := &bufFlusher{}
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	if err := w.WriteUsage(TokenUsage{Prompt: 120, Completion: 45, Total: 165}); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.String()
+	if !strings.Contains(raw, `"choices":[]`) {
+		t.Fatalf("choices must serialize as []: %s", raw)
+	}
+	chunk := decodeChunk(t, raw)
+	if chunk["id"] != "chat" || chunk["object"] != "chat.completion.chunk" || chunk["created"] != float64(1760947200) || chunk["model"] != "qwen-max" {
+		t.Errorf("envelope = %v", chunk)
+	}
+	u := chunk["usage"].(map[string]any)
+	if u["prompt_tokens"] != float64(120) || u["completion_tokens"] != float64(45) || u["total_tokens"] != float64(165) {
+		t.Errorf("usage = %v", u)
+	}
+	if len(u) != 3 {
+		t.Errorf("usage must have exactly 3 keys: %v", u)
+	}
+}
+
+func TestSSEWriter_WriteUsageModelFollowsSetModel(t *testing.T) {
+	buf := &bufFlusher{}
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 0)
+	w.SetAgentModel("coder", "deepseek-r1")
+	w.SetModel("solo-model")
+	if err := w.WriteUsage(TokenUsage{1, 1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeChunk(t, buf.String())["model"]; got != "solo-model" {
+		t.Errorf("model = %v, want solo-model", got)
+	}
+}
+
+func TestSSEWriter_ErrorHasNoUsage(t *testing.T) {
+	buf := &bufFlusher{}
+	w := NewSSEWriter(buf, "sess", "chat", 1, "m", 0)
+	if err := w.WriteError("", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	chunk := decodeChunk(t, buf.String())
+	if _, ok := chunk["usage"]; ok {
+		t.Errorf("error event must not carry usage: %v", chunk)
+	}
+}

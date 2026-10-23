@@ -82,6 +82,14 @@ type chatChunk struct {
 	Created int64         `json:"created"`
 	Model   string        `json:"model"`
 	Choices []chunkChoice `json:"choices"`
+	Usage   *chunkUsage   `json:"usage"` // 普通 chunk 为 nil（序列化为 null），仅 usage chunk 携带对象
+}
+
+// chunkUsage 是 OpenAI chunk.usage 的结构：本次 /chat 请求的 token 用量汇总。
+type chunkUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 // chunkChoice 是 chunk.choices 的元素；Delta 始终为非 nil map 以保证序列化为 {}，
@@ -181,6 +189,23 @@ func (s *SSEWriter) WriteToolResult(agentName, toolCallID, toolName, content str
 		"content":      content,
 		"error":        isError,
 	}, nil)
+}
+
+// WriteUsage writes OpenAI 风格的最终 usage chunk：choices 为空数组 []，顶层 usage 为
+// 本次请求的 token 用量汇总；model 取主模型名（受 SetModel 覆盖，与主 Agent 事件一致）。
+func (s *SSEWriter) WriteUsage(u TokenUsage) error {
+	return s.WriteData(chatChunk{
+		ID:      s.chatID,
+		Object:  "chat.completion.chunk",
+		Created: s.created,
+		Model:   s.modelFor(""),
+		Choices: []chunkChoice{},
+		Usage: &chunkUsage{
+			PromptTokens:     u.Prompt,
+			CompletionTokens: u.Completion,
+			TotalTokens:      u.Total,
+		},
+	})
 }
 
 // WriteError writes an OpenAI 风格的 error 事件（无 choices）；agentName 非空时注入 error.agent_name。

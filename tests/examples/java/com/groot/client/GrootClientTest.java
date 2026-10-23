@@ -352,6 +352,29 @@ class GrootClientTest {
         assertFalse(raw.get("choices").get(0).get("delta").has("finish_reason"));
     }
 
+    @Test
+    void flattenUsageChunk() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+
+        JsonNode raw = mapper.readTree("{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[],"
+            + "\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":45,\"total_tokens\":165}}");
+        JsonNode flat = GrootClient.flattenChunk(raw);
+        assertEquals("usage", flat.get("event").asText());
+        assertEquals(165, flat.get("usage").get("total_tokens").asInt());
+        assertEquals("usage", GrootClient.classifyEvent(flat));
+    }
+
+    @Test
+    void flattenEmptyChoicesWithoutUsagePassthrough() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+
+        // choices 为空且 usage 为 null：维持原样返回
+        JsonNode raw = mapper.readTree("{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":null}");
+        assertSame(raw, GrootClient.flattenChunk(raw));
+    }
+
     /**
      * 其他用例只 enqueue 响应、不取走 RecordedRequest，共享的 MockWebServer 会积压请求；
      * 需要断言请求体的用例先把积压清空，保证 takeRequest() 拿到的是本用例的请求。

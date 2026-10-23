@@ -59,8 +59,10 @@ class TestChatAPI:
 
         # 验证事件顺序
         assert sse.verify_event_order()
-        assert sse.get_event_order()[0] == "message"
-        assert sse.get_event_order()[-1] == "finish"
+        order = sse.get_event_order()
+        assert order[0] == "message"
+        # usage chunk 收尾：finish 倒数第二，usage 最后
+        assert order[-1] == "usage" and order[-2] == "finish"
 
         # 验证首个 message 事件
         first_msg = sse.get_intent_event()

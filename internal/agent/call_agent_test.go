@@ -271,3 +271,47 @@ func TestCallAgentTool_NilSSEIsSafe(t *testing.T) {
 		t.Fatalf("unexpected result: %q", out)
 	}
 }
+
+// accProbeTool 在运行中往累加器写入 token，并把登记的 childChatID 暴露出来。
+type accProbeTool struct {
+	acc  *TokenAccumulators
+	seen string
+}
+
+func (p *accProbeTool) Info(_ context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: "p", Desc: "p"}, nil
+}
+func (p *accProbeTool) InvokableRun(_ context.Context, _ string, _ ...tool.Option) (string, error) {
+	p.seen = p.acc.ChildFor("chat_p", "coder")
+	if p.seen != "" {
+		p.acc.Add(p.seen, 30, 12)
+	}
+	return "done", nil
+}
+
+func TestCallAgentTool_RegistersChildAndRetiresTokens(t *testing.T) {
+	acc := NewTokenAccumulators()
+	acc.OpenRound("chat_p")
+	probe := &accProbeTool{acc: acc}
+	reg := NewRegistryForTest(2)
+	entry := &SubAgentEntry{Name: "coder"}
+	entry.SetToolForTest(probe)
+	reg.SetEntryForTest("coder", entry)
+	ct := newTestCallAgentTool(reg, 0, 0)
+	ct.tokenAccumulators = acc
+	if _, err := ct.InvokableRun(context.Background(), `{"agent_name":"coder","task":"t"}`); err != nil {
+		t.Fatal(err)
+	}
+	if probe.seen == "" {
+		t.Fatal("child chatID must be registered before sub-agent runs")
+	}
+	// PopChild 保留登记：引擎迟到的 usage chunk 仍可按登记归属到子 chatID，由 PopRound 兜底汇总
+	if got := acc.ChildFor("chat_p", "coder"); got != probe.seen {
+		t.Fatalf("registration must survive PopChild: ChildFor = %q, want %q", got, probe.seen)
+	}
+	acc.Add(probe.seen, 1, 1) // 模拟 PopChild 之后迟到的最后一个 usage chunk
+	_, round := acc.PopRound("chat_p")
+	if round != (TokenUsage{31, 13, 44}) {
+		t.Fatalf("round = %+v, child tokens (incl. late chunk) must be summed into round", round)
+	}
+}

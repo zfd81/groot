@@ -81,29 +81,49 @@ class TestSSEClientFlatten:
         raw = {"id": "c", "object": "chat.completion.chunk", "choices": []}
         assert SSEClient.flatten_chunk(raw) is raw
 
+    def test_flatten_usage_chunk(self):
+        """TC-SSE-FLAT-009: choices 为空且 usage 非空 → {"event":"usage","usage":{...}}"""
+        usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+        raw = {"id": "c", "object": "chat.completion.chunk", "choices": [], "usage": usage}
+        flat = SSEClient.flatten_chunk(raw)
+        assert flat == {"event": "usage", "usage": usage}
+        assert SSEClient._infer_event_type(flat) == "usage"
+
+    _usage_chunk = {
+        "id": "c",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "m",
+        "choices": [],
+        "usage": {"prompt_tokens": 120, "completion_tokens": 45, "total_tokens": 165},
+    }
+
     def test_parse_events_keeps_raw(self):
-        """TC-SSE-FLAT-007: _parse_events 的 data 为摊平对象，raw 为原始 chunk"""
+        """TC-SSE-FLAT-007: _parse_events 的 data 为摊平对象，raw 为原始 chunk；usage chunk 分类为 usage"""
 
         class _FakeResp:
             text = (
                 "data: " + json.dumps(self._chunk({"role": "assistant", "content": "hi"})) + "\n\n"
                 "data: " + json.dumps(self._chunk({}, finish_reason="stop")) + "\n\n"
+                "data: " + json.dumps(self._usage_chunk) + "\n\n"
                 "data: [DONE]\n\n"
             )
 
         sse = SSEClient(_FakeResp())
-        assert sse.get_event_order() == ["message", "finish"]
+        assert sse.get_event_order() == ["message", "finish", "usage"]
         assert sse.events[0]["data"] == {"role": "assistant", "content": "hi"}
         assert sse.events[0]["raw"]["object"] == "chat.completion.chunk"
         assert sse.events[1]["data"] == {"finish_reason": "stop"}
         assert "choices" in sse.events[1]["raw"]
+        assert sse.events[2]["data"] == {"event": "usage", "usage": self._usage_chunk["usage"]}
+        assert sse.events[2]["raw"]["choices"] == []
 
 
 class TestSSEEventOrder:
     """SSE 事件顺序测试"""
 
     def test_event_order_basic(self, server, api_headers):
-        """TC-SSE-001: 事件顺序正确性"""
+        """TC-SSE-001: 事件顺序正确性（首个 message，末尾 finish + usage）"""
         payload = {"instruction": "帮我写一个函数"}
 
         response = requests.post(
@@ -122,8 +142,8 @@ class TestSSEEventOrder:
         # message 必须是第一个事件（替代旧的started/intent）
         assert order[0] == "message"
 
-        # finish 必须是最后一个事件（替代旧的completed）
-        assert order[-1] == "finish"
+        # usage 必须是最后一个事件，其前一个为 finish（替代旧的completed）
+        assert order[-1] == "usage" and order[-2] == "finish"
 
     def test_started_is_first_event(self, server, api_headers):
         """TC-SSE-002: message 是首个事件"""
@@ -147,7 +167,7 @@ class TestSSEEventOrder:
         assert len(message_events) >= 1
 
     def test_completed_is_last_event(self, server, api_headers):
-        """TC-SSE-003: completed 是最后一个事件"""
+        """TC-SSE-003: usage 是最后一个事件，其前一个为 finish"""
         payload = {"instruction": "测试"}
 
         response = requests.post(
@@ -159,9 +179,9 @@ class TestSSEEventOrder:
 
         sse = SSEClient(response)
 
-        # completed 事件必须在最后
+        # usage 事件必须在最后，其前一个为 finish（替代旧的 completed）
         events = sse.events
-        assert events[-1]["event"] == "finish"
+        assert events[-1]["event"] == "usage" and events[-2]["event"] == "finish"
 
         # completed 事件只有一个
         completed_events = sse.get_events_by_type("finish")
@@ -510,6 +530,50 @@ class TestSSEEventFields:
         for e in sse.events[first_error:]:
             assert e["event"] == "error"
             assert "choices" not in e["raw"]
+
+
+class TestSSEUsageEvent:
+    """usage 事件测试"""
+
+    def test_usage_event_fields(self, server, api_headers):
+        """TC-SSE-040: usage 事件：choices 为 []、三字段为非负 int 且 total == prompt + completion，
+        位于 [DONE] 前且在最后一个 finish 之后"""
+        payload = {"instruction": "你好"}
+
+        response = requests.post(
+            f"{BASE_URL}/chat",
+            headers=api_headers,
+            json=payload,
+            stream=True
+        )
+
+        assert response.status_code == 200
+        sse = SSEClient(response)
+
+        # 一次对话恰有一条 usage 事件
+        usage_events = sse.get_events_by_type("usage")
+        assert len(usage_events) == 1
+
+        usage_event = usage_events[0]
+        raw = usage_event["raw"]
+        assert raw["object"] == "chat.completion.chunk"
+        assert raw["choices"] == []
+
+        usage = usage_event["data"]["usage"]
+        assert usage == raw["usage"]
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            assert key in usage
+            assert isinstance(usage[key], int) and not isinstance(usage[key], bool)
+            assert usage[key] >= 0
+        assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+        # usage 是流中最后一个事件（紧邻 [DONE]），且位于最后一个 finish 之后
+        order = sse.get_event_order()
+        usage_index = order.index("usage")
+        assert usage_index == len(order) - 1
+        finish_indices = [i for i, e in enumerate(order) if e == "finish"]
+        assert finish_indices, "流中应至少有一条 finish 事件"
+        assert usage_index > finish_indices[-1]
 
 
 class TestSSECancelledEvent:

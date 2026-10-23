@@ -134,6 +134,12 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	childChatID := memory.GenerateChildChatID(t.parentChatID, input.AgentName)
 	execCtx = context.WithValue(execCtx, childChatIDKey{}, childChatID)
 
+	// 向累加器登记本轮 (主 chatID, agentName) → childChatID，引擎据此把子 Agent 事件
+	// 中的 token 归到正确的子 chatID；结束时由 PopChild 取出（登记保留到 PopRound 兜底扫描）。
+	if t.tokenAccumulators != nil {
+		t.tokenAccumulators.RegisterChild(t.parentChatID, input.AgentName, childChatID)
+	}
+
 	// 把当前子 Agent 标记为运行中；defer 在调用结束（含错误/超时）后移除。
 	if t.runtimeState != nil {
 		t.runtimeState.AddSubAgent(t.sessionID, input.AgentName)
@@ -151,7 +157,7 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("build subagent tool: %w", buildErr)
 	}
 
-	// 把本次实际选用的 model 名提前写入累加器，结束时随 token / steps 一起 PopAndDelete。
+	// 把本次实际选用的 model 名提前写入累加器，结束时随 token / steps 一起 PopChild 取出。
 	if t.tokenAccumulators != nil && resolvedModel != "" {
 		t.tokenAccumulators.SetModel(childChatID, resolvedModel)
 	}
@@ -173,9 +179,12 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 
 	// 累加器无条件 pop：与持久化解耦——即便 t.memory == nil，
 	// 也要释放本次调用占用的累加项，避免长期运行时 map 缓慢膨胀。
+	// 同时归还到本轮合计：PopChild 把子 Agent 的 token 累入主 chatID 的轮次状态并记录 childChatID；
+	// 登记不移除——引擎可能在此之后才处理子 Agent 的最后一个 usage chunk，
+	// 迟到写入仍按登记归属，由引擎 PopRound 兜底汇总输出 usage。
 	var aggregate ChatAggregate
 	if t.tokenAccumulators != nil {
-		aggregate = t.tokenAccumulators.PopAndDelete(childChatID)
+		aggregate = t.tokenAccumulators.PopChild(t.parentChatID, input.AgentName, childChatID)
 	}
 
 	// 写 ChatRecord（错误吞掉，不影响主 Agent 返回）

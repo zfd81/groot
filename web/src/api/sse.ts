@@ -123,7 +123,7 @@ function handleChunk(chunk: string, onEvent: (ev: SseEvent) => void) {
       continue
     }
     try {
-      // 摊平 OpenAI chunk；无法识别的 chunk（如空 choices）直接忽略
+      // 摊平 OpenAI chunk；空 choices 仅在带顶层 usage 时产出 usage 事件，其余无法识别的 chunk 直接忽略
       const ev = flattenChunk(JSON.parse(payload))
       if (ev) onEvent(ev)
     } catch {

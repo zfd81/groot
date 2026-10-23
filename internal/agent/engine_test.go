@@ -237,3 +237,55 @@ func TestAgentErrorToolName(t *testing.T) {
 		t.Errorf("AgentErrorToolName = %q, want %q", AgentErrorToolName, "agent_error")
 	}
 }
+
+func TestEngine_AccumulateUsage_ChildViaRegistry(t *testing.T) {
+	acc := NewTokenAccumulators()
+	acc.OpenRound("main_x")
+	acc.RegisterChild("main_x", "db-agent", "child_reg")
+	e := &Engine{agentName: MainAgentName, tokenAccumulators: acc}
+	ctx := WithMainChatID(context.Background(), "main_x") // 不注入 childChatID：模拟生产路径
+	e.accumulateUsage(ctx, "db-agent", &schema.ResponseMeta{Usage: &schema.TokenUsage{PromptTokens: 7, CompletionTokens: 3}})
+	if got := acc.PopAndDelete("child_reg").Tokens; got != (TokenUsage{7, 3, 10}) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestEngine_AccumulateUsage_RegistryBeatsCtx(t *testing.T) {
+	acc := NewTokenAccumulators()
+	acc.OpenRound("main_x")
+	acc.RegisterChild("main_x", "db-agent", "child_reg")
+	e := &Engine{agentName: MainAgentName, tokenAccumulators: acc}
+	ctx := WithChildChatID(WithMainChatID(context.Background(), "main_x"), "child_ctx")
+	e.accumulateUsage(ctx, "db-agent", &schema.ResponseMeta{Usage: &schema.TokenUsage{PromptTokens: 1, CompletionTokens: 1}})
+	if acc.PopAndDelete("child_reg").Tokens != (TokenUsage{1, 1, 2}) {
+		t.Fatal("registry must win")
+	}
+	if acc.PopAndDelete("child_ctx").Tokens != (TokenUsage{}) {
+		t.Fatal("ctx child must be untouched")
+	}
+}
+
+func TestEngine_FinishRound_SumsAndCleans(t *testing.T) {
+	acc := NewTokenAccumulators()
+	e := &Engine{agentName: MainAgentName, tokenAccumulators: acc}
+	ctx := WithMainChatID(context.Background(), "main_x")
+	acc.OpenRound("main_x")
+	acc.Add("main_x", 10, 5)
+	acc.RegisterChild("main_x", "coder", "c1")
+	acc.Add("c1", 20, 10)
+	main, round := e.finishRound(ctx)
+	if main.Tokens != (TokenUsage{10, 5, 15}) {
+		t.Errorf("main = %+v", main.Tokens)
+	}
+	if round != (TokenUsage{30, 15, 45}) {
+		t.Errorf("round = %+v", round)
+	}
+}
+
+func TestEngine_FinishRound_NilAccumulators(t *testing.T) {
+	e := &Engine{agentName: MainAgentName}
+	main, round := e.finishRound(WithMainChatID(context.Background(), "m"))
+	if main.Tokens != (TokenUsage{}) || round != (TokenUsage{}) {
+		t.Fatal("expected zero values")
+	}
+}

@@ -1394,7 +1394,8 @@ JSON 对象采用 OpenAI Chat Completions 流式分块格式（`chat.completion.
 | `object` | string | 固定 `"chat.completion.chunk"` |
 | `created` | int | 对话开始时间的 Unix 秒，整条流内不变 |
 | `model` | string | 生成该事件的模型逻辑名称（Web 界面 设置 → 模型 中配置的名称）。主 Agent 事件为本次对话使用的主模型名；子 Agent 事件（`delta` 带 `agent_name`）为该子 Agent 实际使用的模型名 |
-| `choices` | array | 恒为单元素数组，`choices[0].index` 恒为 `0` |
+| `choices` | array | 普通事件恒为单元素数组，`choices[0].index` 恒为 `0`；`usage` 事件为空数组 `[]` |
+| `usage` | object \| null | 普通事件为 `null`；`usage` 事件为 `{prompt_tokens, completion_tokens, total_tokens}`，为本次对话全部模型调用（主 Agent + 子 Agent）的累计 |
 
 `choices[0]` 结构：
 
@@ -1411,6 +1412,7 @@ JSON 对象采用 OpenAI Chat Completions 流式分块格式（`chat.completion.
 ```
 data == "[DONE]"                     → 流结束
 存在顶层 error                        → error 事件（终结性）
+choices 为空数组且 usage 非 null       → usage 事件（位于 [DONE] 之前）
 d = choices[0].delta
   d.role == "tool"                   → tool_result 事件
   d.tool_calls 存在                   → tool_calls 事件（按 function.name 区分 skill / call_agent / 普通工具）
@@ -1430,6 +1432,7 @@ choices[0].finish_reason 非 null      → finish 事件
 | `tool_calls` | `role:"assistant"`, `tool_calls[]` | `null` | 可见 | 「正在调用 xxx」提示；skill 调用为 `function.name == "skill"`，子 Agent 调用为 `function.name == "call_agent"` |
 | `finish` | `{}`（可含 `agent_name`） | 上游模型返回的 OpenAI 结束原因，原样透传；常见为 `"stop"` / `"tool_calls"` / `"length"` / `"content_filter"` | 可见 | 阶段结束标记，位于 `choices[0].finish_reason`；一次对话可出现多次（每轮 ReAct 一次），不展示 |
 | `tool_result` | `role:"tool"`, `tool_call_id`, `tool_name`, `content`, `error` | `null` | 忽略（Groot 扩展） | **工具调用结果区（调用详情面板）**，不放入正文；`error:true` 表示工具执行失败 |
+| `usage` | —（`choices` 为 `[]`，顶层 `usage` 对象） | — | 可见（OpenAI `include_usage` 标准形状） | 本次对话 token 用量；一次对话最多一条，紧邻 `[DONE]` 之前；对话无任何模型调用时不出现 |
 | `error` | —（无 `choices`，顶层为 `error` 对象） | — | 可见 | **终结性**：致命错误（LLM 连接失败、Agent 执行 panic、Solo 模式子 Agent 构建失败等），之后紧跟 `[DONE]`，收到即视为对话结束 |
 | `done` | — | — | 可见 | `data: [DONE]`，对话流结束 |
 
@@ -1601,34 +1604,37 @@ choices[0].finish_reason 非 null      → finish 事件
 
 #### SSE 事件流示例
 
-以下示例中，每个场景的首条事件给出完整外层结构；后续各行以 `{..., "choices":[...]}` 的形式省略与首条相同的 `id/object/created/model` 字段（实际流中每条事件都完整携带这四个字段）。
+以下示例中，每个场景的首条事件给出完整外层结构；后续各行以 `{..., "choices":[...]}` 的形式省略与首条相同的 `id/object/created/model/usage` 字段（实际流中每条事件都完整携带这五个字段，`usage` 仅在末尾的 usage chunk 中非 null）。
 
 **场景1：纯 LLM 回答（无 thinking）**
 
 ```
-data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","content":"回答内容..."},"finish_reason":null}]}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","content":"回答内容..."},"finish_reason":null}],"usage":null}
 data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":45,"total_tokens":165}}
 data: [DONE]
 ```
 
 **场景2：LLM 回答带 thinking**
 
 ```
-data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"思考过程..."},"finish_reason":null}]}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"思考过程..."},"finish_reason":null}],"usage":null}
 data: {..., "choices":[{"index":0,"delta":{"role":"assistant","content":"回答内容..."},"finish_reason":null}]}
 data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[],"usage":{"prompt_tokens":130,"completion_tokens":96,"total_tokens":226}}
 data: [DONE]
 ```
 
 **场景3：工具调用**
 
 ```
-data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"我需要读取文件"},"finish_reason":null}]}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"我需要读取文件"},"finish_reason":null}],"usage":null}
 data: {..., "choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"/etc/hosts\"}"}}]},"finish_reason":null}]}
 data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
 data: {..., "choices":[{"index":0,"delta":{"role":"tool","tool_call_id":"call_abc123","tool_name":"file_read","content":"127.0.0.1 localhost\n::1 localhost","error":false},"finish_reason":null}]}
 data: {..., "choices":[{"index":0,"delta":{"role":"assistant","content":"文件内容如下：127.0.0.1 localhost"},"finish_reason":null}]}
 data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[],"usage":{"prompt_tokens":410,"completion_tokens":72,"total_tokens":482}}
 data: [DONE]
 ```
 
@@ -1653,7 +1659,9 @@ const pendingTools = new Map(); // tool_call_id → 开始时间，用于统计�
 
 eventSource.onmessage = (e) => {
   if (e.data === "[DONE]") { /* 流结束 */ return; }
-  const data = flattenChunk(JSON.parse(e.data));
+  const c = JSON.parse(e.data);
+  if (Array.isArray(c.choices) && c.choices.length === 0 && c.usage) { /* usage 事件 */ return; }
+  const data = flattenChunk(c);
 
   if (data.event === "error") {
     // error → 终结性，提示用户并结束本次对话（随后会收到 [DONE]）
