@@ -14,6 +14,12 @@ func defaultVoice() VoiceSettings {
 	}
 }
 
+// defaultSpeech 返回语音合成配置的默认值。
+// 两个字段均为空：不向 TTS 模型传 voice / instructions，由模型取其默认行为。
+func defaultSpeech() SpeechSettings {
+	return SpeechSettings{Voice: "", Instructions: ""}
+}
+
 // 以下各函数是配置表分类的基准层。表中缺失的键回落到这里，
 // 因此配置表在创建后为空即可工作。
 

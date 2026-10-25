@@ -238,17 +238,23 @@ function handleMenuCommand(m: ModelInfo, command: string | number | object) {
     case 'setDefaultChat':
       void handleSetDefault(m, 'chat')
       break
-    case 'setDefaultVoice':
-      void handleSetDefault(m, 'voice')
+    case 'setDefaultASR':
+      void handleSetDefault(m, 'asr')
       break
     case 'setDefaultVision':
       void handleSetDefault(m, 'vision')
       break
-    case 'clearDefaultVoice':
-      void handleClearDefault(m, 'voice')
+    case 'setDefaultTTS':
+      void handleSetDefault(m, 'tts')
+      break
+    case 'clearDefaultASR':
+      void handleClearDefault(m, 'asr')
       break
     case 'clearDefaultVision':
       void handleClearDefault(m, 'vision')
+      break
+    case 'clearDefaultTTS':
+      void handleClearDefault(m, 'tts')
       break
     case 'edit':
       openEdit(m)
@@ -281,14 +287,17 @@ onMounted(() => void loadModels())
         <div v-if="c.m" class="item-header">
           <span class="model-name" :class="{ 'is-off': !c.m.enabled }">{{ c.m.name }}</span>
           <span class="status-dot" :class="c.m.enabled ? 'dot-on' : 'dot-off'" />
-          <el-tag v-if="isDef(c.m, 'chat')" size="small" type="primary" effect="light" style="margin-left: 4px">
+          <el-tag v-if="isDef(c.m, 'chat')" size="small" type="success" effect="light" style="margin-left: 4px">
             {{ t('settings.defaultChat') }}
           </el-tag>
-          <el-tag v-if="isDef(c.m, 'voice')" size="small" type="success" effect="light" style="margin-left: 4px">
-            {{ t('settings.defaultVoice') }}
+          <el-tag v-if="isDef(c.m, 'asr')" size="small" type="success" effect="light" style="margin-left: 4px">
+            {{ t('settings.defaultASR') }}
           </el-tag>
-          <el-tag v-if="isDef(c.m, 'vision')" size="small" type="warning" effect="light" style="margin-left: 4px">
+          <el-tag v-if="isDef(c.m, 'vision')" size="small" type="success" effect="light" style="margin-left: 4px">
             {{ t('settings.defaultVision') }}
+          </el-tag>
+          <el-tag v-if="isDef(c.m, 'tts')" size="small" type="success" effect="light" style="margin-left: 4px">
+            {{ t('settings.defaultTTS') }}
           </el-tag>
           <el-tag v-if="!c.m.enabled" size="small" type="info" effect="plain" style="margin-left: 4px">
             {{ t('settings.disabledTag') }}
@@ -303,17 +312,23 @@ onMounted(() => void loadModels())
                   <el-dropdown-item v-if="!isDef(c.m, 'chat')" command="setDefaultChat" :disabled="!c.m.enabled">
                     {{ t('settings.setDefaultChat') }}
                   </el-dropdown-item>
-                  <el-dropdown-item v-if="isDef(c.m, 'voice')" command="clearDefaultVoice">
-                    {{ t('settings.clearDefaultVoice') }}
+                  <el-dropdown-item v-if="isDef(c.m, 'asr')" command="clearDefaultASR">
+                    {{ t('settings.clearDefaultASR') }}
                   </el-dropdown-item>
-                  <el-dropdown-item v-else command="setDefaultVoice" :disabled="!c.m.enabled">
-                    {{ t('settings.setDefaultVoice') }}
+                  <el-dropdown-item v-else command="setDefaultASR" :disabled="!c.m.enabled">
+                    {{ t('settings.setDefaultASR') }}
                   </el-dropdown-item>
                   <el-dropdown-item v-if="isDef(c.m, 'vision')" command="clearDefaultVision">
                     {{ t('settings.clearDefaultVision') }}
                   </el-dropdown-item>
                   <el-dropdown-item v-else command="setDefaultVision" :disabled="!c.m.enabled">
                     {{ t('settings.setDefaultVision') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="isDef(c.m, 'tts')" command="clearDefaultTTS">
+                    {{ t('settings.clearDefaultTTS') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item v-else command="setDefaultTTS" :disabled="!c.m.enabled">
+                    {{ t('settings.setDefaultTTS') }}
                   </el-dropdown-item>
                   <el-dropdown-item command="edit" divided>{{ t('common.edit') }}</el-dropdown-item>
                   <el-dropdown-item command="toggle" :disabled="hasAnyDefault(c.m) && c.m.enabled">

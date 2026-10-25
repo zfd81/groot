@@ -79,7 +79,7 @@ func TestModelsHandler_CreateAndList(t *testing.T) {
 	if len(resp.Models[0].DefaultTypes) != 1 || resp.Models[0].DefaultTypes[0] != "chat" {
 		t.Errorf("首个模型应为默认对话模型, got %v", resp.Models[0].DefaultTypes)
 	}
-	if resp.Defaults.Voice != "" || resp.Defaults.Vision != "" {
+	if resp.Defaults.ASR != "" || resp.Defaults.Vision != "" || resp.Defaults.TTS != "" {
 		t.Errorf("未设置的类型应为空串, got %+v", resp.Defaults)
 	}
 }
@@ -191,9 +191,9 @@ func TestModelsHandler_SetDefaultByType(t *testing.T) {
 	h := newModelsHandlerWithTwo(t)
 	name := map[string]string{"name": "backup"}
 
-	rc := callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/backup/default?type=voice", name)
+	rc := callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/backup/default?type=asr", name)
 	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("SetDefault voice: %d %s", rc.Response.StatusCode(), rc.Response.Body())
+		t.Fatalf("SetDefault asr: %d %s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	rc = callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/gpt-4o/default?type=vision",
 		map[string]string{"name": "gpt-4o"})
@@ -201,8 +201,9 @@ func TestModelsHandler_SetDefaultByType(t *testing.T) {
 		t.Fatalf("SetDefault vision: %d %s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 
+	// 未设置的 tts 应为空串
 	resp := listModels(t, h)
-	want := types.DefaultModels{Chat: "gpt-4o", Voice: "backup", Vision: "gpt-4o"}
+	want := types.DefaultModels{Chat: "gpt-4o", ASR: "backup", Vision: "gpt-4o", TTS: ""}
 	if resp.Defaults != want {
 		t.Errorf("defaults = %+v, want %+v", resp.Defaults, want)
 	}
@@ -214,8 +215,25 @@ func TestModelsHandler_SetDefaultByType(t *testing.T) {
 				t.Errorf("gpt-4o default_types = %q, want chat,vision", got)
 			}
 		case "backup":
-			if got != "voice" {
-				t.Errorf("backup default_types = %q, want voice", got)
+			if got != "asr" {
+				t.Errorf("backup default_types = %q, want asr", got)
+			}
+		}
+	}
+
+	rc = callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/backup/default?type=tts", name)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("SetDefault tts: %d %s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	resp = listModels(t, h)
+	want = types.DefaultModels{Chat: "gpt-4o", ASR: "backup", Vision: "gpt-4o", TTS: "backup"}
+	if resp.Defaults != want {
+		t.Errorf("defaults = %+v, want %+v", resp.Defaults, want)
+	}
+	for _, m := range resp.Models {
+		if m.Name == "backup" {
+			if got := strings.Join(m.DefaultTypes, ","); got != "asr,tts" {
+				t.Errorf("backup default_types = %q, want asr,tts", got)
 			}
 		}
 	}
@@ -237,10 +255,16 @@ func TestModelsHandler_SetDefaultOmittedType(t *testing.T) {
 func TestModelsHandler_DefaultInvalidType(t *testing.T) {
 	h := newModelsHandlerWithTwo(t)
 	name := map[string]string{"name": "backup"}
-	for _, fn := range []func(context.Context, *app.RequestContext){h.SetDefault, h.ClearDefault} {
-		rc := callJSONQuery(fn, consts.MethodPut, "/web/models/backup/default?type=audio", name)
-		if rc.Response.StatusCode() != 400 || !strings.Contains(string(rc.Response.Body()), "invalid_request") {
-			t.Errorf("非法 type 应 400 invalid_request, got %d %s", rc.Response.StatusCode(), rc.Response.Body())
+	// voice 已改名为 asr，不再是合法标识
+	for _, typ := range []string{"audio", "voice"} {
+		for _, fn := range []func(context.Context, *app.RequestContext){h.SetDefault, h.ClearDefault} {
+			rc := callJSONQuery(fn, consts.MethodPut, "/web/models/backup/default?type="+typ, name)
+			if rc.Response.StatusCode() != 400 || !strings.Contains(string(rc.Response.Body()), "invalid_request") {
+				t.Errorf("type=%s 应 400 invalid_request, got %d %s", typ, rc.Response.StatusCode(), rc.Response.Body())
+			}
+			if !strings.Contains(string(rc.Response.Body()), "chat、asr、vision、tts") {
+				t.Errorf("type=%s 错误信息应列出 chat、asr、vision、tts: %s", typ, rc.Response.Body())
+			}
 		}
 	}
 }
@@ -248,20 +272,57 @@ func TestModelsHandler_DefaultInvalidType(t *testing.T) {
 func TestModelsHandler_ClearDefault(t *testing.T) {
 	h := newModelsHandlerWithTwo(t)
 	name := map[string]string{"name": "backup"}
-	callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/backup/default?type=voice", name)
+	callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/backup/default?type=asr", name)
 
-	// 持有语音默认的模型不可删除
+	// 持有 ASR 默认的模型不可删除
 	rc := callJSON(h.Delete, consts.MethodDelete, "", name)
 	if rc.Response.StatusCode() != 409 {
-		t.Errorf("删除默认语音模型应 409, got %d", rc.Response.StatusCode())
+		t.Errorf("删除默认 ASR 模型应 409, got %d", rc.Response.StatusCode())
 	}
 
-	rc = callJSONQuery(h.ClearDefault, consts.MethodDelete, "/web/models/backup/default?type=voice", name)
+	rc = callJSONQuery(h.ClearDefault, consts.MethodDelete, "/web/models/backup/default?type=asr", name)
 	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("ClearDefault voice: %d %s", rc.Response.StatusCode(), rc.Response.Body())
+		t.Fatalf("ClearDefault asr: %d %s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if d := listModels(t, h).Defaults.Voice; d != "" {
-		t.Errorf("取消后 defaults.voice 应为空, got %q", d)
+	if d := listModels(t, h).Defaults.ASR; d != "" {
+		t.Errorf("取消后 defaults.asr 应为空, got %q", d)
+	}
+	for _, m := range listModels(t, h).Models {
+		if m.Name == "backup" && (m.DefaultTypes == nil || len(m.DefaultTypes) != 0) {
+			t.Errorf("非默认模型 default_types 应为空数组, got %#v", m.DefaultTypes)
+		}
+	}
+
+	rc = callJSON(h.Delete, consts.MethodDelete, "", name)
+	if rc.Response.StatusCode() != 200 {
+		t.Errorf("取消默认后删除应成功, got %d", rc.Response.StatusCode())
+	}
+}
+
+// TestModelsHandler_ClearDefaultTTS tts 默认的设置 / 取消 / 取消后可删除，与 asr 用例同构。
+func TestModelsHandler_ClearDefaultTTS(t *testing.T) {
+	h := newModelsHandlerWithTwo(t)
+	name := map[string]string{"name": "backup"}
+	rc := callJSONQuery(h.SetDefault, consts.MethodPut, "/web/models/backup/default?type=tts", name)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("SetDefault tts: %d %s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if d := listModels(t, h).Defaults.TTS; d != "backup" {
+		t.Errorf("defaults.tts = %q, want backup", d)
+	}
+
+	// 持有 TTS 默认的模型不可删除
+	rc = callJSON(h.Delete, consts.MethodDelete, "", name)
+	if rc.Response.StatusCode() != 409 {
+		t.Errorf("删除默认 TTS 模型应 409, got %d", rc.Response.StatusCode())
+	}
+
+	rc = callJSONQuery(h.ClearDefault, consts.MethodDelete, "/web/models/backup/default?type=tts", name)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("ClearDefault tts: %d %s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if d := listModels(t, h).Defaults.TTS; d != "" {
+		t.Errorf("取消后 defaults.tts 应为空, got %q", d)
 	}
 	for _, m := range listModels(t, h).Models {
 		if m.Name == "backup" && (m.DefaultTypes == nil || len(m.DefaultTypes) != 0) {

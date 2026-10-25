@@ -11,22 +11,25 @@ type DefaultFlag int
 
 const (
 	DefaultChat   DefaultFlag = 1 << iota // 1 默认对话模型
-	DefaultVoice                          // 2 默认语音模型
+	DefaultASR                            // 2 默认 ASR（语音识别）模型
 	DefaultVision                         // 4 默认视觉模型
+	DefaultTTS                            // 8 默认 TTS（语音合成）模型
 )
 
 // AllDefaultFlags 全部默认类型，顺序即对外展示顺序
-var AllDefaultFlags = []DefaultFlag{DefaultChat, DefaultVoice, DefaultVision}
+var AllDefaultFlags = []DefaultFlag{DefaultChat, DefaultASR, DefaultVision, DefaultTTS}
 
-// String 返回默认类型的字符串标识（chat / voice / vision），供 HTTP 层使用
+// String 返回默认类型的字符串标识（chat / asr / vision / tts），供 HTTP 层使用
 func (f DefaultFlag) String() string {
 	switch f {
 	case DefaultChat:
 		return "chat"
-	case DefaultVoice:
-		return "voice"
+	case DefaultASR:
+		return "asr"
 	case DefaultVision:
 		return "vision"
+	case DefaultTTS:
+		return "tts"
 	}
 	return ""
 }

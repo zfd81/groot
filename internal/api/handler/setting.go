@@ -53,8 +53,8 @@ func NewSettingHandler(deps SettingHandlerDeps) *SettingHandler {
 }
 
 // GetVoice 处理 GET /web/settings/voice。
-// 配置表中没有 voice.model 行时，说明识别模型从未确定过：存在可用的默认语音模型就把它
-// 写入作为初值，此后识别模型与默认语音模型相互独立；不存在则返回空串且不写入，
+// 配置表中没有 voice.model 行时，说明识别模型从未确定过：存在可用的默认 ASR 模型就把它
+// 写入作为初值，此后识别模型与默认 ASR 模型相互独立；不存在则返回空串且不写入，
 // 下次读取重新判定。并发的首次读取写入的是同一个模型名，结果一致，无需加锁。
 //
 // 已知竞态：首次读取的 GET 若与一次清空识别模型的 PUT 交错（GET 读到行不存在 →
@@ -81,16 +81,16 @@ func (h *SettingHandler) GetVoice(ctx context.Context, rc *app.RequestContext) {
 	})
 }
 
-// initVoiceModel 识别模型从未确定时，以可用的默认语音模型为初值写入并返回；
-// 无可用默认语音模型时返回空串且不写入。错误已在内部记录日志。
+// initVoiceModel 识别模型从未确定时，以可用的默认 ASR 模型为初值写入并返回；
+// 无可用默认 ASR 模型时返回空串且不写入。错误已在内部记录日志。
 func (h *SettingHandler) initVoiceModel(ctx context.Context) (string, error) {
-	m, err := h.models.Resolve(ctx, "", repo.DefaultVoice)
+	m, err := h.models.Resolve(ctx, "", repo.DefaultASR)
 	if errors.Is(err, llm.ErrNoDefaultModel) || errors.Is(err, llm.ErrModelDisabled) {
-		// 没有可用的默认语音模型：保持空串，不写入
+		// 没有可用的默认 ASR 模型：保持空串，不写入
 		return "", nil
 	}
 	if err != nil {
-		h.log.Error("查询默认语音模型失败", zap.Error(err))
+		h.log.Error("查询默认 ASR 模型失败", zap.Error(err))
 		return "", err
 	}
 	if err = h.settings.SetVoiceModel(ctx, m.Name); err != nil {
@@ -117,7 +117,7 @@ func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 				rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
 				return
 			}
-			h.log.Error("校验语音模型失败", zap.String("model", name), zap.Error(err))
+			h.log.Error("校验识别模型失败", zap.String("model", name), zap.Error(err))
 			rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
 			return
 		}
@@ -129,6 +129,48 @@ func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 	})
 	if err != nil {
 		h.log.Error("保存语音配置失败", zap.Error(err))
+		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		return
+	}
+	rc.JSON(200, utils.H{"status": "ok"})
+}
+
+// GetSpeech 处理 GET /web/settings/speech。
+func (h *SettingHandler) GetSpeech(ctx context.Context, rc *app.RequestContext) {
+	v, err := h.settings.Speech(ctx)
+	if err != nil {
+		h.log.Error("读取语音合成配置失败", zap.Error(err))
+		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		return
+	}
+	rc.JSON(200, types.SpeechSettingsResponse{
+		Voice:        v.Voice,
+		Instructions: v.Instructions,
+	})
+}
+
+// PutSpeech 处理 PUT /web/settings/speech，两个字段整体保存。
+// 音色、风格指令的取值由各 TTS 模型自行定义，无法在此校验是否存在，
+// 只去掉首尾空白并限制长度；上限与合成接口对同名字段的限制一致。
+func (h *SettingHandler) PutSpeech(ctx context.Context, rc *app.RequestContext) {
+	var req types.SpeechSettingsRequest
+	if err := rc.BindJSON(&req); err != nil {
+		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		return
+	}
+
+	v := setting.SpeechSettings{
+		Voice:        strings.TrimSpace(req.Voice),
+		Instructions: strings.TrimSpace(req.Instructions),
+	}
+	// language 不属于 Web 朗读配置，传空串占位，只校验 voice 与 instructions
+	if msg, ok := checkSpeechFieldLimits(v.Voice, "", v.Instructions); !ok {
+		rc.JSON(400, utils.H{"status": "invalid_request", "message": msg})
+		return
+	}
+
+	if err := h.settings.SetSpeech(ctx, v); err != nil {
+		h.log.Error("保存语音合成配置失败", zap.Error(err))
 		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
 		return
 	}

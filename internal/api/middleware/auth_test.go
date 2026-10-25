@@ -195,7 +195,7 @@ func TestAuth_EmptyPermissionsDenied(t *testing.T) {
 	}
 }
 
-// TestGetRequiredPermission 路径与方法到权限点的映射表；/audio/transcriptions 与 /chat 共用 chat 权限。
+// TestGetRequiredPermission 路径与方法到权限点的映射表；/audio/transcriptions、/audio/speech 与 /chat 共用 chat 权限。
 func TestGetRequiredPermission(t *testing.T) {
 	tests := []struct {
 		path   string
@@ -205,6 +205,8 @@ func TestGetRequiredPermission(t *testing.T) {
 		{"/chat", consts.MethodPost, "chat"},
 		{"/audio/transcriptions", consts.MethodPost, "chat"},
 		{"/audio/transcriptions", consts.MethodGet, "all"},
+		{"/audio/speech", consts.MethodPost, "chat"},
+		{"/audio/speech", consts.MethodGet, "all"},
 		{"/chat/status/x", consts.MethodGet, "status"},
 		{"/chat/x", consts.MethodGet, "detail"},
 		{"/chat/x/y", consts.MethodGet, "detail"},

@@ -326,11 +326,11 @@
 
 ---
 
-### 1.5 语音输入与配置表测试
+### 1.5 语音输入、语音合成与配置表测试
 
 位于 `internal/db/migrate_test.go`、`internal/repo/settingdb/setting_test.go`、`internal/repo/repofactory/factory_test.go`、
-`internal/setting/settings_test.go`、`internal/llm/transcription_test.go`、
-`internal/api/handler/transcription_test.go` 与 `internal/api/handler/setting_test.go`。
+`internal/setting/settings_test.go`、`internal/llm/transcription_test.go`、`internal/llm/speech_test.go`、
+`internal/api/handler/transcription_test.go`、`internal/api/handler/speech_test.go` 与 `internal/api/handler/setting_test.go`。
 
 覆盖点：
 
@@ -340,6 +340,9 @@
 - 转录客户端：multipart 字段与文件名、`/v1` 补齐表驱动、language 为空不下发、上游错误透传原文与 upstreamMessage 表驱动、空 / 空白文本判错、200 非 JSON 判错、ctx 取消
 - 转录 handler：成功响应含 text 与 model、缺 file、未配置默认语音模型、模型不存在、模型解析顺序（表单 model → 请求头 X-Model-Name → 默认语音模型）、显式指定失效模型不回落、不读取配置表 voice.model、扩展名白名单与无扩展名、上游 502 透传、空文本 400、按 MB 换算的大小上限
 - 设置 handler：无 voice.model 行且有默认语音模型时返回该模型并写入配置表，之后取消默认语音模型仍返回该模型；无默认语音模型时返回空串且不写入，之后设置默认语音模型再读取返回该模型；voice.model 行为空串时不自动填充；保存时 model 为空直接保存（含所选模型已禁用时清空）、模型不存在或已禁用拒绝且消息含模型名、非法 JSON、model 裁剪空白
+- 合成客户端：请求打到 `/v1/audio/speech` 且携带 Bearer 与 JSON Content-Type、JSON 字段（含 language / instructions）原样下发、上游请求体不含 speaker / instruct、voice / language / instructions / response_format 为空时不下发、`/v1` 补齐、上游未给 Content-Type 时按 response_format 推断（表驱动，空格式回落 audio/mpeg）、上游错误透传原文且为 ErrUpstream、ctx 取消、speechContentType 六种格式映射
+- 合成 handler：成功响应原样转发上游字节且带 Content-Type 与 X-Model-Name、voice / response_format 透传、language / instructions 裁剪空白后透传且为空时不下发（`TestSpeechHandler_PassesLanguageInstructions` / `TestSpeechHandler_OmitsEmptyLanguageInstructions`）、对外接口旧字段 speaker / instruct 被忽略且不下发（`TestSpeechHandler_IgnoresLegacyFields`）、voice / language / instructions 长度上限 64 / 16 / 500（表驱动：恰好 N 通过，N+1 返回 400 invalid_request 且 message 为「<字段> 超过 N 字符上限」、不请求上游）、非法 JSON、input 空白、input 超过 4096 字符、不支持的 response_format、未配置默认 TTS 模型、显式指定模型不要求持有 tts 默认、模型解析顺序（请求体 model → 请求头 X-Model-Name → 默认 TTS 模型）、显式指定不存在的模型不回落、上游 502 透传
+- speech 配置：表为空回落默认值（voice / instructions 均为空串）、speech.voice / speech.instructions 两行存在时读出、只有部分行时其余回落空串、表中遗留的 speech.instruct / speech.speaker / speech.language 行不读取且 SetSpeech 不触碰、SetSpeech 两字段整体回写后回读（清空的字段写入空串而非保留旧值）、仓库为 nil 时读用默认值 / 写返回 ErrNoSettingStore、仓库错误透传；设置 handler：GET 默认返回 `{"voice":"","instructions":""}`、PUT 两字段回读裁剪空白且未传字段清空、带已废弃 speaker / language / instruct 字段的 PUT 返回 200 且 GET 不含这些键、voice / instructions 长度上限 64 / 500（`TestSettingHandler_PutSpeechFieldLimits` 表驱动：恰好 N 通过，N+1 返回 400 invalid_request 且不写入）、非法 JSON 400 invalid_request
 
 ---
 
@@ -390,11 +393,11 @@
 
 覆盖点：
 
-- 类型定义：chat=1、voice=2、vision=4；字符串标识互转，非法标识解析失败；`Has` 按位判断
+- 类型定义：chat=1、asr=2、vision=4、tts=8；字符串标识互转，`voice` 等非法标识解析失败；`Has` 按位判断
 - 建表语句：三方言 models 表含 `default_flags INTEGER NOT NULL DEFAULT 0`，不含 `is_default`
-- 仓库层：无默认时 `GetDefault` 按类型返回 ErrNotFound；`SetDefault` 置位并清除原持有者（每类型唯一）；一模型多默认（chat+vision=5）；三种类型互不影响；`ClearDefault` 只清目标位、未持有时无操作；目标不存在返回 ErrNotFound 且事务回滚；`Create` 原样写入、`Update` 不改 default_flags
-- 业务层：首个模型只获得对话默认；非首个模型忽略传入的默认类型；`Resolve` 名称优先、按类型回落、无默认错误按类型区分信息且可识别为 ErrNoDefaultModel；持有语音默认的模型不可删除、不可禁用；禁用模型不可设为默认；取消对话默认返回 ErrChatDefaultRequired；取消未持有的默认直接成功；不存在模型返回 ErrModelNotFound
-- 模型接口：`type` 省略按 chat；非法 `type` 返回 400 invalid_request；列表 `default_types` 按 chat、voice、vision 排序、非默认模型为 `[]`；`defaults` 三字段未设置为空串；取消对话默认返回 400 default_chat_required；取消语音默认后可删除
+- 仓库层：无默认时 `GetDefault` 按类型返回 ErrNotFound；`SetDefault` 置位并清除原持有者（每类型唯一）；一模型多默认（chat+vision=5）；各类型互不影响；`ClearDefault` 只清目标位、未持有时无操作；目标不存在返回 ErrNotFound 且事务回滚；`Create` 原样写入、`Update` 不改 default_flags
+- 业务层：首个模型只获得对话默认；非首个模型忽略传入的默认类型；`Resolve` 名称优先、按类型回落、无默认错误按类型区分信息（ASR / 视觉 / TTS）且可识别为 ErrNoDefaultModel；持有 ASR 默认的模型不可删除、不可禁用；禁用模型不可设为默认；取消对话默认返回 ErrChatDefaultRequired；取消未持有的默认直接成功；不存在模型返回 ErrModelNotFound
+- 模型接口：`type` 省略按 chat；非法 `type` 返回 400 invalid_request；列表 `default_types` 按 chat、asr、vision、tts 排序、非默认模型为 `[]`；`defaults` 四字段（chat / asr / vision / tts）未设置为空串；取消对话默认返回 400 default_chat_required；取消 ASR / TTS 默认后可删除
 
 ---
 
@@ -617,13 +620,16 @@ skills/mcp/logs 等为固定目录（目录配置项已裁剪），仅日志目�
 | TestRuntimeStateRunningCount | test_runtime_state.py | 运行计数 |
 | TestRuntimeStateActiveChatFields | test_runtime_state.py | 活动聊天字段 |
 
-### 2.14 语音转录测试
+### 2.14 语音转录与合成测试
 
 | 测试类 | 测试文件 | 测试内容 |
 |-------|---------|---------|
 | TestTranscriptionErrors | test_transcription.py | 缺文件、扩展名、显式指定不存在的模型（400 invalid_model，不回落默认语音模型）、超大文件、未鉴权 |
 | TestTranscriptionSuccess | test_transcription.py | 真实模型转录（需 GROOT_VOICE_MODEL） |
 | TestVoiceSettings | test_voice_settings.py | `GET /web/settings/voice` 响应体只含 model、auto_send；清空 model 保存成功且回读为空串；不存在的模型 400 invalid_model 且消息含模型名；非法 JSON 400 invalid_request；未登录 401 |
+| TestSpeechErrors | test_speech.py | `POST /audio/speech` 未鉴权 401、非法 JSON、input 空白、不支持的 response_format（均 400 invalid_request）、显式指定不存在的模型（400 invalid_model，不回落默认 TTS 模型） |
+| TestSpeechSuccess | test_speech.py | 真实模型合成 mp3（需 GROOT_TTS_MODEL）：200、Content-Type 以 audio/ 开头、音频非空、X-Model-Name 为所用模型 |
+| TestSpeechSettings | test_speech_settings.py | `GET /web/settings/speech` 响应体恰为 voice / instructions 两个键；PUT 回读裁剪空白；voice 超过 64 字符、instructions 超过 500 字符 400 invalid_request 且不写入；已废弃的 speaker / language / instruct 字段被忽略；非法 JSON 400 invalid_request；未登录 401 |
 
 ### 2.15 安全测试
 
@@ -864,9 +870,9 @@ curl -X POST http://localhost:8080/chat \
 | 重名冲突 | test_models_api.py | 创建同名模型返回 409 `model_name_exists` |
 | api_key 脱敏 | test_models_api.py | 列表响应中 api_key 只保留尾 4 位，不含明文原文（`${ENV_VAR}` 引用原样展示） |
 | api_key 留空不改 | test_models_api.py | 更新时 api_key 传空字符串，库中原密钥保持不变，其他字段正常更新 |
-| 设默认 | test_models_api.py | `PUT /web/models/{name}/default?type=chat\|voice\|vision` 设置对应类型默认，每类型有且只有一个持有者；type 省略按 chat |
-| 取消默认 | test_models_api.py | `DELETE /web/models/{name}/default?type=voice\|vision` 返回 200 且 `defaults` 对应字段清空，取消后可删除；`type=chat` 返回 400 `default_chat_required` |
-| 非法默认类型 | test_models_api.py | `type` 取值非 chat / voice / vision 时返回 400 `invalid_request` |
+| 设默认 | test_models_api.py | `PUT /web/models/{name}/default?type=chat\|asr\|vision\|tts` 设置对应类型默认，每类型有且只有一个持有者；type 省略按 chat |
+| 取消默认 | test_models_api.py | `DELETE /web/models/{name}/default?type=asr\|vision\|tts` 返回 200 且 `defaults` 对应字段清空，取消后可删除；`type=chat` 返回 400 `default_chat_required` |
+| 非法默认类型 | test_models_api.py | `type` 取值非 chat / asr / vision / tts 时返回 400 `invalid_request` |
 | 启用/禁用 | test_models_api.py | 更新 `enabled` 字段生效；禁用模型不可设为默认（返回 400 `model_disabled`） |
 | 更新不存在模型 | test_models_api.py | `PUT /web/models/{不存在}` 返回 404 `model_not_found` |
 | 连接测试 | test_models_api.py | `POST /web/models/test` 对不可达地址返回 200 且 `status: unhealthy` |

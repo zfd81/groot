@@ -2,11 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../api/client'
 import type { ModelsResp, ModelInfo, DefaultModels } from '../api/types'
+import { useSpeechStore } from './speech'
 
 // 元数据：模型列表、各类型默认模型、子 Agent 列表，供聊天输入区的切换控件与设置面板使用。
 export const useMetaStore = defineStore('meta', () => {
   const models = ref<ModelInfo[]>([])
-  const defaults = ref<DefaultModels>({ chat: '', voice: '', vision: '' })
+  const defaults = ref<DefaultModels>({ chat: '', asr: '', vision: '', tts: '' })
   // 默认对话模型，聊天输入区的模型下拉框以它标注「默认」
   const defaultModel = computed(() => defaults.value.chat)
   const agents = ref<string[]>([])
@@ -19,7 +20,7 @@ export const useMetaStore = defineStore('meta', () => {
       models.value = resp.models || []
       // 按 Partial 合并：响应缺字段时以空串兜底
       const got: Partial<DefaultModels> = resp.defaults || {}
-      defaults.value = { chat: '', voice: '', vision: '', ...got }
+      defaults.value = { chat: '', asr: '', vision: '', tts: '', ...got }
     } catch {
       // 模型列表拉取失败不阻断聊天
     }
@@ -30,6 +31,8 @@ export const useMetaStore = defineStore('meta', () => {
       // 子 Agent 列表可选
     }
     loaded.value = true
+    // 默认 TTS 模型被取消：朗读入口随之隐藏，已有的播放队列也要清空并停止。
+    if (defaults.value.tts === '') useSpeechStore().stop()
   }
 
   // 模型管理界面增删改后调用，强制重新拉取模型列表

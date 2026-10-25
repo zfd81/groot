@@ -81,17 +81,17 @@ func (h *TranscriptionHandler) Serve(ctx context.Context, rc *app.RequestContext
 		return
 	}
 
-	// Resolve 按「显式模型名 → 默认语音模型」解析并校验 enabled：
-	// 显式指定的模型不存在或禁用时直接报错，不回落到默认语音模型；
+	// Resolve 按「显式模型名 → 默认 ASR 模型」解析并校验 enabled：
+	// 显式指定的模型不存在或禁用时直接报错，不回落到默认 ASR 模型；
 	// 三类错误对调用方都是「模型不可用」，统一映射为 invalid_model，错误原文已含模型名或类型。
-	m, err := h.models.Resolve(ctx, explicitModelName(rc), repo.DefaultVoice)
+	m, err := h.models.Resolve(ctx, explicitModelName(rc), repo.DefaultASR)
 	if err != nil {
 		if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) ||
 			errors.Is(err, llm.ErrNoDefaultModel) {
 			rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
 			return
 		}
-		h.log.Error("查询语音模型失败", zap.Error(err))
+		h.log.Error("查询 ASR 模型失败", zap.Error(err))
 		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
 		return
 	}

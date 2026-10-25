@@ -254,6 +254,151 @@ func TestSettings_SetVoiceModelRepoError(t *testing.T) {
 	}
 }
 
+func TestSettings_SpeechDefaults(t *testing.T) {
+	s := New(config.Bootstrap{}, newFakeRepo())
+
+	v, err := s.Speech(context.Background())
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	if want := defaultSpeech(); v != want {
+		t.Errorf("Speech = %+v, want %+v（表为空时应返回默认值）", v, want)
+	}
+	if v.Voice != "" {
+		t.Errorf("Voice = %q, want 空串", v.Voice)
+	}
+}
+
+func TestSettings_SpeechFromTable(t *testing.T) {
+	f := newFakeRepo()
+	f.data[key(repo.ScopeGlobal, "", KeySpeechVoice)] = "alloy"
+	f.data[key(repo.ScopeGlobal, "", KeySpeechInstructions)] = "用轻快的语气朗读"
+
+	v, err := New(config.Bootstrap{}, f).Speech(context.Background())
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	want := SpeechSettings{Voice: "alloy", Instructions: "用轻快的语气朗读"}
+	if v != want {
+		t.Errorf("Speech = %+v, want %+v", v, want)
+	}
+}
+
+func TestSettings_SpeechFromTablePartial(t *testing.T) {
+	f := newFakeRepo()
+	f.data[key(repo.ScopeGlobal, "", KeySpeechInstructions)] = "slow"
+
+	v, err := New(config.Bootstrap{}, f).Speech(context.Background())
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	want := SpeechSettings{Instructions: "slow"}
+	if v != want {
+		t.Errorf("Speech = %+v, want %+v（缺失的键应回落为空串）", v, want)
+	}
+}
+
+func TestSettings_SetSpeechRoundTrip(t *testing.T) {
+	f := newFakeRepo()
+	s := New(config.Bootstrap{}, f)
+	ctx := context.Background()
+
+	in := SpeechSettings{Voice: "nova", Instructions: "slow"}
+	if err := s.SetSpeech(ctx, in); err != nil {
+		t.Fatalf("SetSpeech: %v", err)
+	}
+	rows := map[string]string{
+		KeySpeechVoice:        "nova",
+		KeySpeechInstructions: "slow",
+	}
+	for k, want := range rows {
+		if got := f.data[key(repo.ScopeGlobal, "", k)]; got != want {
+			t.Errorf("表中 %s = %q, want %q", k, got, want)
+		}
+	}
+	if len(f.data) != len(rows) {
+		t.Errorf("表中共 %d 行, want %d 行（只应写入 voice / instructions 两行）: %v", len(f.data), len(rows), f.data)
+	}
+	out, err := s.Speech(ctx)
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	if out != in {
+		t.Errorf("Speech = %+v, want %+v", out, in)
+	}
+
+	// 整体保存：把部分字段清空也要写入空串，而不是保留旧值
+	if err := s.SetSpeech(ctx, SpeechSettings{Voice: "nova"}); err != nil {
+		t.Fatalf("SetSpeech: %v", err)
+	}
+	out, err = s.Speech(ctx)
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	if want := (SpeechSettings{Voice: "nova"}); out != want {
+		t.Errorf("Speech = %+v, want %+v（清空的字段应回读为空串）", out, want)
+	}
+}
+
+// 历史遗留的 speech.speaker / speech.language / speech.instruct 行：不读取、不覆盖、不删除。
+func TestSettings_SpeechIgnoresLegacyKeys(t *testing.T) {
+	f := newFakeRepo()
+	f.data[key(repo.ScopeGlobal, "", "speech.speaker")] = "vivian"
+	f.data[key(repo.ScopeGlobal, "", "speech.language")] = "zh"
+	f.data[key(repo.ScopeGlobal, "", "speech.instruct")] = "旧指令"
+	s := New(config.Bootstrap{}, f)
+	ctx := context.Background()
+
+	v, err := s.Speech(ctx)
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	if want := defaultSpeech(); v != want {
+		t.Errorf("Speech = %+v, want %+v（遗留键不应影响读取结果）", v, want)
+	}
+
+	if err := s.SetSpeech(ctx, SpeechSettings{Voice: "x"}); err != nil {
+		t.Fatalf("SetSpeech: %v", err)
+	}
+	if got := f.data[key(repo.ScopeGlobal, "", "speech.speaker")]; got != "vivian" {
+		t.Errorf("表中 speech.speaker = %q, want %q（遗留行不应被改动）", got, "vivian")
+	}
+	if got := f.data[key(repo.ScopeGlobal, "", "speech.language")]; got != "zh" {
+		t.Errorf("表中 speech.language = %q, want %q（遗留行不应被改动）", got, "zh")
+	}
+	if got := f.data[key(repo.ScopeGlobal, "", "speech.instruct")]; got != "旧指令" {
+		t.Errorf("表中 speech.instruct = %q, want %q（遗留行不应被改动）", got, "旧指令")
+	}
+}
+
+func TestSettings_SpeechNilRepo(t *testing.T) {
+	s := New(config.Bootstrap{}, nil)
+
+	v, err := s.Speech(context.Background())
+	if err != nil {
+		t.Fatalf("Speech: %v", err)
+	}
+	if v != defaultSpeech() {
+		t.Errorf("Speech = %+v, want 默认值", v)
+	}
+	if err := s.SetSpeech(context.Background(), SpeechSettings{Voice: "x"}); !errors.Is(err, ErrNoSettingStore) {
+		t.Fatalf("SetSpeech err = %v, want ErrNoSettingStore", err)
+	}
+}
+
+func TestSettings_SpeechRepoError(t *testing.T) {
+	f := newFakeRepo()
+	f.err = errors.New("boom")
+	s := New(config.Bootstrap{}, f)
+
+	if _, err := s.Speech(context.Background()); !errors.Is(err, f.err) {
+		t.Fatalf("Speech err = %v, want boom", err)
+	}
+	if err := s.SetSpeech(context.Background(), SpeechSettings{Voice: "x"}); !errors.Is(err, f.err) {
+		t.Fatalf("SetSpeech err = %v, want boom", err)
+	}
+}
+
 func TestParseBool(t *testing.T) {
 	cases := []struct {
 		raw      string

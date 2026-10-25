@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -92,53 +93,53 @@ func TestSettingHandler_GetVoiceDefaults(t *testing.T) {
 
 	out := getVoice(t, h)
 	if out.Model != "" || out.AutoSend {
-		t.Errorf("表为空且无默认语音模型时应返回默认值，得到 %+v", out)
+		t.Errorf("表为空且无默认 ASR 模型时应返回默认值，得到 %+v", out)
 	}
 	if voiceModelSet(t, h) {
-		t.Error("无默认语音模型时不应写入 voice.model")
+		t.Error("无默认 ASR 模型时不应写入 voice.model")
 	}
 }
 
-// TestSettingHandler_GetVoiceInitFromDefaultVoice 首次读取以默认语音模型为初值并写入，
-// 之后取消默认语音模型不影响已写入的识别模型。
-func TestSettingHandler_GetVoiceInitFromDefaultVoice(t *testing.T) {
+// TestSettingHandler_GetVoiceInitFromDefaultASR 首次读取以默认 ASR 模型为初值并写入，
+// 之后取消默认 ASR 模型不影响已写入的识别模型。
+func TestSettingHandler_GetVoiceInitFromDefaultASR(t *testing.T) {
 	h := newSettingHandlerForTest(t, "whisper-1", true)
 	ctx := context.Background()
-	if err := h.models.SetDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+	if err := h.models.SetDefault(ctx, "whisper-1", repo.DefaultASR); err != nil {
 		t.Fatalf("SetDefault: %v", err)
 	}
 
 	if out := getVoice(t, h); out.Model != "whisper-1" {
-		t.Fatalf("Model = %q, want 默认语音模型 whisper-1", out.Model)
+		t.Fatalf("Model = %q, want 默认 ASR 模型 whisper-1", out.Model)
 	}
 	if !voiceModelSet(t, h) {
-		t.Fatal("取到默认语音模型后应写入 voice.model")
+		t.Fatal("取到默认 ASR 模型后应写入 voice.model")
 	}
 
-	if err := h.models.ClearDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+	if err := h.models.ClearDefault(ctx, "whisper-1", repo.DefaultASR); err != nil {
 		t.Fatalf("ClearDefault: %v", err)
 	}
 	if out := getVoice(t, h); out.Model != "whisper-1" {
-		t.Errorf("取消默认语音模型后 Model = %q, want 仍为 whisper-1", out.Model)
+		t.Errorf("取消默认 ASR 模型后 Model = %q, want 仍为 whisper-1", out.Model)
 	}
 }
 
-// TestSettingHandler_GetVoiceLaterDefaultVoice 首次读取时无默认语音模型，
-// 之后设置了默认语音模型，再读取时取其作为初值。
-func TestSettingHandler_GetVoiceLaterDefaultVoice(t *testing.T) {
+// TestSettingHandler_GetVoiceLaterDefaultASR 首次读取时无默认 ASR 模型，
+// 之后设置了默认 ASR 模型，再读取时取其作为初值。
+func TestSettingHandler_GetVoiceLaterDefaultASR(t *testing.T) {
 	h := newSettingHandlerForTest(t, "whisper-1", true)
 
 	if out := getVoice(t, h); out.Model != "" {
 		t.Fatalf("Model = %q, want 空串", out.Model)
 	}
-	if err := h.models.SetDefault(context.Background(), "whisper-1", repo.DefaultVoice); err != nil {
+	if err := h.models.SetDefault(context.Background(), "whisper-1", repo.DefaultASR); err != nil {
 		t.Fatalf("SetDefault: %v", err)
 	}
 	if out := getVoice(t, h); out.Model != "whisper-1" {
 		t.Errorf("Model = %q, want whisper-1", out.Model)
 	}
 	if !voiceModelSet(t, h) {
-		t.Error("取到默认语音模型后应写入 voice.model")
+		t.Error("取到默认 ASR 模型后应写入 voice.model")
 	}
 }
 
@@ -149,12 +150,12 @@ func TestSettingHandler_GetVoiceEmptyRowNoAutofill(t *testing.T) {
 	if err := h.settings.SetVoiceModel(ctx, ""); err != nil {
 		t.Fatalf("SetVoiceModel: %v", err)
 	}
-	if err := h.models.SetDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
+	if err := h.models.SetDefault(ctx, "whisper-1", repo.DefaultASR); err != nil {
 		t.Fatalf("SetDefault: %v", err)
 	}
 
 	if out := getVoice(t, h); out.Model != "" {
-		t.Errorf("Model = %q, want 空串（已确定的空值不应被默认语音模型覆盖）", out.Model)
+		t.Errorf("Model = %q, want 空串（已确定的空值不应被默认 ASR 模型覆盖）", out.Model)
 	}
 }
 
@@ -170,7 +171,7 @@ func TestSettingHandler_PutVoiceRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSettingHandler_PutVoiceEmptyModel model 为空表示关闭语音输入，无需任何默认语音模型。
+// TestSettingHandler_PutVoiceEmptyModel model 为空表示关闭语音输入，无需任何默认 ASR 模型。
 func TestSettingHandler_PutVoiceEmptyModel(t *testing.T) {
 	h := newSettingHandlerForTest(t, "", false)
 
@@ -237,6 +238,154 @@ func TestSettingHandler_PutVoiceBadJSON(t *testing.T) {
 	h := newSettingHandlerForTest(t, "", false)
 
 	rc := callJSON(h.PutVoice, consts.MethodPut, `{not json`, nil)
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
+	}
+	if s := bodyStatus(t, rc); s != "invalid_request" {
+		t.Errorf("status = %q, want invalid_request", s)
+	}
+}
+
+// getSpeech 调 GET /web/settings/speech 并解析响应。
+func getSpeech(t *testing.T, h *SettingHandler) types.SpeechSettingsResponse {
+	t.Helper()
+	rc := callJSON(h.GetSpeech, consts.MethodGet, "", nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("GetSpeech status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	var out types.SpeechSettingsResponse
+	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
+		t.Fatalf("解析响应: %v", err)
+	}
+	return out
+}
+
+func TestSettingHandler_GetSpeechDefaults(t *testing.T) {
+	h := newSettingHandlerForTest(t, "", false)
+
+	rc := callJSON(h.GetSpeech, consts.MethodGet, "", nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d, want 200", rc.Response.StatusCode())
+	}
+	want := `{"voice":"","instructions":""}`
+	if body := strings.TrimSpace(string(rc.Response.Body())); body != want {
+		t.Errorf("body = %s, want %s", body, want)
+	}
+}
+
+func TestSettingHandler_PutSpeechRoundTrip(t *testing.T) {
+	h := newSettingHandlerForTest(t, "", false)
+
+	rc := callJSON(h.PutSpeech, consts.MethodPut,
+		`{"voice":" alloy ","instructions":" 用轻快的语气朗读 "}`, nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("PutSpeech status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if s := bodyStatus(t, rc); s != "ok" {
+		t.Errorf("status = %q, want ok", s)
+	}
+	want := types.SpeechSettingsResponse{Voice: "alloy", Instructions: "用轻快的语气朗读"}
+	if out := getSpeech(t, h); out != want {
+		t.Errorf("GetSpeech = %+v, want %+v（应去掉首尾空白）", out, want)
+	}
+
+	// 整体保存：只传 voice 时其余字段回读为空串
+	rc = callJSON(h.PutSpeech, consts.MethodPut, `{"voice":"nova"}`, nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("PutSpeech status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	want = types.SpeechSettingsResponse{Voice: "nova"}
+	if out := getSpeech(t, h); out != want {
+		t.Errorf("GetSpeech = %+v, want %+v（未传的字段应清空）", out, want)
+	}
+}
+
+func TestSettingHandler_PutSpeechFieldLimits(t *testing.T) {
+	cases := []struct {
+		field string
+		limit int
+	}{
+		{"voice", 64},
+		{"instructions", 500},
+	}
+	for _, c := range cases {
+		t.Run(c.field, func(t *testing.T) {
+			h := newSettingHandlerForTest(t, "", false)
+
+			exact := strings.Repeat("字", c.limit)
+			rc := callJSON(h.PutSpeech, consts.MethodPut, `{"`+c.field+`":"`+exact+`"}`, nil)
+			if rc.Response.StatusCode() != 200 {
+				t.Fatalf("恰好 %d 字应通过: status=%d body=%s", c.limit,
+					rc.Response.StatusCode(), rc.Response.Body())
+			}
+
+			tooLong := strings.Repeat("字", c.limit+1)
+			rc = callJSON(h.PutSpeech, consts.MethodPut, `{"`+c.field+`":"`+tooLong+`"}`, nil)
+			if rc.Response.StatusCode() != 400 {
+				t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
+			}
+			if s := bodyStatus(t, rc); s != "invalid_request" {
+				t.Errorf("status = %q, want invalid_request", s)
+			}
+			wantMsg := c.field + " 超过 " + strconv.Itoa(c.limit) + " 字符上限"
+			if !strings.Contains(string(rc.Response.Body()), wantMsg) {
+				t.Errorf("message 应为 %q: %s", wantMsg, rc.Response.Body())
+			}
+			// 被拒绝的请求不应写入：仍是上一次保存的恰好 N 字
+			var got string
+			switch out := getSpeech(t, h); c.field {
+			case "voice":
+				got = out.Voice
+			case "instructions":
+				got = out.Instructions
+			}
+			if got != exact {
+				t.Errorf("被拒绝的请求不应写入，%s 长度 = %d, want %d", c.field, len([]rune(got)), c.limit)
+			}
+		})
+	}
+}
+
+// 请求体里出现 speaker、language、instruct 等已不再属于朗读配置的字段时应被忽略，不影响保存与回读。
+func TestSettingHandler_PutSpeechIgnoresLegacyFields(t *testing.T) {
+	h := newSettingHandlerForTest(t, "", false)
+
+	rc := callJSON(h.PutSpeech, consts.MethodPut,
+		`{"voice":"alloy","speaker":"vivian","language":"zh","instruct":"旧"}`, nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("PutSpeech status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+
+	rc = callJSON(h.GetSpeech, consts.MethodGet, "", nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("GetSpeech status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	want := `{"voice":"alloy","instructions":""}`
+	if body := strings.TrimSpace(string(rc.Response.Body())); body != want {
+		t.Errorf("body = %s, want %s（多余字段应被忽略且不回显）", body, want)
+	}
+}
+
+func TestSettingHandler_PutSpeechTooLong(t *testing.T) {
+	h := newSettingHandlerForTest(t, "", false)
+
+	body := `{"voice":"` + strings.Repeat("a", 65) + `"}`
+	rc := callJSON(h.PutSpeech, consts.MethodPut, body, nil)
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
+	}
+	if s := bodyStatus(t, rc); s != "invalid_request" {
+		t.Errorf("status = %q, want invalid_request", s)
+	}
+	if out := getSpeech(t, h); out.Voice != "" {
+		t.Errorf("被拒绝的请求不应写入，Voice = %q", out.Voice)
+	}
+}
+
+func TestSettingHandler_PutSpeechBadJSON(t *testing.T) {
+	h := newSettingHandlerForTest(t, "", false)
+
+	rc := callJSON(h.PutSpeech, consts.MethodPut, `{`, nil)
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}

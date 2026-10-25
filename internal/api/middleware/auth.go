@@ -125,6 +125,11 @@ func getRequiredPermission(path, method string) string {
 		return "chat"
 	}
 
+	// Speech endpoint (POST /audio/speech)：语音输出是聊天回复的一种呈现方式，同样共用 chat 权限
+	if path == "/audio/speech" && method == "POST" {
+		return "chat"
+	}
+
 	// Stop endpoint (POST /chat/:sid/:cid/stop)：中止对话与发起对话同属 chat 权限
 	if strings.HasPrefix(path, "/chat/") && strings.HasSuffix(path, "/stop") && method == "POST" {
 		return "chat"

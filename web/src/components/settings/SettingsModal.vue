@@ -14,6 +14,8 @@ import type { ToolsResp, AgentsResp, AgentInfo, AgentDefinitionResp, HealthResp 
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { type VoiceSettings } from '../../api/voice'
 import { useVoiceStore } from '../../stores/voice'
+import { type SpeechSettings } from '../../api/speech'
+import { useSpeechSettingsStore } from '../../stores/speechSettings'
 import {
   runtimeLimits,
   defaultRuntimeSettings,
@@ -69,6 +71,16 @@ const voiceModelOptions = computed(() => [
 async function loadVoice() {
   await voiceStore.reload()
   voice.value = { ...voiceStore.settings }
+}
+
+// 语音朗读配置。与语音输入同样的本地副本 + 失败回滚模式。
+const speechStore = useSpeechSettingsStore()
+const speech = ref<SpeechSettings>({ ...speechStore.settings })
+const speechSaving = ref(false)
+
+async function loadSpeech() {
+  await speechStore.reload()
+  speech.value = { ...speechStore.settings }
 }
 
 // ---- 运行时配置 ----
@@ -229,6 +241,32 @@ async function saveVoice() {
   }
 }
 
+// saveSpeech 在任一输入框失焦、回车（多行框为 Ctrl/Cmd+Enter）或点击清除时整体保存两个字段。
+// 与 store 中的值逐字段比较，无变化不发请求；保存进行中直接返回，
+// 避免回车后紧接失焦时再发一次 PUT。失败时提示并回到服务端真实值。
+function speechUnchanged(): boolean {
+  const a = speech.value
+  const b = speechStore.settings
+  return (
+    a.voice === b.voice &&
+    a.instructions === b.instructions
+  )
+}
+
+async function saveSpeech() {
+  if (speechSaving.value) return
+  if (speechUnchanged()) return
+  speechSaving.value = true
+  try {
+    await speechStore.save(speech.value)
+  } catch (e: any) {
+    ElMessage.error(t('settings.speechSaveFailed', { msg: e?.message || '' }))
+    await loadSpeech()
+  } finally {
+    speechSaving.value = false
+  }
+}
+
 // 外观三选一卡片配置。
 const themeCards: { value: ThemeMode; icon: typeof Sunny; labelKey: string }[] = [
   { value: 'light', icon: Sunny, labelKey: 'settings.light' },
@@ -350,6 +388,7 @@ watch(
     if (v) {
       void ensureLoaded()
       void loadVoice()
+      void loadSpeech()
       void loadRuntime()
       void loadAuthSettings()
     }
@@ -485,6 +524,45 @@ async function openAgentTools(a: AgentInfo) {
                 :loading="voiceSaving"
                 :disabled="!voice.model"
                 @change="saveVoice"
+              />
+            </div>
+          </div>
+
+          <!-- 语音朗读：消息朗读透传给 TTS 模型的参数。各厂商的取值不同，故用自由输入而非下拉；
+               空串表示不下发该字段、交给上游默认。任一控件失焦、回车（多行框为 Ctrl/Cmd+Enter）
+               或清除时整体保存两个字段。 -->
+          <div class="config-group">
+            <div class="group-title">{{ t('settings.configSpeech') }}</div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.speechVoice') }}</div>
+                <div class="label-desc">{{ t('settings.speechVoiceDesc') }}</div>
+              </div>
+              <el-input
+                v-model="speech.voice"
+                style="width: 220px"
+                maxlength="64"
+                clearable
+                @blur="saveSpeech"
+                @keyup.enter="saveSpeech"
+                @clear="saveSpeech"
+              />
+            </div>
+            <div class="row">
+              <div class="row-label">
+                <div class="label-title">{{ t('settings.speechInstruct') }}</div>
+                <div class="label-desc">{{ t('settings.speechInstructDesc') }}</div>
+              </div>
+              <!-- 多行框里回车是换行，用 Ctrl/Cmd+Enter 触发保存 -->
+              <el-input
+                v-model="speech.instructions"
+                type="textarea"
+                :rows="2"
+                style="width: 220px"
+                maxlength="500"
+                @blur="saveSpeech"
+                @keydown.meta.enter="saveSpeech"
+                @keydown.ctrl.enter="saveSpeech"
               />
             </div>
           </div>

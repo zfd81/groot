@@ -202,8 +202,9 @@ type ModelsResponse struct {
 // DefaultModels 各默认类型当前持有者的模型名，未设置时为空串
 type DefaultModels struct {
 	Chat   string `json:"chat"`
-	Voice  string `json:"voice"`
+	ASR    string `json:"asr"`
 	Vision string `json:"vision"`
+	TTS    string `json:"tts"`
 }
 
 // ModelInfo represents model information（api_key 为脱敏后的展示值）
@@ -221,7 +222,7 @@ type ModelInfo struct {
 	Seed                int      `json:"seed"`
 	Stop                []string `json:"stop"`
 	Thinking            bool     `json:"thinking"`
-	DefaultTypes        []string `json:"default_types"` // 持有的默认类型，按 chat、voice、vision 排列
+	DefaultTypes        []string `json:"default_types"` // 持有的默认类型，按 chat、asr、vision、tts 排列
 	Enabled             bool     `json:"enabled"`
 }
 
@@ -290,6 +291,29 @@ type VoiceSettingsRequest struct {
 type VoiceSettingsResponse struct {
 	Model    string `json:"model"`
 	AutoSend bool   `json:"auto_send"`
+}
+
+// SpeechSettingsRequest 是 PUT /web/settings/speech 的请求体，两个字段整体保存。
+type SpeechSettingsRequest struct {
+	Voice        string `json:"voice"`
+	Instructions string `json:"instructions"`
+}
+
+// SpeechSettingsResponse 是 GET /web/settings/speech 的响应体。
+type SpeechSettingsResponse struct {
+	Voice        string `json:"voice"`
+	Instructions string `json:"instructions"`
+}
+
+// SpeechRequest 是 POST /audio/speech 与 POST /web/audio/speech 的请求体，
+// 字段与 OpenAI 语音合成规范一致。model 为空时取请求头 X-Model-Name，再回落到默认 TTS 模型。
+type SpeechRequest struct {
+	Input          string `json:"input"`
+	Model          string `json:"model"`
+	Voice          string `json:"voice"`
+	Language       string `json:"language"`
+	Instructions   string `json:"instructions"`
+	ResponseFormat string `json:"response_format"`
 }
 
 // RuntimeSettingsPayload 是 /web/settings/runtime 的请求与响应体。

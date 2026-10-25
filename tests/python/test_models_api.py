@@ -14,8 +14,8 @@
 - 默认模型删除/禁用保护（持有任一默认类型，409）
 - 重名冲突（409）
 - api_key 脱敏与留空不改
-- 按类型设默认（chat / voice / vision）/ 禁用模型不可设默认
-- 取消默认（voice / vision 可取消，chat 不可取消）/ 非法 type（400）
+- 按类型设默认（chat / asr / vision / tts）/ 禁用模型不可设默认
+- 取消默认（asr / vision / tts 可取消，chat 不可取消）/ 非法 type（400）
 - 连接测试（不可达地址返回 unhealthy）
 - chat 引用不存在/禁用模型报错（400）
 """
@@ -147,38 +147,71 @@ class TestDefaultModel:
             web.delete(f"{BASE_URL}/web/models/{a}")
             web.delete(f"{BASE_URL}/web/models/{b}")
 
-    def test_voice_default_set_clear_and_protection(self, web, model_name):
-        """默认语音模型：设置后受删除保护，取消后可删除；取消不影响默认对话模型"""
+    def test_asr_default_set_clear_and_protection(self, web, model_name):
+        """默认 ASR 模型：设置后受删除保护，取消后可删除；取消不影响默认对话模型"""
         before = web.get(f"{BASE_URL}/web/models").json()["defaults"]
-        orig_voice = before.get("voice", "")
+        orig_asr = before.get("asr", "")
         assert web.post(f"{BASE_URL}/web/models", json=model_body(model_name)).status_code == 200
         try:
-            resp = web.put(f"{BASE_URL}/web/models/{model_name}/default?type=voice")
+            resp = web.put(f"{BASE_URL}/web/models/{model_name}/default?type=asr")
             assert resp.status_code == 200, resp.text
             data = web.get(f"{BASE_URL}/web/models").json()
-            assert data["defaults"]["voice"] == model_name
-            assert data["defaults"]["chat"] == before["chat"], "设置语音默认不应改变对话默认"
+            assert data["defaults"]["asr"] == model_name
+            assert data["defaults"]["chat"] == before["chat"], "设置 ASR 默认不应改变对话默认"
             m = next(x for x in data["models"] if x["name"] == model_name)
-            assert "voice" in m["default_types"]
+            assert "asr" in m["default_types"]
 
-            # 持有语音默认同样不可删除 / 禁用
+            # 持有 ASR 默认同样不可删除 / 禁用
             assert web.delete(f"{BASE_URL}/web/models/{model_name}").status_code == 409
             assert web.put(f"{BASE_URL}/web/models/{model_name}",
                            json=model_body(model_name, api_key="", enabled=False)).status_code == 409
 
-            resp = web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=voice")
+            resp = web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=asr")
             assert resp.status_code == 200, resp.text
             data = web.get(f"{BASE_URL}/web/models").json()
-            assert data["defaults"]["voice"] == ""
+            assert data["defaults"]["asr"] == ""
             m = next(x for x in data["models"] if x["name"] == model_name)
-            assert "voice" not in m["default_types"]
+            assert "asr" not in m["default_types"]
 
             assert web.delete(f"{BASE_URL}/web/models/{model_name}").status_code == 200
         finally:
-            if orig_voice:
-                web.put(f"{BASE_URL}/web/models/{orig_voice}/default?type=voice")
+            if orig_asr:
+                web.put(f"{BASE_URL}/web/models/{orig_asr}/default?type=asr")
             else:
-                web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=voice")
+                web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=asr")
+
+    def test_tts_default_set_clear_and_protection(self, web, model_name):
+        """默认 TTS 模型：设置后受删除保护，取消后可删除；取消不影响默认对话模型"""
+        before = web.get(f"{BASE_URL}/web/models").json()["defaults"]
+        orig_tts = before.get("tts", "")
+        assert web.post(f"{BASE_URL}/web/models", json=model_body(model_name)).status_code == 200
+        try:
+            resp = web.put(f"{BASE_URL}/web/models/{model_name}/default?type=tts")
+            assert resp.status_code == 200, resp.text
+            data = web.get(f"{BASE_URL}/web/models").json()
+            assert data["defaults"]["tts"] == model_name
+            assert data["defaults"]["chat"] == before["chat"], "设置 TTS 默认不应改变对话默认"
+            m = next(x for x in data["models"] if x["name"] == model_name)
+            assert "tts" in m["default_types"]
+
+            # 持有 TTS 默认同样不可删除 / 禁用
+            assert web.delete(f"{BASE_URL}/web/models/{model_name}").status_code == 409
+            assert web.put(f"{BASE_URL}/web/models/{model_name}",
+                           json=model_body(model_name, api_key="", enabled=False)).status_code == 409
+
+            resp = web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=tts")
+            assert resp.status_code == 200, resp.text
+            data = web.get(f"{BASE_URL}/web/models").json()
+            assert data["defaults"]["tts"] == ""
+            m = next(x for x in data["models"] if x["name"] == model_name)
+            assert "tts" not in m["default_types"]
+
+            assert web.delete(f"{BASE_URL}/web/models/{model_name}").status_code == 200
+        finally:
+            if orig_tts:
+                web.put(f"{BASE_URL}/web/models/{orig_tts}/default?type=tts")
+            else:
+                web.delete(f"{BASE_URL}/web/models/{model_name}/default?type=tts")
 
     def test_invalid_default_type(self, web, model_name):
         web.post(f"{BASE_URL}/web/models", json=model_body(model_name))

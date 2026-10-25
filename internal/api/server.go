@@ -122,6 +122,7 @@ func NewServer(
 	syncH := handler.NewSyncHandler(homeDir, syncResources)
 
 	transcriptionH := handler.NewTranscriptionHandler(settings, models, log)
+	speechH := handler.NewSpeechHandler(models, log)
 	settingH := handler.NewSettingHandler(handler.SettingHandlerDeps{
 		Settings: settings,
 		Models:   models,
@@ -133,7 +134,7 @@ func NewServer(
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, stopH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, settingH)
+		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, settingH)
 
 	return &Server{
 		hertz:  h,

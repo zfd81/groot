@@ -31,6 +31,7 @@ func RegisterRoutes(h *server.Hertz,
 	filesH *handler.FilesHandler,
 	syncH *handler.SyncHandler,
 	transcriptionH *handler.TranscriptionHandler,
+	speechH *handler.SpeechHandler,
 	settingH *handler.SettingHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
@@ -67,9 +68,14 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.GET("/logs/:sid", logsH.Serve)
 	// 聊天页调用的转录接口，与对外接口共用同一 handler
 	webGroup.POST("/audio/transcriptions", transcriptionH.Serve)
+	// 聊天页调用的语音合成接口，与对外接口共用同一 handler
+	webGroup.POST("/audio/speech", speechH.Serve)
 	// 语音配置读写
 	webGroup.GET("/settings/voice", settingH.GetVoice)
 	webGroup.PUT("/settings/voice", settingH.PutVoice)
+	// 语音合成配置读写（朗读音色）
+	webGroup.GET("/settings/speech", settingH.GetSpeech)
+	webGroup.PUT("/settings/speech", settingH.PutSpeech)
 	webGroup.GET("/settings/runtime", settingH.GetRuntime)
 	webGroup.PUT("/settings/runtime", settingH.PutRuntime)
 	// 认证配置：请求头名读写与密钥重新生成，改动需重启生效
@@ -111,6 +117,8 @@ func RegisterRoutes(h *server.Hertz,
 
 	// 对外转录接口：与 /chat 同组，API Key 鉴权并计入限流
 	apiGroup.POST("/audio/transcriptions", transcriptionH.Serve)
+	// 对外合成接口：与转录同组，API Key 鉴权并计入限流
+	apiGroup.POST("/audio/speech", speechH.Serve)
 
 	// Session endpoints - 会话管理
 	// 静态路由（/sess/history、/sess/search）优先级高于命名参数路由（/sess/:sid），可共存

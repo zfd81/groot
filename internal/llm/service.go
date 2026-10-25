@@ -31,10 +31,12 @@ type noDefaultError struct{ flag repo.DefaultFlag }
 
 func (e noDefaultError) Error() string {
 	switch e.flag {
-	case repo.DefaultVoice:
-		return "未配置默认语音模型，请在模型管理中设置"
+	case repo.DefaultASR:
+		return "未配置默认 ASR 模型，请在模型管理中设置"
 	case repo.DefaultVision:
 		return "未配置默认视觉模型，请在模型管理中设置"
+	case repo.DefaultTTS:
+		return "未配置默认 TTS 模型，请在模型管理中设置"
 	}
 	return ErrNoDefaultModel.Error()
 }

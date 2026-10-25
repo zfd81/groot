@@ -320,6 +320,7 @@ http://localhost:8080/ui/
 | 功能 | 说明 |
 |------|------|
 | 聊天 | 与 Agent 对话，流式输出，展示思考过程与工具调用详情；支持上传附件（含预览与删除）、切换模型与 Agent、中断执行中的对话 |
+| 语音朗读 | 设置了默认 TTS 模型后，聊天窗口顶部栏出现喇叭开关（默认开启，状态保存在浏览器本地）：开启时回复在流式输出过程中按句合成并连续播放；每条回复底部有一个小喇叭，点击可朗读或停止朗读该条内容。音色、风格指令在 设置 → 通用 的「语音朗读」分组中配置，见 [4.3 配置字段详解](#43-配置字段详解) |
 | 会话管理 | 侧边栏查看历史会话列表、继续会话、分页加载 |
 | 会话搜索 | 侧边栏搜索图标或快捷键 `Ctrl`/`⌘` + `K`，按关键词搜索历史对话的指令与执行结果，点击结果跳转到对应会话并定位轮次 |
 | 会话日志 | 顶部栏「查看日志」按钮，查看当前会话的运行日志（扫描最近 7 天，最多 1000 条），支持按级别过滤 |
@@ -330,7 +331,7 @@ http://localhost:8080/ui/
 | 菜单 | 说明 |
 |------|------|
 | 通用 | 界面语言（中文/English）、外观主题（浅色/深色/跟随系统）、运行环境信息（工作目录、数据库类型、日志目录） |
-| 模型 | 模型管理（创建、编辑、删除、启用/禁用、测试连接、设置默认对话 / 语音 / 视觉模型），见 [3.4 创建模型](#34-创建模型) |
+| 模型 | 模型管理（创建、编辑、删除、启用/禁用、测试连接、设置默认对话 / ASR / 视觉 / TTS 模型），见 [3.4 创建模型](#34-创建模型) |
 | Agents | 以卡片展示主 Agent 与所有子 Agent，每个卡片可查看定义文件（`GROOT.md` / `agent.md`）、Skills 列表和 MCP 工具 |
 | API Keys | API Key 管理（创建、查看、复制、删除），见 [3.5 第一次调用](#35-第一次调用) |
 | 集群管理 | 查看集群成员列表（地址、角色、进程 PID、心跳时间，Leader 排首位，当前实例标「本机」）并可重启指定实例；SQLite 单机多实例与 MySQL/PostgreSQL 集群均适用 |
@@ -348,9 +349,9 @@ Web 界面登录认证始终启用：
 
 ### 3.4 创建模型
 
-模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，点击「新建模型」，填写模型名称、API 地址（`base_url`）、API 密钥（`api_key`）和 Model ID 后保存。首个创建的模型自动成为默认对话模型；默认语音模型、默认视觉模型在模型卡片的「···」菜单中设置。
+模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，点击「新建模型」，填写模型名称、API 地址（`base_url`）、API 密钥（`api_key`）和 Model ID 后保存。首个创建的模型自动成为默认对话模型；默认 ASR 模型、默认视觉模型、默认 TTS 模型在模型卡片的「···」菜单中设置。
 
-- 可创建、编辑、删除模型，设置默认对话 / 语音 / 视觉模型，启用/禁用模型并测试连接
+- 可创建、编辑、删除模型，设置默认对话 / ASR / 视觉 / TTS 模型，启用/禁用模型并测试连接；ASR 模型用于音频转录，TTS 模型用于文本转语音
 - API Key 支持填写 `${ENV_VAR}` 引用环境变量，例如填写 `${OPENAI_API_KEY}` 后：
 
 ```bash
@@ -462,7 +463,7 @@ security:
 
 #### 模型配置（Web UI 管理）
 
-模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，可创建、编辑、删除模型，设置默认对话 / 语音 / 视觉模型，启用/禁用模型并测试连接。API Key 支持填写 `${ENV_VAR}` 引用环境变量。模型配置存储在数据库中，增删改**立即生效，无需重启**。
+模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，可创建、编辑、删除模型，设置默认对话 / ASR / 视觉 / TTS 模型，启用/禁用模型并测试连接。API Key 支持填写 `${ENV_VAR}` 引用环境变量。模型配置存储在数据库中，增删改**立即生效，无需重启**。
 
 模型参数说明（在 Web UI 表单中填写）：
 
@@ -484,11 +485,12 @@ security:
 
 默认模型规则：
 
-- 模型有三种默认类型：默认对话模型、默认语音模型、默认视觉模型；每种类型至多一个模型持有，一个模型可同时持有多种
-- 调用方不指定模型时按用途取对应默认：对话取默认对话模型，音频转录取默认语音模型
-- 首个创建的模型自动成为默认对话模型；默认语音、默认视觉模型需手动设置
+- 模型有四种默认类型：默认对话模型、默认 ASR 模型、默认视觉模型、默认 TTS 模型；每种类型至多一个模型持有，一个模型可同时持有多种
+- ASR 模型用于音频转录（`/audio/transcriptions`，音频转文字），TTS 模型用于文本转语音（`/audio/speech`，文字转音频）
+- 调用方不指定模型时按用途取对应默认：对话取默认对话模型，音频转录取默认 ASR 模型，文本转语音取默认 TTS 模型
+- 首个创建的模型自动成为默认对话模型；默认 ASR、默认视觉、默认 TTS 模型需手动设置
 - 持有任一默认类型的模型不允许删除或禁用，需先取消其默认标记
-- 默认语音、默认视觉可直接取消；默认对话不能取消，只能通过把其他模型设为默认对话模型来转移
+- 默认 ASR、默认视觉、默认 TTS 可直接取消；默认对话不能取消，只能通过把其他模型设为默认对话模型来转移
 - 禁用的模型不可设为默认，也不会出现在聊天下拉框中
 
 > **从旧版本升级**：原 `config.yaml` 中的 `llm` 配置不再生效，需登录 Web UI 在 设置 → 模型 中重新创建模型。
@@ -581,7 +583,8 @@ security:
 > **说明：**
 > - 定时任务的通知不在设置面板中配置：创建任务时用自然语言描述通知要求，由 LLM 调用已配置的 MCP 工具发送，见 [Q11](#q11-如何让定时任务发通知)
 > - 子 Agent 的目录、`agent.md` 与专属 mcp/skills 配置放在 `{GROOT_HOME}/subagents/<name>/` 下，详见 [五、扩展能力](#五扩展能力) 中的「5.3 多 Agent」
-> - 语音输入（识别模型、话筒开关等）在 **设置 → 通用** 的「语音输入」分组中维护，同样存放于配置表；其中识别模型只作用于 Web 界面的语音输入，选择「跟随默认语音模型」时使用 设置 → 模型 中的默认语音模型
+> - 语音输入（识别模型、话筒开关等）在 **设置 → 通用** 的「语音输入」分组中维护，同样存放于配置表；其中识别模型只作用于 Web 界面的语音输入，选择「跟随默认 ASR 模型」时使用 设置 → 模型 中的默认 ASR 模型
+> - 语音朗读（文本转语音）在 **设置 → 通用** 的「语音朗读」分组中维护，两个字段存放于配置表：`speech.voice` 音色（音色名，不同模型可选值不同，如 OpenAI 系的 `alloy`、Qwen3-TTS 的 `vivian`，合成时作为规范字段 `voice` 下发）、`speech.instructions` 风格指令（朗读风格描述，仅支持指令的模型有效）。留空的字段不下发给 TTS 上游，由模型取默认行为。这些值只作用于 Web 界面的朗读，对外接口 `/audio/speech` 由调用方自行传参。旧版本保存的风格指令（配置键 `speech.instruct`）不会自动迁移，升级后请在设置页重新填写
 
 ### 4.4 目录配置说明
 
@@ -642,7 +645,7 @@ groot 面向多个业务系统后端提供服务，会话按（租户，用户�
 - **用户由调用方声明**：业务系统完成自身用户鉴权后，在每个请求的 `X-User-ID` 请求头中声明当前用户（格式要求同租户标识）。groot 信任持有有效 Key 的调用方对用户的声明。
 - **会话类接口**（`POST /chat`、`POST /chat/{sid}/{cid}/stop`、`GET /chat/status/{sid}`、`GET /chat/{sid}`、`GET /chat/{sid}/{cid}`、`GET /sess/{sid}`、`PATCH /sess/{sid}`、`DELETE /sess/{sid}`、`GET /sess/history`、`GET /sess/search`）要求完整归属：Key 未绑定租户返回 `403 forbidden`（消息"API Key 未绑定租户"）；`X-User-ID` 缺失或非法返回 `400 invalid_request`（消息"缺少或非法的 X-User-ID"）。
 - **归属不符等同于不存在**：读取或续写他人会话时，接口的可观测行为与会话不存在完全一致（`/chat` 续聊生成新 sid，`/chat/status` 返回 `idle`，详情、中止、重命名、删除接口返回 404），不泄漏会话 ID 是否真实存在。列表与搜索只返回当前归属的会话。
-- `/audio/transcriptions`、`/schedule/*` 与会话无关，不要求 `X-User-ID`。
+- `/audio/transcriptions`、`/audio/speech`、`/schedule/*` 与会话无关，不要求 `X-User-ID`。
 - 通过 Web 界面登录的管理员不受租户与用户隔离限制，可查看、重命名、中止、删除全部会话；定时任务产生的会话归属为空，只能由 Web 管理员查看、重命名与删除。
 
 ### 4.6 配置热更新
@@ -1274,6 +1277,7 @@ groot user reset -y   # 跳过确认直接执行
 | `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
 | `/chat/{sid}/{cid}/stop` | POST | `chat` | 中止正在执行的对话 |
 | `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
+| `/audio/speech` | POST | `chat` | 文本转语音（返回音频二进制） |
 | `/sess/{sid}` | GET | `session` | 查询会话详情（完整对话历史） |
 | `/sess/{sid}` | PATCH | `session` | 重命名会话 |
 | `/sess/{sid}` | DELETE | `delete` | 删除会话及其全部对话记录 |
@@ -1730,7 +1734,7 @@ curl -X POST http://localhost:8080/chat \
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `file` | 是 | 音频文件，支持 webm、mp3、mp4、mpeg、mpga、m4a、wav、ogg、flac |
-| `model` | 否 | 转录模型名，省略时使用默认语音模型 |
+| `model` | 否 | 转录模型名，省略时使用默认 ASR 模型 |
 | `language` | 否 | 音频语种的 ISO-639-1 代码，如 `zh`、`en`，可提升准确率 |
 
 ```bash
@@ -1754,10 +1758,54 @@ curl -X POST http://localhost:8080/audio/transcriptions \
 - `400 invalid_request`：缺少 `file` 字段或识别结果为空
 - `400 unsupported_type`：扩展名不受支持
 - `400 file_too_large`：超过 `attachment.max_size`
-- `400 invalid_model`：模型不存在、已禁用或未配置默认语音模型
+- `400 invalid_model`：模型不存在、已禁用或未配置默认 ASR 模型
 - `502 upstream_error`：上游转录服务出错，`message` 透传原文
 
-模型也可用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为表单 `model` → 请求头 `X-Model-Name` → 默认语音模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认语音模型。
+模型也可用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为表单 `model` → 请求头 `X-Model-Name` → 默认 ASR 模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认 ASR 模型。
+
+---
+
+#### 7.4.1 POST /audio/speech - 文本转语音
+
+需要携带具有 `chat` 权限的 API Key，与 `/chat` 相同。本接口与会话无关，不要求 `X-User-ID`。
+
+把文本合成为语音。请求为 `application/json`，字段与 OpenAI 语音合成规范一致：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `input` | 是 | 要合成的文本，去除首尾空白后不能为空，最长 4096 个字符 |
+| `model` | 否 | 合成模型名，省略时使用默认 TTS 模型 |
+| `voice` | 否 | 音色，原样透传给上游模型（如 `alloy`）；省略时由上游取默认音色 |
+| `language` | 否 | 合成语种，取值由上游定义（如 vLLM-Omni 的 `Chinese`、`English`、`Auto`），省略时不下发，由上游自行判断 |
+| `instructions` | 否 | 风格指令（OpenAI 规范字段，如「用轻快的语气朗读」），原样透传，仅支持指令的模型有效；省略时不下发 |
+| `response_format` | 否 | 音频格式，可选 `mp3`、`opus`、`aac`、`flac`、`wav`、`pcm`；省略时由上游决定（通常为 `mp3`） |
+
+`voice`、`language`、`instructions` 均去除首尾空白后透传，长度上限分别为 64、16、500 个字符，超出返回 400 `invalid_request`。请求体中出现的其他未知字段（如旧版的 `speaker`、`instruct`）会被忽略，不下发也不报错。
+
+```bash
+curl -X POST http://localhost:8080/audio/speech \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "你好，欢迎使用 Groot。", "model": "tts-1", "voice": "alloy", "instructions": "用轻快的语气朗读", "response_format": "mp3"}' \
+  -o out.mp3
+```
+
+响应：
+
+- 状态码 `200`，响应体为音频二进制，上游音频流直接转发
+- `Content-Type` 透传上游的值；上游未给出时按 `response_format` 推断（`mp3` → `audio/mpeg`、`opus` → `audio/ogg`、`aac` → `audio/aac`、`flac` → `audio/flac`、`wav` → `audio/wav`、`pcm` → `audio/pcm`），未指定格式时为 `audio/mpeg`
+- 响应头 `X-Model-Name`：实际使用的模型名
+
+**错误响应：**
+
+| HTTP 状态码 | 错误码 | 说明 |
+|------------|--------|------|
+| 400 | `invalid_request` | 请求体不是合法 JSON、`input` 为空或超过 4096 个字符、`voice` / `language` / `instructions` 超过长度上限、`response_format` 不在允许值内 |
+| 400 | `invalid_model` | 模型不存在、已禁用或未配置默认 TTS 模型 |
+| 502 | `upstream_error` | 上游语音合成服务出错，`message` 透传原文 |
+| 500 | `error` | 内部错误 |
+
+模型也可用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为 JSON `model` → 请求头 `X-Model-Name` → 默认 TTS 模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认 TTS 模型。
 
 ---
 
@@ -2797,9 +2845,9 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
 | HTTP 状态码 | 错误码 | 说明 |
 |------------|--------|------|
-| 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失、会话类接口缺少或非法的 `X-User-ID`、`PATCH /sess/{sid}` 请求体非法或 `title` 为空/超过 100 个字符） |
+| 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失、会话类接口缺少或非法的 `X-User-ID`、`PATCH /sess/{sid}` 请求体非法或 `title` 为空/超过 100 个字符、`/audio/speech` 的 `input` 为空/超过 4096 个字符或 `response_format` 非法） |
 | 400 | `invalid_tenant` | 创建 API Key 时 `tenant_id` 为空或含非法字符 |
-| 400 | `invalid_model` | `X-Model-Name` 指定的模型不存在或已禁用，或未配置默认模型 |
+| 400 | `invalid_model` | `X-Model-Name`（或 `/audio/*` 的 `model` 字段）指定的模型不存在或已禁用，或未配置对应用途的默认模型 |
 | 400 | `unknown_agent` | `X-Agent-Name` 指定的子 Agent 未注册 |
 | 400 | `attachment_count_exceeded` | 附件数量超限 |
 | 400 | `attachment_type_not_allowed` | 附件类型不允许 |
@@ -2826,7 +2874,7 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
 | 500 | `schedule_error` | 定时任务操作失败 |
-| 502 | `upstream_error` | 上游转录服务出错（连接超时、鉴权失败、模型拒绝），`message` 透传上游原文 |
+| 502 | `upstream_error` | 上游转录或语音合成服务出错（连接超时、鉴权失败、模型拒绝），`message` 透传上游原文 |
 | 503 | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或 `schedule.enabled` 未开启） |
 
 ### E. 联系与支持

@@ -81,14 +81,15 @@ export interface ChatRecord {
   error: { code: string; message: string } | null
 }
 
-// 模型默认类型：对话 / 语音 / 视觉
-export type DefaultType = 'chat' | 'voice' | 'vision'
+// 模型默认类型：对话 / ASR / 视觉 / TTS
+export type DefaultType = 'chat' | 'asr' | 'vision' | 'tts'
 
 // 各默认类型当前持有者的模型名，未设置时为空串
 export interface DefaultModels {
   chat: string
-  voice: string
+  asr: string
   vision: string
+  tts: string
 }
 
 export interface ModelInfo {
@@ -105,7 +106,7 @@ export interface ModelInfo {
   seed: number
   stop: string[]
   thinking: boolean
-  default_types: DefaultType[] // 持有的默认类型，按 chat、voice、vision 排列
+  default_types: DefaultType[] // 持有的默认类型，按 chat、asr、vision、tts 排列
   enabled: boolean
 }
 

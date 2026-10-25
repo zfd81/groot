@@ -25,8 +25,8 @@ import (
 // newTranscriptionHandlerForTest 建一套真实的仓库与配置对象，
 // cfg 作为静态配置传入 setting.New；upstreamURL 非空时创建名为 whisper-1 的模型
 // （库中首个模型，自动成为默认对话模型），其 base_url 指向 httptest 假上游；
-// defaultVoice 为 true 时把 whisper-1 设为默认语音模型。
-func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstreamURL string, defaultVoice bool) *TranscriptionHandler {
+// defaultASR 为 true 时把 whisper-1 设为默认 ASR 模型。
+func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstreamURL string, defaultASR bool) *TranscriptionHandler {
 	t.Helper()
 	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
 	if err != nil {
@@ -45,9 +45,9 @@ func newTranscriptionHandlerForTest(t *testing.T, cfg config.Bootstrap, upstream
 		if err != nil {
 			t.Fatalf("创建测试模型: %v", err)
 		}
-		if defaultVoice {
-			if err := models.SetDefault(ctx, "whisper-1", repo.DefaultVoice); err != nil {
-				t.Fatalf("设置默认语音模型: %v", err)
+		if defaultASR {
+			if err := models.SetDefault(ctx, "whisper-1", repo.DefaultASR); err != nil {
+				t.Fatalf("设置默认 ASR 模型: %v", err)
 			}
 		}
 	}
@@ -163,9 +163,9 @@ func TestTranscriptionHandler_MissingFile(t *testing.T) {
 	}
 }
 
-func TestTranscriptionHandler_NoVoiceModelConfigured(t *testing.T) {
+func TestTranscriptionHandler_NoASRModelConfigured(t *testing.T) {
 	up := fakeUpstream(t)
-	// 建了模型但未设默认语音模型，且请求不带 model 字段
+	// 建了模型但未设默认 ASR 模型，且请求不带 model 字段
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
@@ -177,8 +177,8 @@ func TestTranscriptionHandler_NoVoiceModelConfigured(t *testing.T) {
 	if s := bodyStatus(t, rc); s != "invalid_model" {
 		t.Errorf("status = %q, want invalid_model", s)
 	}
-	if !bytes.Contains(rc.Response.Body(), []byte("未配置默认语音模型")) {
-		t.Errorf("错误信息应提示未配置默认语音模型: %s", rc.Response.Body())
+	if !bytes.Contains(rc.Response.Body(), []byte("未配置默认 ASR 模型")) {
+		t.Errorf("错误信息应提示未配置默认 ASR 模型: %s", rc.Response.Body())
 	}
 }
 
@@ -200,8 +200,8 @@ func TestTranscriptionHandler_ModelNotFound(t *testing.T) {
 	}
 }
 
-// TestTranscriptionHandler_DefaultVoiceUsed 请求不指定模型时使用默认语音模型。
-func TestTranscriptionHandler_DefaultVoiceUsed(t *testing.T) {
+// TestTranscriptionHandler_DefaultASRUsed 请求不指定模型时使用默认 ASR 模型。
+func TestTranscriptionHandler_DefaultASRUsed(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
@@ -212,11 +212,11 @@ func TestTranscriptionHandler_DefaultVoiceUsed(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	if m := bodyModel(t, rc); m != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1（默认语音模型）", m)
+		t.Errorf("model = %q, want whisper-1（默认 ASR 模型）", m)
 	}
 }
 
-// TestTranscriptionHandler_FormModelWithoutDefault 未设默认语音模型，表单显式指定时照常转录。
+// TestTranscriptionHandler_FormModelWithoutDefault 未设默认 ASR 模型，表单显式指定时照常转录。
 func TestTranscriptionHandler_FormModelWithoutDefault(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
@@ -232,7 +232,7 @@ func TestTranscriptionHandler_FormModelWithoutDefault(t *testing.T) {
 	}
 }
 
-// TestTranscriptionHandler_HeaderModelWithoutDefault 未设默认语音模型，请求头显式指定时照常转录。
+// TestTranscriptionHandler_HeaderModelWithoutDefault 未设默认 ASR 模型，请求头显式指定时照常转录。
 func TestTranscriptionHandler_HeaderModelWithoutDefault(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
@@ -249,7 +249,7 @@ func TestTranscriptionHandler_HeaderModelWithoutDefault(t *testing.T) {
 	}
 }
 
-// TestTranscriptionHandler_ExplicitUnknownNoFallback 显式指定的模型不存在时报错，不回落到默认语音模型。
+// TestTranscriptionHandler_ExplicitUnknownNoFallback 显式指定的模型不存在时报错，不回落到默认 ASR 模型。
 func TestTranscriptionHandler_ExplicitUnknownNoFallback(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
@@ -259,7 +259,7 @@ func TestTranscriptionHandler_ExplicitUnknownNoFallback(t *testing.T) {
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("status=%d, want 400（不应回落到默认语音模型）", rc.Response.StatusCode())
+		t.Fatalf("status=%d, want 400（不应回落到默认 ASR 模型）", rc.Response.StatusCode())
 	}
 	if s := bodyStatus(t, rc); s != "invalid_model" {
 		t.Errorf("status = %q, want invalid_model", s)
@@ -267,7 +267,7 @@ func TestTranscriptionHandler_ExplicitUnknownNoFallback(t *testing.T) {
 }
 
 // TestTranscriptionHandler_IgnoresVoiceSetting 服务端不读取配置表 voice.model：
-// 配置表选了 whisper-1 但无默认语音模型、请求也不指定时，仍报未配置。
+// 配置表选了 whisper-1 但无默认 ASR 模型、请求也不指定时，仍报未配置。
 func TestTranscriptionHandler_IgnoresVoiceSetting(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)

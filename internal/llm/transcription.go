@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	// ErrUpstream 上游转录服务返回了错误，错误信息中透传上游原文
-	ErrUpstream = errors.New("上游转录服务返回错误")
+	// ErrUpstream 上游服务（转录、合成）返回了错误，错误信息中透传上游原文
+	ErrUpstream = errors.New("上游服务返回错误")
 	// ErrEmptyTranscript 上游返回了空文本，通常是音频过短或无有效语音
 	ErrEmptyTranscript = errors.New("未识别到有效语音")
 )

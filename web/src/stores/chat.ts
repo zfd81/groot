@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { api } from '../api/client'
 import { streamChat, ChatStreamError, type SseEvent, type ChatAttachment } from '../api/sse'
 import i18n from '../i18n'
+import { useSpeechStore } from './speech'
 import type {
   SessionSummary,
   SessionHistoryResp,
@@ -35,6 +36,9 @@ export type ChatStep =
 
 // 一条消息：用户输入或一次助手回复。
 export interface ChatMessage {
+  // 前端内存中的消息标识（不持久化），朗读播放器用它定位正在朗读的消息，
+  // 不依赖会话 ID 或列表索引。
+  id: string
   role: 'user' | 'assistant'
   content: string
   reasoning: string
@@ -58,6 +62,14 @@ export interface ChatMessage {
 }
 
 const PAGE_SIZE = 20
+
+// 生成消息 id：优先 crypto.randomUUID，不可用时退回时间戳加随机数。
+function newMessageId(): string {
+  return (
+    (typeof crypto !== 'undefined' && crypto.randomUUID?.()) ||
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  )
+}
 
 // 单调时钟：优先用 performance.now()，退回 Date.now()，用于步骤计时。
 function now(): number {
@@ -130,9 +142,12 @@ export const useChatStore = defineStore('chat', () => {
 
   let abortCtrl: AbortController | null = null
 
+  const speech = useSpeechStore()
+
   const canLoadMore = computed(() => sessions.value.length < sessionsTotal.value)
 
   function newSession() {
+    // stop() 内部已调用 speech.stop()，朗读随之停止。
     stop()
     sessionId.value = ''
     messages.value = []
@@ -183,6 +198,7 @@ export const useChatStore = defineStore('chat', () => {
 
   // 打开历史会话，加载其消息记录。
   async function openSession(sid: string) {
+    // stop() 内部已调用 speech.stop()，朗读随之停止。
     stop()
     sessionId.value = sid
     messages.value = []
@@ -191,6 +207,7 @@ export const useChatStore = defineStore('chat', () => {
     const msgs = detail.history?.messages || []
     for (const m of msgs) {
       messages.value.push({
+        id: newMessageId(),
         role: 'user',
         content: m.instruction,
         reasoning: '',
@@ -204,6 +221,7 @@ export const useChatStore = defineStore('chat', () => {
       // 连同 token 用量一起回填给底部操作栏与会话统计条展示。
       const finishedAt = Date.parse(m.timestamp)
       messages.value.push({
+        id: newMessageId(),
         role: 'assistant',
         content: m.result,
         reasoning: '',
@@ -236,7 +254,11 @@ export const useChatStore = defineStore('chat', () => {
   ) {
     if (sending.value || !instruction.trim()) return
 
+    // 发送新消息即停止当前朗读；发送的点击/回车是用户手势，顺带解锁浏览器的音频自动播放限制。
+    speech.stop()
+    speech.unlock()
     messages.value.push({
+      id: newMessageId(),
       role: 'user',
       content: instruction,
       reasoning: '',
@@ -245,6 +267,7 @@ export const useChatStore = defineStore('chat', () => {
       streaming: false,
     })
     const assistant: ChatMessage = {
+      id: newMessageId(),
       role: 'assistant',
       content: '',
       reasoning: '',
@@ -301,6 +324,13 @@ export const useChatStore = defineStore('chat', () => {
       }
       sending.value = false
       abortCtrl = null
+      // 流结束：剩余文本作为最后一句送入朗读队列。放在解除 sending 之后并兜住异常，
+      // 朗读出错不能卡住聊天。
+      try {
+        speech.feedStreaming(live.id, live.content, true)
+      } catch (e) {
+        console.warn('speech:', e)
+      }
       // 刷新统计与会话列表；拿到本轮记录后把 token 用量回填给刚完成的消息。
       void fetchStats().then((rec) => {
         if (rec && (rec.prompt_tokens || rec.completion_tokens)) {
@@ -397,11 +427,17 @@ export const useChatStore = defineStore('chat', () => {
       // 正文开始输出意味着思考阶段结束，结算其耗时。
       finalizeReasoning(msg)
       msg.content += ev.content
+      try {
+        speech.feedStreaming(msg.id, msg.content, false)
+      } catch (e) {
+        console.warn('speech:', e)
+      }
     }
   }
 
   // 停止生成（断开 SSE 连接）。
   function stop() {
+    speech.stop()
     if (abortCtrl) {
       abortCtrl.abort()
       abortCtrl = null

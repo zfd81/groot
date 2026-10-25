@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useChatStore } from '../stores/chat'
 import { useMetaStore } from '../stores/meta'
+import { useSpeechStore } from '../stores/speech'
 import type { ChatAttachment } from '../api/sse'
 import SessionSidebar from '../components/chat/SessionSidebar.vue'
 import MessageList from '../components/chat/MessageList.vue'
@@ -15,6 +16,7 @@ import LogModal from '../components/chat/LogModal.vue'
 import FilePanel from '../components/files/FilePanel.vue'
 import { useFilesStore } from '../stores/files'
 import { Monitor } from '@element-plus/icons-vue'
+import SpeakerIcon from '../components/chat/SpeakerIcon.vue'
 import PanelIcon from '../components/files/PanelIcon.vue'
 
 const route = useRoute()
@@ -22,6 +24,7 @@ const router = useRouter()
 const { t } = useI18n()
 const chat = useChatStore()
 const meta = useMetaStore()
+const speech = useSpeechStore()
 const files = useFilesStore()
 // 悬浮输入框需要与页面同色的遮罩，取 Element Plus 的背景色变量，随主题明暗切换。
 const bodyColor = 'var(--el-bg-color)'
@@ -149,9 +152,19 @@ onMounted(async () => {
     </aside>
 
     <div class="main">
-      <!-- 顶部栏：会话标题 + 日志按钮 -->
+      <!-- 顶部栏：会话标题 + 自动朗读开关 + 日志按钮 -->
       <header class="topbar">
         <h1 class="topbar-title">{{ headerTitle }}</h1>
+        <!-- 自动朗读总开关：仅在配置了默认 TTS 模型时显示 -->
+        <button
+          v-if="meta.defaults.tts"
+          class="topbar-logs"
+          type="button"
+          :title="speech.autoplay ? t('chat.speechAutoOn') : t('chat.speechAutoOff')"
+          @click="speech.setAutoplay(!speech.autoplay)"
+        >
+          <el-icon :size="17"><SpeakerIcon :muted="!speech.autoplay" /></el-icon>
+        </button>
         <button
           class="topbar-logs"
           type="button"

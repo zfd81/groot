@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { Loading, CopyDocument, Clock } from '@element-plus/icons-vue'
+import SpeakerIcon from './SpeakerIcon.vue'
 import type { ChatMessage } from '../../stores/chat'
+import { useMetaStore } from '../../stores/meta'
+import { useSpeechStore } from '../../stores/speech'
 import { fmtTok } from '../../utils/format'
 
 const { t } = useI18n()
 const props = defineProps<{ message: ChatMessage }>()
+const meta = useMetaStore()
+const speech = useSpeechStore()
+
+// 本条消息是否正在被朗读（自动朗读或点播）。
+const isPlaying = computed(() => speech.playingId === props.message.id)
 
 // 实时计时：仅在流式进行中每秒刷新一次墙钟，驱动「深度思考中 X秒」跳动。
 const nowMs = ref(Date.now())
@@ -113,6 +121,17 @@ async function copyContent() {
     >
       <el-icon :size="15"><CopyDocument /></el-icon>
     </button>
+    <!-- 点播/停止朗读：仅在配置了默认 TTS 模型且有正文时显示 -->
+    <button
+      v-if="meta.defaults.tts && message.content"
+      class="copy-btn"
+      :class="{ playing: isPlaying }"
+      type="button"
+      :title="isPlaying ? t('chat.speechStop') : t('chat.speechPlay')"
+      @click="isPlaying ? speech.stop() : speech.playMessage(message.id, message.content)"
+    >
+      <el-icon :size="15"><SpeakerIcon /></el-icon>
+    </button>
     <span v-if="hasTokens" class="stat">
       {{ t('chat.tokenInputShort', { n: fmtTok(message.promptTokens || 0) }) }}
     </span>
@@ -158,6 +177,20 @@ async function copyContent() {
 }
 .copy-btn:hover {
   background: rgba(127, 127, 127, 0.12);
+}
+/* 正在朗读：主色 + 呼吸动效 */
+.copy-btn.playing {
+  color: var(--el-color-primary);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 .stat {
   display: inline-flex;

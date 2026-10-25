@@ -1,5 +1,7 @@
 # Groot AI Agent 项目规范
 
+> **强制要求：本项目的所有开发活动（需求澄清、方案设计、写计划、写代码、调试、测试、代码评审、完成前验证、分支收尾）都必须使用 Superpowers 技能完成，不得跳过。** 具体对照与约束见下文「开发工具规范（Superpowers）」。
+
 ## 目录结构规范
 
 项目采用以下标准目录结构，**所有新增文件必须遵循此规范**：
@@ -45,9 +47,38 @@ groot/
 - ❌ 不要创建奇怪的目录名（如 `~/`）
 - ❌ 不要在 `examples/<语言>/` 目录下创建测试文件 - 测试一律放 `tests/examples/<语言>/`
 
+## 开发工具规范（Superpowers）
+
+**本项目所有开发活动必须使用 Superpowers 插件。** 需求讨论、方案设计、写计划、写代码、调试、代码评审、完成前验证等环节，均须先通过 `Skill` 工具加载对应的 superpowers skill 并按其流程执行，不得跳过。
+
+已安装：`superpowers@claude-plugins-official`（user 级作用域，版本 7.0.0），skill 定义位于 `~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/`。
+
+### 场景与技能对照
+
+| 开发场景 | 使用技能 |
+|---------|---------|
+| 需求澄清、方案发散 | `brainstorming` |
+| 编写实施计划 | `writing-plans` |
+| 执行计划 | `executing-plans` |
+| 按计划写代码（子代理驱动） | `subagent-driven-development`、`dispatching-parallel-agents` |
+| 单元测试（红/绿循环） | `test-driven-development` |
+| 问题排查、缺陷定位 | `systematic-debugging` |
+| 提交前代码评审 | `requesting-code-review`、`receiving-code-review` |
+| 完成前验证 | `verification-before-completion` |
+| 分支收尾、合并 | `finishing-a-development-branch`（仅做完成前检查，不建分支、不合并，见下文「Git 分支与提交规范」） |
+| 新增/修改 skill | `writing-skills` |
+
+### 约束
+
+- 每项开发任务开始时，先加载 `using-superpowers` 了解当前可用技能与使用方式
+- 只要某个 skill 有可能适用于当前任务，就必须加载并按其流程执行；加载后发现不适用可以不采用，但不允许以"任务简单"、"只是改一行"、"先看看代码"为理由跳过加载
+- 若所需 skill 未安装或加载失败，须先补装/修复，再继续开发，禁止绕过流程直接编码
+- 子代理（subagent）执行的任务同样适用本规范，分派任务时须在提示中说明需要使用的 skill
+- Superpowers 的流程要求与本文档冲突时，以本文档的目录结构、测试规范、Git 分支与提交规范为准；流程本身不冲突的部分必须遵守
+
 ## 开发工作流程
 
-实施 plan 后的代码开发，遵循以下流程：
+实施 plan 后的代码开发，遵循以下流程（各环节均配合上文的 Superpowers 技能执行）：
 
 ```
 Plan → 编写/更新设计文档 → 编写代码 → 编写单元测试 → 运行单元测试 → 提交
@@ -178,15 +209,43 @@ tests/
 - Go 代码遵循标准 Go 风格
 - 使用 `gofmt` 格式化代码
 
+### 命名一致性
+
+**代表同一内容的标识符，在同一类事物中必须使用同一个名字**，跨表、跨包、跨接口都不例外：
+
+- 数据库：不同表中表示同一含义的列，列名相同（如租户标识在 `api_keys` 与 `memory_sessions` 中都叫 `tenant_id`）
+- Go 代码：同一含义的结构体字段、变量、参数使用同一名字（如 `TenantID`）
+- JSON：请求与响应中同一含义的属性名相同（如 `tenant_id`）
+- 请求上下文键、日志字段等内部标识同样遵守
+
+新增字段前先查找已有同义字段并沿用其名字；发现不一致时以最早出现或使用最广的名字为准统一，不允许并存。
+
 ## 配置说明
 
 - 运行时配置自动生成到 `~/.groot/config.yaml`
 - 不要在项目目录创建 `configs/` 目录
 
-## Git 提交规范
+## Git 分支与提交规范
+
+### 分支
+
+- **所有开发一律直接在 `master` 分支上进行，禁止创建任何分支或 worktree**（包括功能分支、修复分支、临时分支、`git worktree add` 等）
+- 开始任何任务前不需要也不允许切换分支；若发现当前不在 `master`，先向用户确认，不要自行创建或切换分支
+- Superpowers 中涉及分支/worktree 的技能（如 `using-git-worktrees`、`finishing-a-development-branch` 的建分支与合并步骤）在本项目中不执行，相关流程改为直接在 `master` 工作区完成
+
+### 提交
 
 - **所有 git commit 必须由用户明确请求**，禁止自动提交
 - 只有用户明确说"提交"、"commit"、"推送到远程"等指令时，才执行 git 操作
+
+## 计划执行模式（默认约定）
+
+用户无特殊说明时，执行实施计划一律按以下方式进行：
+
+- **执行方式**: 子代理驱动（`subagent-driven-development`）：每个任务由一个全新实施子代理完成，随后一个独立评审子代理做规格与质量评审，全部任务完成后再做一次整体评审
+- **工作分支**: 直接在 `master` 上开发，不创建 worktree 或功能分支（见「Git 分支与提交规范」）
+- **提交**: 不自动提交。计划中的"Commit"步骤改为用悬空快照对象（`git write-tree` + `git commit-tree`，不触碰 HEAD、索引和分支）记录每个任务的工作区状态，供评审者生成精确 diff；所有改动留在工作区，等用户明确要求时再提交
+- **进度账本**: 写在 `.superpowers/sdd/<plan-name>/progress.md`（已被 gitignore），整体评审通过后删除该目录
 
 ## 编译规范
 

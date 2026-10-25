@@ -203,7 +203,7 @@ func (s *Settings) SetRuntime(ctx context.Context, r RuntimeSettings) error {
 
 // Voice 读取语音配置。表内缺失的字段由代码默认值填充。
 // modelSet 表示配置表中是否存在 voice.model 一行：不存在说明识别模型从未确定过，
-// 调用方可据此以默认语音模型作为初值；存在（含空串）则表示已确定，不再自动填充。
+// 调用方可据此以默认 ASR 模型作为初值；存在（含空串）则表示已确定，不再自动填充。
 // 出错时返回值无意义，调用方须先检查 error。
 func (s *Settings) Voice(ctx context.Context) (v VoiceSettings, modelSet bool, err error) {
 	v = defaultVoice()
@@ -244,6 +244,38 @@ func (s *Settings) SetVoiceModel(ctx context.Context, model string) error {
 	}
 	return s.repo.Upsert(ctx,
 		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeyVoiceModel, Value: model},
+	)
+}
+
+// Speech 读取语音合成配置。表内缺失的字段由代码默认值填充。
+// 出错时返回值无意义，调用方须先检查 error。
+func (s *Settings) Speech(ctx context.Context) (SpeechSettings, error) {
+	v := defaultSpeech()
+	if s.repo == nil {
+		return v, nil
+	}
+	vals, err := s.globalValues(ctx)
+	if err != nil {
+		return SpeechSettings{}, err
+	}
+	if raw, ok := vals[KeySpeechVoice]; ok {
+		v.Voice = raw
+	}
+	if raw, ok := vals[KeySpeechInstructions]; ok {
+		v.Instructions = raw
+	}
+	return v, nil
+}
+
+// SetSpeech 保存语音合成配置，两个字段整体写入（空串也写入，覆盖旧值）。
+// 写入后即视为明确设置，之后不再跟随代码默认值变化；恢复默认需删除对应行。
+func (s *Settings) SetSpeech(ctx context.Context, v SpeechSettings) error {
+	if s.repo == nil {
+		return ErrNoSettingStore
+	}
+	return s.repo.Upsert(ctx,
+		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeySpeechVoice, Value: v.Voice},
+		&repo.Setting{Scope: repo.ScopeGlobal, Name: KeySpeechInstructions, Value: v.Instructions},
 	)
 }
 

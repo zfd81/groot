@@ -107,7 +107,11 @@ func parseDefaultType(rc *app.RequestContext) (repo.DefaultFlag, bool) {
 }
 
 func writeInvalidDefaultType(rc *app.RequestContext) {
-	rc.JSON(400, utils.H{"status": "invalid_request", "message": "type 取值无效，可选 chat、voice、vision"})
+	names := make([]string, 0, len(repo.AllDefaultFlags))
+	for _, f := range repo.AllDefaultFlags {
+		names = append(names, f.String())
+	}
+	rc.JSON(400, utils.H{"status": "invalid_request", "message": "type 取值无效，可选 " + strings.Join(names, "、")})
 }
 
 // writeModelError 把 ModelService 错误映射为 HTTP 状态码与错误码。
@@ -150,11 +154,14 @@ func (h *ModelsHandler) List(ctx context.Context, rc *app.RequestContext) {
 		if m.Has(repo.DefaultChat) {
 			defaults.Chat = m.Name
 		}
-		if m.Has(repo.DefaultVoice) {
-			defaults.Voice = m.Name
+		if m.Has(repo.DefaultASR) {
+			defaults.ASR = m.Name
 		}
 		if m.Has(repo.DefaultVision) {
 			defaults.Vision = m.Name
+		}
+		if m.Has(repo.DefaultTTS) {
+			defaults.TTS = m.Name
 		}
 		models = append(models, toModelInfo(m))
 	}
@@ -208,7 +215,7 @@ func (h *ModelsHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 	rc.JSON(200, utils.H{"status": "ok"})
 }
 
-// SetDefault 处理 PUT /web/models/:name/default?type=chat|voice|vision（type 省略为 chat）
+// SetDefault 处理 PUT /web/models/:name/default?type=chat|asr|vision|tts（type 省略为 chat）
 func (h *ModelsHandler) SetDefault(ctx context.Context, rc *app.RequestContext) {
 	flag, ok := parseDefaultType(rc)
 	if !ok {
@@ -222,7 +229,7 @@ func (h *ModelsHandler) SetDefault(ctx context.Context, rc *app.RequestContext) 
 	rc.JSON(200, utils.H{"status": "ok"})
 }
 
-// ClearDefault 处理 DELETE /web/models/:name/default?type=voice|vision。
+// ClearDefault 处理 DELETE /web/models/:name/default?type=asr|vision|tts。
 // type 为 chat（或省略）时由业务层返回 default_chat_required。
 func (h *ModelsHandler) ClearDefault(ctx context.Context, rc *app.RequestContext) {
 	flag, ok := parseDefaultType(rc)

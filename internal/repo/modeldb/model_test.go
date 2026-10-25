@@ -212,18 +212,18 @@ func TestModelRepo_SetDefault(t *testing.T) {
 		t.Errorf("m2 default_flags = %d, want 5", got)
 	}
 
-	// 类型互不影响：m1 设为 voice 不动 m2 的 chat、vision
-	if err := r.SetDefault(ctx, "m1", repo.DefaultVoice); err != nil {
-		t.Fatalf("SetDefault m1 voice: %v", err)
+	// 类型互不影响：m1 设为 asr 不动 m2 的 chat、vision
+	if err := r.SetDefault(ctx, "m1", repo.DefaultASR); err != nil {
+		t.Fatalf("SetDefault m1 asr: %v", err)
 	}
-	if got := flagsOf(t, r, "m1"); got != repo.DefaultVoice {
+	if got := flagsOf(t, r, "m1"); got != repo.DefaultASR {
 		t.Errorf("m1 default_flags = %d, want 2", got)
 	}
 	if got := flagsOf(t, r, "m2"); got != repo.DefaultChat|repo.DefaultVision {
 		t.Errorf("m2 default_flags = %d, want 5", got)
 	}
-	if d, err := r.GetDefault(ctx, repo.DefaultVoice); err != nil || d.Name != "m1" {
-		t.Errorf("GetDefault voice: %v, %+v", err, d)
+	if d, err := r.GetDefault(ctx, repo.DefaultASR); err != nil || d.Name != "m1" {
+		t.Errorf("GetDefault asr: %v, %+v", err, d)
 	}
 
 	if err := r.SetDefault(ctx, "ghost", repo.DefaultChat); !errors.Is(err, repo.ErrNotFound) {
@@ -245,7 +245,7 @@ func TestModelRepo_ClearDefault(t *testing.T) {
 	}
 	_ = r.SetDefault(ctx, "m1", repo.DefaultChat)
 	_ = r.SetDefault(ctx, "m1", repo.DefaultVision)
-	_ = r.SetDefault(ctx, "m2", repo.DefaultVoice)
+	_ = r.SetDefault(ctx, "m2", repo.DefaultASR)
 
 	// 只清目标位
 	if err := r.ClearDefault(ctx, "m1", repo.DefaultVision); err != nil {
@@ -257,22 +257,22 @@ func TestModelRepo_ClearDefault(t *testing.T) {
 	if _, err := r.GetDefault(ctx, repo.DefaultVision); !errors.Is(err, repo.ErrNotFound) {
 		t.Errorf("清除后 vision 应无默认, got %v", err)
 	}
-	if got := flagsOf(t, r, "m2"); got != repo.DefaultVoice {
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultASR {
 		t.Errorf("m2 不应受影响, default_flags = %d", got)
 	}
 
 	// 清除未持有的位：无操作、不报错
-	if err := r.ClearDefault(ctx, "m1", repo.DefaultVoice); err != nil {
+	if err := r.ClearDefault(ctx, "m1", repo.DefaultASR); err != nil {
 		t.Errorf("清除未持有的位应成功, got %v", err)
 	}
 	if got := flagsOf(t, r, "m1"); got != repo.DefaultChat {
 		t.Errorf("m1 default_flags = %d, want 1", got)
 	}
-	if got := flagsOf(t, r, "m2"); got != repo.DefaultVoice {
-		t.Errorf("清除 m1 未持有的 voice 不应影响 m2, got %d", got)
+	if got := flagsOf(t, r, "m2"); got != repo.DefaultASR {
+		t.Errorf("清除 m1 未持有的 asr 不应影响 m2, got %d", got)
 	}
 
-	if err := r.ClearDefault(ctx, "ghost", repo.DefaultVoice); !errors.Is(err, repo.ErrNotFound) {
+	if err := r.ClearDefault(ctx, "ghost", repo.DefaultASR); !errors.Is(err, repo.ErrNotFound) {
 		t.Errorf("ClearDefault 不存在模型应返回 ErrNotFound, got %v", err)
 	}
 }
@@ -282,7 +282,7 @@ func TestModelRepo_CreateAndUpdateDefaultFlags(t *testing.T) {
 	r := newTestRepo(t)
 	ctx := context.Background()
 	m := newModel("m1")
-	m.DefaultFlags = repo.DefaultChat | repo.DefaultVoice
+	m.DefaultFlags = repo.DefaultChat | repo.DefaultASR
 	if err := r.Create(ctx, m); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
