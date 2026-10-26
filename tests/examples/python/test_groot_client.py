@@ -53,6 +53,8 @@ class MockGrootHandler(BaseHTTPRequestHandler):
             })
         elif self.path == "/audio/transcriptions":
             self._handle_transcription()
+        elif self.path == "/image/understanding":
+            self._handle_image_understanding()
         else:
             self.send_error(404)
 
@@ -153,6 +155,22 @@ class MockGrootHandler(BaseHTTPRequestHandler):
             end = body.index(b"\r\n", start)
             model = body[start:end].decode()
         self._json_response(200, {"text": "你好，世界", "model": model})
+
+    def _handle_image_understanding(self):
+        """模拟 POST /image/understanding：校验图片附件，回显 model 与 instruction。"""
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length > 0 else {}
+        attachments = body.get("attachments") or []
+        if not attachments or attachments[0].get("type") != "image" \
+                or not attachments[0].get("content"):
+            self._json_response(400, {"status": "invalid_request", "message": "必须提供 1 张图片附件"})
+            return
+        model = self.headers.get("X-Model-Name") or "qwen-vl-max"
+        self._json_response(200, {
+            "text": "图里是一张发票",
+            "model": model,
+            "instruction": body.get("instruction", ""),
+        })
 
     def _json_response(self, status, data):
         self.send_response(status)
@@ -365,3 +383,24 @@ class TestGrootClient(unittest.TestCase):
     def test_transcribe_explicit_model(self):
         result = self.client.transcribe(self._tmp_audio(), model="my-asr", language="zh")
         self.assertEqual(result["model"], "my-asr")
+
+    def _tmp_png(self):
+        f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_understand_image_default_instruction(self):
+        result = self.client.understand_image(self._tmp_png())
+        # 未指定 instruction 时客户端不下发该字段，由服务端使用默认指令
+        self.assertEqual(result["instruction"], "")
+        self.assertEqual(result["model"], "qwen-vl-max")
+
+    def test_understand_image_explicit_instruction(self):
+        result = self.client.understand_image(self._tmp_png(), instruction="提取文字")
+        self.assertEqual(result["instruction"], "提取文字")
+
+    def test_understand_image_explicit_model(self):
+        result = self.client.understand_image(self._tmp_png(), model="my-vlm")
+        self.assertEqual(result["model"], "my-vlm")

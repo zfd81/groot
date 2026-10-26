@@ -13,9 +13,15 @@ type ExecuteRequest struct {
 
 // Attachment represents file attachment
 type Attachment struct {
-	Type    string `json:"type"` // file, image
+	Type    string `json:"type"` // file, image, audio, video
 	Name    string `json:"name"`
 	Content string `json:"content"` // Base64
+}
+
+// ImageUnderstandingRequest represents image understanding request
+type ImageUnderstandingRequest struct {
+	Instruction string       `json:"instruction"`
+	Attachments []Attachment `json:"attachments"`
 }
 
 // ExecuteResponse represents SSE event response

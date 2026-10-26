@@ -57,7 +57,7 @@ func Speech(ctx context.Context, m *repo.Model, sr SpeechRequest) (io.ReadCloser
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.APIKey)
 
-	client := &http.Client{Timeout: transcribeTimeout}
+	client := &http.Client{Timeout: upstreamTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		// 调用方主动取消或超时不算上游故障，直接返回 ctx 的错误。

@@ -242,7 +242,7 @@ tests/
 
 用户无特殊说明时，执行实施计划一律按以下方式进行：
 
-- **执行方式**: 子代理驱动（`subagent-driven-development`）：每个任务由一个全新实施子代理完成，随后一个独立评审子代理做规格与质量评审，全部任务完成后再做一次整体评审
+- **执行方式**: 固定为子代理驱动（`subagent-driven-development`）：每个任务由一个全新实施子代理完成，随后一个独立评审子代理做规格与质量评审，全部任务完成后再做一次整体评审。所有计划一律按此方式执行，不再询问用户选择执行方式（Native 等其它方式仅在用户当次明确要求时使用）
 - **工作分支**: 直接在 `master` 上开发，不创建 worktree 或功能分支（见「Git 分支与提交规范」）
 - **提交**: 不自动提交。计划中的"Commit"步骤改为用悬空快照对象（`git write-tree` + `git commit-tree`，不触碰 HEAD、索引和分支）记录每个任务的工作区状态，供评审者生成精确 diff；所有改动留在工作区，等用户明确要求时再提交
 - **进度账本**: 写在 `.superpowers/sdd/<plan-name>/progress.md`（已被 gitignore），整体评审通过后删除该目录
@@ -250,5 +250,5 @@ tests/
 ## 编译规范
 
 - 编译产物必须输出到 `dist/` 目录
-- 编译命令：`go build -o dist/groot ./cmd`
+- 编译命令：`go build -o dist/groot ./cmd/groot`
 - 不要在项目根目录留下编译产物

@@ -351,7 +351,7 @@ Web 界面登录认证始终启用：
 
 模型配置通过 Web UI 管理：登录后进入 **设置 → 模型**，点击「新建模型」，填写模型名称、API 地址（`base_url`）、API 密钥（`api_key`）和 Model ID 后保存。首个创建的模型自动成为默认对话模型；默认 ASR 模型、默认视觉模型、默认 TTS 模型在模型卡片的「···」菜单中设置。
 
-- 可创建、编辑、删除模型，设置默认对话 / ASR / 视觉 / TTS 模型，启用/禁用模型并测试连接；ASR 模型用于音频转录，TTS 模型用于文本转语音
+- 可创建、编辑、删除模型，设置默认对话 / ASR / 视觉 / TTS 模型，启用/禁用模型并测试连接；ASR 模型用于音频转录，视觉模型用于图片解析，TTS 模型用于文本转语音
 - API Key 支持填写 `${ENV_VAR}` 引用环境变量，例如填写 `${OPENAI_API_KEY}` 后：
 
 ```bash
@@ -486,8 +486,8 @@ security:
 默认模型规则：
 
 - 模型有四种默认类型：默认对话模型、默认 ASR 模型、默认视觉模型、默认 TTS 模型；每种类型至多一个模型持有，一个模型可同时持有多种
-- ASR 模型用于音频转录（`/audio/transcriptions`，音频转文字），TTS 模型用于文本转语音（`/audio/speech`，文字转音频）
-- 调用方不指定模型时按用途取对应默认：对话取默认对话模型，音频转录取默认 ASR 模型，文本转语音取默认 TTS 模型
+- ASR 模型用于音频转录（`/audio/transcriptions`，音频转文字），视觉模型用于图片解析（`/image/understanding`，图片转文字），TTS 模型用于文本转语音（`/audio/speech`，文字转音频）
+- 调用方不指定模型时按用途取对应默认：对话取默认对话模型，音频转录取默认 ASR 模型，图片解析取默认视觉模型，文本转语音取默认 TTS 模型
 - 首个创建的模型自动成为默认对话模型；默认 ASR、默认视觉、默认 TTS 模型需手动设置
 - 持有任一默认类型的模型不允许删除或禁用，需先取消其默认标记
 - 默认 ASR、默认视觉、默认 TTS 可直接取消；默认对话不能取消，只能通过把其他模型设为默认对话模型来转移
@@ -625,7 +625,7 @@ logging:
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
-| `chat` | POST /chat、POST /chat/{sid}/{cid}/stop | 执行对话、中止对话 |
+| `chat` | POST /chat、POST /chat/{sid}/{cid}/stop、POST /audio/transcriptions、POST /audio/speech、POST /image/understanding | 执行对话、中止对话、音频转录、文本转语音、图片解析 |
 | `status` | GET /chat/status/{sid} | 查询对话状态 |
 | `detail` | GET /chat/{sid}、GET /chat/{sid}/{cid} | 查询对话详情 |
 | `session` | GET /sess/{sid}、PATCH /sess/{sid}、GET /sess/search | 查询会话详情、重命名会话、搜索历史对话 |
@@ -645,7 +645,7 @@ groot 面向多个业务系统后端提供服务，会话按（租户，用户�
 - **用户由调用方声明**：业务系统完成自身用户鉴权后，在每个请求的 `X-User-ID` 请求头中声明当前用户（格式要求同租户标识）。groot 信任持有有效 Key 的调用方对用户的声明。
 - **会话类接口**（`POST /chat`、`POST /chat/{sid}/{cid}/stop`、`GET /chat/status/{sid}`、`GET /chat/{sid}`、`GET /chat/{sid}/{cid}`、`GET /sess/{sid}`、`PATCH /sess/{sid}`、`DELETE /sess/{sid}`、`GET /sess/history`、`GET /sess/search`）要求完整归属：Key 未绑定租户返回 `403 forbidden`（消息"API Key 未绑定租户"）；`X-User-ID` 缺失或非法返回 `400 invalid_request`（消息"缺少或非法的 X-User-ID"）。
 - **归属不符等同于不存在**：读取或续写他人会话时，接口的可观测行为与会话不存在完全一致（`/chat` 续聊生成新 sid，`/chat/status` 返回 `idle`，详情、中止、重命名、删除接口返回 404），不泄漏会话 ID 是否真实存在。列表与搜索只返回当前归属的会话。
-- `/audio/transcriptions`、`/audio/speech`、`/schedule/*` 与会话无关，不要求 `X-User-ID`。
+- `/audio/transcriptions`、`/audio/speech`、`/image/understanding`、`/schedule/*` 与会话无关，不要求 `X-User-ID`。
 - 通过 Web 界面登录的管理员不受租户与用户隔离限制，可查看、重命名、中止、删除全部会话；定时任务产生的会话归属为空，只能由 Web 管理员查看、重命名与删除。
 
 ### 4.6 配置热更新
@@ -1278,6 +1278,7 @@ groot user reset -y   # 跳过确认直接执行
 | `/chat/{sid}/{cid}/stop` | POST | `chat` | 中止正在执行的对话 |
 | `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
 | `/audio/speech` | POST | `chat` | 文本转语音（返回音频二进制） |
+| `/image/understanding` | POST | `chat` | 图片解析（Base64 上传，返回文本） |
 | `/sess/{sid}` | GET | `session` | 查询会话详情（完整对话历史） |
 | `/sess/{sid}` | PATCH | `session` | 重命名会话 |
 | `/sess/{sid}` | DELETE | `delete` | 删除会话及其全部对话记录 |
@@ -1809,7 +1810,68 @@ curl -X POST http://localhost:8080/audio/speech \
 
 ---
 
-### 7.5 GET /chat/status/{sid} - 查询对话状态
+### 7.5 POST /image/understanding - 图片解析
+
+需要携带具有 `chat` 权限的 API Key，与 `/chat` 相同。本接口与会话无关，不要求 `X-User-ID`。
+
+提交一张图片和一段可选的解析指令，返回模型输出的文本。请求为 `application/json`，附件结构与 `/chat` 相同：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `instruction` | 否 | 解析指令，如「把这张发票转成 JSON，字段：金额、日期、开票方」。省略或为空白时使用内置默认指令：请详细描述这张图片的内容；如果图片中包含文字，请完整识别并逐字输出。 |
+| `attachments` | 是 | 图片附件数组，长度必须为 1 |
+| `attachments[].type` | 是 | 必须为 `"image"` |
+| `attachments[].name` | 是 | 文件名，扩展名用于文件头识别失败时判定类型 |
+| `attachments[].content` | 是 | 图片的纯 Base64 内容，不带 `data:` 前缀 |
+
+图片类型由文件头识别（`image/*`，含 ICO）；文件头无法识别时按扩展名兜底：`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`。
+
+**请求示例：**
+
+```bash
+# 生成不带换行的 Base64（带换行的同样可用）
+BASE64=$(base64 -w 0 invoice.png)   # macOS: base64 -i invoice.png | tr -d '\n'
+
+curl -X POST http://localhost:8080/image/understanding \
+  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"把这张发票转成 JSON，字段：金额、日期、开票方",
+       "attachments":[{"type":"image","name":"invoice.png","content":"'"$BASE64"'"}]}'
+```
+
+**响应：**
+
+```json
+{
+  "text": "金额：1280.00 元；日期：2026-10-21；开票方：某某科技有限公司",
+  "model": "qwen-vl-max",
+  "usage": { "prompt_tokens": 1024, "completion_tokens": 48, "total_tokens": 1072 }
+}
+```
+
+- `text`：模型输出的原文，原样返回，Groot 不解析、不改写。
+- `model`：实际使用的模型名。
+- `usage`：上游返回 token 用量时给出，未返回时省略该字段。
+
+**错误响应：**
+
+| HTTP 状态码 | 错误码 | 说明 |
+|---|---|---|
+| 400 | `invalid_request` | 请求体非法、`attachments` 数量不为 1 |
+| 400 | `attachment_invalid_type` | 附件 `type` 不是 `image` |
+| 400 | `attachment_count_exceeded` / `attachment_size_exceeded` / `attachment_total_size_exceeded` / `attachment_type_not_allowed` / `attachment_missing_name` / `attachment_missing_content` | 附件校验失败，文案与 `/chat` 相同 |
+| 400 | `attachment_decode_error` | `content` 不是合法 Base64 |
+| 400 | `unsupported_type` | 文件头识别出明确的非图片类型，或无法识别且扩展名不匹配 |
+| 400 | `invalid_model` | 模型不存在、已禁用或未配置默认视觉模型 |
+| 500 | `error` | 内部错误（读取附件配置失败等） |
+| 502 | `upstream_error` | 上游图片解析服务出错，`message` 透传上游原文 |
+| 499 | `cancelled` | 调用方在拿到响应前放弃请求（连接中断、超时取消等）。与 `502` 分开：这不是上游故障，日志记录为「图片解析已中断」而非「图片解析失败」 |
+
+模型用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为请求头 `X-Model-Name` → 默认视觉模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认视觉模型。
+
+---
+
+### 7.6 GET /chat/status/{sid} - 查询对话状态
 
 查询指定会话中最近一次对话的运行状态。
 
@@ -1866,7 +1928,7 @@ curl -X POST http://localhost:8080/audio/speech \
 
 ---
 
-### 7.6 GET /chat/{sid}/{cid} - 查询对话详情
+### 7.7 GET /chat/{sid}/{cid} - 查询对话详情
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。省略 `cid`（即 `GET /chat/{sid}`）时返回该会话最近一次对话的详情。
 
@@ -1910,7 +1972,7 @@ curl -X POST http://localhost:8080/audio/speech \
 
 ---
 
-### 7.6.1 POST /chat/{sid}/{cid}/stop - 中止对话
+### 7.7.1 POST /chat/{sid}/{cid}/stop - 中止对话
 
 中止会话 `sid` 中正在执行的对话 `cid`。权限点 `chat`。只能中止当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`；Web 登录的管理员可中止任意会话的对话。
 
@@ -1972,7 +2034,7 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 ---
 
-### 7.7 GET /sess/{sid} - 查询会话详情
+### 7.8 GET /sess/{sid} - 查询会话详情
 
 查询会话详情，包括完整对话历史（所有轮次）。只能查询当前（租户，用户）自己的会话，会话不存在或归属不符均返回 `404 session_not_found`。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
 
@@ -2045,7 +2107,7 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 ---
 
-### 7.7.1 PATCH /sess/{sid} - 重命名会话
+### 7.8.1 PATCH /sess/{sid} - 重命名会话
 
 修改会话标题。权限点 `session`。只能重命名当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员可重命名任意会话，包括定时任务产生的归属为空的会话。
 
@@ -2133,7 +2195,7 @@ API Key 未绑定租户 → `403`：
 
 ---
 
-### 7.8 GET /sess/history - 查询会话列表
+### 7.9 GET /sess/history - 查询会话列表
 
 查询当前（租户，用户）的会话列表，支持分页，`total` 同样按归属统计。参数通过 URL Query String 传递。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员看到全部会话。
 
@@ -2175,7 +2237,7 @@ X-User-ID: alice
 
 ---
 
-### 7.9 GET /sess/search - 搜索历史对话
+### 7.10 GET /sess/search - 搜索历史对话
 
 按关键词在当前（租户，用户）历史对话（主 Agent 已完成轮次）的指令与执行结果中模糊搜索，返回轮次级结果，按轮次开始时间倒序。Web 登录的管理员搜索全部会话。
 
@@ -2231,7 +2293,7 @@ X-User-ID: alice
 
 ---
 
-### 7.9.1 DELETE /sess/{sid} - 删除会话
+### 7.10.1 DELETE /sess/{sid} - 删除会话
 
 删除会话及其全部对话记录。权限点 `delete`。只能删除当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员可删除任意会话，包括定时任务产生的归属为空的会话。
 
@@ -2287,7 +2349,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.10 GET /web/health - 健康检查
+### 7.11 GET /web/health - 健康检查
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -2341,11 +2403,11 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.11 GET /schedule - 列出定时任务
+### 7.12 GET /schedule - 列出定时任务
 
 查询所有定时任务，支持按状态过滤。
 
-> **可用性说明：** 7.11 ~ 7.17 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
+> **可用性说明：** 7.12 ~ 7.18 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
 
 **Query 参数：**
 
@@ -2379,7 +2441,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.12 GET /schedule/:id - 查询任务详情
+### 7.13 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -2387,11 +2449,11 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 |------|------|------|------|
 | `id` | string | 是 | 任务 ID（路径参数） |
 
-**响应：** 返回完整任务定义，格式同 7.11 中单条任务。
+**响应：** 返回完整任务定义，格式同 7.12 中单条任务。
 
 ---
 
-### 7.13 DELETE /schedule/:id - 删除任务
+### 7.14 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -2411,7 +2473,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.14 POST /schedule/:id/disable - 禁用任务
+### 7.15 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -2425,7 +2487,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.15 POST /schedule/:id/enable - 启用任务
+### 7.16 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -2439,7 +2501,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.16 POST /schedule/:id/archive - 归档任务
+### 7.17 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -2453,7 +2515,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.17 GET /schedule/:id/history - 执行历史
+### 7.18 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -2481,7 +2543,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.18 定时任务创建（通过对话）
+### 7.19 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
@@ -2519,9 +2581,13 @@ print(f"会话ID: {result['session_id']}")
 
 # 继续会话
 result2 = client.execute_chat("生成摘要", session_id=result["session_id"])
+
+# 图片解析（无状态，不产生会话）
+result = client.understand_image("invoice.png", instruction="把这张发票转成 JSON")
+print(result["text"])
 ```
 
-> 完整代码及 17 个测试用例：[examples/python/](examples/python/)
+> 完整代码及 28 个测试用例：[examples/python/](examples/python/)
 
 ### 8.2 Java
 
@@ -2691,7 +2757,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **说明：** 会话数据长期保留在数据库中，不做内置定时清理。
 
-- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.9.1](#791-delete-sesssid---删除会话)
+- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.10.1](#7101-delete-sesssid---删除会话)
 - 运维侧如需按时间批量清理，可直接对数据库执行 SQL（`memory_chats` 配有 `idx_started_at` 索引，`memory_sessions` 配有 `idx_updated_at` 索引）
 - SQLite 模式下数据库文件为 `{GROOT_HOME}/groot.db`
 
@@ -2847,18 +2913,18 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 |------------|--------|------|
 | 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失、会话类接口缺少或非法的 `X-User-ID`、`PATCH /sess/{sid}` 请求体非法或 `title` 为空/超过 100 个字符、`/audio/speech` 的 `input` 为空/超过 4096 个字符或 `response_format` 非法） |
 | 400 | `invalid_tenant` | 创建 API Key 时 `tenant_id` 为空或含非法字符 |
-| 400 | `invalid_model` | `X-Model-Name`（或 `/audio/*` 的 `model` 字段）指定的模型不存在或已禁用，或未配置对应用途的默认模型 |
+| 400 | `invalid_model` | `X-Model-Name`（或 `/audio/*` 的 `model` 字段）指定的模型不存在或已禁用，或未配置对应用途的默认模型（对话 / ASR / 视觉 / TTS） |
 | 400 | `unknown_agent` | `X-Agent-Name` 指定的子 Agent 未注册 |
 | 400 | `attachment_count_exceeded` | 附件数量超限 |
 | 400 | `attachment_type_not_allowed` | 附件类型不允许 |
 | 400 | `attachment_size_exceeded` | 单个附件大小超限 |
 | 400 | `attachment_total_size_exceeded` | 附件总大小超限 |
-| 400 | `attachment_invalid_type` | 附件 `type` 字段无效（须为 file/image/audio/video） |
+| 400 | `attachment_invalid_type` | 附件 `type` 字段无效（须为 file/image/audio/video）；`/image/understanding` 仅接受 image |
 | 400 | `attachment_missing_name` | 附件缺少文件名 |
 | 400 | `attachment_missing_content` | 附件缺少内容 |
-| 400 | `attachment_decode_error` | 附件 Base64 解码失败 |
+| 400 | `attachment_decode_error` | 附件 Base64 解码失败（`/chat` 与 `/image/understanding`） |
 | 400 | `attachment_validation_error` | 其他附件校验失败 |
-| 400 | `unsupported_type` | 转录音频扩展名不受支持（支持 webm/mp3/mp4/mpeg/mpga/m4a/wav/ogg/flac） |
+| 400 | `unsupported_type` | 转录音频扩展名不受支持（支持 webm/mp3/mp4/mpeg/mpga/m4a/wav/ogg/flac）；`/image/understanding` 在文件头识别出非图片或扩展名不匹配时返回（扩展名支持 png/jpg/jpeg/webp/gif/bmp） |
 | 400 | `file_too_large` | 转录音频超过 `attachment.max_size` 单文件上限 |
 | 401 | `unauthorized` | API Key 无效、过期、已删除或缺失 |
 | 403 | `forbidden` | API Key 权限不足，或调用会话类接口的 API Key 未绑定租户 |
@@ -2874,7 +2940,7 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 | 500 | `llm_connection_error` | LLM 连接失败 |
 | 500 | `tool_call_error` | 工具调用失败 |
 | 500 | `schedule_error` | 定时任务操作失败 |
-| 502 | `upstream_error` | 上游转录或语音合成服务出错（连接超时、鉴权失败、模型拒绝），`message` 透传上游原文 |
+| 502 | `upstream_error` | 上游转录、语音合成或图片解析服务出错（连接超时、鉴权失败、模型拒绝），`message` 透传上游原文 |
 | 503 | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或 `schedule.enabled` 未开启） |
 
 ### E. 联系与支持

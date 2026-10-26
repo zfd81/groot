@@ -34,6 +34,7 @@ SSE 格式说明:
     thinking / message / tool_calls / tool_result / finish / error / unknown。
 """
 
+import base64
 import json
 import os
 from typing import Optional, Callable
@@ -297,5 +298,27 @@ class GrootClient:
                 data=data,
                 files={"file": (os.path.basename(audio_path), f)},
             )
+        resp.raise_for_status()
+        return resp.json()
+
+    def understand_image(self, image_path: str, instruction: Optional[str] = None,
+                         model: Optional[str] = None) -> dict:
+        """图片解析。返回 {"text": 模型输出, "model": 实际使用的模型}，上游给用量时含 usage。
+
+        本接口与会话无关：不产生会话、不写历史。instruction 省略时由服务端使用默认指令；
+        model 省略时由服务端使用默认视觉模型。
+        """
+        with open(image_path, "rb") as f:
+            content = base64.b64encode(f.read()).decode()
+        payload = {"attachments": [{
+            "type": "image",
+            "name": os.path.basename(image_path),
+            "content": content,
+        }]}
+        if instruction:
+            payload["instruction"] = instruction
+        headers = {"X-Model-Name": model} if model else None
+        resp = self.session.post(f"{self.base_url}/image/understanding",
+                                 json=payload, headers=headers)
         resp.raise_for_status()
         return resp.json()

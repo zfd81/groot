@@ -130,6 +130,12 @@ func getRequiredPermission(path, method string) string {
 		return "chat"
 	}
 
+	// Image understanding endpoint (POST /image/understanding)：图片解析是聊天输入的一种形式，
+	// 与 /chat 共用 chat 权限
+	if path == "/image/understanding" && method == "POST" {
+		return "chat"
+	}
+
 	// Stop endpoint (POST /chat/:sid/:cid/stop)：中止对话与发起对话同属 chat 权限
 	if strings.HasPrefix(path, "/chat/") && strings.HasSuffix(path, "/stop") && method == "POST" {
 		return "chat"

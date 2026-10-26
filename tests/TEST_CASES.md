@@ -468,6 +468,18 @@
 
 ---
 
+### 1.14 图片解析测试
+
+位于 `internal/llm/image_test.go`、`internal/api/handler/image_test.go`、`internal/api/middleware/auth_test.go`。
+
+覆盖点：
+
+- 解析客户端（`internal/llm/image_test.go`）：`/v1` 补齐；Bearer 鉴权；三段拼接的请求体可被 `json.Unmarshal` 还原；`Content-Length` 与实际一致；大 Base64 透传；`max_completion_tokens` 为 0 时不下发；`usage` 缺失与补齐；上游错误透传；非法 JSON；空内容；ctx 取消
+- 解析 handler（`internal/api/handler/image_test.go`）：六步校验顺序；只收 image；Base64 换行；非法字符；文本改名；`octet-stream` 扩展名兜底；ICO 嗅探；体积上限；模型解析三态；`X-Model-Name`；默认与自定义指令；上游 502；调用方取消 499 `cancelled`（与上游故障分开）；usage 有无
+- 权限映射（`internal/api/middleware/auth_test.go`）：`/image/understanding` POST 为 `chat`、GET 为 `all`
+
+---
+
 ## 二、系统测试（Python）
 
 位于 `tests/python/` 目录，使用 pytest 框架。
@@ -981,6 +993,16 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 
 ---
 
+### 2.30 图片解析测试
+
+| 测试类 | 测试文件 | 测试内容 |
+|-------|---------|---------|
+| `TestImageUnderstandingErrors` | `test_image_understanding.py` | 覆盖 TC-IMG-001..007、009（未鉴权 401、非法 JSON、附件数量、type 非 image、Base64 解码失败、文本改名、显式模型不存在 400 `invalid_model` 不回落、仅 status 权限 403 与 chat 权限放行） |
+| `TestImageUnderstandingNoDefaultVision` | `test_image_understanding.py` | 覆盖 TC-IMG-010（取消默认视觉模型后调用 → 400 `invalid_model`，message 含「默认视觉模型」，不回落其它类型默认；用例结束恢复原默认） |
+| `TestImageUnderstandingSuccess` | `test_image_understanding.py` | 真实视觉模型解析 1x1 PNG（需 `GROOT_VISION_MODEL`），200 且 text 非空、model 为所用模型 |
+
+---
+
 ## 三、手工验证（Web 界面）
 
 浏览器打开 `http://localhost:8080/ui/`，逐项确认：
@@ -1029,10 +1051,10 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Go 单元测试 | 438 个函数 | 61 |
-| Python 系统测试 | 360 个测试（pytest --collect-only） | 28 |
+| Go 单元测试 | 1014 个函数 | 117 |
+| Python 系统测试 | 414 个测试（pytest --collect-only） | 33 |
 
-**总计**: 约 798 个测试点覆盖核心功能。
+**总计**: 约 1428 个测试点覆盖核心功能。
 
 ---
 

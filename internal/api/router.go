@@ -32,6 +32,7 @@ func RegisterRoutes(h *server.Hertz,
 	syncH *handler.SyncHandler,
 	transcriptionH *handler.TranscriptionHandler,
 	speechH *handler.SpeechHandler,
+	imageH *handler.ImageHandler,
 	settingH *handler.SettingHandler,
 ) {
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
@@ -119,6 +120,8 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.POST("/audio/transcriptions", transcriptionH.Serve)
 	// 对外合成接口：与转录同组，API Key 鉴权并计入限流
 	apiGroup.POST("/audio/speech", speechH.Serve)
+	// 对外图片解析接口：与 /chat 同组，API Key 鉴权并计入限流
+	apiGroup.POST("/image/understanding", imageH.Serve)
 
 	// Session endpoints - 会话管理
 	// 静态路由（/sess/history、/sess/search）优先级高于命名参数路由（/sess/:sid），可共存

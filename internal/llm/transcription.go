@@ -15,15 +15,15 @@ import (
 )
 
 var (
-	// ErrUpstream 上游服务（转录、合成）返回了错误，错误信息中透传上游原文
+	// ErrUpstream 上游服务（转录、合成、图片解析）返回了错误，错误信息中透传上游原文
 	ErrUpstream = errors.New("上游服务返回错误")
 	// ErrEmptyTranscript 上游返回了空文本，通常是音频过短或无有效语音
 	ErrEmptyTranscript = errors.New("未识别到有效语音")
 )
 
-// transcribeTimeout 转录请求的整体超时。音频转录比对话补全慢，
-// 留足时间，但不能无上限，否则挂起的请求会一直占用连接。
-const transcribeTimeout = 120 * time.Second
+// upstreamTimeout 转录、合成、图片解析共用的整体超时。这几类请求都比
+// 对话补全慢，留足时间，但不能无上限，否则挂起的请求会一直占用连接。
+const upstreamTimeout = 120 * time.Second
 
 // Transcribe 把音频转成文字。
 //
@@ -74,7 +74,7 @@ func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+m.APIKey)
 
-	client := &http.Client{Timeout: transcribeTimeout}
+	client := &http.Client{Timeout: upstreamTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		// 调用方主动取消或超时不算上游故障，直接返回 ctx 的错误。
