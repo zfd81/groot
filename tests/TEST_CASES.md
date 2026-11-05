@@ -98,11 +98,15 @@
 | TestCluster_TriggerPoll_SkipsWhilePreviousRoundInProgress | 上一轮未结束时跳过本轮 |
 | TestCluster_TriggerPoll_NoServiceIsNoop | 未挂接消息服务时不报错 |
 
-**数据库迁移** (`internal/db/migrate_test.go`) 追加：
+**数据库迁移** (`internal/db/migrate_test.go`，幂等用例在 `internal/db/db_test.go`) 追加：
 
 | 测试函数 | 测试内容 |
 |---------|---------|
 | TestMigrate_CreatesClusterMessageTables | 建 cluster_messages / cluster_message_consumers 两表及索引，重复执行幂等 |
+| TestMigrate_FreshDBHasStatusColumnWithActiveDefault | 新建库 `shared_resources` 即带 `status` 列，不指定该列插入时默认为 `active` |
+| TestMigrate_Idempotent | 已建表的库重复 Migrate 不报错、不改变结构 |
+
+> 建表策略为「只新建」：`Migrate` 仅执行各方言的 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`，不含任何 `ALTER TABLE`、`DROP INDEX` 或列/索引存在性探测。结构变更由使用者手工删除历史库后重启生效。原针对历史库的加列与删索引测试（`TestMigrate_AddsStatusColumnToLegacySharedResources`、`TestMigrate_StatusColumnIsIdempotent`、`TestMigrate_DropsLegacyUKSessionRound`、`TestMigrate_NoLegacyIndexIsNoop`）已删除。
 
 **进程生命周期与实例重启** (`internal/lifecycle/`)
 

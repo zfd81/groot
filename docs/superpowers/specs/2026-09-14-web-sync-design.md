@@ -216,7 +216,7 @@ Go 单元测试覆盖：
 - `internal/api/handler/sync`：三个端点的正常返回、`sync_disabled` 的 409、非法路径的 400；`paths` 只同步指定资源而不触碰同类别下未指定的资源；`paths` 携带已不在最新差异中的路径时跳过而不报错
 
 前端逻辑测试覆盖差异条目到树结构的聚合，以及勾选状态的三态推导。项目当前无前端测试框架，此部分以 `npx vue-tsc -b` 的类型检查与手工验证为准，不引入新测试工具。
-- `internal/db/migrate`：已有库加列后旧数据状态为 `active`
+- `internal/db/migrate`：建表语句中 `status` 列的存在与默认值（各历史库加列测试已随「只新建」策略移除）
 
 系统测试由用户在 `tests/python/` 下自行运行。
 
@@ -228,6 +228,7 @@ Go 单元测试覆盖：
 
 - 新增：`shared_resources` 表增加 `status` 列，三种数据库的建表语句同步调整
 - 新增：针对已部署数据库的 `ALTER TABLE ADD COLUMN` 迁移。现有迁移是一组幂等建表语句，没有版本号机制，因此加列需要配合列存在性检查，参照 `dropIndexIfExists` 的现有模式实现
+  - 后续变更：该加列迁移已被移除。建表策略统一为「只新建」，结构变更由使用者手工删除历史库后重启生效，详见 [数据库建表策略设计](2026-11-05-db-schema-create-only-design.md)
 - 调整：`resourcedb.Delete` 从物理删除改为修改状态列、清空内容并更新 `updated_at`
 - 调整：`resourcedb` 的 `Get`/`Stat`/`List` 增加有效状态过滤；`Put` 的 upsert 更新字段列表纳入 `status`
 

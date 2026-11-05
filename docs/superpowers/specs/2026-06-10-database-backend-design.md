@@ -243,7 +243,7 @@ database:
 服务启动时对数据库连接执行 fail-fast 校验（参见 [`internal/db/db.go`](../../../internal/db/db.go)）：
 
 1. `db.Ping()` 验证连通性
-2. 执行 schema 迁移（参见 [`internal/db/migrate.go`](../../../internal/db/migrate.go)，幂等，已存在的表不重建；同时清理历史遗留索引如 `memory_chats.uk_session_round`）
+2. 执行建表（参见 [`internal/db/migrate.go`](../../../internal/db/migrate.go)，幂等，只创建不存在的表和索引，已存在的表保持原样、不做任何结构修改）
 3. 任一失败立即退出，输出明确错误信息
 
 ### 1.6 业务 ID 格式规范

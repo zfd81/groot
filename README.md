@@ -743,6 +743,11 @@ database:
 - 数据库连接只认 `bootstrap.yaml` 的 `database` 节；老部署迁移遗留的 `env.yaml` 不再生效（见 [3.6 从老版本升级](#36-从老版本升级)）
 - 多实例共享同一数据库即组成集群（SQLite 模式下为同一台机器上的多个实例，MySQL/PostgreSQL 模式下可跨主机），自动进行 Leader 选举（Leader 负责定时任务调度）；成员状态可在 Web 界面 **设置 → 集群管理** 中查看，并可在该面板重启指定实例
 - MySQL/PostgreSQL 模式下可在 Web 工作空间面板中将 skills、subagents、mcp 等配置资源在本地目录与数据库之间同步，详见 [4.7.1 配置同步](#471-配置同步web-工作空间)
+- 启动时只创建尚不存在的表和索引，不对已存在的表做任何结构修改。更换到表结构有变化的版本时，先删除旧库再启动：
+  - SQLite：删除 `{GROOT_HOME}/groot.db`、`groot.db-shm`、`groot.db-wal`
+  - MySQL / PostgreSQL：`DROP DATABASE <库名>` 后重新 `CREATE DATABASE <库名>`
+
+  删除会丢失库中的会话历史、附件、定时任务、集群成员与配置表数据，请确认无需保留后再执行。
 
 #### 4.7.1 配置同步（Web 工作空间）
 
