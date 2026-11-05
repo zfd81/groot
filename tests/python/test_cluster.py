@@ -58,7 +58,7 @@ def _create_cluster_config(home: str, port: int) -> None:
         "agent": {"name": "groot", "version": "1.0.0"},
         "server": {"host": "127.0.0.1", "port": port},
         # 认证始终开启（新 JWT API Key 机制）；集群用例只访问免认证端点
-        "security": {"auth": {"header_name": "X-API-Key", "secret": TEST_AUTH_SECRET}},
+        "security": {"auth": {"secret": TEST_AUTH_SECRET}},
         "memory": {"history_window": 20},
         "schedule": {"enabled": False, "max_concurrent_tasks": 10, "sync_interval": "30s"},
         "logging": {"level": "info", "format": "console", "output": ["stdout"]},

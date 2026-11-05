@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/memory"
 )
 
@@ -34,9 +35,7 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	sessionID := rc.Param("sid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
@@ -59,9 +58,7 @@ func (h *StatusHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		if h.memory.ExistsSession(sessionID) {
 			history, err := h.memory.GetHistory(sessionID)
 			if err != nil {
-				rc.SetContentType("application/json")
-				rc.SetStatusCode(500)
-				rc.Write([]byte(`{"status":"error","message":"获取历史失败"}`))
+				errbody.Write(rc, 500, "获取历史失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 				return
 			}
 

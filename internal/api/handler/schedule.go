@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/setting"
@@ -32,7 +32,7 @@ func NewScheduleHandler(mgr **schedule.Manager, settings *setting.Settings, log 
 func (h *ScheduleHandler) manager(ctx context.Context, rc *app.RequestContext) (*schedule.Manager, bool) {
 	mgr := *h.mgr
 	if mgr == nil {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务不可用"})
+		errbody.Write(rc, 503, "调度服务不可用", errbody.TypeAPI, "", errbody.CodeScheduleUnavailable)
 		return nil, false
 	}
 	enabled := h.settings.RuntimeStatic().Schedule.Enabled
@@ -42,7 +42,7 @@ func (h *ScheduleHandler) manager(ctx context.Context, rc *app.RequestContext) (
 		enabled = sc.Enabled
 	}
 	if !enabled {
-		rc.JSON(503, utils.H{"status": "schedule_unavailable", "message": "调度服务未启用"})
+		errbody.Write(rc, 503, "调度服务未启用", errbody.TypeAPI, "", errbody.CodeScheduleUnavailable)
 		return nil, false
 	}
 	return mgr, true
@@ -63,7 +63,7 @@ func (h *ScheduleHandler) List(ctx context.Context, rc *app.RequestContext) {
 	tasks, err := mgr.List(status)
 	if err != nil {
 		h.log.Error("Failed to list schedule tasks", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
+		errbody.Write(rc, 500, err.Error(), errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -85,7 +85,7 @@ func (h *ScheduleHandler) Get(ctx context.Context, rc *app.RequestContext) {
 	task, err := mgr.Get(id)
 	if err != nil {
 		h.log.Error("Failed to get schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(404, utils.H{"status": "task_not_found", "message": "任务不存在"})
+		errbody.Write(rc, 404, "任务不存在", errbody.TypeInvalidRequest, "id", errbody.CodeTaskNotFound)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (h *ScheduleHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Delete(id); err != nil {
 		h.log.Error("Failed to delete schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
+		errbody.Write(rc, 500, err.Error(), errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -121,7 +121,7 @@ func (h *ScheduleHandler) Disable(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Disable(id); err != nil {
 		h.log.Error("Failed to disable schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
+		errbody.Write(rc, 500, err.Error(), errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -139,7 +139,7 @@ func (h *ScheduleHandler) Enable(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Enable(id); err != nil {
 		h.log.Error("Failed to enable schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
+		errbody.Write(rc, 500, err.Error(), errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -157,7 +157,7 @@ func (h *ScheduleHandler) Archive(ctx context.Context, rc *app.RequestContext) {
 
 	if err := mgr.Archive(id); err != nil {
 		h.log.Error("Failed to archive schedule task", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
+		errbody.Write(rc, 500, err.Error(), errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -176,7 +176,7 @@ func (h *ScheduleHandler) History(ctx context.Context, rc *app.RequestContext) {
 	records, err := mgr.GetHistory(id)
 	if err != nil {
 		h.log.Error("Failed to get schedule history", zap.String("id", id), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "schedule_error", "message": err.Error()})
+		errbody.Write(rc, 500, err.Error(), errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 

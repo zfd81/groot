@@ -1,12 +1,31 @@
 package api
 
 import (
+	"context"
+
+	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/api/websession"
 )
+
+// registerFallbackHandlers 为未匹配的路径与方法注册统一错误信封。
+// Hertz 默认返回纯文本的 404/405，与本服务「所有由应用处理的请求都返回
+// OpenAI 错误信封」的约定不符，因此在路由注册最前面覆写这两个兜底处理器。
+// 它与具体路由的注册顺序无关，也不受分组中间件影响。
+func registerFallbackHandlers(h *server.Hertz) {
+	h.NoRoute(func(ctx context.Context, rc *app.RequestContext) {
+		errbody.Write(rc, 404, "接口不存在："+string(rc.URI().Path()),
+			errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
+	})
+	h.NoMethod(func(ctx context.Context, rc *app.RequestContext) {
+		errbody.Write(rc, 405, "该接口不支持 "+string(rc.Method())+" 方法",
+			errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
+	})
+}
 
 // RegisterRoutes registers all API routes
 func RegisterRoutes(h *server.Hertz,
@@ -23,6 +42,7 @@ func RegisterRoutes(h *server.Hertz,
 	agentsH *handler.AgentsHandler,
 	toolsH *handler.ToolsHandler,
 	modelsH *handler.ModelsHandler,
+	modelsPublicH *handler.ModelsPublicHandler,
 	scheduleH *handler.ScheduleHandler,
 	webAuthH *handler.WebAuthHandler,
 	apiKeysH *handler.APIKeysHandler,
@@ -35,6 +55,9 @@ func RegisterRoutes(h *server.Hertz,
 	imageH *handler.ImageHandler,
 	settingH *handler.SettingHandler,
 ) {
+	// 未匹配的路径与方法也返回统一的 OpenAI 错误信封，避免框架默认的纯文本响应。
+	registerFallbackHandlers(h)
+
 	// Web UI 免登录端点：认证入口与健康检查（groot status 也走 /web/health）
 	h.GET("/web/health", healthH.Serve)
 	h.POST("/web/login", webAuthH.Login)
@@ -79,9 +102,8 @@ func RegisterRoutes(h *server.Hertz,
 	webGroup.PUT("/settings/speech", settingH.PutSpeech)
 	webGroup.GET("/settings/runtime", settingH.GetRuntime)
 	webGroup.PUT("/settings/runtime", settingH.PutRuntime)
-	// 认证配置：请求头名读写与密钥重新生成，改动需重启生效
+	// 认证配置：密钥读取与重新生成，改动需重启生效
 	webGroup.GET("/settings/auth", settingH.GetAuthSettings)
-	webGroup.PUT("/settings/auth", settingH.PutAuthSettings)
 	webGroup.POST("/settings/auth/secret", settingH.RegenerateAuthSecret)
 
 	// 文件面板端点（filesH 为 nil 表示初始化失败，跳过注册）
@@ -110,7 +132,7 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.Use(authMW.Serve(), rateLimitMW.Serve())
 
 	// Chat endpoints - 多轮对话
-	apiGroup.POST("/chat", chatH.Serve)
+	apiGroup.POST("/chat/completions", chatH.Serve)
 	apiGroup.GET("/chat/status/:sid", statusH.Serve)
 	apiGroup.GET("/chat/:sid", detailH.GetLatest)      // 获取最近一次对话详情
 	apiGroup.GET("/chat/:sid/:cid", detailH.Serve)     // 获取指定对话详情
@@ -122,6 +144,9 @@ func RegisterRoutes(h *server.Hertz,
 	apiGroup.POST("/audio/speech", speechH.Serve)
 	// 对外图片解析接口：与 /chat 同组，API Key 鉴权并计入限流
 	apiGroup.POST("/image/understanding", imageH.Serve)
+
+	// 对外模型列表接口：与上述端点同组，API Key 鉴权并计入限流
+	apiGroup.GET("/models", modelsPublicH.Serve)
 
 	// Session endpoints - 会话管理
 	// 静态路由（/sess/history、/sess/search）优先级高于命名参数路由（/sess/:sid），可共存

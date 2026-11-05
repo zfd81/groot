@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/zfd81/groot/internal/api/errbody"
 )
 
 // flushWriter is the minimal interface for SSE writing: Write + Flush.
@@ -23,6 +25,8 @@ type SSEWriter struct {
 	round     int
 	created   int64 // 对话开始时间（Unix 秒），作为 chunk.created
 
+	includeUsage bool // 请求是否带 stream_options.include_usage=true，决定是否下发 usage chunk
+
 	mu          sync.RWMutex
 	model       string            // 主模型名，作为 chunk.model 的默认值；受 mu 保护（SetModel 可覆盖）
 	agentModels map[string]string // 子 Agent 名 → 其实际使用的模型名；由 CallAgentTool 登记，保留至请求结束
@@ -30,15 +34,17 @@ type SSEWriter struct {
 
 // NewSSEWriter creates a new SSE writer.
 // model 为本轮对话的主模型名，created 为对话开始时间的 Unix 秒。
-func NewSSEWriter(w flushWriter, sessionID, chatID string, round int, model string, created int64) *SSEWriter {
+// includeUsage 为 true 时才下发 usage chunk（对应 stream_options.include_usage）。
+func NewSSEWriter(w flushWriter, sessionID, chatID string, round int, model string, created int64, includeUsage bool) *SSEWriter {
 	return &SSEWriter{
-		w:           w,
-		sessionID:   sessionID,
-		chatID:      chatID,
-		round:       round,
-		model:       model,
-		created:     created,
-		agentModels: make(map[string]string),
+		w:            w,
+		sessionID:    sessionID,
+		chatID:       chatID,
+		round:        round,
+		model:        model,
+		created:      created,
+		includeUsage: includeUsage,
+		agentModels:  make(map[string]string),
 	}
 }
 
@@ -76,13 +82,15 @@ func (s *SSEWriter) ClearAgentModel(agentName string) {
 }
 
 // chatChunk 是 OpenAI chat.completion.chunk 的外层结构。
+// session_id 是项目扩展字段（OpenAI 标准 chunk 无此字段），供前端与测试获取会话 ID。
 type chatChunk struct {
-	ID      string        `json:"id"`
-	Object  string        `json:"object"`
-	Created int64         `json:"created"`
-	Model   string        `json:"model"`
-	Choices []chunkChoice `json:"choices"`
-	Usage   *chunkUsage   `json:"usage"` // 普通 chunk 为 nil（序列化为 null），仅 usage chunk 携带对象
+	ID        string        `json:"id"`
+	Object    string        `json:"object"`
+	Created   int64         `json:"created"`
+	Model     string        `json:"model"`
+	SessionID string        `json:"session_id"`
+	Choices   []chunkChoice `json:"choices"`
+	Usage     *chunkUsage   `json:"usage"` // 普通 chunk 为 nil（序列化为 null），仅 usage chunk 携带对象
 }
 
 // chunkUsage 是 OpenAI chunk.usage 的结构：本次 /chat 请求的 token 用量汇总。
@@ -123,10 +131,11 @@ func (s *SSEWriter) writeChunk(agentName string, delta map[string]any, finishRea
 		delta["agent_name"] = agentName
 	}
 	return s.WriteData(chatChunk{
-		ID:      s.chatID,
-		Object:  "chat.completion.chunk",
-		Created: s.created,
-		Model:   s.modelFor(agentName),
+		ID:        s.chatID,
+		Object:    "chat.completion.chunk",
+		Created:   s.created,
+		Model:     s.modelFor(agentName),
+		SessionID: s.sessionID,
 		Choices: []chunkChoice{{
 			Index:        0,
 			Delta:        delta,
@@ -193,13 +202,18 @@ func (s *SSEWriter) WriteToolResult(agentName, toolCallID, toolName, content str
 
 // WriteUsage writes OpenAI 风格的最终 usage chunk：choices 为空数组 []，顶层 usage 为
 // 本次请求的 token 用量汇总；model 取主模型名（受 SetModel 覆盖，与主 Agent 事件一致）。
+// 仅在请求带 stream_options.include_usage=true 时下发；否则不写任何 chunk。
 func (s *SSEWriter) WriteUsage(u TokenUsage) error {
+	if !s.includeUsage {
+		return nil
+	}
 	return s.WriteData(chatChunk{
-		ID:      s.chatID,
-		Object:  "chat.completion.chunk",
-		Created: s.created,
-		Model:   s.modelFor(""),
-		Choices: []chunkChoice{},
+		ID:        s.chatID,
+		Object:    "chat.completion.chunk",
+		Created:   s.created,
+		Model:     s.modelFor(""),
+		SessionID: s.sessionID,
+		Choices:   []chunkChoice{},
 		Usage: &chunkUsage{
 			PromptTokens:     u.Prompt,
 			CompletionTokens: u.Completion,
@@ -208,18 +222,13 @@ func (s *SSEWriter) WriteUsage(u TokenUsage) error {
 	})
 }
 
-// WriteError writes an OpenAI 风格的 error 事件（无 choices）；agentName 非空时注入 error.agent_name。
+// WriteError writes an OpenAI 风格的 error 事件（无 choices），data 负载为
+// errbody 错误信封 {"error":{"message":...,"type":"api_error","param":null,"code":null}}。
+// agentName 保留参数形状，信封内不再携带（调用点不变）。
 func (s *SSEWriter) WriteError(agentName, message string) error {
-	e := map[string]any{
-		"message": message,
-		"type":    "server_error",
-		"code":    nil,
-		"param":   nil,
-	}
-	if agentName != "" {
-		e["agent_name"] = agentName
-	}
-	return s.WriteData(map[string]any{"error": e})
+	_ = agentName
+	// Bytes() 已是完整信封 JSON，作为 data 负载原样写出，不再二次编码
+	return s.WriteData(json.RawMessage(errbody.New(message, errbody.TypeAPI, "", "").Bytes()))
 }
 
 // WriteDone writes [DONE] marker and flushes.

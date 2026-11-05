@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/llm"
@@ -90,13 +91,16 @@ func (u *imageUpstream) received() []byte {
 }
 
 // imageBody 拼一个单图请求体；content 直接嵌入（不转义），便于构造非法 JSON 之外的用例。
-// instruction 为空串时省略该字段，代表调用方未传指令。
-func imageBody(instruction, typ, name, content string) string {
-	ins := ""
+// instruction 与 model 为空串时省略对应字段，代表调用方未传。
+func imageBody(instruction, model, typ, name, content string) string {
+	fields := ""
 	if instruction != "" {
-		ins = `"instruction":"` + instruction + `",`
+		fields += `"instruction":"` + instruction + `",`
 	}
-	return `{` + ins + `"attachments":[{"type":"` + typ + `","name":"` + name +
+	if model != "" {
+		fields += `"model":"` + model + `",`
+	}
+	return `{` + fields + `"attachments":[{"type":"` + typ + `","name":"` + name +
 		`","content":"` + content + `"}]}`
 }
 
@@ -130,26 +134,24 @@ func callJSONWithContext(ctx context.Context, h func(context.Context, *app.Reque
 	return rc
 }
 
-// bodyMessage 解析错误响应中的 message 字段。
+// bodyMessage 解析错误信封中的 message 字段。
 func bodyMessage(t *testing.T, rc *app.RequestContext) string {
 	t.Helper()
-	var out struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("响应不是合法 JSON: %s", rc.Response.Body())
-	}
-	return out.Message
+	return envelopeOf(t, rc).Error.Message
 }
 
-// assertImageError 断言响应状态码与 status 字段。
-func assertImageError(t *testing.T, rc *app.RequestContext, code int, status string) {
+// assertImageError 断言响应状态码与信封 type、code 字段。
+func assertImageError(t *testing.T, rc *app.RequestContext, status int, typ, code string) {
 	t.Helper()
-	if rc.Response.StatusCode() != code {
-		t.Fatalf("status=%d, want %d; body=%s", rc.Response.StatusCode(), code, rc.Response.Body())
+	if rc.Response.StatusCode() != status {
+		t.Fatalf("status=%d, want %d; body=%s", rc.Response.StatusCode(), status, rc.Response.Body())
 	}
-	if s := bodyStatus(t, rc); s != status {
-		t.Errorf("status = %q, want %s", s, status)
+	got := envelopeOf(t, rc).Error
+	if got.Type != typ {
+		t.Errorf("type = %q, want %s; body=%s", got.Type, typ, rc.Response.Body())
+	}
+	if got.Code == nil || *got.Code != code {
+		t.Errorf("code = %v, want %s; body=%s", got.Code, code, rc.Response.Body())
 	}
 }
 
@@ -182,7 +184,7 @@ func TestImageHandler_BadJSON(t *testing.T) {
 	h := newImageHandlerForTest(t, srv.URL, true)
 
 	rc := postImage(h, `{not json`, nil)
-	assertImageError(t, rc, 400, "invalid_request")
+	assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 func TestImageHandler_AttachmentCount(t *testing.T) {
@@ -198,7 +200,7 @@ func TestImageHandler_AttachmentCount(t *testing.T) {
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
 			rc := postImage(h, body, nil)
-			assertImageError(t, rc, 400, "invalid_request")
+			assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 			if msg := bodyMessage(t, rc); !strings.Contains(msg, "必须提供 1 张图片附件") {
 				t.Errorf("message = %q, 应含「必须提供 1 张图片附件」", msg)
 			}
@@ -212,8 +214,8 @@ func TestImageHandler_NotImageType(t *testing.T) {
 
 	for _, typ := range []string{"audio", "file"} {
 		t.Run(typ, func(t *testing.T) {
-			rc := postImage(h, imageBody("", typ, "a.png", pngBase64), nil)
-			assertImageError(t, rc, 400, "attachment_invalid_type")
+			rc := postImage(h, imageBody("", "", typ, "a.png", pngBase64), nil)
+			assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeUnsupportedType)
 		})
 	}
 }
@@ -222,16 +224,16 @@ func TestImageHandler_MissingName(t *testing.T) {
 	srv, _ := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("", "image", "", pngBase64), nil)
-	assertImageError(t, rc, 400, "attachment_missing_name")
+	rc := postImage(h, imageBody("", "", "image", "", pngBase64), nil)
+	assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 func TestImageHandler_DecodeError(t *testing.T) {
 	srv, _ := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("", "image", "a.png", "aGVs bG8="), nil)
-	assertImageError(t, rc, 400, "attachment_decode_error")
+	rc := postImage(h, imageBody("", "", "image", "a.png", "aGVs bG8="), nil)
+	assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestImageHandler_Base64WithNewlines 按 76 列换行的 Base64 与 /chat 同口径，应被接受。
@@ -241,7 +243,7 @@ func TestImageHandler_Base64WithNewlines(t *testing.T) {
 
 	// JSON 字符串里换行必须转义，故写入 \r\n 的转义形式，解出的 content 含真实 \r\n
 	wrapped := pngBase64[:76] + `\r\n` + pngBase64[76:]
-	rc := postImage(h, imageBody("", "image", "a.png", wrapped), nil)
+	rc := postImage(h, imageBody("", "", "image", "a.png", wrapped), nil)
 
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
@@ -258,8 +260,8 @@ func TestImageHandler_TextRenamedPNG(t *testing.T) {
 	srv, _ := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("", "image", "a.png", textBase64), nil)
-	assertImageError(t, rc, 400, "unsupported_type")
+	rc := postImage(h, imageBody("", "", "image", "a.png", textBase64), nil)
+	assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeUnsupportedType)
 }
 
 // TestImageHandler_OctetStreamExtensionFallback 嗅探不出类型时按扩展名兜底映射。
@@ -267,7 +269,7 @@ func TestImageHandler_OctetStreamExtensionFallback(t *testing.T) {
 	srv, up := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("", "image", "a.png", octetBase64), nil)
+	rc := postImage(h, imageBody("", "", "image", "a.png", octetBase64), nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
@@ -282,8 +284,8 @@ func TestImageHandler_OctetStreamUnknownExtension(t *testing.T) {
 	srv, _ := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("", "image", "a.tiff", octetBase64), nil)
-	assertImageError(t, rc, 400, "unsupported_type")
+	rc := postImage(h, imageBody("", "", "image", "a.tiff", octetBase64), nil)
+	assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeUnsupportedType)
 	if msg := bodyMessage(t, rc); !strings.Contains(msg, ".png") {
 		t.Errorf("message = %q, 应列出支持的扩展名（含 .png）", msg)
 	}
@@ -294,7 +296,7 @@ func TestImageHandler_ICOSniffed(t *testing.T) {
 	srv, up := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("", "image", "a.ico", icoBase64), nil)
+	rc := postImage(h, imageBody("", "", "image", "a.ico", icoBase64), nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
@@ -305,6 +307,7 @@ func TestImageHandler_ICOSniffed(t *testing.T) {
 }
 
 // TestImageHandler_SizeExceeded 附件上限设为 1 MB 时提交约 2 MB Base64，应触发单文件超限。
+// 体积超限统一返回 413 file_too_large。
 func TestImageHandler_SizeExceeded(t *testing.T) {
 	srv, _ := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
@@ -316,29 +319,22 @@ func TestImageHandler_SizeExceeded(t *testing.T) {
 	}
 
 	big := strings.Repeat("A", 2<<20)
-	rc := postImage(h, imageBody("", "image", "a.png", big), nil)
-	assertImageError(t, rc, 400, "attachment_size_exceeded")
+	rc := postImage(h, imageBody("", "", "image", "a.png", big), nil)
+	assertImageError(t, rc, http.StatusRequestEntityTooLarge, errbody.TypeInvalidRequest, errbody.CodeFileTooLarge)
 }
 
-// TestImageHandler_InvalidModel 模型不可用的三种来源统一 400 invalid_model，且不回落到默认视觉模型。
+// TestImageHandler_InvalidModel 模型不可用的三种来源统一 400 model_not_found，且不回落到默认视觉模型。
 func TestImageHandler_InvalidModel(t *testing.T) {
 	srv, _ := newImageUpstream(t)
 
 	cases := []struct {
 		name    string
-		header  string
+		model   string
 		handler func(t *testing.T) *ImageHandler
 	}{
 		{
-			name:   "显式模型不存在",
-			header: "__nope__",
-			handler: func(t *testing.T) *ImageHandler {
-				return newImageHandlerForTest(t, srv.URL, true)
-			},
-		},
-		{
-			name:   "显式模型已禁用",
-			header: "qwen-vl-max",
+			name:  "显式模型已禁用",
+			model: "qwen-vl-max",
 			handler: func(t *testing.T) *ImageHandler {
 				h := newImageHandlerForTest(t, "", false)
 				ctx := context.Background()
@@ -358,8 +354,8 @@ func TestImageHandler_InvalidModel(t *testing.T) {
 			},
 		},
 		{
-			name:   "未配置默认视觉模型",
-			header: "",
+			name:  "未配置默认视觉模型",
+			model: "",
 			handler: func(t *testing.T) *ImageHandler {
 				return newImageHandlerForTest(t, srv.URL, false)
 			},
@@ -368,12 +364,8 @@ func TestImageHandler_InvalidModel(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := c.handler(t)
-			var headers map[string]string
-			if c.header != "" {
-				headers = map[string]string{"X-Model-Name": c.header}
-			}
-			rc := postImage(h, imageBody("", "image", "a.png", pngBase64), headers)
-			assertImageError(t, rc, 400, "invalid_model")
+			rc := postImage(h, imageBody("", c.model, "image", "a.png", pngBase64), nil)
+			assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeModelNotFound)
 			if msg := bodyMessage(t, rc); msg == "" {
 				t.Error("message 不应为空")
 			}
@@ -381,23 +373,60 @@ func TestImageHandler_InvalidModel(t *testing.T) {
 	}
 }
 
-// TestImageHandler_ModelHeader 显式指定模型不要求它持有 vision 默认。
-func TestImageHandler_ModelHeader(t *testing.T) {
+// TestImageHandler_UnknownModel 显式指定不存在的模型时报 400 model_not_found，
+// 即使已配置默认视觉模型也不得静默回落到它。
+func TestImageHandler_UnknownModel(t *testing.T) {
 	srv, _ := newImageUpstream(t)
-	h := newImageHandlerForTest(t, srv.URL, false)
+	h := newImageHandlerForTest(t, srv.URL, true) // 默认视觉模型已配置，回落会让请求成功
 
-	rc := postImage(h, imageBody("", "image", "a.png", pngBase64),
-		map[string]string{"X-Model-Name": "qwen-vl-max"})
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	rc := postImage(h, imageBody("", "nope", "image", "a.png", pngBase64), nil)
+	assertImageError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeModelNotFound)
+	if msg := bodyMessage(t, rc); !strings.Contains(msg, "nope") {
+		t.Errorf("message = %q, 应含模型名 nope", msg)
 	}
+}
+
+// TestImageHandler_ModelFromBody 模型选择来自请求体 model：指定即生效，
+// 请求头 X-Model-Name 不再参与选择。
+func TestImageHandler_ModelFromBody(t *testing.T) {
+	t.Run("body 指定模型生效", func(t *testing.T) {
+		srv, _ := newImageUpstream(t)
+		// 未设默认视觉模型，能成功只可能是用了 body.model
+		h := newImageHandlerForTest(t, srv.URL, false)
+
+		rc := postImage(h, imageBody("", "qwen-vl-max", "image", "a.png", pngBase64), nil)
+		if rc.Response.StatusCode() != 200 {
+			t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+		}
+		var out struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
+			t.Fatalf("解析响应: %v", err)
+		}
+		if out.Model != "qwen-vl-max" {
+			t.Errorf("model = %q, want qwen-vl-max", out.Model)
+		}
+	})
+
+	t.Run("请求头被忽略", func(t *testing.T) {
+		srv, _ := newImageUpstream(t)
+		h := newImageHandlerForTest(t, srv.URL, true)
+
+		// 请求头指向不存在的模型；若仍被读取会得到 400，实际应回落到默认视觉模型
+		rc := postImage(h, imageBody("", "", "image", "a.png", pngBase64),
+			map[string]string{"X-Model-Name": "__nope__"})
+		if rc.Response.StatusCode() != 200 {
+			t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+		}
+	})
 }
 
 // TestImageHandler_DefaultInstruction 未传指令或只传空白时下发默认指令。
 func TestImageHandler_DefaultInstruction(t *testing.T) {
 	bodies := map[string]string{
-		"未传":  imageBody("", "image", "a.png", pngBase64),
-		"全空白": imageBody("   ", "image", "a.png", pngBase64),
+		"未传":  imageBody("", "", "image", "a.png", pngBase64),
+		"全空白": imageBody("   ", "", "image", "a.png", pngBase64),
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
@@ -421,7 +450,7 @@ func TestImageHandler_CustomInstruction(t *testing.T) {
 	srv, up := newImageUpstream(t)
 	h := newImageHandlerForTest(t, srv.URL, true)
 
-	rc := postImage(h, imageBody("提取发票字段", "image", "a.png", pngBase64), nil)
+	rc := postImage(h, imageBody("提取发票字段", "", "image", "a.png", pngBase64), nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
@@ -443,17 +472,17 @@ func TestImageHandler_UpstreamError(t *testing.T) {
 	defer srv.Close()
 
 	h := newImageHandlerForTest(t, srv.URL, true)
-	rc := postImage(h, imageBody("", "image", "a.png", pngBase64), nil)
+	rc := postImage(h, imageBody("", "", "image", "a.png", pngBase64), nil)
 
-	assertImageError(t, rc, 502, "upstream_error")
+	assertImageError(t, rc, 502, errbody.TypeAPI, errbody.CodeUpstreamError)
 	if msg := bodyMessage(t, rc); !strings.Contains(msg, "boom") {
 		t.Errorf("message = %q, 应透传上游原文", msg)
 	}
 }
 
-// TestImageHandler_CallerCancelled 调用方中断请求时，响应必须与「上游故障」分开：
+// TestImageHandler_ClientClosed 调用方中断请求时，响应必须与「上游故障」分开：
 // 不能报成 502 upstream_error，否则日志与响应都会把「请求被放弃」误读成「上游坏了」。
-func TestImageHandler_CallerCancelled(t *testing.T) {
+func TestImageHandler_ClientClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -475,8 +504,8 @@ func TestImageHandler_CallerCancelled(t *testing.T) {
 	}()
 
 	rc := callJSONWithContext(ctx, h.Serve, consts.MethodPost,
-		imageBody("", "image", "a.png", pngBase64), nil)
-	assertImageError(t, rc, 499, "cancelled")
+		imageBody("", "", "image", "a.png", pngBase64), nil)
+	assertImageError(t, rc, 499, errbody.TypeInvalidRequest, errbody.CodeClientClosedRequest)
 }
 
 func TestImageHandler_Success(t *testing.T) {
@@ -484,7 +513,7 @@ func TestImageHandler_Success(t *testing.T) {
 		srv, _ := newImageUpstream(t)
 		h := newImageHandlerForTest(t, srv.URL, true)
 
-		rc := postImage(h, imageBody("", "image", "a.png", pngBase64), nil)
+		rc := postImage(h, imageBody("", "", "image", "a.png", pngBase64), nil)
 		if rc.Response.StatusCode() != 200 {
 			t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 		}
@@ -519,7 +548,7 @@ func TestImageHandler_Success(t *testing.T) {
 		defer srv.Close()
 
 		h := newImageHandlerForTest(t, srv.URL, true)
-		rc := postImage(h, imageBody("", "image", "a.png", pngBase64), nil)
+		rc := postImage(h, imageBody("", "", "image", "a.png", pngBase64), nil)
 		if rc.Response.StatusCode() != 200 {
 			t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 		}

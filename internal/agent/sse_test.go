@@ -17,7 +17,7 @@ func (b *bufFlusher) Flush() error { return nil }
 
 func TestSSEWriter_WriteThinkingWithAgentName(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteThinking("db-agent", "thinking..."); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestSSEWriter_WriteThinkingWithAgentName(t *testing.T) {
 
 func TestSSEWriter_WriteThinkingWithoutAgentName(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteThinking("", "x"); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func chunkDelta(t *testing.T, chunk map[string]any) map[string]any {
 
 func TestSSEWriter_ChunkEnvelope(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteMessage("", "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestSSEWriter_ChunkEnvelope(t *testing.T) {
 
 func TestSSEWriter_FinishMovesToChoice(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteFinish("", "stop"); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestSSEWriter_FinishMovesToChoice(t *testing.T) {
 
 func TestSSEWriter_FinishWithAgentName(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteFinish("coder", "tool_calls"); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestSSEWriter_FinishWithAgentName(t *testing.T) {
 
 func TestSSEWriter_ToolResultInDelta(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteToolResult("", "tc_1", "fs.read", "ok", true); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestSSEWriter_ToolResultInDelta(t *testing.T) {
 
 func TestSSEWriter_ErrorEnvelope(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteError("", "boom"); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestSSEWriter_ErrorEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("error should be an object: %v", chunk)
 	}
-	if e["message"] != "boom" || e["type"] != "server_error" {
+	if e["message"] != "boom" || e["type"] != "api_error" {
 		t.Errorf("error = %v", e)
 	}
 	if code, ok := e["code"]; !ok || code != nil {
@@ -191,23 +191,24 @@ func TestSSEWriter_ErrorEnvelope(t *testing.T) {
 	if param, ok := e["param"]; !ok || param != nil {
 		t.Errorf("param should be null: %v", e)
 	}
-	if _, ok := e["agent_name"]; ok {
-		t.Errorf("agent_name should be omitted: %v", e)
-	}
 
+	// agentName 参数保留形状，但信封内不再携带 agent_name
 	buf.Reset()
 	if err := w.WriteError("coder", "boom"); err != nil {
 		t.Fatal(err)
 	}
-	e = decodeChunk(t, buf.String())["error"].(map[string]any)
-	if e["agent_name"] != "coder" {
-		t.Errorf("error.agent_name = %v, want coder", e["agent_name"])
+	raw := buf.String()
+	if strings.Contains(raw, "agent_name") {
+		t.Errorf("agent_name should be omitted from error envelope: %s", raw)
+	}
+	if !strings.Contains(raw, `"error":{"message":"boom","type":"api_error","param":null,"code":null}`) {
+		t.Errorf("unexpected error envelope: %s", raw)
 	}
 }
 
 func TestSSEWriter_DoneUnchanged(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteDone(); err != nil {
 		t.Fatal(err)
 	}
@@ -216,10 +217,12 @@ func TestSSEWriter_DoneUnchanged(t *testing.T) {
 	}
 }
 
-// TestSSEWriter_AgentNameInjection 表驱动覆盖 6 个 Write* 方法的 agent_name 注入逻辑：
+// TestSSEWriter_AgentNameInjection 表驱动覆盖各 Write* 方法的 agent_name 注入逻辑：
 //   - agentName 非空时 JSON 必含 "agent_name":"..."
 //   - agentName 为空时 JSON 必无 agent_name 键（向后兼容主 Agent 事件）
 //   - 同时验证各方法特有的 payload 关键字段（避免笔误漏测）
+//
+// WriteError 不在表内：其 data 负载是 errbody 错误信封，不再携带 agent_name。
 func TestSSEWriter_AgentNameInjection(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -255,17 +258,12 @@ func TestSSEWriter_AgentNameInjection(t *testing.T) {
 			},
 			mustHave: `"tool_call_id":"tc_1"`,
 		},
-		{
-			name:     "error",
-			write:    func(w *SSEWriter, a string) error { return w.WriteError(a, "boom") },
-			mustHave: `"message":"boom"`,
-		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name+"/with_agent", func(t *testing.T) {
 			buf := &bufFlusher{}
-			w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+			w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 			if err := c.write(w, "db-agent"); err != nil {
 				t.Fatal(err)
 			}
@@ -276,20 +274,15 @@ func TestSSEWriter_AgentNameInjection(t *testing.T) {
 			if !strings.Contains(s, c.mustHave) {
 				t.Errorf("missing %s: %s", c.mustHave, s)
 			}
-			// agent_name 必须位于 delta 内（error 事件位于 error 对象内）
-			chunk := decodeChunk(t, s)
-			if c.name == "error" {
-				if got := chunk["error"].(map[string]any)["agent_name"]; got != "db-agent" {
-					t.Errorf("error.agent_name = %v, want db-agent", got)
-				}
-			} else if got := chunkDelta(t, chunk)["agent_name"]; got != "db-agent" {
+			// agent_name 必须位于 delta 内
+			if got := chunkDelta(t, decodeChunk(t, s))["agent_name"]; got != "db-agent" {
 				t.Errorf("delta.agent_name = %v, want db-agent", got)
 			}
 		})
 
 		t.Run(c.name+"/without_agent", func(t *testing.T) {
 			buf := &bufFlusher{}
-			w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+			w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 			if err := c.write(w, ""); err != nil {
 				t.Fatal(err)
 			}
@@ -308,7 +301,7 @@ func TestSSEWriter_AgentNameInjection(t *testing.T) {
 // 主 Agent（agentName 为空）事件仍为主模型。
 func TestSSEWriter_ModelForSubAgent(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	w.SetAgentModel("coder", "deepseek-r1")
 
 	if err := w.WriteMessage("coder", "x"); err != nil {
@@ -330,7 +323,7 @@ func TestSSEWriter_ModelForSubAgent(t *testing.T) {
 // TestSSEWriter_ModelFallbackWhenUnregistered 未登记、已清除、登记为空串三种情况均回退主模型。
 func TestSSEWriter_ModelFallbackWhenUnregistered(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 
 	// 未登记
 	if err := w.WriteMessage("other", "x"); err != nil {
@@ -365,7 +358,7 @@ func TestSSEWriter_ModelFallbackWhenUnregistered(t *testing.T) {
 
 // TestSSEWriter_ModelMapConcurrent 并发 Set/Write/Clear 不 panic、无数据竞争（需 -race）。
 func TestSSEWriter_ModelMapConcurrent(t *testing.T) {
-	w := NewSSEWriter(&bufFlusher{}, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(&bufFlusher{}, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -389,7 +382,7 @@ func TestSSEWriter_ModelMapConcurrent(t *testing.T) {
 // 之后主 Agent（agentName 为空）事件的 model 反映新值；空串为 no-op。
 func TestSSEWriter_SetModel(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 
 	w.SetModel("deepseek-r1")
 	if err := w.WriteMessage("", "x"); err != nil {
@@ -412,7 +405,7 @@ func TestSSEWriter_SetModel(t *testing.T) {
 
 func TestSSEWriter_OrdinaryChunkHasNullUsage(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
 	if err := w.WriteMessage("", "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +418,7 @@ func TestSSEWriter_OrdinaryChunkHasNullUsage(t *testing.T) {
 
 func TestSSEWriter_WriteUsage(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, true)
 	if err := w.WriteUsage(TokenUsage{Prompt: 120, Completion: 45, Total: 165}); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +441,7 @@ func TestSSEWriter_WriteUsage(t *testing.T) {
 
 func TestSSEWriter_WriteUsageModelFollowsSetModel(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 0)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 0, true)
 	w.SetAgentModel("coder", "deepseek-r1")
 	w.SetModel("solo-model")
 	if err := w.WriteUsage(TokenUsage{1, 1, 2}); err != nil {
@@ -461,12 +454,72 @@ func TestSSEWriter_WriteUsageModelFollowsSetModel(t *testing.T) {
 
 func TestSSEWriter_ErrorHasNoUsage(t *testing.T) {
 	buf := &bufFlusher{}
-	w := NewSSEWriter(buf, "sess", "chat", 1, "m", 0)
+	w := NewSSEWriter(buf, "sess", "chat", 1, "m", 0, false)
 	if err := w.WriteError("", "boom"); err != nil {
 		t.Fatal(err)
 	}
 	chunk := decodeChunk(t, buf.String())
 	if _, ok := chunk["usage"]; ok {
 		t.Errorf("error event must not carry usage: %v", chunk)
+	}
+}
+
+// TestSSEWriter_ChunkHasTopLevelSessionID 任何普通 chunk 顶层都带 session_id（项目扩展字段）。
+func TestSSEWriter_ChunkHasTopLevelSessionID(t *testing.T) {
+	buf := &bufFlusher{}
+	w := NewSSEWriter(buf, "s1", "chat", 1, "qwen-max", 1760947200, false)
+	if err := w.WriteMessage("", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	chunk := decodeChunk(t, buf.String())
+	if got := chunk["session_id"]; got != "s1" {
+		t.Errorf("session_id = %v, want s1", got)
+	}
+	if !strings.Contains(buf.String(), `"session_id":"s1"`) {
+		t.Errorf("raw output missing session_id: %s", buf.String())
+	}
+}
+
+// TestSSEWriter_UsageOnlyWhenIncludeUsage 仅当 includeUsage 为 true 时下发 usage chunk。
+func TestSSEWriter_UsageOnlyWhenIncludeUsage(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		buf := &bufFlusher{}
+		w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
+		if err := w.WriteUsage(TokenUsage{Prompt: 1, Completion: 2, Total: 3}); err != nil {
+			t.Fatal(err)
+		}
+		if got := buf.String(); got != "" {
+			t.Errorf("WriteUsage should write nothing when includeUsage=false, got %q", got)
+		}
+	})
+
+	t.Run("enabled", func(t *testing.T) {
+		buf := &bufFlusher{}
+		w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, true)
+		if err := w.WriteUsage(TokenUsage{Prompt: 1, Completion: 2, Total: 3}); err != nil {
+			t.Fatal(err)
+		}
+		raw := buf.String()
+		if n := strings.Count(raw, `"usage":{`); n != 1 {
+			t.Fatalf("usage chunk count = %d, want 1: %s", n, raw)
+		}
+		if !strings.Contains(raw, `"choices":[]`) {
+			t.Errorf("usage chunk choices must be []: %s", raw)
+		}
+	})
+}
+
+// TestSSEWriter_ErrorUsesAPIErrorAndEnvelope WriteError 的 data 行为 OpenAI 错误信封，
+// type 为 api_error，param/code 为 null。
+func TestSSEWriter_ErrorUsesAPIErrorAndEnvelope(t *testing.T) {
+	buf := &bufFlusher{}
+	w := NewSSEWriter(buf, "sess", "chat", 1, "qwen-max", 1760947200, false)
+	if err := w.WriteError("", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.String()
+	want := `data: {"error":{"message":"boom","type":"api_error","param":null,"code":null}}` + "\n\n"
+	if raw != want {
+		t.Errorf("WriteError output = %q, want %q", raw, want)
 	}
 }

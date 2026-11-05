@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route/param"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/auth"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
@@ -73,21 +74,23 @@ func TestAPIKeys_CreateAndVerify(t *testing.T) {
 	}
 }
 
-// TestAPIKeys_CreateValidation 非法参数各返回 400。
+// TestAPIKeys_CreateValidation 非法参数各返回 400，类型统一为 invalid_request_error；
+// 细分 code 保留原值（invalid_expires_in / invalid_permissions），其余归为 invalid_request。
 func TestAPIKeys_CreateValidation(t *testing.T) {
 	h, _ := newAPIKeysHandler(t)
-	cases := []string{
-		`{"name":"","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`,                                // 空名称
-		`{"name":"a","tenant_id":"t1","expires_in":"3d","permissions":["chat"]}`,                               // 非法 expires_in
-		`{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":[]}`,                                     // 空权限
-		`{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":["superuser"]}`,                          // 非法权限点
-		`{"name":"web","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`,                             // 系统保留名称
-		`{"name":"` + strings.Repeat("a", 65) + `","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`, // 名称超过 64 字符
+	cases := []struct {
+		body string
+		code string
+	}{
+		{`{"name":"","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`, errbody.CodeInvalidRequest},                                // 空名称
+		{`{"name":"a","tenant_id":"t1","expires_in":"3d","permissions":["chat"]}`, "invalid_expires_in"},                                     // 非法 expires_in
+		{`{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":[]}`, "invalid_permissions"},                                          // 空权限
+		{`{"name":"a","tenant_id":"t1","expires_in":"7d","permissions":["superuser"]}`, "invalid_permissions"},                               // 非法权限点
+		{`{"name":"web","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`, errbody.CodeInvalidRequest},                             // 系统保留名称
+		{`{"name":"` + strings.Repeat("a", 65) + `","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`, errbody.CodeInvalidRequest}, // 名称超过 64 字符
 	}
-	for _, body := range cases {
-		if rc := postJSON(h.Create, body); rc.Response.StatusCode() != 400 {
-			t.Errorf("body %s: status=%d, want 400", body, rc.Response.StatusCode())
-		}
+	for _, c := range cases {
+		assertEnvelopeError(t, postJSON(h.Create, c.body), 400, errbody.TypeInvalidRequest, c.code)
 	}
 }
 
@@ -96,9 +99,7 @@ func TestAPIKeys_CreateDuplicateName(t *testing.T) {
 	h, _ := newAPIKeysHandler(t)
 	postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`)
 	rc := postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"1d","permissions":["all"]}`)
-	if rc.Response.StatusCode() != 409 {
-		t.Fatalf("duplicate name status=%d, want 409", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestAPIKeys_CreateSameSecondRetry 同秒创建两把 Key，主键 +1 秒重试后都成功。
@@ -161,9 +162,7 @@ func TestAPIKeys_DeleteNotFound(t *testing.T) {
 	rc.Request.Header.SetMethod(consts.MethodDelete)
 	setParamID(rc, "19700101000000")
 	h.Delete(context.Background(), rc)
-	if rc.Response.StatusCode() != 404 {
-		t.Errorf("delete missing id = %d, want 404", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "not_found")
 }
 
 // TestAPIKeys_CreateTrimsName 名称去除首尾空白后入库，重名判定基于去空白后的名称。
@@ -175,17 +174,14 @@ func TestAPIKeys_CreateTrimsName(t *testing.T) {
 	if _, err := keys.GetByName(context.Background(), "svc-a"); err != nil {
 		t.Fatalf("GetByName(svc-a) after trimmed create: %v", err)
 	}
-	if rc := postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`); rc.Response.StatusCode() != 409 {
-		t.Errorf("create with same trimmed name = %d, want 409", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSON(h.Create, `{"name":"svc-a","tenant_id":"t1","expires_in":"7d","permissions":["chat"]}`),
+		409, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestAPIKeys_CreateMalformedJSON 非法 JSON 请求体返回 400。
 func TestAPIKeys_CreateMalformedJSON(t *testing.T) {
 	h, _ := newAPIKeysHandler(t)
-	if rc := postJSON(h.Create, `{not json`); rc.Response.StatusCode() != 400 {
-		t.Errorf("malformed json = %d, want 400", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSON(h.Create, `{not json`), 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestAPIKeys_TokenAndDelete 查看 token 与删除端点。
@@ -227,9 +223,7 @@ func TestAPIKeys_TokenAndDelete(t *testing.T) {
 	rcGone := app.NewContext(0)
 	setParamID(rcGone, created.ID)
 	h.Token(context.Background(), rcGone)
-	if rcGone.Response.StatusCode() != 404 {
-		t.Errorf("token after delete = %d, want 404", rcGone.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rcGone, 404, errbody.TypeInvalidRequest, "not_found")
 }
 
 // TestAPIKeys_CreateRequiresTenant 租户缺失、空白或含非法字符时返回 400 invalid_tenant。
@@ -241,9 +235,7 @@ func TestAPIKeys_CreateRequiresTenant(t *testing.T) {
 		`{"name":"a","tenant_id":"bad tenant","expires_in":"7d","permissions":["chat"]}`,
 	} {
 		rc := postJSON(h.Create, body)
-		if rc.Response.StatusCode() != 400 || !strings.Contains(string(rc.Response.Body()), "invalid_tenant") {
-			t.Errorf("%s → %d %s", body, rc.Response.StatusCode(), rc.Response.Body())
-		}
+		assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, "invalid_tenant")
 	}
 }
 

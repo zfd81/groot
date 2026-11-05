@@ -12,6 +12,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/llm"
@@ -98,6 +99,7 @@ func fakeUpstream(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// bodyStatus 解析旧式 {"status":"..."} 响应体，供其它 handler 的测试共用。
 func bodyStatus(t *testing.T, rc *app.RequestContext) string {
 	t.Helper()
 	var out struct {
@@ -109,20 +111,20 @@ func bodyStatus(t *testing.T, rc *app.RequestContext) string {
 	return out.Status
 }
 
-// bodyModel 解析成功响应中回传的 model 字段。
-func bodyModel(t *testing.T, rc *app.RequestContext) string {
+// envelopeOf 解析 OpenAI 错误信封，失败即终止测试。
+func envelopeOf(t *testing.T, rc *app.RequestContext) errbody.Envelope {
 	t.Helper()
-	var out struct {
-		Model string `json:"model"`
+	var envl errbody.Envelope
+	if err := json.Unmarshal(rc.Response.Body(), &envl); err != nil {
+		t.Fatalf("响应体不是合法错误信封: %v, body=%s", err, rc.Response.Body())
 	}
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("响应不是合法 JSON: %s", rc.Response.Body())
-	}
-	return out.Model
+	return envl
 }
 
 var fakeAudio = []byte("FAKE-AUDIO-BYTES")
 
+// TestTranscriptionHandler_Success 成功响应原样透传上游的 status、Content-Type 与 body，
+// 不再附加 model 字段。
 func TestTranscriptionHandler_Success(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
@@ -133,18 +135,36 @@ func TestTranscriptionHandler_Success(t *testing.T) {
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	var out struct {
-		Text  string `json:"text"`
-		Model string `json:"model"`
+	if ct := string(rc.Response.Header.ContentType()); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
+	if got := string(rc.Response.Body()); got != `{"text":"打开登录日志"}` {
+		t.Errorf("body = %q，应原样透传上游响应", got)
 	}
-	if out.Text != "打开登录日志" {
-		t.Errorf("text = %q", out.Text)
+}
+
+// TestTranscriptionHandler_StreamsNonJSONBody 上游返回非 JSON（如 SRT 字幕）时，
+// 原样转发上游的 Content-Type 与字节。
+func TestTranscriptionHandler_StreamsNonJSONBody(t *testing.T) {
+	const srt = "1\n00:00:00,000 --> 00:00:02,000\n你好\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(srt))
+	}))
+	defer srv.Close()
+
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, true)
+	rc := audioCtx(t, fakeAudio, "rec.webm", "")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if out.Model != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1（应回传实际使用的模型）", out.Model)
+	if ct := string(rc.Response.Header.ContentType()); ct != "text/plain" {
+		t.Errorf("Content-Type = %q, want text/plain", ct)
+	}
+	if got := string(rc.Response.Body()); got != srt {
+		t.Errorf("body = %q, want 原样 srt", got)
 	}
 }
 
@@ -158,8 +178,8 @@ func TestTranscriptionHandler_MissingFile(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
+	if code := envelopeOf(t, rc).Error.Code; code == nil || *code != errbody.CodeInvalidRequest {
+		t.Errorf("code = %v, want invalid_request", code)
 	}
 }
 
@@ -174,8 +194,9 @@ func TestTranscriptionHandler_NoASRModelConfigured(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_model" {
-		t.Errorf("status = %q, want invalid_model", s)
+	envl := envelopeOf(t, rc)
+	if envl.Error.Code == nil || *envl.Error.Code != errbody.CodeModelNotFound {
+		t.Errorf("code = %v, want model_not_found", envl.Error.Code)
 	}
 	if !bytes.Contains(rc.Response.Body(), []byte("未配置默认 ASR 模型")) {
 		t.Errorf("错误信息应提示未配置默认 ASR 模型: %s", rc.Response.Body())
@@ -192,8 +213,12 @@ func TestTranscriptionHandler_ModelNotFound(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_model" {
-		t.Errorf("status = %q, want invalid_model", s)
+	envl := envelopeOf(t, rc)
+	if envl.Error.Code == nil || *envl.Error.Code != errbody.CodeModelNotFound {
+		t.Errorf("code = %v, want model_not_found", envl.Error.Code)
+	}
+	if envl.Error.Param == nil || *envl.Error.Param != "model" {
+		t.Errorf("param = %v, want model", envl.Error.Param)
 	}
 	if !bytes.Contains(rc.Response.Body(), []byte("nonexistent-model")) {
 		t.Errorf("错误信息应含模型名: %s", rc.Response.Body())
@@ -202,17 +227,24 @@ func TestTranscriptionHandler_ModelNotFound(t *testing.T) {
 
 // TestTranscriptionHandler_DefaultASRUsed 请求不指定模型时使用默认 ASR 模型。
 func TestTranscriptionHandler_DefaultASRUsed(t *testing.T) {
-	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseMultipartForm(1 << 20)
+		gotModel = r.FormValue("model")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"text":"ok"}`))
+	}))
+	defer srv.Close()
 
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, true)
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if m := bodyModel(t, rc); m != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1（默认 ASR 模型）", m)
+	if gotModel != "whisper-1" {
+		t.Errorf("上游收到 model = %q, want whisper-1（默认 ASR 模型）", gotModel)
 	}
 }
 
@@ -227,26 +259,6 @@ func TestTranscriptionHandler_FormModelWithoutDefault(t *testing.T) {
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if m := bodyModel(t, rc); m != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1", m)
-	}
-}
-
-// TestTranscriptionHandler_HeaderModelWithoutDefault 未设默认 ASR 模型，请求头显式指定时照常转录。
-func TestTranscriptionHandler_HeaderModelWithoutDefault(t *testing.T) {
-	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
-
-	rc := audioCtx(t, fakeAudio, "rec.webm", "")
-	rc.Request.Header.Set("X-Model-Name", "whisper-1")
-	h.Serve(context.Background(), rc)
-
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if m := bodyModel(t, rc); m != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1", m)
-	}
 }
 
 // TestTranscriptionHandler_ExplicitUnknownNoFallback 显式指定的模型不存在时报错，不回落到默认 ASR 模型。
@@ -254,15 +266,14 @@ func TestTranscriptionHandler_ExplicitUnknownNoFallback(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
-	rc := audioCtx(t, fakeAudio, "rec.webm", "")
-	rc.Request.Header.Set("X-Model-Name", "no-such-model")
+	rc := audioCtx(t, fakeAudio, "rec.webm", "no-such-model")
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400（不应回落到默认 ASR 模型）", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_model" {
-		t.Errorf("status = %q, want invalid_model", s)
+	if code := envelopeOf(t, rc).Error.Code; code == nil || *code != errbody.CodeModelNotFound {
+		t.Errorf("code = %v, want model_not_found", code)
 	}
 }
 
@@ -282,29 +293,13 @@ func TestTranscriptionHandler_IgnoresVoiceSetting(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400（不应读取配置表 voice.model）", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_model" {
-		t.Errorf("status = %q, want invalid_model", s)
+	if code := envelopeOf(t, rc).Error.Code; code == nil || *code != errbody.CodeModelNotFound {
+		t.Errorf("code = %v, want model_not_found", code)
 	}
 }
 
-// TestTranscriptionHandler_FormWinsOverHeader 表单与请求头同时给出时，表单优先。
-func TestTranscriptionHandler_FormWinsOverHeader(t *testing.T) {
-	up := fakeUpstream(t)
-	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
-
-	rc := audioCtx(t, fakeAudio, "rec.webm", "whisper-1")
-	rc.Request.Header.Set("X-Model-Name", "no-such-model")
-	h.Serve(context.Background(), rc)
-
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s（表单应优先于请求头）", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if m := bodyModel(t, rc); m != "whisper-1" {
-		t.Errorf("model = %q, want whisper-1", m)
-	}
-}
-
-func TestTranscriptionHandler_HeaderModelUsed(t *testing.T) {
+// TestTranscriptionHandler_IgnoresModelHeader 模型只读表单 model，请求头不再回退。
+func TestTranscriptionHandler_IgnoresModelHeader(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, false)
 
@@ -312,8 +307,69 @@ func TestTranscriptionHandler_HeaderModelUsed(t *testing.T) {
 	rc.Request.Header.Set("X-Model-Name", "whisper-1")
 	h.Serve(context.Background(), rc)
 
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("status=%d, want 400（请求头不应再决定模型）", rc.Response.StatusCode())
+	}
+	if code := envelopeOf(t, rc).Error.Code; code == nil || *code != errbody.CodeModelNotFound {
+		t.Errorf("code = %v, want model_not_found", code)
+	}
+}
+
+// TestTranscriptionHandler_ForwardsFormFields 除 model 外的表单参数在 handler 层一并转发，
+// timestamp_granularities[] 的多项以多个同名字段下发。
+func TestTranscriptionHandler_ForwardsFormFields(t *testing.T) {
+	var gotLang, gotPrompt, gotFormat, gotTemp string
+	var gotGranularities []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseMultipartForm(1 << 20)
+		gotLang = r.FormValue("language")
+		gotPrompt = r.FormValue("prompt")
+		gotFormat = r.FormValue("response_format")
+		gotTemp = r.FormValue("temperature")
+		gotGranularities = r.MultipartForm.Value["timestamp_granularities[]"]
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"text":"ok"}`))
+	}))
+	defer srv.Close()
+
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, true)
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, err := w.CreateFormFile("file", "rec.webm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw.Write(fakeAudio)
+	for k, v := range map[string]string{
+		"language":        "zh",
+		"prompt":          "登录日志",
+		"response_format": "verbose_json",
+		"temperature":     "0",
+	} {
+		w.WriteField(k, v)
+	}
+	w.WriteField("timestamp_granularities[]", "word")
+	w.WriteField("timestamp_granularities[]", "segment")
+	w.Close()
+
+	rc := app.NewContext(0)
+	rc.Request.Header.SetMethod(consts.MethodPost)
+	rc.Request.Header.SetContentTypeBytes([]byte(w.FormDataContentType()))
+	rc.Request.Header.SetContentLength(buf.Len())
+	rc.Request.SetBody(buf.Bytes())
+
+	h.Serve(context.Background(), rc)
+
 	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s（请求头应可指定模型）", rc.Response.StatusCode(), rc.Response.Body())
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if gotLang != "zh" || gotPrompt != "登录日志" || gotFormat != "verbose_json" || gotTemp != "0" {
+		t.Errorf("表单字段未透传: language=%q prompt=%q response_format=%q temperature=%q",
+			gotLang, gotPrompt, gotFormat, gotTemp)
+	}
+	if len(gotGranularities) != 2 || gotGranularities[0] != "word" || gotGranularities[1] != "segment" {
+		t.Errorf("timestamp_granularities[] = %v, want [word segment]", gotGranularities)
 	}
 }
 
@@ -327,8 +383,8 @@ func TestTranscriptionHandler_UnsupportedExtension(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "unsupported_type" {
-		t.Errorf("status = %q, want unsupported_type", s)
+	if code := envelopeOf(t, rc).Error.Code; code == nil || *code != errbody.CodeUnsupportedType {
+		t.Errorf("code = %v, want unsupported_type", code)
 	}
 }
 
@@ -343,18 +399,45 @@ func TestTranscriptionHandler_NoExtension(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "unsupported_type" {
-		t.Errorf("status = %q, want unsupported_type", s)
+	if code := envelopeOf(t, rc).Error.Code; code == nil || *code != errbody.CodeUnsupportedType {
+		t.Errorf("code = %v, want unsupported_type", code)
 	}
 	if !bytes.Contains(rc.Response.Body(), []byte("缺少扩展名")) {
 		t.Errorf("错误信息应提示缺少扩展名: %s", rc.Response.Body())
 	}
 }
 
-func TestTranscriptionHandler_UpstreamError(t *testing.T) {
+// TestTranscriptionHandler_UpstreamEnvelopePassthrough 上游非 2xx 且是 OpenAI 信封时，
+// 原样转发上游的状态码与响应体（逐字节相同）。
+func TestTranscriptionHandler_UpstreamEnvelopePassthrough(t *testing.T) {
+	const upstreamBody = `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(401)
-		w.Write([]byte(`{"error":{"message":"Incorrect API key provided"}}`))
+		w.Write([]byte(upstreamBody))
+	}))
+	defer srv.Close()
+
+	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, srv.URL, true)
+	rc := audioCtx(t, fakeAudio, "rec.webm", "")
+	h.Serve(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 401 {
+		t.Fatalf("status=%d, want 401（原样转发上游状态码）; body=%s",
+			rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if got := string(rc.Response.Body()); got != upstreamBody {
+		t.Errorf("body = %q，应与上游响应逐字节相同", got)
+	}
+}
+
+// TestTranscriptionHandler_UpstreamNonEnvelopeReturns502 上游非 2xx 但不是 OpenAI 信封
+// （如网关 HTML 页）时，返回 502 upstream_error，message 带上游原文。
+func TestTranscriptionHandler_UpstreamNonEnvelopeReturns502(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(502)
+		w.Write([]byte(`<html>Bad Gateway</html>`))
 	}))
 	defer srv.Close()
 
@@ -363,18 +446,19 @@ func TestTranscriptionHandler_UpstreamError(t *testing.T) {
 	h.Serve(context.Background(), rc)
 
 	if rc.Response.StatusCode() != 502 {
-		t.Fatalf("status=%d, want 502", rc.Response.StatusCode())
+		t.Fatalf("status=%d, want 502; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if s := bodyStatus(t, rc); s != "upstream_error" {
-		t.Errorf("status = %q, want upstream_error", s)
+	envl := envelopeOf(t, rc)
+	if envl.Error.Code == nil || *envl.Error.Code != errbody.CodeUpstreamError {
+		t.Errorf("code = %v, want upstream_error", envl.Error.Code)
 	}
-	if !bytes.Contains(rc.Response.Body(), []byte("Incorrect API key")) {
-		t.Errorf("应透传上游错误原文: %s", rc.Response.Body())
+	if !bytes.Contains([]byte(envl.Error.Message), []byte("Bad Gateway")) {
+		t.Errorf("message 应透传上游原文: %q", envl.Error.Message)
 	}
 }
 
-// TestTranscriptionHandler_EmptyTranscript 上游返回空文本时应视为客户端请求问题（音频无有效语音）。
-func TestTranscriptionHandler_EmptyTranscript(t *testing.T) {
+// TestTranscriptionHandler_EmptyTextPassthrough 上游返回空 text 也原样透传，不再当成客户端错误。
+func TestTranscriptionHandler_EmptyTextPassthrough(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"text":""}`))
@@ -385,17 +469,16 @@ func TestTranscriptionHandler_EmptyTranscript(t *testing.T) {
 	rc := audioCtx(t, fakeAudio, "rec.webm", "")
 	h.Serve(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("status=%d, want 400; body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d, want 200; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
+	if got := string(rc.Response.Body()); got != `{"text":""}` {
+		t.Errorf("body = %q，应原样透传", got)
 	}
 }
 
-// TestTranscriptionHandler_FileTooLarge 把附件上限设为 1MB，再上传 2MB 的音频，
-// 验证按 MB 换算后的超限判断。
-func TestTranscriptionHandler_FileTooLarge(t *testing.T) {
+// TestTranscriptionHandler_TooLargeReturns413 超过附件上限时返回 413 file_too_large。
+func TestTranscriptionHandler_TooLargeReturns413(t *testing.T) {
 	up := fakeUpstream(t)
 	h := newTranscriptionHandlerForTest(t, config.Bootstrap{}, up.URL, true)
 
@@ -409,10 +492,11 @@ func TestTranscriptionHandler_FileTooLarge(t *testing.T) {
 	rc := audioCtx(t, bytes.Repeat([]byte{0}, 2<<20), "big.webm", "whisper-1")
 	h.Serve(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
+	if rc.Response.StatusCode() != 413 {
+		t.Fatalf("status=%d, want 413", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "file_too_large" {
-		t.Errorf("status = %q, want file_too_large", s)
+	envl := envelopeOf(t, rc)
+	if envl.Error.Code == nil || *envl.Error.Code != errbody.CodeFileTooLarge {
+		t.Errorf("code = %v, want file_too_large", envl.Error.Code)
 	}
 }

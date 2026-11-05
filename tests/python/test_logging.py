@@ -100,11 +100,11 @@ class TestLogLevels:
 
     def test_log_level_error_on_failure(self, server, api_headers):
         """TC-LOG-005: ERROR 级别日志（失败场景）"""
-        # 执行错误请求
+        # 执行错误请求（空 messages → 400）
         requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": ""}
+            json={"messages": []}
         )
 
         logs_dir = f"{TEST_HOME}/logs"
@@ -126,9 +126,9 @@ class TestLogEvents:
     def test_log_api_request_event(self, server, api_headers):
         """TC-LOG-006: api_request 日志事件"""
         requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True
         )
 
@@ -158,9 +158,9 @@ class TestLogEvents:
         from conftest import SSEClient
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True
         )
 

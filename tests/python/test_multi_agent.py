@@ -9,7 +9,7 @@
 - 子 Agent 启动期注册行为
 - /web/agents 列表接口（Web 登录 Cookie）
 - /web/skills /web/tools + X-Agent-Name 路由（Web 登录 Cookie）
-- /chat 的 X-Agent-Name 输入校验（unknown_agent → 400）
+- /chat/completions 的 agent_name 请求体字段校验（unknown_agent → 400）
 - /chat/status 含 sub_agents 字段
 - groot init 子目录与 GROOT.md 调度引导段
 
@@ -68,10 +68,9 @@ def _write_minimal_config(home: str, port: int) -> None:
     cfg = {
         "agent": {"name": "groot", "version": "test"},
         "server": {"host": "127.0.0.1", "port": port},
-        # 认证始终开启：只需请求头名与 JWT 签名密钥；API Key 通过 Web 端点创建
+        # 认证始终开启：只需 JWT 签名密钥；API Key 通过 Web 端点创建
         "security": {
             "auth": {
-                "header_name": "X-API-Key",
                 "secret": TEST_AUTH_SECRET,
             }
         },
@@ -115,10 +114,10 @@ class _Server:
     """启动一个独占 groot 进程，按指定 home + port 跑；上下文管理器自动清理。
 
     每个实例使用独立数据库，启动后自动：
-    - 通过 Web 端点创建 API Key（self.headers，用于 /chat 等 API 端点）
+    - 通过 Web 端点创建 API Key（self.headers，用于 /chat/completions 等 API 端点）
     - 建立 Web 登录 Cookie Session（self.web，用于 /web/agents|skills|tools）
     - 确保模型库中有默认模型（TC-MA-020 等依赖：模型解析先于 agent 校验，
-      空模型库时打不存在的 agent 会返回 invalid_model 而非 unknown_agent）
+      空模型库时打不存在的 agent 会返回 model_not_found 而非 unknown_agent）
     """
 
     def __init__(self, home: str, port: int):
@@ -146,10 +145,10 @@ class _Server:
         # 独立数据库：为本实例创建 all 权限的 JWT API Key
         self.headers = {
             "Content-Type": "application/json",
-            "X-API-Key": bootstrap_api_key(self.base_url, name="pytest-multi-agent"),
-            "X-User-ID": TEST_USER_ID,
+            "Authorization": f"Bearer {bootstrap_api_key(self.base_url, name='pytest-multi-agent')}",
+            "user": TEST_USER_ID,
         }
-        # /web/* 端点需要 Web 登录 Cookie（X-API-Key 无效）
+        # /web/* 端点需要 Web 登录 Cookie（Bearer API Key 无效）
         self.web = _web_login(self.base_url)
         # 模型只存数据库：确保空库中有默认模型
         ensure_default_model(self.base_url)
@@ -315,32 +314,38 @@ class TestAgentsAPI:
 
 
 class TestXAgentNameValidation:
-    """/chat /web/skills /web/tools 的 X-Agent-Name 输入校验。
+    """/chat/completions 的 agent_name 字段，与 /web/skills /web/tools 的 X-Agent-Name 头校验。
 
+    /chat/completions 是 OpenAI 兼容端点，agent 名改由请求体顶层 agent_name 承载；
+    /web/skills /web/tools 不是 OpenAI 兼容端点，仍用 X-Agent-Name 请求头。
     本组用例**只验证错误路径**（unknown_agent → 400 / 主 Agent 等价空），
     不真实触发 LLM 推理。对应 TEST_CASES 2.21.2 / 2.21.4。
     """
 
     def test_chat_unknown_agent_returns_400(self):
-        """TC-MA-020: POST /chat + X-Agent-Name=ghost → 400 unknown_agent。
+        """TC-MA-020: POST /chat/completions + agent_name=ghost → 400 unknown_agent。
 
         注意：chat.go 先解析模型再校验 agent，_Server 已经保证模型库中有
-        默认模型，因此此处应得到 unknown_agent 而非 invalid_model。
+        默认模型，因此此处应得到 unknown_agent 而非 model_not_found。
         """
         home = _bootstrap_home()
         port = _free_port()
         _write_minimal_config(home, port)
 
         with _Server(home, port) as srv:
-            h = {**srv.headers, "X-Agent-Name": "ghost-agent"}
             r = requests.post(
-                f"{srv.base_url}/chat",
-                headers=h,
-                json={"instruction": "x"},
+                f"{srv.base_url}/chat/completions",
+                headers=srv.headers,
+                json={
+                    "messages": [{"role": "user", "content": "x"}],
+                    "agent_name": "ghost-agent",
+                },
                 timeout=5,
             )
             assert r.status_code == 400
-            assert "unknown_agent" in r.text or "Unknown" in r.text
+            error = r.json()["error"]
+            assert error["code"] == "unknown_agent"
+            assert error["param"] == "agent_name"
 
     def test_skills_unknown_agent_returns_400(self):
         """TC-MA-021: GET /web/skills + X-Agent-Name=ghost → 400 unknown_agent。"""

@@ -23,7 +23,7 @@ const { t } = useI18n()
 
 // 主 Agent 的哨兵值：与后端 agent.MainAgentName 一致。用非空值而非空串，
 // 使 el-select 能正确显示选中态（空串会被当作“未选中”而回落到 placeholder）。
-// 后端把 X-Agent-Name=groot 视为等价于不传（即默认编排模式）。
+// 请求体 agent_name 取值为 groot 时后端视为等价于不传（即默认编排模式）。
 const MAIN_AGENT = 'groot'
 
 const text = ref('')
@@ -105,7 +105,7 @@ async function stopRecording() {
       ElMessage.info(t('chat.recordEmpty'))
       return
     }
-    // 总是经 X-Model-Name 传递设置中选定的识别模型
+    // 总是经 multipart 的 model 字段传递设置中选定的识别模型
     const res = await voiceApi.transcribe(rec.blob, rec.filename, voice.value.model)
     const piece = res.text.trim()
     if (!piece) {
@@ -246,6 +246,8 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
           type: isImage ? 'image' : 'file',
           name: file.name,
           content: base64,
+          // 服务端按 data URL 的 MIME 校验图片/文件片段，浏览器给出的类型在此透传
+          mime: file.type,
         },
         preview: isImage ? result : '',
       })

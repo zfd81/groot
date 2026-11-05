@@ -6,6 +6,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/logger"
 )
@@ -31,9 +32,8 @@ func NewLogsHandler(cfg config.LoggingConfig) *LogsHandler {
 func (h *LogsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	sessionID := rc.Param("sid")
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		errbody.Write(rc, 400, "session_id 参数缺失",
+			errbody.TypeInvalidRequest, "session_id", errbody.CodeInvalidRequest)
 		return
 	}
 

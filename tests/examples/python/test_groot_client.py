@@ -1,5 +1,15 @@
 """
-GrootClient 测试。
+GrootClient 测试（OpenAI 官方 SDK 驱动本地 mock 服务）。
+
+被测对象是 examples/python/groot_client.py —— 一个基于官方 `openai` 包的示例客户端。
+本测试用真实 SDK 打本地 HTTPServer 的 mock 服务，验证 Groot 的 OpenAI 兼容契约：
+
+    1. 请求走 POST /chat/completions，且路径里没有 /v1 前缀
+    2. 认证走 Authorization: Bearer <key>（不再有 X-API-Key 之类的自定义头）
+    3. 扩展字段 session_id / agent_name / user 出现在请求体顶层
+    4. 非流式响应顶层的 session_id 能被客户端读到
+    5. 流式每个 chunk 顶层的 session_id 能被客户端读到
+    6. HTTP 400 错误体触发 openai.BadRequestError，且能取到 message
 
 Usage:
     cd tests/examples/python
@@ -9,180 +19,100 @@ Usage:
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 import unittest
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 将 examples/python/ 加入搜索路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../examples/python"))
 
-from groot_client import GrootClient
+import openai  # noqa: E402
+from groot_client import GrootClient, _extra  # noqa: E402
 
 
-# ---- 测试辅助 ----
+# ---- 响应构造辅助 ----
 
-def _chunk(delta: dict, finish_reason=None) -> dict:
-    """构造一条 OpenAI chat.completion.chunk 对象。"""
-    return {
+def _chunk(content=None, finish_reason=None, session_id=None, role=None):
+    """构造一条 chat.completion.chunk；session_id 放在顶层（Groot 扩展字段）。"""
+    delta = {}
+    if role:
+        delta["role"] = role
+    if content is not None:
+        delta["content"] = content
+    obj = {
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 1,
         "model": "test-model",
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
+    if session_id is not None:
+        obj["session_id"] = session_id
+    return obj
+
+
+def _completion(content, session_id="sess_001", model="test-model"):
+    """构造一条非流式 chat.completion；session_id 放在顶层（Groot 扩展字段）。"""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "session_id": session_id,
+    }
 
 
 # ---- Mock Groot Server ----
 
 class MockGrootHandler(BaseHTTPRequestHandler):
-    """模拟 Groot API 服务，用于测试客户端。"""
+    """记录收到的请求，并按队列返回预置响应。"""
+
+    protocol_version = "HTTP/1.1"
 
     def do_POST(self):
-        if self.path == "/chat":
-            self._handle_chat()
-        elif self.path.startswith("/chat/") and self.path.endswith("/stop"):
-            # POST /chat/{sid}/{cid}/stop  →  ["", "chat", sid, cid, "stop"]
-            parts = self.path.split("/")
-            self._json_response(200, {
-                "status": "success",
-                "session_id": parts[2],
-                "chat_id": parts[3],
-                "message": "对话已请求中止",
-            })
-        elif self.path == "/audio/transcriptions":
-            self._handle_transcription()
-        elif self.path == "/image/understanding":
-            self._handle_image_understanding()
-        else:
-            self.send_error(404)
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b""
+        self.server.recorded.append({
+            "method": "POST",
+            "path": self.path,
+            # HTTP 头名大小写不敏感，统一小写便于断言
+            "headers": {k.lower(): v for k, v in self.headers.items()},
+            "body": json.loads(raw) if raw else None,
+        })
+        if not self.server.responses:
+            self._send(500, "application/json", b'{"error":"no response enqueued"}')
+            return
+        status, ctype, payload = self.server.responses.pop(0)
+        self._send(status, ctype, payload)
 
     def do_GET(self):
-        if self.path == "/health":
-            self._json_response(200, {"status": "healthy", "version": "1.0.0"})
-        elif self.path == "/skills":
-            self._json_response(200, {"skills": [{"name": "test_skill"}], "total": 1})
-        elif self.path == "/tools":
-            self._json_response(200, {"test_mcp": {"tools": [{"name": "echo"}], "total": 1}})
-        elif self.path.startswith("/chat/status/"):
-            self._json_response(200, {"status": "success", "chat": None})
-        elif self.path.startswith("/chat/") and self.path.count("/") >= 3:
-            # GET /chat/{sid}/{cid}  →  /chat/sid/cid = ["", "chat", "sid", "cid"]
-            parts = self.path.split("/")
-            self._json_response(200, {
-                "status": "success",
-                "chat": {"chat_id": parts[3], "status": "completed"}
-            })
-        elif self.path.startswith("/sess/history"):
-            self._json_response(200, {"status": "success", "total": 0, "sessions": []})
-        elif self.path.startswith("/sess/"):
-            self._json_response(200, {"status": "success", "session": {}, "history": {"messages": []}})
-        else:
-            self.send_error(404)
+        self.server.recorded.append({
+            "method": "GET",
+            "path": self.path,
+            "headers": {k.lower(): v for k, v in self.headers.items()},
+            "body": None,
+        })
+        status, ctype, payload = self.server.responses.pop(0)
+        self._send(status, ctype, payload)
 
-    def do_PATCH(self):
-        if self.path.startswith("/sess/"):
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length > 0 else {}
-            self._json_response(200, {
-                "status": "success",
-                "session_id": self.path.split("/")[-1],
-                "title": body.get("title", ""),
-            })
-        else:
-            self.send_error(404)
-
-    def do_DELETE(self):
-        if self.path.startswith("/sess/"):
-            self._json_response(200, {
-                "status": "success",
-                "session_id": self.path.split("/")[-1],
-            })
-        else:
-            self.send_error(404)
-
-    def _handle_chat(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
-
-        sid = self.headers.get("X-Session-ID", f"test_sid_{int(time.time())}")
-        cid = f"chat_test_{int(time.time())}"
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.send_header("X-Session-ID", sid)
-        self.send_header("X-Chat-ID", cid)
+    def _send(self, status, ctype, payload):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-
-        # 以 OpenAI chat.completion.chunk 格式输出事件，最后以 [DONE] 结束
-        chunks = [
-            _chunk({"role": "assistant", "reasoning_content": "让我思考一下..."}),
-            _chunk({"role": "assistant", "content": "分析结果如下：" + body.get("instruction", "")[:20]}),
-            _chunk({
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "tool_name": "test_skill",
-                "content": "工具输出",
-                "error": False,
-            }),
-            _chunk({}, finish_reason="stop"),
-        ]
-        events = ["data: " + json.dumps(c, ensure_ascii=False) + "\n\n" for c in chunks]
-        events.append("data: [DONE]\n\n")
-        payload = "".join(events)
-        self.wfile.write(payload.encode())
+        self.wfile.write(payload)
         self.wfile.flush()
 
-    def _handle_transcription(self):
-        """模拟 POST /audio/transcriptions：校验 multipart，回显 model 字段。"""
-        ctype = self.headers.get("Content-Type", "")
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length > 0 else b""
-        if not ctype.startswith("multipart/form-data"):
-            self._json_response(400, {"status": "invalid_request", "message": "expect multipart"})
-            return
-        if b'name="file"' not in body:
-            self._json_response(400, {"status": "invalid_request", "message": "缺少 file 字段"})
-            return
-        # 从表单里取 model；客户端没传时模拟服务端回落到默认语音模型
-        model = "whisper-1"
-        marker = b'name="model"\r\n\r\n'
-        if marker in body:
-            start = body.index(marker) + len(marker)
-            end = body.index(b"\r\n", start)
-            model = body[start:end].decode()
-        self._json_response(200, {"text": "你好，世界", "model": model})
+    def log_message(self, fmt, *args):
+        pass  # 抑制日志
 
-    def _handle_image_understanding(self):
-        """模拟 POST /image/understanding：校验图片附件，回显 model 与 instruction。"""
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length > 0 else {}
-        attachments = body.get("attachments") or []
-        if not attachments or attachments[0].get("type") != "image" \
-                or not attachments[0].get("content"):
-            self._json_response(400, {"status": "invalid_request", "message": "必须提供 1 张图片附件"})
-            return
-        model = self.headers.get("X-Model-Name") or "qwen-vl-max"
-        self._json_response(200, {
-            "text": "图里是一张发票",
-            "model": model,
-            "instruction": body.get("instruction", ""),
-        })
-
-    def _json_response(self, status, data):
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
-
-    def log_message(self, format, *args):
-        pass  # 抑制日志输出
-
-
-# ---- 模拟服务管理 ----
 
 _server = None
 _server_thread = None
@@ -190,217 +120,209 @@ _server_url = None
 
 
 def setUpModule():
-    """模块级别 setup：启动模拟服务器。"""
     global _server, _server_thread, _server_url
-    _server = HTTPServer(("127.0.0.1", 0), MockGrootHandler)
-    _server_url = f"http://127.0.0.1:{_server.server_address[1]}"
+    _server = ThreadingHTTPServer(("127.0.0.1", 0), MockGrootHandler)
+    _server.recorded = []
+    _server.responses = []
+    _server_url = "http://127.0.0.1:%d" % _server.server_address[1]
     _server_thread = threading.Thread(target=_server.serve_forever, daemon=True)
     _server_thread.start()
     time.sleep(0.05)
 
 
 def tearDownModule():
-    """模块级别 teardown：关闭模拟服务器。"""
-    global _server
     if _server:
         _server.shutdown()
+        _server.server_close()
 
 
-# ---- 测试用例 ----
+def _enqueue(status, ctype, obj):
+    """入队一个响应；obj 为 dict/list 时序列化为 JSON，为 str 时当作 SSE 原文。"""
+    if isinstance(obj, (dict, list)):
+        payload = json.dumps(obj, ensure_ascii=False).encode()
+    else:
+        payload = obj.encode()
+    _server.responses.append((status, ctype, payload))
+
+
+def _sse(*chunks):
+    """把若干 chunk 拼成 SSE 流，末尾补 data: [DONE]。"""
+    lines = ["data: " + json.dumps(c, ensure_ascii=False) + "\n\n" for c in chunks]
+    lines.append("data: [DONE]\n\n")
+    return "".join(lines)
+
+
+def _last_request():
+    return _server.recorded[-1]
 
 
 class TestGrootClient(unittest.TestCase):
-    """GrootClient 完整测试"""
+    """GrootClient 的 OpenAI 兼容契约。"""
 
-    @classmethod
-    def setUpClass(cls):
-        cls.client = GrootClient(_server_url, api_key="test-key")
+    def setUp(self):
+        _server.recorded.clear()
+        del _server.responses[:]
+        # 关闭 SDK 重试，保证 1:1 请求数，便于断言
+        self.client = GrootClient(_server_url, "test-key", user="alice")
+        self.client.client = self.client.client.with_options(max_retries=0)
 
-    def test_health_check(self):
-        resp = self.client.health_check()
-        self.assertEqual(resp["status"], "healthy")
-        self.assertEqual(resp["version"], "1.0.0")
+    # ---- 请求形状 ----
 
-    def test_list_skills(self):
-        resp = self.client.list_skills()
-        self.assertEqual(resp["total"], 1)
-        self.assertEqual(resp["skills"][0]["name"], "test_skill")
+    def test_request_path_and_auth_header(self):
+        _enqueue(200, "application/json", _completion("你好"))
+        self.client.chat("你好", model="test-model")
 
-    def test_list_tools(self):
-        resp = self.client.list_tools()
-        self.assertIn("test_mcp", resp)
-        self.assertEqual(resp["test_mcp"]["tools"][0]["name"], "echo")
+        req = _last_request()
+        self.assertEqual(req["path"], "/chat/completions")
+        self.assertNotIn("/v1", req["path"])
+        self.assertEqual(req["headers"].get("authorization"), "Bearer test-key")
+        # 旧自定义头一律不再出现
+        self.assertNotIn("x-api-key", req["headers"])
+        self.assertNotIn("x-session-id", req["headers"])
+        self.assertNotIn("x-chat-id", req["headers"])
 
-    def test_execute_chat_new_session(self):
-        events = []
+    def test_extension_fields_in_request_body_top_level(self):
+        _enqueue(200, "application/json", _completion("ok"))
+        self.client.chat("你好", model="test-model", session_id="sess_existing",
+                         agent_name="analyst")
 
-        def collect(event_type, data):
-            events.append((event_type, data))
+        body = _last_request()["body"]
+        self.assertEqual(body["model"], "test-model")
+        self.assertEqual(body["messages"], [{"role": "user", "content": "你好"}])
+        self.assertEqual(body["session_id"], "sess_existing")
+        self.assertEqual(body["agent_name"], "analyst")
+        self.assertEqual(body["user"], "alice")
 
-        result = self.client.execute_chat("测试指令", callback=collect)
+    def test_extension_fields_omitted_when_absent(self):
+        _enqueue(200, "application/json", _completion("ok"))
+        client = GrootClient(_server_url, "test-key")  # 不带 user
+        client.client = client.client.with_options(max_retries=0)
+        client.chat("你好", model="test-model")
 
-        self.assertIsNotNone(result["session_id"])
-        self.assertIsNotNone(result["chat_id"])
-        # 正常结束时不设置 status / error
-        self.assertNotIn("status", result)
-        self.assertNotIn("error", result)
-        event_types = [e[0] for e in events]
-        self.assertIn("message", event_types)
+        body = _last_request()["body"]
+        self.assertNotIn("session_id", body)
+        self.assertNotIn("agent_name", body)
+        self.assertNotIn("user", body)
 
-    def test_execute_chat_event_types(self):
-        events = []
+    # ---- 非流式 ----
 
-        def collect(event_type, data):
-            events.append((event_type, data))
+    def test_chat_reads_top_level_session_id(self):
+        _enqueue(200, "application/json", _completion("分析结果", session_id="sess_new"))
+        resp = self.client.chat("分析数据", model="test-model", agent_name="analyst")
 
-        self.client.execute_chat("测试指令", callback=collect)
+        self.assertEqual(resp["content"], "分析结果")
+        self.assertEqual(resp["session_id"], "sess_new")
+        self.assertEqual(resp["model"], "test-model")
 
-        event_types = [e[0] for e in events]
-        self.assertEqual(event_types, ["thinking", "message", "tool_result", "finish"])
-        self.assertNotIn("completed", event_types)
-        self.assertNotIn("unknown", event_types)
+    def test_list_models(self):
+        _enqueue(200, "application/json", {
+            "object": "list",
+            "data": [{"id": "qwen-max", "object": "model", "created": 1, "owned_by": "groot"}],
+        })
+        self.assertEqual(self.client.list_models(), ["qwen-max"])
 
-        # 回调收到的 data 已摊平为 delta 本身
-        message_data = next(d for t, d in events if t == "message")
-        self.assertNotIn("choices", message_data)
-        self.assertTrue(message_data["content"].startswith("分析结果如下"))
-        tool_data = next(d for t, d in events if t == "tool_result")
-        self.assertEqual(tool_data["tool_call_id"], "call_1")
-        finish_data = next(d for t, d in events if t == "finish")
-        self.assertEqual(finish_data, {"finish_reason": "stop"})
+        req = _last_request()
+        self.assertEqual(req["path"], "/models")
+        self.assertEqual(req["headers"].get("authorization"), "Bearer test-key")
 
-    def test_flatten_chunk_message(self):
-        raw = _chunk({"role": "assistant", "content": "hi"})
-        flat = GrootClient._flatten_chunk(raw)
-        self.assertEqual(flat, {"role": "assistant", "content": "hi"})
-        self.assertEqual(GrootClient._classify_event(flat), "message")
-        # 返回的是拷贝，不影响原始 delta
-        self.assertIsNot(flat, raw["choices"][0]["delta"])
+    # ---- 流式 ----
 
-    def test_flatten_chunk_finish(self):
-        raw = _chunk({}, finish_reason="stop")
-        flat = GrootClient._flatten_chunk(raw)
-        self.assertEqual(flat, {"finish_reason": "stop"})
-        self.assertEqual(GrootClient._classify_event(flat), "finish")
-        # delta 为 None 时视为 {}
-        raw_none = _chunk(None, finish_reason="stop")
-        self.assertEqual(GrootClient._flatten_chunk(raw_none), {"finish_reason": "stop"})
+    def test_chat_stream_collects_text_and_session_id(self):
+        _enqueue(200, "text/event-stream", _sse(
+            _chunk(role="assistant", session_id="sess_stream"),
+            _chunk(content="你好", session_id="sess_stream"),
+            _chunk(content="，世界", session_id="sess_stream"),
+            _chunk(finish_reason="stop", session_id="sess_stream"),
+        ))
 
-    def test_flatten_chunk_error(self):
-        raw = {"error": {"message": "boom", "type": "server_error", "code": None, "param": None}}
-        flat = GrootClient._flatten_chunk(raw)
-        self.assertEqual(flat, {"event": "error", "message": "boom", "error": raw["error"]})
-        self.assertEqual(GrootClient._classify_event(flat), "error")
-        # 无 error / choices 的对象原样返回
-        other = {"foo": "bar"}
-        self.assertIs(GrootClient._flatten_chunk(other), other)
+        pieces = list(self.client.chat_stream("打个招呼", model="test-model"))
 
-    def test_flatten_usage_chunk(self):
-        raw = {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m",
-               "choices": [], "usage": {"prompt_tokens": 120, "completion_tokens": 45, "total_tokens": 165}}
-        flat = GrootClient._flatten_chunk(raw)
-        self.assertEqual(flat, {"event": "usage", "usage": raw["usage"]})
-        self.assertEqual(GrootClient._classify_event(flat), "usage")
+        self.assertEqual("".join(p[0] for p in pieces), "你好，世界")
+        self.assertEqual(pieces[0][1], "sess_stream")
 
-    def test_flatten_empty_choices_without_usage_passthrough(self):
-        raw = {"choices": [], "usage": None}
-        self.assertIs(GrootClient._flatten_chunk(raw), raw)
+        body = _last_request()["body"]
+        self.assertIs(body["stream"], True)
+        self.assertEqual(body["user"], "alice")
 
-    def test_execute_chat_with_session(self):
-        result = self.client.execute_chat("继续分析", session_id="existing_sid")
-        self.assertEqual(result["session_id"], "existing_sid")
+    def test_chat_stream_passes_session_id_in_body(self):
+        _enqueue(200, "text/event-stream", _sse(
+            _chunk(content="继续", session_id="sess_existing"),
+            _chunk(finish_reason="stop", session_id="sess_existing"),
+        ))
+        list(self.client.chat_stream("继续", model="test-model", session_id="sess_existing",
+                                     agent_name="analyst"))
 
-    def test_execute_chat_with_prompt(self):
-        result = self.client.execute_chat("指令", prompt="你是专家")
-        self.assertIsNotNone(result["session_id"])
+        body = _last_request()["body"]
+        self.assertEqual(body["session_id"], "sess_existing")
+        self.assertEqual(body["agent_name"], "analyst")
 
-    def test_get_chat_status(self):
-        resp = self.client.get_chat_status("test_sid")
-        self.assertEqual(resp["status"], "success")
+    # ---- 扩展字段读取形状 ----
 
-    def test_get_chat_detail(self):
-        resp = self.client.get_chat_detail("test_sid", "test_cid")
-        self.assertEqual(resp["status"], "success")
-        self.assertEqual(resp["chat"]["chat_id"], "test_cid")
+    def test_extra_reads_attribute_when_container_absent(self):
+        """pydantic v1 形状：只有属性访问，没有 model_extra 时也要取到 session_id。"""
 
-    def test_get_session_detail(self):
-        resp = self.client.get_session_detail("test_sid")
-        self.assertEqual(resp["status"], "success")
+        class AttrOnly:
+            session_id = "sess_attr"
 
-    def test_stop_chat(self):
-        resp = self.client.stop_chat("test_sid", "test_cid")
-        self.assertEqual(resp["status"], "success")
-        self.assertEqual(resp["session_id"], "test_sid")
-        self.assertEqual(resp["chat_id"], "test_cid")
+        self.assertEqual(_extra(AttrOnly(), "session_id"), "sess_attr")
 
-    def test_rename_session(self):
-        resp = self.client.rename_session("test_sid", "新标题")
-        self.assertEqual(resp["status"], "success")
-        self.assertEqual(resp["session_id"], "test_sid")
-        self.assertEqual(resp["title"], "新标题")
+    def test_extra_falls_back_to_model_extra(self):
+        """只有在 model_extra 容器里（属性缺失）时也能取到 session_id。"""
 
-    def test_delete_session(self):
-        resp = self.client.delete_session("test_sid")
-        self.assertEqual(resp["status"], "success")
-        self.assertEqual(resp["session_id"], "test_sid")
+        class ContainerOnly:
+            model_extra = {"session_id": "sess_container"}
 
-    def test_list_sessions(self):
-        resp = self.client.list_sessions(limit=10)
-        self.assertEqual(resp["status"], "success")
+        self.assertEqual(_extra(ContainerOnly(), "session_id"), "sess_container")
 
-    def test_list_sessions_pagination(self):
-        resp = self.client.list_sessions(limit=5, offset=10)
-        self.assertEqual(resp["status"], "success")
+    def test_extra_returns_none_when_both_absent(self):
+        """属性与容器都没有该字段时返回 None，不抛异常。"""
 
-    def test_execute_chat_no_callback(self):
-        result = self.client.execute_chat("简单指令")
-        self.assertIsNotNone(result["session_id"])
+        class Neither:
+            pass
 
-    def test_execute_chat_with_attachments(self):
-        result = self.client.execute_chat(
-            "分析文件",
-            attachments=[{"type": "file", "name": "test.pdf", "content": "base64content"}],
-        )
-        self.assertIsNotNone(result["session_id"])
+        self.assertIsNone(_extra(Neither(), "session_id"))
 
-    def test_execute_chat_with_model(self):
-        result = self.client.execute_chat("指令", model_name="gpt-4o")
-        self.assertIsNotNone(result["session_id"])
+    # ---- 错误路径 ----
 
-    def _tmp_audio(self):
-        f = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
-        f.write(b"FAKE-AUDIO")
-        f.close()
-        self.addCleanup(os.unlink, f.name)
-        return f.name
+    def test_bad_request_raises_bad_request_error(self):
+        _enqueue(400, "application/json", {
+            "error": {
+                "message": "messages 不能为空",
+                "type": "invalid_request_error",
+                "param": "messages",
+                "code": None,
+            }
+        })
+        with self.assertRaises(openai.BadRequestError) as ctx:
+            self.client.chat("", model="test-model")
 
-    def test_transcribe_default_model(self):
-        result = self.client.transcribe(self._tmp_audio())
-        self.assertEqual(result["text"], "你好，世界")
-        # 未指定 model 时由服务端回落到默认语音模型
-        self.assertEqual(result["model"], "whisper-1")
+        err = ctx.exception
+        self.assertEqual(err.status_code, 400)
+        # 官方 SDK 的 str(err) 形如 "Error code: 400 - <error.message>"
+        self.assertIn("messages 不能为空", err.message)
+        # 结构化错误体：err.body 是 OpenAI 的 error 对象本身（message/type/param/code）
+        self.assertEqual(err.body["message"], "messages 不能为空")
+        self.assertEqual(err.body["type"], "invalid_request_error")
+        self.assertEqual(err.body["param"], "messages")
 
-    def test_transcribe_explicit_model(self):
-        result = self.client.transcribe(self._tmp_audio(), model="my-asr", language="zh")
-        self.assertEqual(result["model"], "my-asr")
+    def test_bad_request_error_on_stream(self):
+        _enqueue(400, "application/json", {
+            "error": {
+                "message": "模型不存在",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": None,
+            }
+        })
+        with self.assertRaises(openai.BadRequestError) as ctx:
+            # 流式请求在拿到响应头时就抛错（消费迭代器之前）
+            self.client.client.chat.completions.create(
+                model="no-such-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+        self.assertIn("模型不存在", ctx.exception.message)
 
-    def _tmp_png(self):
-        f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
-        f.close()
-        self.addCleanup(os.unlink, f.name)
-        return f.name
 
-    def test_understand_image_default_instruction(self):
-        result = self.client.understand_image(self._tmp_png())
-        # 未指定 instruction 时客户端不下发该字段，由服务端使用默认指令
-        self.assertEqual(result["instruction"], "")
-        self.assertEqual(result["model"], "qwen-vl-max")
-
-    def test_understand_image_explicit_instruction(self):
-        result = self.client.understand_image(self._tmp_png(), instruction="提取文字")
-        self.assertEqual(result["instruction"], "提取文字")
-
-    def test_understand_image_explicit_model(self):
-        result = self.client.understand_image(self._tmp_png(), model="my-vlm")
-        self.assertEqual(result["model"], "my-vlm")
+if __name__ == "__main__":
+    unittest.main()

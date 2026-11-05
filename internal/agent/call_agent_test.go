@@ -210,7 +210,7 @@ func (p *sseProbeTool) InvokableRun(_ context.Context, _ string, _ ...tool.Optio
 // 保证引擎在另一 goroutine 上继续转发的子 Agent 尾部 chunk 不会回退到主模型名。
 func TestCallAgentTool_RegistersResolvedModelOnSSE(t *testing.T) {
 	buf := &bufFlusher{}
-	sse := NewSSEWriter(buf, "sess_x", "chat_p", 1, "qwen-max", 0)
+	sse := NewSSEWriter(buf, "sess_x", "chat_p", 1, "qwen-max", 0, false)
 
 	reg := NewRegistryForTest(2)
 	entry := &SubAgentEntry{Name: "coder", AgentMdModel: "deepseek-r1"}

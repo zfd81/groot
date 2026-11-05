@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
@@ -211,9 +212,7 @@ func TestSettingHandler_PutVoiceUnknownModel(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_model" {
-		t.Errorf("status = %q, want invalid_model", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeModelNotFound)
 	if !strings.Contains(string(rc.Response.Body()), "nope") {
 		t.Errorf("响应应包含模型名 nope，得到 %s", rc.Response.Body())
 	}
@@ -226,9 +225,7 @@ func TestSettingHandler_PutVoiceDisabledModel(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400（已禁用的模型不应被选为识别模型）", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_model" {
-		t.Errorf("status = %q, want invalid_model", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeModelNotFound)
 	if !strings.Contains(string(rc.Response.Body()), "whisper-1") {
 		t.Errorf("响应应包含模型名 whisper-1，得到 %s", rc.Response.Body())
 	}
@@ -241,9 +238,7 @@ func TestSettingHandler_PutVoiceBadJSON(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // getSpeech 调 GET /web/settings/speech 并解析响应。
@@ -324,9 +319,7 @@ func TestSettingHandler_PutSpeechFieldLimits(t *testing.T) {
 			if rc.Response.StatusCode() != 400 {
 				t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 			}
-			if s := bodyStatus(t, rc); s != "invalid_request" {
-				t.Errorf("status = %q, want invalid_request", s)
-			}
+			assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 			wantMsg := c.field + " 超过 " + strconv.Itoa(c.limit) + " 字符上限"
 			if !strings.Contains(string(rc.Response.Body()), wantMsg) {
 				t.Errorf("message 应为 %q: %s", wantMsg, rc.Response.Body())
@@ -374,9 +367,7 @@ func TestSettingHandler_PutSpeechTooLong(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	if out := getSpeech(t, h); out.Voice != "" {
 		t.Errorf("被拒绝的请求不应写入，Voice = %q", out.Voice)
 	}
@@ -389,9 +380,7 @@ func TestSettingHandler_PutSpeechBadJSON(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 func TestSettingHandler_PutVoiceTrimsModel(t *testing.T) {
@@ -624,9 +613,7 @@ func TestSettingHandler_PutRuntimeRejectsOutOfRange(t *testing.T) {
 				t.Fatalf("status=%d, want 400，body=%s",
 					rc.Response.StatusCode(), rc.Response.Body())
 			}
-			if !strings.Contains(string(rc.Response.Body()), "invalid_request") {
-				t.Errorf("响应应含 invalid_request，得到 %s", rc.Response.Body())
-			}
+			assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 		})
 	}
 }
@@ -705,9 +692,7 @@ func TestSettingHandler_PutRuntimeRejectsMissingRateLimit(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400，body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	// 守卫的 400 与越界的 400 同为 invalid_request，靠消息区分
 	if !strings.Contains(string(rc.Response.Body()), "rate_limit") {
 		t.Errorf("响应应指明缺少 rate_limit 分区，得到 %s", rc.Response.Body())
@@ -728,9 +713,7 @@ func TestSettingHandler_PutRuntimeRejectsBadRateLimit(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	if h.limiter.Config() != before {
 		t.Error("越界请求不应改动限流器")
 	}
@@ -850,9 +833,7 @@ func TestSettingHandler_PutRuntimeRejectsMissingSchedule(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status=%d, want 400，body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	if !strings.Contains(string(rc.Response.Body()), "schedule") {
 		t.Errorf("响应应指明缺少 schedule 分区，得到 %s", rc.Response.Body())
 	}

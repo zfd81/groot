@@ -4,10 +4,10 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -49,12 +49,14 @@ func (h *ToolsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		if h.registry == nil {
 			h.logger.Info("X-Agent-Name 校验失败：SubAgentRegistry 未初始化",
 				zap.String("requested_agent", requestedAgent))
-			rc.JSON(400, utils.H{"status": "unknown_agent", "message": "Unknown agent: " + requestedAgent})
+			errbody.Write(rc, 400, "Unknown agent: "+requestedAgent,
+				errbody.TypeInvalidRequest, "X-Agent-Name", errbody.CodeUnknownAgent)
 			return
 		}
 		entry, ok := h.registry.Get(requestedAgent)
 		if !ok {
-			rc.JSON(400, utils.H{"status": "unknown_agent", "message": "Unknown agent: " + requestedAgent})
+			errbody.Write(rc, 400, "Unknown agent: "+requestedAgent,
+				errbody.TypeInvalidRequest, "X-Agent-Name", errbody.CodeUnknownAgent)
 			return
 		}
 		mgr = entry.MCPManager

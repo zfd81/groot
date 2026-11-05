@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/auth"
 	"github.com/zfd81/groot/internal/config"
@@ -97,7 +98,7 @@ func (h *APIKeysHandler) List(ctx context.Context, rc *app.RequestContext) {
 	list, err := h.keys.List(ctx)
 	if err != nil {
 		h.log.Error("API Key 列表查询失败: " + err.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	now := apiKeyNow()
@@ -112,47 +113,50 @@ func (h *APIKeysHandler) List(ctx context.Context, rc *app.RequestContext) {
 func (h *APIKeysHandler) Create(ctx context.Context, rc *app.RequestContext) {
 	var req apiKeyCreateRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "名称不能为空"})
+		errbody.Write(rc, 400, "名称不能为空", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	// 数据库列为 VARCHAR(64)，超长会落到底层驱动错误（500）；按字节数校验与列宽语义一致
 	if len(req.Name) > 64 {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "名称长度不能超过 64 个字符"})
+		errbody.Write(rc, 400, "名称长度不能超过 64 个字符", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	// Cookie 通道的 caller 固定为 "web"，同名 API Key 会在限流/日志维度与 Web 会话混同
 	if req.Name == "web" {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "web 为系统保留名称"})
+		errbody.Write(rc, 400, "web 为系统保留名称", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	// 租户是会话隔离的边界，由 API Key 记录绑定、不可通过请求头指定；
-	// 标识规则与 X-User-ID 请求头相同（middleware.ValidIdentifier）
+	// 标识规则与 user 请求头相同（middleware.ValidIdentifier）
 	tenant, ok := middleware.ValidIdentifier(req.TenantID)
 	if !ok {
-		rc.JSON(400, utils.H{"status": "invalid_tenant", "message": "租户标识不能为空，且只能包含字母、数字、下划线、短横线，长度不超过 64"})
+		errbody.Write(rc, 400, "租户标识不能为空，且只能包含字母、数字、下划线、短横线，长度不超过 64",
+			errbody.TypeInvalidRequest, "", "invalid_tenant")
 		return
 	}
 	expFn, ok := expiresInOptions[req.ExpiresIn]
 	if !ok {
-		rc.JSON(400, utils.H{"status": "invalid_expires_in", "message": "过期时间只支持 1d/7d/1mo/6mo/1y/10y"})
+		errbody.Write(rc, 400, "过期时间只支持 1d/7d/1mo/6mo/1y/10y",
+			errbody.TypeInvalidRequest, "", "invalid_expires_in")
 		return
 	}
 	if !validatePermissions(req.Permissions) {
-		rc.JSON(400, utils.H{"status": "invalid_permissions", "message": "权限范围为空或包含非法权限点"})
+		errbody.Write(rc, 400, "权限范围为空或包含非法权限点",
+			errbody.TypeInvalidRequest, "", "invalid_permissions")
 		return
 	}
 
 	if _, err := h.keys.GetByName(ctx, req.Name); err == nil {
-		rc.JSON(409, utils.H{"status": "name_exists", "message": "名称已存在"})
+		errbody.Write(rc, 409, "名称已存在", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	} else if !errors.Is(err, repo.ErrNotFound) {
 		h.log.Error("API Key 名称查重失败: " + err.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -178,18 +182,18 @@ func (h *APIKeysHandler) Create(ctx context.Context, rc *app.RequestContext) {
 		// 并发重名兜底：查重与写入非原子，两请求同时通过 GetByName 后，
 		// 后写入者会撞名称唯一约束——此时应返回 409 而非 500。
 		if _, err := h.keys.GetByName(ctx, req.Name); err == nil {
-			rc.JSON(409, utils.H{"status": "name_exists", "message": "名称已存在"})
+			errbody.Write(rc, 409, "名称已存在", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 			return
 		}
 		h.log.Error("API Key 创建失败: " + createErr.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
 	token, err := auth.Sign(k, h.secret)
 	if err != nil {
 		h.log.Error("API Key 签发失败: " + err.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	info := toAPIKeyInfo(k, apiKeyNow())
@@ -200,18 +204,18 @@ func (h *APIKeysHandler) Create(ctx context.Context, rc *app.RequestContext) {
 func (h *APIKeysHandler) Token(ctx context.Context, rc *app.RequestContext) {
 	k, err := h.keys.GetByID(ctx, rc.Param("id"))
 	if errors.Is(err, repo.ErrNotFound) {
-		rc.JSON(404, utils.H{"status": "not_found", "message": "API Key 不存在"})
+		errbody.Write(rc, 404, "API Key 不存在", errbody.TypeInvalidRequest, "", "not_found")
 		return
 	}
 	if err != nil {
 		h.log.Error("API Key 查询失败: " + err.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	token, err := auth.Sign(k, h.secret)
 	if err != nil {
 		h.log.Error("API Key 还原失败: " + err.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, utils.H{"token": token})
@@ -221,12 +225,12 @@ func (h *APIKeysHandler) Token(ctx context.Context, rc *app.RequestContext) {
 func (h *APIKeysHandler) Delete(ctx context.Context, rc *app.RequestContext) {
 	err := h.keys.DeleteByID(ctx, rc.Param("id"))
 	if errors.Is(err, repo.ErrNotFound) {
-		rc.JSON(404, utils.H{"status": "not_found", "message": "API Key 不存在"})
+		errbody.Write(rc, 404, "API Key 不存在", errbody.TypeInvalidRequest, "", "not_found")
 		return
 	}
 	if err != nil {
 		h.log.Error("API Key 删除失败: " + err.Error())
-		rc.JSON(500, utils.H{"status": "internal_error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, utils.H{"status": "ok"})

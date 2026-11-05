@@ -138,7 +138,6 @@ schedule:
 security:
   auth:
     secret: "deadbeef"
-    header_name: X-Groot-Key
   rate_limit:
     enabled: true
     default_qps: 25
@@ -165,7 +164,7 @@ message:
 	if !lb.ScheduleEnabled {
 		t.Error("schedule.enabled=true 未交出")
 	}
-	if lb.Auth.Secret != "deadbeef" || lb.Auth.HeaderName != "X-Groot-Key" {
+	if lb.Auth.Secret != "deadbeef" {
 		t.Errorf("auth 未交出: %+v", lb.Auth)
 	}
 	if !lb.RateLimit.Enabled || lb.RateLimit.DefaultQPS != 25 {

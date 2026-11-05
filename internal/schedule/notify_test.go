@@ -105,7 +105,7 @@ type fakeExecutor struct {
 	err       *agent.TaskError
 }
 
-func (f *fakeExecutor) Execute(ctx context.Context, sessionID string, task *agent.Task, sse *agent.SSEWriter) {
+func (f *fakeExecutor) Execute(ctx context.Context, sessionID string, task *agent.Task, events agent.EventWriter) {
 	f.calls++
 	f.sessionID = sessionID
 	f.task = task

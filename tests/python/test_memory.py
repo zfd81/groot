@@ -8,6 +8,8 @@ history.json / chats/*.json 文件；本文件全部通过 API 断言：
 - round_count / status 追踪
 """
 
+import json
+
 import pytest
 import requests
 from conftest import BASE_URL, SSEClient, assert_session_id_format
@@ -18,17 +20,16 @@ class TestSessionHistoryFormat:
 
     def test_session_history_exists(self, server, api_headers):
         """TC-MEM-001: 对话后可通过 API 查询会话历史"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         # 记忆已入库，直接通过 API 验证
         detail_response = requests.get(
@@ -39,17 +40,16 @@ class TestSessionHistoryFormat:
 
     def test_session_history_structure(self, server, api_headers):
         """TC-MEM-002: 会话历史结构验证（history 与 messages 字段）"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         detail_response = requests.get(
             f"{BASE_URL}/sess/{session_id}",
@@ -81,27 +81,27 @@ class TestSessionHistoryFormat:
     def test_session_history_multiple_rounds(self, server, api_headers):
         """TC-MEM-003: 会话历史多轮记录"""
         # 第一轮
-        payload1 = {"instruction": "第一轮"}
+        payload1 = {"messages": [{"role": "user", "content": "第一轮"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)
+        session_id = SSEClient(response1).get_session_id()
 
         # 第二轮
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "第二轮"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "第二轮"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
@@ -127,18 +127,18 @@ class TestChatRecordFormat:
 
     def test_chat_record_exists(self, server, api_headers):
         """TC-MEM-004: 对话后可通过 API 查询对话记录"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        chat_id = response.headers.get("X-Chat-ID")
-        SSEClient(response)
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
+        chat_id = sse.get_chat_id()
 
         # 记忆已入库，通过 API 验证
         detail_response = requests.get(
@@ -150,18 +150,18 @@ class TestChatRecordFormat:
 
     def test_chat_record_structure(self, server, api_headers):
         """TC-MEM-005: 对话记录结构验证（ChatRecord 字段）"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        chat_id = response.headers.get("X-Chat-ID")
-        SSEClient(response)
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
+        chat_id = sse.get_chat_id()
 
         detail_response = requests.get(
             f"{BASE_URL}/chat/{session_id}/{chat_id}",
@@ -204,17 +204,16 @@ class TestSessionIDFormat:
 
         会话数据已入库，不再有会话目录；API 保留 path 字段（兼容），值恒为空串。
         """
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         # 验证 session_id 无 sess_ 前缀
         assert not session_id.startswith("sess_")
@@ -236,17 +235,16 @@ class TestMemoryRoundTracking:
     def test_round_count_in_session(self, server, api_headers):
         """TC-MEM-010: round_count 正确"""
         # 第一轮
-        payload1 = {"instruction": "第一轮"}
+        payload1 = {"messages": [{"role": "user", "content": "第一轮"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)
+        session_id = SSEClient(response1).get_session_id()
 
         # 查询会话
         detail_response = requests.get(
@@ -258,14 +256,15 @@ class TestMemoryRoundTracking:
         assert data["session"]["round_count"] == 1
 
         # 第二轮
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "第二轮"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "第二轮"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
@@ -287,17 +286,16 @@ class TestMemoryStatusTracking:
 
     def test_status_success(self, server, api_headers):
         """TC-MEM-011: 成功对话 status 为 completed"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         # 查询历史
         detail_response = requests.get(
@@ -313,16 +311,31 @@ class TestMemoryStatusTracking:
 
     def test_status_cancelled(self, server, api_headers):
         """TC-MEM-012: 断开 SSE 后对话被终止"""
-        payload = {"instruction": "长任务"}
+        payload = {"messages": [{"role": "user", "content": "长任务"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
+        # 流式响应不再携带会话标识响应头，从首个 chunk 的顶层 session_id 取值；
+        # 一旦拿到就断开，模拟调用方中途停止生成。
+        session_id = None
+        for line in response.iter_lines():
+            if not line:
+                continue
+            text = line.decode("utf-8") if isinstance(line, bytes) else line
+            if not text.startswith("data:"):
+                continue
+            body = text[5:].strip()
+            if not body or body == "[DONE]":
+                continue
+            session_id = json.loads(body).get("session_id")
+            if session_id:
+                break
+        assert session_id
 
         # DELETE 端点已删除，返回 404
         cancel_response = requests.delete(
@@ -333,8 +346,6 @@ class TestMemoryStatusTracking:
 
         # 关闭 SSE 流即取消
         response.close()
-
-        SSEClient(response)
 
         # 等服务器完成写入
         import time

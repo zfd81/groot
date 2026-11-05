@@ -218,7 +218,10 @@ class TestDefaultModel:
         for method in (web.put, web.delete):
             resp = method(f"{BASE_URL}/web/models/{model_name}/default?type=audio")
             assert resp.status_code == 400, resp.text
-            assert resp.json()["status"] == "invalid_request"
+            error = resp.json()["error"]
+            assert error["code"] == "invalid_request"
+            assert error["type"] == "invalid_request_error"
+            assert error["param"] == "type"
 
     def test_clear_chat_default_rejected(self, web):
         default_chat = web.get(f"{BASE_URL}/web/models").json()["defaults"]["chat"]
@@ -226,7 +229,7 @@ class TestDefaultModel:
             pytest.skip("库中无默认对话模型")
         resp = web.delete(f"{BASE_URL}/web/models/{default_chat}/default?type=chat")
         assert resp.status_code == 400, resp.text
-        assert resp.json()["status"] == "default_chat_required"
+        assert resp.json()["error"]["code"] == "default_chat_required"
         assert web.get(f"{BASE_URL}/web/models").json()["defaults"]["chat"] == default_chat
 
 
@@ -242,15 +245,23 @@ class TestConnection:
 
 
 class TestChatModelErrors:
-    """chat 引用不存在/禁用模型时应在执行前被拦截并报 400"""
+    """chat 引用不存在/禁用模型时应在执行前被拦截并报 400
+
+    /chat/completions 走 Web Cookie 鉴权（本文件的 web fixture），模型名经请求体 model 字段传递。
+    """
 
     def test_chat_with_unknown_model(self, web):
         resp = web.post(
-            f"{BASE_URL}/chat",
-            headers={"X-Model-Name": "no-such-model"},
-            json={"instruction": "hi"},
+            f"{BASE_URL}/chat/completions",
+            json={
+                "model": "no-such-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
         )
         assert resp.status_code == 400
+        error = resp.json()["error"]
+        assert error["code"] == "model_not_found"
+        assert error["param"] == "model"
 
     def test_chat_with_disabled_model(self, web):
         a = f"t-{uuid.uuid4().hex[:8]}"
@@ -264,11 +275,16 @@ class TestChatModelErrors:
                            json=model_body(b, api_key="", enabled=False)).status_code == 200
 
             resp = web.post(
-                f"{BASE_URL}/chat",
-                headers={"X-Model-Name": b},
-                json={"instruction": "hi"},
+                f"{BASE_URL}/chat/completions",
+                json={
+                    "model": b,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
             )
             assert resp.status_code == 400
+            error = resp.json()["error"]
+            assert error["code"] == "model_not_found"
+            assert error["param"] == "model"
         finally:
             if orig_default:
                 web.put(f"{BASE_URL}/web/models/{orig_default}/default")

@@ -11,7 +11,7 @@
 用例点：
 - GET 响应体只含 model、auto_send
 - PUT 清空 model 保存成功，回读为空串
-- PUT 不存在的模型返回 400 invalid_model，消息含模型名
+- PUT 不存在的模型返回 400 model_not_found，消息含模型名
 - PUT 非法 JSON 返回 400 invalid_request
 - 未登录访问返回 401
 
@@ -88,15 +88,16 @@ class TestVoiceSettings:
         name = f"nope-{uuid.uuid4().hex[:8]}"
         resp = web.put(VOICE_URL, json={"model": name, "auto_send": False}, timeout=10)
         assert resp.status_code == 400
-        body = resp.json()
-        assert body["status"] == "invalid_model"
-        assert name in body["message"]
+        err = resp.json()["error"]
+        assert err["code"] == "model_not_found"
+        assert err["param"] == "model"
+        assert name in err["message"]
 
     def test_bad_json(self, web):
         resp = web.put(VOICE_URL, data="{not json",
                        headers={"Content-Type": "application/json"}, timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        assert resp.json()["error"]["code"] == "invalid_request"
 
     def test_unauthorized(self):
         resp = requests.get(VOICE_URL, timeout=10)

@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/cluster"
 	"github.com/zfd81/groot/internal/lifecycle"
@@ -67,7 +67,7 @@ func (h *ClusterHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	list, err := h.members.ListAll(ctx)
 	if err != nil {
 		h.log.Error("列出集群成员失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "读取集群成员失败"})
+		errbody.Write(rc, 500, "读取集群成员失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -99,28 +99,29 @@ func (h *ClusterHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 func (h *ClusterHandler) Restart(ctx context.Context, rc *app.RequestContext) {
 	regID := rc.Param("reg_id")
 	if h.members == nil {
-		rc.JSON(404, utils.H{"status": "error", "code": "member_not_found", "message": "实例不存在"})
+		errbody.Write(rc, 404, "实例不存在", errbody.TypeInvalidRequest, "", "member_not_found")
 		return
 	}
 	// 仅校验存在性：成员在投递前消失也无妨——消息 2 分钟过期，且重启后的新 reg_id 不会匹配旧目标。
 	if _, err := h.members.Get(ctx, regID); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			rc.JSON(404, utils.H{"status": "error", "code": "member_not_found", "message": "实例不存在"})
+			errbody.Write(rc, 404, "实例不存在", errbody.TypeInvalidRequest, "", "member_not_found")
 			return
 		}
 		h.log.Error("查询集群成员失败", zap.String("reg_id", regID), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "读取集群成员失败"})
+		errbody.Write(rc, 500, "读取集群成员失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
 	self := regID == h.selfID()
 	if self && !h.restartSupported {
-		rc.JSON(409, utils.H{"status": "error", "code": "restart_unsupported", "message": "实例以单进程模式运行，不支持重启"})
+		errbody.Write(rc, 409, "实例以单进程模式运行，不支持重启",
+			errbody.TypeInvalidRequest, "", "restart_unsupported")
 		return
 	}
 	if h.sender == nil {
 		h.log.Error("集群消息服务未挂接，无法投递重启指令")
-		rc.JSON(500, utils.H{"status": "error", "message": "集群消息服务不可用"})
+		errbody.Write(rc, 500, "集群消息服务不可用", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -138,7 +139,7 @@ func (h *ClusterHandler) Restart(ctx context.Context, rc *app.RequestContext) {
 	}
 	if err := h.sender.SendMessage(ctx, msg); err != nil {
 		h.log.Error("投递重启指令失败", zap.String("reg_id", regID), zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "投递重启指令失败"})
+		errbody.Write(rc, 500, "投递重启指令失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	h.log.Info("已投递重启指令", zap.String("reg_id", regID), zap.Bool("self", self), zap.Any("requested_by", requestedBy))

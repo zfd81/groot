@@ -84,8 +84,7 @@ type RateLimitConfig struct {
 
 // AuthConfig holds authentication settings（认证始终开启，无开关）
 type AuthConfig struct {
-	HeaderName string `yaml:"header_name"` // API Key 请求头名称，默认 X-API-Key
-	Secret     string `yaml:"secret"`      // JWT 签名密钥；存于数据库配置表，启动时由 EnsureAuthSecret 兜底生成
+	Secret string `yaml:"secret"` // JWT 签名密钥；存于数据库配置表，启动时由 EnsureAuthSecret 兜底生成
 }
 
 // LoggingConfig holds logging settings

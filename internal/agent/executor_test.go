@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,9 +86,6 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 		log,
 	)
 
-	buf := &bufFlusher{}
-	sse := NewSSEWriter(buf, sessionID, "chat_exec_001", 1, "test-model", 1760947200)
-
 	task := &Task{
 		ID:          "chat_exec_001",
 		Round:       1,
@@ -94,7 +94,7 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 		StartTime:   time.Now(),
 	}
 
-	e.Execute(context.Background(), sessionID, task, sse)
+	e.Execute(context.Background(), sessionID, task, NopEventWriter())
 
 	if task.Status != StatusFailed {
 		t.Errorf("soloErr 路径应将任务标记为 failed，实际 %v", task.Status)
@@ -119,6 +119,118 @@ func TestExecutor_ExecuteLogsCarrySessionID(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "保存对话记录失败") {
 		t.Errorf("期望捕获到「保存对话记录失败」日志，实际: %s", joined)
+	}
+}
+
+// TestExecutor_NilEventWriterDoesNotPanic Execute 的第四参数传 nil 时按 NopEventWriter 处理，
+// 不会因空接口调用而 panic，任务状态照常回写。
+func TestExecutor_NilEventWriterDoesNotPanic(t *testing.T) {
+	const sessionID = "sess_exec_nil"
+
+	e := NewExecutor(
+		t.TempDir(),
+		newRealMemoryManager(t),
+		nil,
+		nil,
+		nil, // subAgentRegistry 为 nil -> soloErr，提前返回
+		nil,
+		nil,
+		setting.New(config.Bootstrap{}, nil),
+		logger.NewNop(),
+	)
+
+	task := &Task{
+		ID:          "chat_exec_nil",
+		Round:       1,
+		Instruction: "ping",
+		AgentName:   "not-exist-agent", // 非主 Agent -> 进入 Solo 分支
+		StartTime:   time.Now(),
+	}
+
+	// 传字面 nil：Execute 内部必须替换为 NopEventWriter() 后再写出事件。
+	e.Execute(context.Background(), sessionID, task, nil)
+
+	if task.Status != StatusFailed {
+		t.Errorf("soloErr 路径应将任务标记为 failed，实际 %v", task.Status)
+	}
+	if task.Error == nil || task.Error.Code != "subagent_unavailable" {
+		t.Errorf("soloErr 路径应回写 subagent_unavailable 错误，实际 %+v", task.Error)
+	}
+}
+
+// TestExecute_PassesHistoryForToEngineRun 用 AST 锁住 Execute 内对 engine.Run 的调用接线：
+// 第 5 个实参（索引 4）必须是 historyFor(...) 调用。
+// 直接调 historyFor 的测试只锁住 helper 实现，锁不住调用点，本测试补上这一环。
+func TestExecute_PassesHistoryForToEngineRun(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "executor.go", nil, 0)
+	if err != nil {
+		t.Fatalf("解析 executor.go 失败: %v", err)
+	}
+
+	// 1. 找到 func (e *Executor) Execute 声明
+	var executeDecl *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Name == nil || fn.Name.Name != "Execute" {
+			continue
+		}
+		recv := fn.Recv.List
+		if len(recv) != 1 {
+			continue
+		}
+		star, ok := recv[0].Type.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		ident, ok := star.X.(*ast.Ident)
+		if !ok || ident.Name != "Executor" {
+			continue
+		}
+		executeDecl = fn
+		break
+	}
+	if executeDecl == nil {
+		t.Fatal("executor.go 中未找到 func (e *Executor) Execute 声明")
+	}
+
+	// 2. 在 Execute 体内找到对 engine.Run( 的调用表达式
+	var runCall *ast.CallExpr
+	ast.Inspect(executeDecl.Body, func(n ast.Node) bool {
+		if runCall != nil {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "Run" {
+			return true
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok || x.Name != "engine" {
+			return true
+		}
+		runCall = call
+		return false
+	})
+	if runCall == nil {
+		t.Fatal("Execute 中未找到对 engine.Run 的调用")
+	}
+
+	// 3. 断言第 5 个实参是 historyFor(...) 调用
+	if len(runCall.Args) < 5 {
+		t.Fatalf("engine.Run 实参个数 = %d，want >= 5", len(runCall.Args))
+	}
+	arg := runCall.Args[4]
+	call, ok := arg.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("engine.Run 第 5 个实参不是 historyFor(...) 调用，实际是 %T", arg)
+	}
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok || ident.Name != "historyFor" {
+		t.Fatalf("engine.Run 第 5 个实参不是 historyFor(...) 调用，Fun 实际是 %T", call.Fun)
 	}
 }
 

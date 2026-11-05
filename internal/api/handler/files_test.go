@@ -12,6 +12,9 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+
+	"github.com/zfd81/groot/internal/api/errbody"
+	"github.com/zfd81/groot/internal/webfiles"
 )
 
 // newFilesHandlerForTest 在临时 home 上构造 FilesHandler。
@@ -56,6 +59,28 @@ func jsonCtx(method, body string) *app.RequestContext {
 	return rc
 }
 
+// assertEnvelopeError 断言响应为期望的 OpenAI 错误封套：状态码、type 与 code。
+// Task 16 涉及的 Web/定时任务 handler 测试共用。
+func assertEnvelopeError(t *testing.T, rc *app.RequestContext, status int, typ, code string) {
+	t.Helper()
+	if got := rc.Response.StatusCode(); got != status {
+		t.Fatalf("status = %d, want %d; body=%s", got, status, rc.Response.Body())
+	}
+	envl := envelopeOf(t, rc).Error
+	if envl.Type != typ {
+		t.Errorf("type = %q, want %s; body=%s", envl.Type, typ, rc.Response.Body())
+	}
+	if code == "" {
+		if envl.Code != nil {
+			t.Errorf("code = %q, want null; body=%s", *envl.Code, rc.Response.Body())
+		}
+		return
+	}
+	if envl.Code == nil || *envl.Code != code {
+		t.Errorf("code = %v, want %s; body=%s", envl.Code, code, rc.Response.Body())
+	}
+}
+
 // TestFilesHandler_List 验证列表成功响应与 home 字段。
 func TestFilesHandler_List(t *testing.T) {
 	h, _ := newFilesHandlerForTest(t)
@@ -84,27 +109,30 @@ func TestFilesHandler_List(t *testing.T) {
 	}
 }
 
-// TestFilesHandler_ErrorMapping 验证错误码映射：404/403/400。
+// TestFilesHandler_ErrorMapping 验证错误封套映射：404/403/413/400。
 func TestFilesHandler_ErrorMapping(t *testing.T) {
-	h, _ := newFilesHandlerForTest(t)
+	h, home := newFilesHandlerForTest(t)
 
 	rc := getCtx("path=groot.db")
 	h.Content(context.Background(), rc)
-	if rc.Response.StatusCode() != 404 {
-		t.Errorf("隐藏文件 status = %d, want 404", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "not_found")
 
 	rc = jsonCtx(consts.MethodPut, `{"path":"config.yaml","content":"x"}`)
 	h.Save(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("只读保存 status = %d, want 403", rc.Response.StatusCode())
+	assertEnvelopeError(t, rc, 403, errbody.TypePermission, "read_only")
+
+	// 内容超出读取上限 → 413 file_too_large
+	big := filepath.Join(home, "mcp", "big.txt")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("x"), webfiles.MaxTextSize+1), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	rc = getCtx("path=mcp/big.txt")
+	h.Content(context.Background(), rc)
+	assertEnvelopeError(t, rc, 413, errbody.TypeInvalidRequest, errbody.CodeFileTooLarge)
 
 	rc = jsonCtx(consts.MethodPut, `not-json`)
 	h.Save(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Errorf("非法 JSON status = %d, want 400", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestFilesHandler_SaveAndScaffold 验证保存与 scaffold 成功路径。
@@ -194,12 +222,7 @@ func TestFilesHandler_Delete(t *testing.T) {
 	// 非空的二级目录 → 409 not_empty
 	rc := deleteCtx("path=skills/demo")
 	h.Delete(context.Background(), rc)
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("非空目录 status = %d, want 409", rc.Response.StatusCode())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "not_empty") {
-		t.Errorf("响应体缺少 not_empty: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "not_empty")
 
 	rc = deleteCtx("path=skills/demo/tmp.txt")
 	h.Delete(context.Background(), rc)
@@ -213,12 +236,7 @@ func TestFilesHandler_Delete(t *testing.T) {
 	// home 一级目录（即使为空）→ 403 forbidden
 	rc = deleteCtx("path=mcp")
 	h.Delete(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("一级目录 status = %d, want 403", rc.Response.StatusCode())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "forbidden") {
-		t.Errorf("响应体缺少 forbidden: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 403, errbody.TypePermission, errbody.CodeInsufficientPermissions)
 }
 
 // TestFilesHandler_Rename 验证改名成功与目标已存在冲突。
@@ -241,14 +259,10 @@ func TestFilesHandler_Rename(t *testing.T) {
 	// GROOT.md 与一级目录禁止改名
 	rc = jsonCtx(consts.MethodPost, `{"from":"GROOT.md","to":"GROOT2.md"}`)
 	h.Rename(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("改名 GROOT.md status = %d, want 403", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 403, errbody.TypePermission, errbody.CodeInsufficientPermissions)
 	rc = jsonCtx(consts.MethodPost, `{"from":"mcp","to":"mcp2"}`)
 	h.Rename(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("改名一级目录 status = %d, want 403", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 403, errbody.TypePermission, errbody.CodeInsufficientPermissions)
 
 	for _, name := range []string{"a.txt", "b.txt"} {
 		if err := os.WriteFile(filepath.Join(home, "skills", "demo", name), []byte("x"), 0o644); err != nil {
@@ -257,12 +271,7 @@ func TestFilesHandler_Rename(t *testing.T) {
 	}
 	rc = jsonCtx(consts.MethodPost, `{"from":"skills/demo/a.txt","to":"skills/demo/b.txt"}`)
 	h.Rename(context.Background(), rc)
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("目标已存在 status = %d, want 409", rc.Response.StatusCode())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "exists") {
-		t.Errorf("响应体缺少 exists: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "exists")
 }
 
 // TestFilesHandler_Upload 验证上传：缺 file 字段 400、home 根 403、子目录 200。
@@ -271,16 +280,12 @@ func TestFilesHandler_Upload(t *testing.T) {
 
 	rc := jsonCtx(consts.MethodPost, `{}`)
 	h.Upload(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Errorf("缺 file 字段 status = %d, want 400", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 
 	// 工作空间根目录不接受上传：根下的一级目录是结构性目录，面板删不掉也改不了名。
 	rc = multipartCtx(t, true, "", "root.txt", "data")
 	h.Upload(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("home 根上传 status = %d, want 403", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 403, errbody.TypePermission, errbody.CodeInsufficientPermissions)
 	if _, err := os.Lstat(filepath.Join(home, "root.txt")); !os.IsNotExist(err) {
 		t.Errorf("根目录不应残留 root.txt, got %v", err)
 	}
@@ -327,9 +332,7 @@ func TestFilesHandler_Upload(t *testing.T) {
 	// relpath 带绝对路径：首段空串不过 validName，整体 400 且不建目录
 	rc = multipartRelpathCtx(t, true, "mcp", "/etc/passwd", "passwd", "x")
 	h.Upload(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Errorf("绝对路径 relpath status = %d, want 400", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	if _, err := os.Lstat(filepath.Join(home, "mcp", "etc")); !os.IsNotExist(err) {
 		t.Errorf("非法 relpath 不应建出 mcp/etc, got %v", err)
 	}
@@ -353,9 +356,7 @@ func TestFilesHandler_Download(t *testing.T) {
 
 	rc = getCtx("path=skills")
 	h.Download(context.Background(), rc)
-	if rc.Response.StatusCode() != 404 {
-		t.Errorf("目录下载 status = %d, want 404", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "not_found")
 }
 
 // TestFilesHandler_UploadPrepare 验证目录上传占位端点：成功、重名 409、
@@ -375,25 +376,16 @@ func TestFilesHandler_UploadPrepare(t *testing.T) {
 	// 重名 → 409，前端据此终止整批上传
 	rc = jsonCtx(consts.MethodPost, `{"path":"skills","name":"uploaded-dir"}`)
 	h.UploadPrepare(context.Background(), rc)
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("重名 status = %d, want 409", rc.Response.StatusCode())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "exists") {
-		t.Errorf("响应体缺少 exists: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "exists")
 
 	rc = jsonCtx(consts.MethodPost, `{"path":"nope","name":"x"}`)
 	h.UploadPrepare(context.Background(), rc)
-	if rc.Response.StatusCode() != 404 {
-		t.Errorf("父目录不存在 status = %d, want 404", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "not_found")
 
 	// 工作空间根目录不接受上传，占位同样被拒
 	rc = jsonCtx(consts.MethodPost, `{"path":"","name":"x"}`)
 	h.UploadPrepare(context.Background(), rc)
-	if rc.Response.StatusCode() != 403 {
-		t.Errorf("home 根 status = %d, want 403", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 403, errbody.TypePermission, errbody.CodeInsufficientPermissions)
 	if _, err := os.Lstat(filepath.Join(home, "x")); !os.IsNotExist(err) {
 		t.Errorf("根目录不应残留 x, got %v", err)
 	}
@@ -402,16 +394,12 @@ func TestFilesHandler_UploadPrepare(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{"path": "skills", "name": name})
 		rc = jsonCtx(consts.MethodPost, string(body))
 		h.UploadPrepare(context.Background(), rc)
-		if rc.Response.StatusCode() != 400 {
-			t.Errorf("非法名 %q status = %d, want 400", name, rc.Response.StatusCode())
-		}
+		assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	}
 
 	rc = jsonCtx(consts.MethodPost, `{"path":`)
 	h.UploadPrepare(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Errorf("非法 JSON status = %d, want 400", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestFilesHandler_ScaffoldForAgent 验证 agent 字段透传：
@@ -443,13 +431,9 @@ func TestFilesHandler_ScaffoldForAgent(t *testing.T) {
 
 	rc = jsonCtx(consts.MethodPost, `{"kind":"skill","name":"s","agent":"ghost"}`)
 	h.Scaffold(context.Background(), rc)
-	if rc.Response.StatusCode() != 404 {
-		t.Errorf("子 Agent 不存在应 404, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "not_found")
 
 	rc = jsonCtx(consts.MethodPost, `{"kind":"agent","name":"n","agent":"bot"}`)
 	h.Scaffold(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Errorf("kind=agent 携带 agent 应 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }

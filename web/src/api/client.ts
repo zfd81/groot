@@ -58,10 +58,15 @@ async function request<T>(
   }
 
   if (!resp.ok) {
+    // 错误信封：{"error":{"message","type","param","code"}}
+    const err = data && typeof data === 'object' ? data.error : null
     const message =
-      (data && (data.message || data.error)) ||
+      (err && typeof err.message === 'string' && err.message) ||
       t('error.requestFailed', { status: resp.status })
-    const code = data && (data.code || data.status)
+    const code =
+      err && typeof err === 'object'
+        ? (err.code ?? err.type ?? undefined)
+        : undefined
     throw new ApiError(resp.status, message, code)
   }
 

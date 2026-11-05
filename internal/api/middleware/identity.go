@@ -8,7 +8,7 @@ import (
 )
 
 // UserIDHeader 携带终端用户标识的请求头，由 API Key 调用方在转发请求时填入。
-const UserIDHeader = "X-User-ID"
+const UserIDHeader = "user"
 
 // identifierPattern 租户 / 用户标识允许的字符集：字母、数字、下划线、连字符。
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)

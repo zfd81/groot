@@ -2,11 +2,11 @@ package handler
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/memory"
 )
 
@@ -28,16 +28,12 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	chatID := rc.Param("cid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
 	if chatID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"chat_id 参数缺失"}`))
+		writeMissingChatID(rc)
 		return
 	}
 
@@ -48,18 +44,15 @@ func (h *DetailHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 
 	// 检查会话是否存在且归属于调用者（归属不符与不存在同样返回 404）
 	if !ownsOrAdmin(h.memory, owner, sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))
+		writeSessionNotFound(rc)
 		return
 	}
 
 	// 获取对话记录
 	record, err := h.memory.GetChatRecord(sessionID, chatID)
 	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"chat_not_found","session_id":"%s","chat_id":"%s","message":"对话记录不存在"}`, sessionID, chatID)))
+		errbody.Write(rc, 404, "对话记录不存在",
+			errbody.TypeInvalidRequest, "", errbody.CodeTaskNotFound)
 		return
 	}
 
@@ -75,9 +68,7 @@ func (h *DetailHandler) GetLatest(ctx context.Context, rc *app.RequestContext) {
 	sessionID := rc.Param("sid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
@@ -88,18 +79,14 @@ func (h *DetailHandler) GetLatest(ctx context.Context, rc *app.RequestContext) {
 
 	// 检查会话是否存在且归属于调用者（归属不符与不存在同样返回 404）
 	if !ownsOrAdmin(h.memory, owner, sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sessionID)))
+		writeSessionNotFound(rc)
 		return
 	}
 
 	// 获取最近一次对话记录
 	record, err := h.memory.GetLatestChatRecord(sessionID)
 	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"error","message":"获取对话记录失败"}`))
+		errbody.Write(rc, 500, "获取对话记录失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 

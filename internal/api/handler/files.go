@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/webfiles"
 )
 
@@ -27,25 +28,28 @@ func NewFilesHandler(homeDir string) (*FilesHandler, error) {
 	return &FilesHandler{svc: svc}, nil
 }
 
-// writeFilesError 把 webfiles 错误映射为 HTTP 响应。
+// writeFilesError 把 webfiles 错误映射为 OpenAI 错误信封。
+// 文件面板不在 OpenAI 标准内，未覆盖的细分错误保留原 code 字符串，
+// 只把 type 归一到对应的 HTTP 类。
 func writeFilesError(rc *app.RequestContext, err error) {
 	switch {
 	case errors.Is(err, webfiles.ErrNotFound):
-		rc.JSON(404, utils.H{"status": "not_found", "message": "文件或目录不存在"})
+		errbody.Write(rc, 404, "文件或目录不存在", errbody.TypeInvalidRequest, "", "not_found")
 	case errors.Is(err, webfiles.ErrReadOnly):
-		rc.JSON(403, utils.H{"status": "read_only", "message": "该文件为只读"})
+		errbody.Write(rc, 403, "该文件为只读", errbody.TypePermission, "", "read_only")
 	case errors.Is(err, webfiles.ErrForbidden):
-		rc.JSON(403, utils.H{"status": "forbidden", "message": "该位置不允许此操作"})
+		errbody.Write(rc, 403, "该位置不允许此操作",
+			errbody.TypePermission, "", errbody.CodeInsufficientPermissions)
 	case errors.Is(err, webfiles.ErrExists):
-		rc.JSON(409, utils.H{"status": "exists", "message": "同名文件或目录已存在"})
+		errbody.Write(rc, 409, "同名文件或目录已存在", errbody.TypeInvalidRequest, "", "exists")
 	case errors.Is(err, webfiles.ErrNotEmpty):
-		rc.JSON(409, utils.H{"status": "not_empty", "message": "目录非空，无法删除"})
+		errbody.Write(rc, 409, "目录非空，无法删除", errbody.TypeInvalidRequest, "", "not_empty")
 	case errors.Is(err, webfiles.ErrTooLarge):
-		rc.JSON(413, utils.H{"status": "too_large", "message": "内容超出大小限制"})
+		errbody.Write(rc, 413, "内容超出大小限制", errbody.TypeInvalidRequest, "", errbody.CodeFileTooLarge)
 	case errors.Is(err, webfiles.ErrInvalid):
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "参数非法"})
+		errbody.Write(rc, 400, "参数非法", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 	default:
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 	}
 }
 
@@ -80,7 +84,7 @@ func (h *FilesHandler) Save(ctx context.Context, rc *app.RequestContext) {
 		Content string `json:"content"`
 	}
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
+		errbody.Write(rc, 400, "请求体解析失败", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	if err := h.svc.Write(req.Path, req.Content); err != nil {
@@ -97,7 +101,7 @@ func (h *FilesHandler) Rename(ctx context.Context, rc *app.RequestContext) {
 		To   string `json:"to"`
 	}
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
+		errbody.Write(rc, 400, "请求体解析失败", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	if err := h.svc.Rename(req.From, req.To); err != nil {
@@ -129,7 +133,7 @@ func (h *FilesHandler) UploadPrepare(ctx context.Context, rc *app.RequestContext
 		Name string `json:"name"`
 	}
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
+		errbody.Write(rc, 400, "请求体解析失败", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	if err := h.svc.Mkdir(req.Path, req.Name); err != nil {
@@ -143,7 +147,7 @@ func (h *FilesHandler) UploadPrepare(ctx context.Context, rc *app.RequestContext
 func (h *FilesHandler) Upload(ctx context.Context, rc *app.RequestContext) {
 	fh, err := rc.FormFile("file")
 	if err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "缺少 file 字段"})
+		errbody.Write(rc, 400, "缺少 file 字段", errbody.TypeInvalidRequest, "file", errbody.CodeInvalidRequest)
 		return
 	}
 	// relpath 承载目录上传时文件在所选目录内的相对路径（如 "A/sub/note.md"），
@@ -160,7 +164,7 @@ func (h *FilesHandler) Upload(ctx context.Context, rc *app.RequestContext) {
 		return
 	}
 	if err := rc.SaveUploadedFile(fh, dst); err != nil {
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, utils.H{"status": "success"})
@@ -200,7 +204,7 @@ func (h *FilesHandler) Scaffold(ctx context.Context, rc *app.RequestContext) {
 		Agent string `json:"agent"` // 可选：非空时 skill/mcp 创建到 subagents/<agent>/ 下
 	}
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
+		errbody.Write(rc, 400, "请求体解析失败", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	rel, err := h.svc.Scaffold(req.Kind, req.Name, req.Agent)

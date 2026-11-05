@@ -1,5 +1,24 @@
 // 后端 API 响应类型定义，字段名对齐 groot 服务实际返回。
 
+// 统一错误信封：全部非 2xx 响应的 body 形如
+// {"error":{"message","type","param","code"}}；param 与 code 无值时序列化为 null。
+export interface ApiErrorBody {
+  error: {
+    message: string
+    type: string
+    param: string | null
+    code: string | null
+  }
+}
+
+// OpenAI 内容片段：user 消息的 content 数组元素。
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'input_audio'; input_audio: { data: string; format: string } }
+  | { type: 'file'; file: { filename: string; file_data: string } }
+
+
 export interface SessionSummary {
   session_id: string
   created_at: string

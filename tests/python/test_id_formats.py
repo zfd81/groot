@@ -19,16 +19,17 @@ class TestSessionIdFormat:
 
     def test_new_session_id_format(self, server, api_headers):
         """TC-ID-001: 新会话 session_id 格式"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 验证格式
         assert_session_id_format(session_id)
@@ -37,27 +38,24 @@ class TestSessionIdFormat:
         # 无 sess_ 前缀
         assert not session_id.startswith("sess_")
 
-        SSEClient(response)
-
     def test_session_id_no_prefix(self, server, api_headers):
         """TC-ID-002: session_id 无 sess_ 前缀"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 验证无前缀
         assert not session_id.startswith("sess_")
 
         # 验证通过 API 查询
-        SSEClient(response)
-
         detail_response = requests.get(
             f"{BASE_URL}/sess/{session_id}",
             headers=api_headers
@@ -80,10 +78,10 @@ class TestSessionIdFormat:
         # 记录当前时间
         before_time = datetime.now()
 
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -91,7 +89,8 @@ class TestSessionIdFormat:
 
         after_time = datetime.now()
 
-        session_id = response.headers.get("X-Session-ID")
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 提取时间戳部分
         timestamp_part = session_id.split("_")[0]
@@ -115,20 +114,19 @@ class TestSessionIdFormat:
         assert 0 <= second <= 59
         assert 0 <= millisecond <= 999
 
-        SSEClient(response)
-
     def test_session_id_random_length(self, server, api_headers):
         """TC-ID-004: session_id 随机部分长度"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 验证随机部分
         random_part = session_id.split("_")[1]
@@ -136,24 +134,23 @@ class TestSessionIdFormat:
         assert len(random_part) == 4
         assert random_part.isalnum()  # 字母或数字
 
-        SSEClient(response)
-
 
 class TestChatIdFormat:
     """chat_id 格式测试"""
 
     def test_chat_id_format(self, server, api_headers):
         """TC-ID-005: chat_id 格式"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        chat_id = response.headers.get("X-Chat-ID")
+        sse = SSEClient(response)
+        chat_id = sse.get_chat_id()
 
         # 验证格式
         assert_chat_id_format(chat_id)
@@ -161,20 +158,19 @@ class TestChatIdFormat:
         # 格式：{YYYYMMDDHHMMSSmmm}，17 位纯数字，无前缀
         assert len(chat_id) == 17
 
-        SSEClient(response)
-
     def test_chat_id_no_prefix(self, server, api_headers):
         """TC-ID-006: chat_id 为 17 位纯数字时间戳（无 chat_ 前缀）"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        chat_id = response.headers.get("X-Chat-ID")
+        sse = SSEClient(response)
+        chat_id = sse.get_chat_id()
 
         # 验证无前缀的纯时间戳格式
         assert not chat_id.startswith("chat_")
@@ -182,41 +178,38 @@ class TestChatIdFormat:
         assert len(chat_id) == 17
         assert chat_id.isdigit()
 
-        SSEClient(response)
-
     def test_chat_id_changes_per_round(self, server, api_headers):
         """TC-ID-007: 每轮对话 chat_id 不同"""
         # 第一轮
-        payload1 = {"instruction": "第一轮"}
+        payload1 = {"messages": [{"role": "user", "content": "第一轮"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        chat_id1 = response1.headers.get("X-Chat-ID")
-        session_id = response1.headers.get("X-Session-ID")
-
-        SSEClient(response1)
+        sse1 = SSEClient(response1)
+        chat_id1 = sse1.get_chat_id()
+        session_id = sse1.get_session_id()
 
         # 第二轮
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "第二轮"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "第二轮"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
 
-        chat_id2 = response2.headers.get("X-Chat-ID")
-
-        SSEClient(response2)
+        sse2 = SSEClient(response2)
+        chat_id2 = sse2.get_chat_id()
 
         # 验证 chat_id 不同
         assert chat_id1 != chat_id2
@@ -237,13 +230,13 @@ class TestStepIdFormat:
     def _get_steps(api_headers, instruction="帮我分析数据"):
         """执行一次对话并通过详情接口返回 steps 列表"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": instruction},
+            json={"messages": [{"role": "user", "content": instruction}], "stream": True},
             stream=True
         )
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)  # 等待对话完成
+        sse = SSEClient(response)  # 等待对话完成
+        session_id = sse.get_session_id()
 
         detail_response = requests.get(
             f"{BASE_URL}/chat/{session_id}",
@@ -299,18 +292,17 @@ class TestNestingLevel:
 
     def test_nesting_level_in_chat_record(self, server, api_headers):
         """TC-NEST-005: chat 记录包含 nesting_level"""
-        payload = {"instruction": "帮我分析数据"}
+        payload = {"messages": [{"role": "user", "content": "帮我分析数据"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-
-        SSEClient(response)
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 查询对话详情
         detail_response = requests.get(
@@ -336,19 +328,17 @@ class TestIDGenerationUniqueness:
         session_ids = []
 
         for i in range(10):
-            payload = {"instruction": f"测试{i}"}
+            payload = {"messages": [{"role": "user", "content": f"测试{i}"}], "stream": True}
 
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}/chat/completions",
                 headers=api_headers,
                 json=payload,
                 stream=True
             )
 
-            session_id = response.headers.get("X-Session-ID")
+            session_id = SSEClient(response).get_session_id()
             session_ids.append(session_id)
-
-            SSEClient(response)
 
         # 验证唯一性
         assert len(session_ids) == len(set(session_ids))
@@ -356,36 +346,35 @@ class TestIDGenerationUniqueness:
     def test_multiple_chats_unique_ids(self, server, api_headers):
         """TC-ID-012: 多轮对话 chat_id 唯一"""
         # 第一轮
-        payload1 = {"instruction": "第一轮"}
+        payload1 = {"messages": [{"role": "user", "content": "第一轮"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        chat_ids = [response1.headers.get("X-Chat-ID")]
-
-        SSEClient(response1)
+        sse1 = SSEClient(response1)
+        session_id = sse1.get_session_id()
+        chat_ids = [sse1.get_chat_id()]
 
         # 多轮对话
         for i in range(5):
-            headers = api_headers.copy()
-            headers["X-Session-ID"] = session_id
-
-            payload = {"instruction": f"第{i+2}轮"}
+            payload = {
+                "messages": [{"role": "user", "content": f"第{i+2}轮"}],
+                "session_id": session_id,
+                "stream": True,
+            }
 
             response = requests.post(
-                f"{BASE_URL}/chat",
-                headers=headers,
+                f"{BASE_URL}/chat/completions",
+                headers=api_headers,
                 json=payload,
                 stream=True
             )
 
-            chat_ids.append(response.headers.get("X-Chat-ID"))
-            SSEClient(response)
+            chat_ids.append(SSEClient(response).get_chat_id())
 
         # 验证唯一性
         assert len(chat_ids) == len(set(chat_ids))

@@ -15,7 +15,7 @@ import (
 
 // taskExecutor runs an agent task within a session. *agent.Executor satisfies it.
 type taskExecutor interface {
-	Execute(ctx context.Context, sessionID string, task *agent.Task, sse *agent.SSEWriter)
+	Execute(ctx context.Context, sessionID string, task *agent.Task, events agent.EventWriter)
 }
 
 // Runner executes scheduled tasks

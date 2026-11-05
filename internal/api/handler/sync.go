@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/repo"
 	grootsync "github.com/zfd81/groot/internal/sync"
 )
@@ -57,18 +58,23 @@ func syncErrorStatus(err error) (int, string) {
 	}
 }
 
+// writeSyncError 把同步错误写成 OpenAI 错误信封。
+// sync_disabled 不在 OpenAI 标准内，保留原 code 字符串，type 归为 invalid_request_error。
 func writeSyncError(rc *app.RequestContext, err error) {
-	code, status := syncErrorStatus(err)
+	status, code := syncErrorStatus(err)
 	message := "内部错误"
-	switch status {
+	typ, envCode := errbody.TypeAPI, errbody.CodeInternalError
+	switch code {
 	case "sync_disabled":
 		// 不直接用 err.Error()：ErrSyncDisabled 的消息带"请在 bootstrap.yaml 中配置
 		// database 节"的 CLI 提示，对浏览器用户无意义，Web 场景只说结论。
 		message = "配置同步仅在 MySQL/PostgreSQL 模式下可用"
+		typ, envCode = errbody.TypeInvalidRequest, "sync_disabled"
 	case "invalid_request":
 		message = err.Error()
+		typ, envCode = errbody.TypeInvalidRequest, errbody.CodeInvalidRequest
 	}
-	rc.JSON(code, utils.H{"status": status, "message": message})
+	errbody.Write(rc, status, message, typ, "", envCode)
 }
 
 // bindPaths 解析请求体中的 paths；请求体缺失或非法 JSON 视为全量同步。
@@ -91,7 +97,7 @@ func bindPathsStrict(rc *app.RequestContext) ([]string, bool) {
 	}
 	var req syncRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求体解析失败"})
+		errbody.Write(rc, 400, "请求体解析失败", errbody.TypeInvalidRequest, "paths", errbody.CodeInvalidRequest)
 		return nil, false
 	}
 	return normalizeSyncPaths(req.Paths), true

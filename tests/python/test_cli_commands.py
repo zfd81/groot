@@ -233,7 +233,7 @@ class TestGrootUserReset:
             assert r.status_code == 200, r.text
             r = s.get(f"{base}/schedule", timeout=5)
             assert r.status_code == 503, r.text
-            assert r.json()["status"] == "schedule_unavailable"
+            assert r.json()["error"]["code"] == "schedule_unavailable"
 
             # user reset -y：直接删库中用户表，无需停服
             result = _run_groot(["user", "reset", "-y"], temp_home)

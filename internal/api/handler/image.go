@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/attachment"
 	"github.com/zfd81/groot/internal/llm"
@@ -102,30 +103,29 @@ func NewImageHandler(settings *setting.Settings, models *llm.ModelService,
 func (h *ImageHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	var req types.ImageUnderstandingRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "attachments", errbody.CodeInvalidRequest)
 		return
 	}
 
 	// 本接口一次只解析一张图，多张时无法确定用哪张，直接拒绝而不是只取第一张。
 	if len(req.Attachments) != 1 {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "必须提供 1 张图片附件"})
+		errbody.Write(rc, 400, "必须提供 1 张图片附件", errbody.TypeInvalidRequest,
+			"attachments", errbody.CodeInvalidRequest)
 		return
 	}
 	att := req.Attachments[0]
 
 	// 提前拦住非图片类型，报出的错误比 Validate 的统一类型校验更贴题。
 	if att.Type != "image" {
-		rc.JSON(400, utils.H{
-			"status":  "attachment_invalid_type",
-			"message": "无效的附件类型：" + att.Type,
-		})
+		errbody.Write(rc, 400, "无效的附件类型："+att.Type, errbody.TypeInvalidRequest,
+			"attachments", errbody.CodeUnsupportedType)
 		return
 	}
 
 	cfg, err := h.settings.Attachment(ctx)
 	if err != nil {
 		h.log.Error("读取附件配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	attInput := []attachment.Attachment{{
@@ -135,44 +135,41 @@ func (h *ImageHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	}}
 	if err := attachment.NewHandler(cfg).Validate(attInput); err != nil {
 		if attErr, ok := err.(*attachment.AttachmentError); ok {
-			rc.JSON(400, utils.H{"status": attErr.Code, "message": attErr.Message})
+			code := attachmentErrorCode(attErr.Code)
+			errbody.Write(rc, attachmentStatus(code), attErr.Message, errbody.TypeInvalidRequest,
+				"attachments", code)
 		} else {
-			rc.JSON(400, utils.H{"status": "attachment_validation_error", "message": err.Error()})
+			errbody.Write(rc, 400, err.Error(), errbody.TypeInvalidRequest,
+				"attachments", errbody.CodeInvalidRequest)
 		}
 		return
 	}
 
 	mimeType, err := imageMIME(att.Content, att.Name)
 	if err != nil {
-		switch {
-		case errors.Is(err, errDecodeImage):
-			rc.JSON(400, utils.H{
-				"status":  "attachment_decode_error",
-				"message": fmt.Sprintf("附件 %s 的 Base64 解码失败", att.Name),
-			})
-		default:
-			rc.JSON(400, utils.H{
-				"status": "unsupported_type",
-				"message": fmt.Sprintf("附件 %s 不是受支持的图片（支持的扩展名：%s）",
-					att.Name, supportedImageExtensions()),
-			})
+		if errors.Is(err, errDecodeImage) {
+			errbody.Write(rc, 400, fmt.Sprintf("附件 %s 的 Base64 解码失败", att.Name),
+				errbody.TypeInvalidRequest, "attachments", errbody.CodeInvalidRequest)
+		} else {
+			errbody.Write(rc, 400, fmt.Sprintf("附件 %s 不是受支持的图片（支持的扩展名：%s）",
+				att.Name, supportedImageExtensions()),
+				errbody.TypeInvalidRequest, "attachments", errbody.CodeUnsupportedType)
 		}
 		return
 	}
 
 	// Resolve 按「显式模型名 → 默认视觉模型」解析并校验 enabled：
 	// 显式指定的模型不存在或禁用时直接报错，不回落到默认视觉模型；
-	// 三类错误对调用方都是「模型不可用」，统一映射为 invalid_model，错误原文已含模型名或类型。
-	m, err := h.models.Resolve(ctx,
-		strings.TrimSpace(string(rc.GetHeader("X-Model-Name"))), repo.DefaultVision)
+	// 三类错误对调用方都是「模型不可用」，统一映射为 model_not_found，错误原文已含模型名或类型。
+	m, err := h.models.Resolve(ctx, strings.TrimSpace(req.Model), repo.DefaultVision)
 	if err != nil {
 		if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) ||
 			errors.Is(err, llm.ErrNoDefaultModel) {
-			rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
+			errbody.Write(rc, 400, err.Error(), errbody.TypeInvalidRequest, "model", errbody.CodeModelNotFound)
 			return
 		}
 		h.log.Error("查询视觉模型失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -193,11 +190,12 @@ func (h *ImageHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		// 只有错误本身就是该上下文错误时才这样判定，避免上游真出错时恰好赶上取消而被误记。
 		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 			h.log.Info("图片解析已中断", zap.String("model", m.Name), zap.Error(ctxErr))
-			rc.JSON(statusClientClosedRequest, utils.H{"status": "cancelled", "message": ctxErr.Error()})
+			errbody.Write(rc, statusClientClosedRequest, ctxErr.Error(), errbody.TypeInvalidRequest, "",
+				errbody.CodeClientClosedRequest)
 			return
 		}
 		h.log.Warn("图片解析失败", zap.String("model", m.Name), zap.Error(err))
-		rc.JSON(502, utils.H{"status": "upstream_error", "message": err.Error()})
+		errbody.Write(rc, 502, err.Error(), errbody.TypeAPI, "", errbody.CodeUpstreamError)
 		return
 	}
 

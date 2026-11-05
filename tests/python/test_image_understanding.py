@@ -6,15 +6,15 @@
   GROOT_WEB_USER / GROOT_WEB_PASS  Web 登录凭据（改默认视觉模型的用例需要）
 
 用例点：
-- 未携带 API Key（401 unauthorized）
+- 未携带 API Key（401 invalid_api_key）
 - 非法 JSON（400 invalid_request）
 - attachments 缺失或超过 1 张（400 invalid_request）
-- type 不是 image（400 attachment_invalid_type）
-- content 不是合法 Base64（400 attachment_decode_error）
+- type 不是 image（400 unsupported_type）
+- content 不是合法 Base64（400 invalid_request）
 - 纯文本内容改名 .png（400 unsupported_type）
-- 显式指定不存在的模型，不回落默认视觉模型（400 invalid_model）
-- 仅含 status 权限的 Key 调用（403 forbidden）；仅含 chat 权限的 Key 放行
-- 未配置默认视觉模型（400 invalid_model，不回落其它类型默认）
+- 显式指定不存在的模型，不回落默认视觉模型（400 model_not_found）
+- 仅含 status 权限的 Key 调用（403 insufficient_permissions）；仅含 chat 权限的 Key 放行
+- 未配置默认视觉模型（400 model_not_found，不回落其它类型默认）
 - 正常解析 1x1 PNG（需 GROOT_VISION_MODEL）
 """
 import os
@@ -41,8 +41,8 @@ PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAA
 
 @pytest.fixture
 def key_headers(api_key):
-    """带 API Key 的 JSON 请求头"""
-    return {"X-API-Key": api_key, "Content-Type": "application/json"}
+    """带 API Key 的 JSON 请求头（OpenAI 风格 Bearer 鉴权）"""
+    return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
 
 @pytest.fixture(scope="module")
@@ -68,19 +68,27 @@ class TestImageUnderstandingErrors:
         """TC-IMG-001: 未携带 API Key"""
         resp = requests.post(URL, json={"attachments": []}, timeout=10)
         assert resp.status_code == 401
-        assert resp.json()["status"] == "unauthorized"
+        data = resp.json()
+        assert data["error"]["type"] == "authentication_error"
+        assert data["error"]["code"] == "invalid_api_key"
 
     def test_bad_json(self, server, key_headers):
         """TC-IMG-002: 请求体不是合法 JSON"""
         resp = requests.post(URL, headers=key_headers, data="{not json", timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "attachments"
+        assert data["error"]["code"] == "invalid_request"
 
     def test_bad_attachment_count(self, server, key_headers):
         """TC-IMG-003: attachments 缺失或超过 1 张"""
         resp = requests.post(URL, headers=key_headers, json={}, timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "attachments"
+        assert data["error"]["code"] == "invalid_request"
 
         resp = requests.post(
             URL, headers=key_headers,
@@ -90,7 +98,9 @@ class TestImageUnderstandingErrors:
             ]}, timeout=10,
         )
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        data = resp.json()
+        assert data["error"]["param"] == "attachments"
+        assert data["error"]["code"] == "invalid_request"
 
     def test_non_image_type(self, server, key_headers):
         """TC-IMG-004: 附件 type 不是 image"""
@@ -100,7 +110,10 @@ class TestImageUnderstandingErrors:
             timeout=10,
         )
         assert resp.status_code == 400
-        assert resp.json()["status"] == "attachment_invalid_type"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "attachments"
+        assert data["error"]["code"] == "unsupported_type"
 
     def test_bad_base64(self, server, key_headers):
         """TC-IMG-005: content 不是合法 Base64"""
@@ -110,7 +123,10 @@ class TestImageUnderstandingErrors:
             timeout=10,
         )
         assert resp.status_code == 400
-        assert resp.json()["status"] == "attachment_decode_error"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "attachments"
+        assert data["error"]["code"] == "invalid_request"
 
     def test_text_renamed_png(self, server, key_headers):
         """TC-IMG-006: 纯文本内容改名 .png，文件头嗅探出非图片类型"""
@@ -120,45 +136,56 @@ class TestImageUnderstandingErrors:
             timeout=10,
         )
         assert resp.status_code == 400
-        assert resp.json()["status"] == "unsupported_type"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "attachments"
+        assert data["error"]["code"] == "unsupported_type"
 
     def test_unknown_model_no_fallback(self, server, key_headers):
         """TC-IMG-007: 显式指定不存在的模型，不回落默认视觉模型"""
         resp = requests.post(
-            URL,
-            headers={**key_headers, "X-Model-Name": "__nope__"},
-            json={"attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}]},
+            URL, headers=key_headers,
+            json={
+                "attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}],
+                "model": "__nope__",
+            },
             timeout=10,
         )
         assert resp.status_code == 400
         body = resp.json()
-        assert body["status"] == "invalid_model"
-        assert "__nope__" in body["message"]
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["param"] == "model"
+        assert body["error"]["code"] == "model_not_found"
+        assert "__nope__" in body["error"]["message"]
 
     def test_forbidden_without_chat_permission(self, server):
         """TC-IMG-009: 仅含 status 权限的 Key 调用 → 403；含 chat 权限的 Key → 不被鉴权拦截"""
         token = bootstrap_api_key(BASE_URL, name="pytest-status-only-img", permissions=["status"])
-        headers = {"Content-Type": "application/json", "X-API-Key": token, "X-User-ID": TEST_USER_ID}
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}", "user": TEST_USER_ID}
         resp = requests.post(
             URL, headers=headers,
             json={"attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}]},
             timeout=10,
         )
         assert resp.status_code == 403
-        assert "forbidden" in resp.text
+        data = resp.json()
+        assert data["error"]["type"] == "permission_error"
+        assert data["error"]["code"] == "insufficient_permissions"
 
         # 正例控制项：仅含 chat 权限的 Key 能通过鉴权（绝不能是 401/403）。
         # 显式指定一个不存在的模型，让请求在模型解析阶段就返回 400，避免真的打到上游视觉模型。
         token = bootstrap_api_key(BASE_URL, name="pytest-chat-only-img", permissions=["chat"])
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token,
-            "X-User-ID": TEST_USER_ID,
-            "X-Model-Name": "__nope__",
+            "Authorization": f"Bearer {token}",
+            "user": TEST_USER_ID,
         }
         resp = requests.post(
             URL, headers=headers,
-            json={"attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}]},
+            json={
+                "attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}],
+                "model": "__nope__",
+            },
             timeout=10,
         )
         assert resp.status_code not in (401, 403), resp.text
@@ -171,9 +198,11 @@ class TestImageUnderstandingSuccess:
     def test_understand_image(self, server, key_headers):
         """TC-IMG-008: 用指定视觉模型解析 1x1 PNG"""
         resp = requests.post(
-            URL,
-            headers={**key_headers, "X-Model-Name": VISION_MODEL},
-            json={"attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}]},
+            URL, headers=key_headers,
+            json={
+                "attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}],
+                "model": VISION_MODEL,
+            },
             timeout=120,
         )
         assert resp.status_code == 200, resp.text
@@ -186,7 +215,7 @@ class TestImageUnderstandingNoDefaultVision:
     """未配置默认视觉模型时的错误路径（依赖 Web 会话改默认模型）"""
 
     def test_no_default_vision_model(self, server, web, api_key):
-        """TC-IMG-010: 未配置默认视觉模型 → 400 invalid_model，不回落其它类型默认"""
+        """TC-IMG-010: 未配置默认视觉模型 → 400 model_not_found，不回落其它类型默认"""
         orig_vision = web.get(f"{BASE_URL}/web/models").json()["defaults"].get("vision", "")
         name = f"t-img-vision-{uuid.uuid4().hex[:8]}"
         body = {
@@ -207,14 +236,17 @@ class TestImageUnderstandingNoDefaultVision:
             assert web.get(f"{BASE_URL}/web/models").json()["defaults"]["vision"] == ""
 
             resp = requests.post(
-                URL, headers={"Content-Type": "application/json", "X-API-Key": api_key},
+                URL,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
                 json={"attachments": [{"type": "image", "name": "a.png", "content": PNG_BASE64}]},
                 timeout=10,
             )
             assert resp.status_code == 400, resp.text
             payload = resp.json()
-            assert payload["status"] == "invalid_model"
-            assert "默认视觉模型" in payload["message"]
+            assert payload["error"]["type"] == "invalid_request_error"
+            assert payload["error"]["param"] == "model"
+            assert payload["error"]["code"] == "model_not_found"
+            assert "默认视觉模型" in payload["error"]["message"]
         finally:
             # 先摘掉可能残留的视觉默认标记再删模型（Delete 对仍持默认的模型返回 409），
             # 这样即使 try 块中途失败也不会把带默认标记的模型留在库里

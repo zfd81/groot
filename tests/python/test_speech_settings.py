@@ -88,7 +88,7 @@ class TestSpeechSettings:
         """超过 64 字符拒绝，且不写入"""
         resp = web.put(SPEECH_URL, json={"voice": "a" * 65}, timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        assert resp.json()["error"]["code"] == "invalid_request"
 
         got = web.get(SPEECH_URL, timeout=10).json()
         assert got["voice"] == original["voice"]
@@ -97,7 +97,7 @@ class TestSpeechSettings:
         """instructions 超过 500 字符拒绝，且不写入"""
         resp = web.put(SPEECH_URL, json={"instructions": "a" * 501}, timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        assert resp.json()["error"]["code"] == "invalid_request"
 
         got = web.get(SPEECH_URL, timeout=10).json()
         assert got["instructions"] == original["instructions"]
@@ -121,7 +121,7 @@ class TestSpeechSettings:
         resp = web.put(SPEECH_URL, data="{not json",
                        headers={"Content-Type": "application/json"}, timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        assert resp.json()["error"]["code"] == "invalid_request"
 
     def test_unauthorized(self):
         resp = requests.get(SPEECH_URL, timeout=10)

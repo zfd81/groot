@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
@@ -23,9 +24,7 @@ func TestToolsHandler_UnknownAgent(t *testing.T) {
 	rc.Request.Header.SetMethod(consts.MethodGet)
 	rc.Request.Header.Set("X-Agent-Name", "nope")
 	h.Serve(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeUnknownAgent)
 	if !strings.Contains(string(rc.Response.Body()), "Unknown agent") {
 		t.Errorf("body should contain 'Unknown agent', got %s", rc.Response.Body())
 	}
@@ -39,9 +38,7 @@ func TestToolsHandler_NilRegistryReturns400(t *testing.T) {
 	rc.Request.Header.SetMethod(consts.MethodGet)
 	rc.Request.Header.Set("X-Agent-Name", "any")
 	h.Serve(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeUnknownAgent)
 }
 
 // TestToolsHandler_MainAgentExposesCallAgent 验证主 Agent 路径下，

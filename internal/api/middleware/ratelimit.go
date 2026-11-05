@@ -2,11 +2,11 @@ package middleware
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/ratelimit"
 )
 
@@ -21,7 +21,7 @@ func NewRateLimitMiddleware(limiter *ratelimit.RateLimiter) *RateLimitMiddleware
 }
 
 // Serve returns a Hertz middleware handler that:
-// - Tracks concurrency (acquire/release) for long-lived endpoints (POST /chat)
+// - Tracks concurrency (acquire/release) for long-lived endpoints (POST /chat/completions)
 // - Only checks QPS for short-lived endpoints (GET, DELETE etc.)
 func (m *RateLimitMiddleware) Serve() app.HandlerFunc {
 	return func(ctx context.Context, rc *app.RequestContext) {
@@ -29,11 +29,10 @@ func (m *RateLimitMiddleware) Serve() app.HandlerFunc {
 		path := string(rc.URI().Path())
 		method := string(rc.Method())
 
-		// POST /chat is a long-lived SSE connection — needs concurrency tracking
-		if path == "/chat" && method == "POST" {
+		// POST /chat/completions is a long-lived SSE connection — needs concurrency tracking
+		if path == "/chat/completions" && method == "POST" {
 			if !m.limiter.Acquire(key) {
 				writeRateLimitResponse(rc)
-				rc.Abort()
 				return
 			}
 			rc.Next(ctx)
@@ -41,7 +40,6 @@ func (m *RateLimitMiddleware) Serve() app.HandlerFunc {
 		} else {
 			if !m.limiter.Allow(key) {
 				writeRateLimitResponse(rc)
-				rc.Abort()
 				return
 			}
 			rc.Next(ctx)
@@ -49,12 +47,9 @@ func (m *RateLimitMiddleware) Serve() app.HandlerFunc {
 	}
 }
 
-// writeRateLimitResponse writes a 429 Too Many Requests response
+// writeRateLimitResponse 写出 429 限流信封（内部已 Abort）。
 func writeRateLimitResponse(rc *app.RequestContext) {
-	rc.SetContentType("application/json; charset=utf-8")
-	rc.SetStatusCode(429)
-	rc.Write([]byte(fmt.Sprintf(
-		`{"status":"rate_limited","message":"请求过于频繁，请稍后重试"}`)))
+	errbody.Write(rc, 429, "请求过于频繁，请稍后重试", errbody.TypeRateLimit, "", errbody.CodeRateLimitExceeded)
 }
 
 // resolveKey determines the rate limiting key from the request context

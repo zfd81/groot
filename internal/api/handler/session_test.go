@@ -40,7 +40,52 @@ func newListContext(rawQuery string) *app.RequestContext {
 	return rc
 }
 
-const sessionNotFoundBody = `{"status":"session_not_found","message":"会话不存在"}`
+// TestSessionHandler_NotFoundEnvelope 验证会话不存在（以及归属不符）时返回 404 错误信封。
+func TestSessionHandler_NotFoundEnvelope(t *testing.T) {
+	h, mem, _ := newSearchTestHandler(t)
+	if err := mem.CreateSession("s1", "crm", "u1", ""); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		caller [3]string // web/svc + tenant + user
+		sid    string
+	}{
+		{"GET missing session", [3]string{"svc", "crm", "u1"}, "nope"},
+		{"GET foreign tenant", [3]string{"svc", "erp", "u1"}, "s1"},
+		{"DELETE missing session", [3]string{"web", "", ""}, "nope"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var rc *app.RequestContext
+			switch tc.name {
+			case "DELETE missing session":
+				rc = newDeleteContext(tc.sid)
+				setIdentity(rc, tc.caller[0], tc.caller[1], tc.caller[2])
+				h.DeleteSession(context.Background(), rc)
+			default:
+				rc = newSidContext(tc.sid)
+				setIdentity(rc, tc.caller[0], tc.caller[1], tc.caller[2])
+				h.GetSession(context.Background(), rc)
+			}
+			assertErrorEnvelope(t, rc, 404, "会话不存在",
+				"invalid_request_error", "", "session_not_found")
+		})
+	}
+}
+
+func TestRenameSession_NotFoundEnvelope(t *testing.T) {
+	h, mem, _ := newSearchTestHandler(t)
+	if err := mem.CreateSession("s1", "crm", "u1", ""); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	rc := newPatchCtx("nope", `{"title":"改"}`)
+	setIdentity(rc, "svc", "crm", "u1")
+	h.RenameSession(context.Background(), rc)
+	assertErrorEnvelope(t, rc, 404, "会话不存在",
+		"invalid_request_error", "", "session_not_found")
+}
 
 func TestGetSession_ForeignTenantIs404(t *testing.T) {
 	h, mem, _ := newSearchTestHandler(t)
@@ -388,12 +433,8 @@ func TestDeleteSession_RunningWaitTimeout409(t *testing.T) {
 	if rc.Response.StatusCode() != 409 {
 		t.Fatalf("expected 409, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	body := string(rc.Response.Body())
-	for _, want := range []string{`"status":"chat_still_running"`, `"session_id":"s1"`, "对话仍在执行"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("body = %s, want contains %s", body, want)
-		}
-	}
+	assertErrorEnvelope(t, rc, 409, "对话仍在执行，请稍后重试",
+		"invalid_request_error", "", "chat_still_running")
 	if !mem.ExistsSession("s1") {
 		t.Fatal("session s1 must still exist")
 	}
@@ -446,7 +487,7 @@ func TestDeleteSession_PlaceholderRaceReturns409(t *testing.T) {
 	if rc.Response.StatusCode() != 409 {
 		t.Fatalf("expected 409, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if !strings.Contains(string(rc.Response.Body()), `"status":"chat_still_running"`) {
+	if !strings.Contains(string(rc.Response.Body()), `"code":"chat_still_running"`) {
 		t.Fatalf("body = %s, want chat_still_running", rc.Response.Body())
 	}
 	if !mem.ExistsSession("s1") {
@@ -513,12 +554,8 @@ func TestDeleteSession_MissingUser400(t *testing.T) {
 	setIdentity(rc, "svc", "crm", "")
 	h.DeleteSession(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), `"status":"invalid_request"`) {
-		t.Fatalf("body = %s, want invalid_request", rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "缺少或非法的 user",
+		"invalid_request_error", "user", "invalid_request")
 	if !mem.ExistsSession("s1") {
 		t.Fatal("session s1 must still exist")
 	}
@@ -530,12 +567,8 @@ func TestDeleteSession_MissingSid400(t *testing.T) {
 	setIdentity(rc, "web", "", "")
 	h.DeleteSession(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), `"status":"invalid_request"`) {
-		t.Fatalf("body = %s, want invalid_request", rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "session_id 参数缺失",
+		"invalid_request_error", "session_id", "invalid_request")
 }
 
 // ---- PATCH /sess/{sid} ----
@@ -628,16 +661,17 @@ func TestRenameSession_Validation400(t *testing.T) {
 	}
 	tooLong := strings.Repeat("中", memory.MaxTitleRunes+1)
 	cases := []struct {
-		name string
-		body string
-		want string
+		name  string
+		body  string
+		want  string
+		param string
 	}{
-		{"empty", `{"title":""}`, "标题不能为空"},
-		{"blank", `{"title":"   "}`, "标题不能为空"},
-		{"too_long", `{"title":"` + tooLong + `"}`, "标题不能为空"},
-		{"number", `{"title":123}`, "请求参数错误"},
-		{"not_json", `not json`, "请求参数错误"},
-		{"no_title", `{}`, "标题不能为空"},
+		{"empty", `{"title":""}`, "标题不能为空", "title"},
+		{"blank", `{"title":"   "}`, "标题不能为空", "title"},
+		{"too_long", `{"title":"` + tooLong + `"}`, "标题不能为空", "title"},
+		{"number", `{"title":123}`, "请求参数错误", ""},
+		{"not_json", `not json`, "请求参数错误", ""},
+		{"no_title", `{}`, "标题不能为空", "title"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -647,9 +681,20 @@ func TestRenameSession_Validation400(t *testing.T) {
 			if rc.Response.StatusCode() != 400 {
 				t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 			}
-			body := string(rc.Response.Body())
-			if !strings.Contains(body, `"status":"invalid_request"`) || !strings.Contains(body, tc.want) {
-				t.Fatalf("body = %s, want invalid_request containing %q", body, tc.want)
+			envl := decodeErrorEnvelope(t, rc)
+			if envl.Error.Type != "invalid_request_error" || envl.Error.Code == nil ||
+				*envl.Error.Code != "invalid_request" {
+				t.Fatalf("body = %s, want invalid_request_error/invalid_request", rc.Response.Body())
+			}
+			if !strings.Contains(envl.Error.Message, tc.want) {
+				t.Fatalf("message = %q, want contains %q", envl.Error.Message, tc.want)
+			}
+			if tc.param == "" {
+				if envl.Error.Param != nil {
+					t.Fatalf("param = %q, want null", *envl.Error.Param)
+				}
+			} else if envl.Error.Param == nil || *envl.Error.Param != tc.param {
+				t.Fatalf("param = %v, want %q", envl.Error.Param, tc.param)
 			}
 			if got := sessionTitle(t, mem, "s1"); got != "原标题" {
 				t.Fatalf("title changed to %q", got)
@@ -735,12 +780,8 @@ func TestRenameSession_MissingUser400(t *testing.T) {
 	rc := newPatchCtx("s1", `{"title":"改"}`)
 	setIdentity(rc, "svc", "crm", "")
 	h.RenameSession(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), `"status":"invalid_request"`) {
-		t.Fatalf("body = %s, want invalid_request", rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "缺少或非法的 user",
+		"invalid_request_error", "user", "invalid_request")
 	if got := sessionTitle(t, mem, "s1"); got != "原标题" {
 		t.Fatalf("title changed to %q", got)
 	}
@@ -751,12 +792,8 @@ func TestRenameSession_MissingSid400(t *testing.T) {
 	rc := newPatchCtx("", `{"title":"改"}`)
 	setIdentity(rc, "web", "", "")
 	h.RenameSession(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "session_id 参数缺失") {
-		t.Fatalf("body = %s, want session_id 参数缺失", rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "session_id 参数缺失",
+		"invalid_request_error", "session_id", "invalid_request")
 }
 
 func TestRenameSession_DoesNotTouchUpdatedAt(t *testing.T) {

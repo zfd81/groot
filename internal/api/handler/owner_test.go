@@ -12,6 +12,9 @@ import (
 	"github.com/zfd81/groot/internal/repo/memorydb"
 )
 
+// sessionNotFoundBody 是 404 会话不存在的错误信封响应体。
+const sessionNotFoundBody = `{"error":{"message":"会话不存在","type":"invalid_request_error","param":null,"code":"session_not_found"}}`
+
 // newOwnerTestContext 构造带身份上下文的 RequestContext；caller 为空时不注入 caller 键。
 func newOwnerTestContext(caller, tenant, user string) *app.RequestContext {
 	rc := app.NewContext(0)
@@ -43,13 +46,13 @@ func TestRequireOwner(t *testing.T) {
 			name:   "empty tenant → 403",
 			caller: "svc", tenant: "", user: "u1",
 			wantOK: false, wantStatus: 403,
-			wantBody: `{"status":"forbidden","message":"API Key 未绑定租户"}`,
+			wantBody: `{"error":{"message":"API Key 未绑定租户","type":"permission_error","param":null,"code":"tenant_not_bound"}}`,
 		},
 		{
 			name:   "empty user → 400",
 			caller: "svc", tenant: "crm", user: "",
 			wantOK: false, wantStatus: 400,
-			wantBody: `{"status":"invalid_request","message":"缺少或非法的 X-User-ID"}`,
+			wantBody: `{"error":{"message":"缺少或非法的 user","type":"invalid_request_error","param":"user","code":"invalid_request"}}`,
 		},
 		{
 			name:   "full identity → owner",
@@ -96,6 +99,53 @@ func TestRequireOwner(t *testing.T) {
 			}
 		})
 	}
+}
+
+// assertErrorEnvelope 断言响应为期望的 OpenAI 错误信封；param/code 传空串表示 JSON null。
+func assertErrorEnvelope(t *testing.T, rc *app.RequestContext, status int, message, typ, param, code string) {
+	t.Helper()
+	if got := rc.Response.StatusCode(); got != status {
+		t.Fatalf("status = %d, want %d; body=%s", got, status, rc.Response.Body())
+	}
+	envl := decodeErrorEnvelope(t, rc)
+	if envl.Error.Message != message {
+		t.Errorf("message = %q, want %q", envl.Error.Message, message)
+	}
+	if envl.Error.Type != typ {
+		t.Errorf("type = %q, want %q", envl.Error.Type, typ)
+	}
+	if param == "" {
+		if envl.Error.Param != nil {
+			t.Errorf("param = %q, want null", *envl.Error.Param)
+		}
+	} else if envl.Error.Param == nil || *envl.Error.Param != param {
+		t.Errorf("param = %v, want %q", envl.Error.Param, param)
+	}
+	if code == "" {
+		if envl.Error.Code != nil {
+			t.Errorf("code = %q, want null", *envl.Error.Code)
+		}
+	} else if envl.Error.Code == nil || *envl.Error.Code != code {
+		t.Errorf("code = %v, want %q", envl.Error.Code, code)
+	}
+}
+
+func TestRequireOwner_MissingTenant(t *testing.T) {
+	rc := newOwnerTestContext("svc", "", "u1")
+	if _, ok := requireOwner(rc); ok {
+		t.Fatal("requireOwner should fail without tenant")
+	}
+	assertErrorEnvelope(t, rc, 403, "API Key 未绑定租户",
+		"permission_error", "", "tenant_not_bound")
+}
+
+func TestRequireOwner_MissingUser(t *testing.T) {
+	rc := newOwnerTestContext("svc", "crm", "")
+	if _, ok := requireOwner(rc); ok {
+		t.Fatal("requireOwner should fail without user")
+	}
+	assertErrorEnvelope(t, rc, 400, "缺少或非法的 user",
+		"invalid_request_error", "user", "invalid_request")
 }
 
 // newOwnerTestManager 构造挂了临时 SQLite 库的 memory.Manager。

@@ -44,11 +44,13 @@ export const filesApi = {
     }
     if (!resp.ok) {
       const data = await resp.json().catch(() => null)
-      throw new ApiError(
-        resp.status,
-        data?.message || `upload failed: ${resp.status}`,
-        data?.code || data?.status
-      )
+      const err = data && typeof data === 'object' ? data.error : null
+      const message =
+        (err && typeof err.message === 'string' && err.message) ||
+        t('error.requestFailed', { status: resp.status })
+      const code =
+        err && typeof err === 'object' ? (err.code ?? err.type ?? undefined) : undefined
+      throw new ApiError(resp.status, message, code)
     }
   },
 }

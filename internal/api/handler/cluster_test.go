@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route/param"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/cluster"
 	"github.com/zfd81/groot/internal/lifecycle"
@@ -146,9 +147,7 @@ func TestClusterHandler_RepoError(t *testing.T) {
 	fake := &fakeMemberRepo{err: errors.New("db connection refused")}
 	rc := serveCluster(NewClusterHandler(fake, nil, nil, false, logger.NewNop()))
 
-	if got := rc.Response.StatusCode(); got != 500 {
-		t.Fatalf("expected 500, got %d body=%s", got, rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 500, errbody.TypeAPI, errbody.CodeInternalError)
 	if body := string(rc.Response.Body()); contains(body, "db connection refused") {
 		t.Errorf("响应体不应泄漏底层错误: %s", body)
 	}
@@ -222,12 +221,7 @@ func TestRestart_UnknownMember404(t *testing.T) {
 	fake := &fakeMemberRepo{members: []*repo.Member{{RegID: "n-001", Host: "10.0.0.1", Port: 8080}}}
 	s := &fakeSender{}
 	rc := serveRestart(NewClusterHandler(fake, fixedSelfID("n-001"), s, true, logger.NewNop()), "n-999")
-	if got := rc.Response.StatusCode(); got != 404 {
-		t.Fatalf("expected 404, got %d body=%s", got, rc.Response.Body())
-	}
-	if body := string(rc.Response.Body()); !contains(body, `"code":"member_not_found"`) {
-		t.Errorf("expected member_not_found, got %s", body)
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "member_not_found")
 	if len(s.sent) != 0 {
 		t.Errorf("未知成员不应发送消息，sent=%+v", s.sent)
 	}
@@ -237,12 +231,7 @@ func TestRestart_SelfUnsupported409(t *testing.T) {
 	fake := &fakeMemberRepo{members: []*repo.Member{{RegID: "n-001", Host: "10.0.0.1", Port: 8080}}}
 	s := &fakeSender{}
 	rc := serveRestart(NewClusterHandler(fake, fixedSelfID("n-001"), s, false, logger.NewNop()), "n-001")
-	if got := rc.Response.StatusCode(); got != 409 {
-		t.Fatalf("expected 409, got %d body=%s", got, rc.Response.Body())
-	}
-	if body := string(rc.Response.Body()); !contains(body, `"code":"restart_unsupported"`) {
-		t.Errorf("expected restart_unsupported, got %s", body)
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "restart_unsupported")
 	if len(s.sent) != 0 {
 		t.Errorf("单进程模式本机不应发送消息，sent=%+v", s.sent)
 	}
@@ -308,9 +297,7 @@ func TestRestart_SenderError500(t *testing.T) {
 	fake := &fakeMemberRepo{members: []*repo.Member{{RegID: "n-002", Host: "10.0.0.2", Port: 8080}}}
 	s := &fakeSender{err: errors.New("db down")}
 	rc := serveRestart(NewClusterHandler(fake, fixedSelfID("n-001"), s, true, logger.NewNop()), "n-002")
-	if got := rc.Response.StatusCode(); got != 500 {
-		t.Fatalf("expected 500, got %d", got)
-	}
+	assertEnvelopeError(t, rc, 500, errbody.TypeAPI, errbody.CodeInternalError)
 	if body := string(rc.Response.Body()); contains(body, "db down") {
 		t.Errorf("不应泄漏底层错误: %s", body)
 	}
@@ -319,25 +306,19 @@ func TestRestart_SenderError500(t *testing.T) {
 func TestRestart_NoSender500(t *testing.T) {
 	fake := &fakeMemberRepo{members: []*repo.Member{{RegID: "n-002", Host: "10.0.0.2", Port: 8080}}}
 	rc := serveRestart(NewClusterHandler(fake, fixedSelfID("n-001"), nil, true, logger.NewNop()), "n-002")
-	if got := rc.Response.StatusCode(); got != 500 {
-		t.Fatalf("expected 500, got %d", got)
-	}
+	assertEnvelopeError(t, rc, 500, errbody.TypeAPI, errbody.CodeInternalError)
 }
 
 func TestRestart_NilRepo404(t *testing.T) {
 	rc := serveRestart(NewClusterHandler(nil, nil, &fakeSender{}, true, logger.NewNop()), "n-001")
-	if got := rc.Response.StatusCode(); got != 404 {
-		t.Fatalf("expected 404, got %d", got)
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, "member_not_found")
 }
 
 func TestRestart_RepoError500(t *testing.T) {
 	fake := &fakeMemberRepo{err: errors.New("db connection refused")}
 	s := &fakeSender{}
 	rc := serveRestart(NewClusterHandler(fake, fixedSelfID("n-001"), s, true, logger.NewNop()), "n-002")
-	if got := rc.Response.StatusCode(); got != 500 {
-		t.Fatalf("expected 500, got %d body=%s", got, rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 500, errbody.TypeAPI, errbody.CodeInternalError)
 	if body := string(rc.Response.Body()); contains(body, "db connection refused") {
 		t.Errorf("不应泄漏底层错误: %s", body)
 	}

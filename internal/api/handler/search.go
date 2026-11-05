@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/memory"
 )
 
@@ -36,9 +37,7 @@ func (h *SessionHandler) SearchSessions(ctx context.Context, rc *app.RequestCont
 
 	results, err := h.memory.Search(owner, q, limit)
 	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"error","message":"搜索失败"}`))
+		errbody.Write(rc, 500, "搜索失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, utils.H{"status": "success", "results": results})

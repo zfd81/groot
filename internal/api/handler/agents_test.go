@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/route/param"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/logger"
 )
@@ -251,16 +252,12 @@ func TestAgentsHandler_DefinitionUnknownAgent(t *testing.T) {
 
 	for _, name := range []string{"nonexistent", "../../etc"} {
 		rc := defRequest(h, name)
-		if got := rc.Response.StatusCode(); got != 404 {
-			t.Errorf("name=%q expected 404, got %d body=%s", name, got, rc.Response.Body())
-		}
+		assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	}
 
 	hNil := NewAgentsHandler(nil, nil, home, logger.NewNop())
 	rc := defRequest(hNil, "any-agent")
-	if got := rc.Response.StatusCode(); got != 404 {
-		t.Errorf("nil registry expected 404, got %d", got)
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
 
 // TestAgentsHandler_DefinitionFileMissing 验证注册表命中但磁盘文件缺失时返回 404，
@@ -272,13 +269,9 @@ func TestAgentsHandler_DefinitionFileMissing(t *testing.T) {
 	h := NewAgentsHandler(reg, nil, home, logger.NewNop())
 
 	rc := defRequest(h, "ghost-agent")
-	if got := rc.Response.StatusCode(); got != 404 {
-		t.Fatalf("expected 404, got %d body=%s", got, rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 
 	// 主 Agent 的 GROOT.md 缺失同样 404
 	rc2 := defRequest(h, agent.MainAgentName)
-	if got := rc2.Response.StatusCode(); got != 404 {
-		t.Fatalf("main agent expected 404, got %d body=%s", got, rc2.Response.Body())
-	}
+	assertEnvelopeError(t, rc2, 404, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }

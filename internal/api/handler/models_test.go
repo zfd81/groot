@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/cloudwego/hertz/pkg/route/param"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/llm"
@@ -88,18 +89,14 @@ func TestModelsHandler_CreateDuplicate(t *testing.T) {
 	h := newModelsHandlerForTest(t)
 	callJSON(h.Create, consts.MethodPost, createBody, nil)
 	rc := callJSON(h.Create, consts.MethodPost, createBody, nil)
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("重名创建应 409, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "model_name_exists")
 }
 
 func TestModelsHandler_DeleteDefaultRejected(t *testing.T) {
 	h := newModelsHandlerForTest(t)
 	callJSON(h.Create, consts.MethodPost, createBody, nil)
 	rc := callJSON(h.Delete, consts.MethodDelete, "", map[string]string{"name": "gpt-4o"})
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("删除默认模型应 409, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "default_model_protected")
 }
 
 func TestModelsHandler_SetDefaultAndDelete(t *testing.T) {
@@ -121,9 +118,7 @@ func TestModelsHandler_SetDefaultAndDelete(t *testing.T) {
 func TestModelsHandler_UpdateNotFound(t *testing.T) {
 	h := newModelsHandlerForTest(t)
 	rc := callJSON(h.Update, consts.MethodPut, createBody, map[string]string{"name": "ghost"})
-	if rc.Response.StatusCode() != 404 {
-		t.Errorf("更新不存在模型应 404, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, errbody.CodeModelNotFound)
 }
 
 // TestModelsHandler_CreateOmittedEnabledDefaultsTrue 请求体省略 enabled 字段时默认启用。
@@ -259,9 +254,7 @@ func TestModelsHandler_DefaultInvalidType(t *testing.T) {
 	for _, typ := range []string{"audio", "voice"} {
 		for _, fn := range []func(context.Context, *app.RequestContext){h.SetDefault, h.ClearDefault} {
 			rc := callJSONQuery(fn, consts.MethodPut, "/web/models/backup/default?type="+typ, name)
-			if rc.Response.StatusCode() != 400 || !strings.Contains(string(rc.Response.Body()), "invalid_request") {
-				t.Errorf("type=%s 应 400 invalid_request, got %d %s", typ, rc.Response.StatusCode(), rc.Response.Body())
-			}
+			assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 			if !strings.Contains(string(rc.Response.Body()), "chat、asr、vision、tts") {
 				t.Errorf("type=%s 错误信息应列出 chat、asr、vision、tts: %s", typ, rc.Response.Body())
 			}
@@ -276,9 +269,7 @@ func TestModelsHandler_ClearDefault(t *testing.T) {
 
 	// 持有 ASR 默认的模型不可删除
 	rc := callJSON(h.Delete, consts.MethodDelete, "", name)
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("删除默认 ASR 模型应 409, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "default_model_protected")
 
 	rc = callJSONQuery(h.ClearDefault, consts.MethodDelete, "/web/models/backup/default?type=asr", name)
 	if rc.Response.StatusCode() != 200 {
@@ -313,9 +304,7 @@ func TestModelsHandler_ClearDefaultTTS(t *testing.T) {
 
 	// 持有 TTS 默认的模型不可删除
 	rc = callJSON(h.Delete, consts.MethodDelete, "", name)
-	if rc.Response.StatusCode() != 409 {
-		t.Errorf("删除默认 TTS 模型应 409, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "default_model_protected")
 
 	rc = callJSONQuery(h.ClearDefault, consts.MethodDelete, "/web/models/backup/default?type=tts", name)
 	if rc.Response.StatusCode() != 200 {
@@ -349,10 +338,7 @@ func TestModelsHandler_ClearChatDefaultRejected(t *testing.T) {
 	h := newModelsHandlerWithTwo(t)
 	for _, uri := range []string{"/web/models/gpt-4o/default?type=chat", "/web/models/gpt-4o/default"} {
 		rc := callJSONQuery(h.ClearDefault, consts.MethodDelete, uri, map[string]string{"name": "gpt-4o"})
-		if rc.Response.StatusCode() != 400 || !strings.Contains(string(rc.Response.Body()), "default_chat_required") {
-			t.Errorf("%s: 取消对话默认应 400 default_chat_required, got %d %s",
-				uri, rc.Response.StatusCode(), rc.Response.Body())
-		}
+		assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, "default_chat_required")
 	}
 }
 

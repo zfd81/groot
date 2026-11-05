@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Groot Java Client</name>
-    <description>Groot AI Agent Java 客户端</description>
+    <description>Groot AI Agent Java 示例（OpenAI 官方 Java SDK）</description>
 
     <properties>
         <maven.compiler.source>8</maven.compiler.source>
@@ -19,18 +19,11 @@
     </properties>
 
     <dependencies>
-        <!-- HTTP 客户端 / SSE 支持 -->
+        <!-- OpenAI 官方 Java SDK：Groot 对外是 OpenAI 兼容接口，只换 baseUrl / apiKey -->
         <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>4.12.0</version>
-        </dependency>
-
-        <!-- JSON 解析 -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>2.17.2</version>
+            <groupId>com.openai</groupId>
+            <artifactId>openai-java</artifactId>
+            <version>4.99.0</version>
         </dependency>
 
         <!-- 测试 -->

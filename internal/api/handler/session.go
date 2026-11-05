@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/repo"
@@ -43,9 +44,7 @@ func (h *SessionHandler) GetSession(ctx context.Context, rc *app.RequestContext)
 	sessionID := rc.Param("sid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
@@ -55,25 +54,19 @@ func (h *SessionHandler) GetSession(ctx context.Context, rc *app.RequestContext)
 	}
 	// 非本人（他租户/他用户）的会话与不存在的会话一律 404，响应体保持一致，不可区分
 	if !ownsOrAdmin(h.memory, owner, sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(`{"status":"session_not_found","message":"会话不存在"}`))
+		writeSessionNotFound(rc)
 		return
 	}
 
 	info, err := h.memory.GetSessionInfo(sessionID)
 	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(`{"status":"session_not_found","message":"会话不存在"}`))
+		writeSessionNotFound(rc)
 		return
 	}
 
 	history, err := h.memory.GetHistory(sessionID)
 	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"error","message":"获取历史失败"}`))
+		errbody.Write(rc, 500, "获取历史失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -108,9 +101,7 @@ func (h *SessionHandler) DeleteSession(ctx context.Context, rc *app.RequestConte
 	sessionID := rc.Param("sid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
@@ -120,9 +111,7 @@ func (h *SessionHandler) DeleteSession(ctx context.Context, rc *app.RequestConte
 	}
 	// 非本人的会话与不存在的会话一律 404，响应体与 GetSession 保持一致
 	if !ownsOrAdmin(h.memory, owner, sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(`{"status":"session_not_found","message":"会话不存在"}`))
+		writeSessionNotFound(rc)
 		return
 	}
 
@@ -134,7 +123,7 @@ func (h *SessionHandler) DeleteSession(ctx context.Context, rc *app.RequestConte
 		if !h.runtime.Wait(sessionID, deleteWaitTimeout) {
 			log.Warn("删除会话：等待活跃对话退出超时",
 				zap.String("session_id", sessionID), zap.String("chat_id", active.ChatID))
-			writeChatStillRunning(rc, sessionID)
+			writeChatStillRunning(rc)
 			return
 		}
 	} else if h.canceller.OthersAlive(ctx) {
@@ -148,16 +137,14 @@ func (h *SessionHandler) DeleteSession(ctx context.Context, rc *app.RequestConte
 
 	// 占位：阻止删除期间续聊；若续聊已抢先注册则视为仍在执行
 	if _, err := h.runtime.Register(ctx, sessionID, "delete"); err != nil {
-		writeChatStillRunning(rc, sessionID)
+		writeChatStillRunning(rc)
 		return
 	}
 	defer h.runtime.Delete(sessionID)
 
 	if err := h.memory.DeleteSession(sessionID); err != nil {
 		log.Error("删除会话失败", zap.String("session_id", sessionID), zap.Error(err))
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"error","message":"删除会话失败"}`))
+		errbody.Write(rc, 500, "删除会话失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -180,25 +167,20 @@ func (h *SessionHandler) RenameSession(ctx context.Context, rc *app.RequestConte
 	sessionID := rc.Param("sid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
 	var req renameSessionRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"请求参数错误"}`))
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 
 	title := strings.TrimSpace(req.Title)
 	if n := utf8.RuneCountInString(title); n < 1 || n > memory.MaxTitleRunes {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"标题不能为空，且长度不能超过 100 个字符"}`))
+		errbody.Write(rc, 400, "标题不能为空，且长度不能超过 100 个字符",
+			errbody.TypeInvalidRequest, "title", errbody.CodeInvalidRequest)
 		return
 	}
 
@@ -208,23 +190,17 @@ func (h *SessionHandler) RenameSession(ctx context.Context, rc *app.RequestConte
 	}
 	// 非本人的会话与不存在的会话一律 404，响应体与 GetSession 保持一致
 	if !ownsOrAdmin(h.memory, owner, sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(`{"status":"session_not_found","message":"会话不存在"}`))
+		writeSessionNotFound(rc)
 		return
 	}
 
 	if err := h.memory.RenameSession(sessionID, title); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			rc.SetContentType("application/json")
-			rc.SetStatusCode(404)
-			rc.Write([]byte(`{"status":"session_not_found","message":"会话不存在"}`))
+			writeSessionNotFound(rc)
 			return
 		}
 		logger.FromContext(ctx).Error("重命名会话失败", zap.String("session_id", sessionID), zap.Error(err))
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"error","message":"重命名失败"}`))
+		errbody.Write(rc, 500, "重命名失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
@@ -236,12 +212,9 @@ func (h *SessionHandler) RenameSession(ctx context.Context, rc *app.RequestConte
 }
 
 // writeChatStillRunning 写出 409 chat_still_running 响应
-func writeChatStillRunning(rc *app.RequestContext, sessionID string) {
-	rc.JSON(409, utils.H{
-		"status":     "chat_still_running",
-		"session_id": sessionID,
-		"message":    "对话仍在执行，请稍后重试",
-	})
+func writeChatStillRunning(rc *app.RequestContext) {
+	errbody.Write(rc, 409, "对话仍在执行，请稍后重试",
+		errbody.TypeInvalidRequest, "", errbody.CodeChatStillRunning)
 }
 
 // ListSessions 处理 GET /sess/history
@@ -270,9 +243,7 @@ func (h *SessionHandler) ListSessions(ctx context.Context, rc *app.RequestContex
 
 	sessions, total, err := h.memory.ListSessions(owner, limitInt, offsetInt)
 	if err != nil {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(500)
-		rc.Write([]byte(`{"status":"error","message":"查询失败"}`))
+		errbody.Write(rc, 500, "查询失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 

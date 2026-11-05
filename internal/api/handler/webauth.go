@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/repo"
@@ -80,31 +81,31 @@ func (h *WebAuthHandler) Setup(ctx context.Context, rc *app.RequestContext) {
 	n, err := h.users.Count(ctx)
 	if err != nil {
 		h.logger.Error("查询用户数量失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "服务器内部错误"})
+		errbody.Write(rc, 500, "服务器内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	if n > 0 {
-		rc.JSON(409, utils.H{"status": "already_initialized", "message": "用户已存在"})
+		errbody.Write(rc, 409, "用户已存在", errbody.TypeInvalidRequest, "", "already_initialized")
 		return
 	}
 	var req webLoginRequest
 	if err := json.Unmarshal(rc.Request.Body(), &req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求格式错误"})
+		errbody.Write(rc, 400, "请求格式错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	username := strings.TrimSpace(req.Username)
 	if username == "" {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "用户名不能为空"})
+		errbody.Write(rc, 400, "用户名不能为空", errbody.TypeInvalidRequest, "username", errbody.CodeInvalidRequest)
 		return
 	}
 	if msg, ok := validatePassword(req.Password); !ok {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": msg})
+		errbody.Write(rc, 400, msg, errbody.TypeInvalidRequest, "password", errbody.CodeInvalidRequest)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		h.logger.Error("密码加密失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "服务器内部错误"})
+		errbody.Write(rc, 500, "服务器内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	now := time.Now()
@@ -117,7 +118,7 @@ func (h *WebAuthHandler) Setup(ctx context.Context, rc *app.RequestContext) {
 	}
 	if err := h.users.Create(ctx, u); err != nil {
 		h.logger.Error("创建用户失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "创建用户失败"})
+		errbody.Write(rc, 500, "创建用户失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	h.logger.Info("Web 用户已创建", zap.String("username", username))
@@ -130,18 +131,18 @@ func (h *WebAuthHandler) Login(ctx context.Context, rc *app.RequestContext) {
 	// X-Forwarded-For，攻击者每次换一个头即可绕过锁定。
 	key := lockKey(rc)
 	if h.store.IsLocked(key) {
-		rc.JSON(429, utils.H{"status": "locked", "message": "登录失败次数过多，请稍后再试"})
+		errbody.Write(rc, 429, "登录失败次数过多，请稍后再试", errbody.TypeRateLimit, "", errbody.CodeRateLimitExceeded)
 		return
 	}
 	var req webLoginRequest
 	if err := json.Unmarshal(rc.Request.Body(), &req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求格式错误"})
+		errbody.Write(rc, 400, "请求格式错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	user, err := h.users.GetByUsername(ctx, strings.TrimSpace(req.Username))
 	if err != nil && !errors.Is(err, repo.ErrNotFound) {
 		h.logger.Error("查询用户失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "服务器内部错误"})
+		errbody.Write(rc, 500, "服务器内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	// 用户不存在时仍对假哈希做一次 bcrypt 比较，拉平耗时，
@@ -155,7 +156,7 @@ func (h *WebAuthHandler) Login(ctx context.Context, rc *app.RequestContext) {
 		h.store.RecordFailure(key)
 		// 仅记录来源，不记录用户名与密码，避免凭证进入日志
 		h.logger.Warn("Web 登录失败", zap.String("source", key))
-		rc.JSON(401, utils.H{"status": "unauthorized", "message": "用户名或密码错误"})
+		errbody.Write(rc, 401, "用户名或密码错误", errbody.TypeAuthentication, "", errbody.CodeInvalidAPIKey)
 		return
 	}
 	h.store.ClearFailures(key)
@@ -196,7 +197,7 @@ func (h *WebAuthHandler) Me(ctx context.Context, rc *app.RequestContext) {
 	n, err := h.users.Count(ctx)
 	if err != nil {
 		h.logger.Error("查询用户数量失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "服务器内部错误"})
+		errbody.Write(rc, 500, "服务器内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	resp := utils.H{
@@ -224,37 +225,37 @@ func (h *WebAuthHandler) ChangePassword(ctx context.Context, rc *app.RequestCont
 		userID, ok = h.store.Validate(token)
 	}
 	if !ok {
-		rc.JSON(401, utils.H{"status": "unauthorized", "message": "未登录或会话已过期"})
+		errbody.Write(rc, 401, "未登录或会话已过期", errbody.TypeAuthentication, "", errbody.CodeInvalidAPIKey)
 		return
 	}
 	var req webChangePasswordRequest
 	if err := json.Unmarshal(rc.Request.Body(), &req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求格式错误"})
+		errbody.Write(rc, 400, "请求格式错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	user, err := h.users.GetByID(ctx, userID)
 	if err != nil {
 		h.logger.Error("查询用户失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "服务器内部错误"})
+		errbody.Write(rc, 500, "服务器内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)) != nil {
-		rc.JSON(401, utils.H{"status": "wrong_password", "message": "原始密码错误"})
+		errbody.Write(rc, 401, "原始密码错误", errbody.TypeAuthentication, "old_password", "wrong_password")
 		return
 	}
 	if msg, ok := validatePassword(req.NewPassword); !ok {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": msg})
+		errbody.Write(rc, 400, msg, errbody.TypeInvalidRequest, "new_password", errbody.CodeInvalidRequest)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
 		h.logger.Error("密码加密失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "服务器内部错误"})
+		errbody.Write(rc, 500, "服务器内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	if err := h.users.UpdatePassword(ctx, user.ID, string(hash)); err != nil {
 		h.logger.Error("更新密码失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "更新密码失败"})
+		errbody.Write(rc, 500, "更新密码失败", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	kicked := h.store.DeleteOtherByUser(user.ID, token)

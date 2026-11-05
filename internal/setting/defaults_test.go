@@ -44,8 +44,4 @@ func TestDefaults(t *testing.T) {
 	if defaultScheduleEnabled() {
 		t.Error("定时任务默认应关闭")
 	}
-
-	if got := defaultAuthHeaderName(); got != "X-API-Key" {
-		t.Errorf("auth.header_name = %q, want X-API-Key", got)
-	}
 }

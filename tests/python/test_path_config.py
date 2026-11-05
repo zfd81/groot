@@ -80,8 +80,7 @@ def abs_path_server():
         },
         "security": {
             "auth": {
-                # 认证始终开启：只需请求头名与 JWT 签名密钥
-                "header_name": "X-API-Key",
+                # 认证始终开启：只需 JWT 签名密钥
                 "secret": TEST_AUTH_SECRET
             }
         }

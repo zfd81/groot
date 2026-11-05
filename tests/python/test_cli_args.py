@@ -151,7 +151,7 @@ server:
 
             # 不带 API Key → 401（认证始终开启）
             response = requests.post(
-                "http://localhost:8093/chat",
+                "http://localhost:8093/chat/completions",
                 headers={"Content-Type": "application/json"},
                 json={"instruction": "test"},
                 timeout=10

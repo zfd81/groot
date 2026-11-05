@@ -55,7 +55,7 @@ type CallAgentTool struct {
 	tokenAccumulators *TokenAccumulators
 	log               *logger.Logger
 	parentRound       int
-	sse               *SSEWriter // 可为 nil；用于在子 Agent 运行期间登记其实际模型名
+	sse               EventWriter // 可为 nil；用于在子 Agent 运行期间登记其实际模型名
 }
 
 // CallAgentToolConfig 是 NewCallAgentTool 的命名参数集合。
@@ -72,7 +72,7 @@ type CallAgentToolConfig struct {
 	TokenAccumulators *TokenAccumulators
 	Log               *logger.Logger
 	ParentRound       int
-	SSE               *SSEWriter // 可为 nil
+	SSE               EventWriter // 可为 nil
 }
 
 // NewCallAgentTool 构造一个请求级 CallAgentTool。
@@ -162,7 +162,7 @@ func (t *CallAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		t.tokenAccumulators.SetModel(childChatID, resolvedModel)
 	}
 
-	// 向 SSEWriter 登记该子 Agent 的模型名，让其 chunk.model 反映实际模型。
+	// 向 EventWriter 登记该子 Agent 的模型名，让其 chunk.model 反映实际模型。
 	// 映射在请求生命周期内保留、不在此处清除：SSEWriter 按请求创建，且一次请求内
 	// 子 Agent 的模型固定；引擎在另一 goroutine 上转发子 Agent 事件，InvokableRun
 	// 返回后仍可能写出该子 Agent 的尾部 content/finish chunk，提前清除会使其误标为主模型。

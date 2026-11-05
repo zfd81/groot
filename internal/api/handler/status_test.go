@@ -139,9 +139,8 @@ func TestStatusHandler_MissingSidReturns400(t *testing.T) {
 
 	h.Serve(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "session_id 参数缺失",
+		"invalid_request_error", "session_id", "invalid_request")
 }
 
 // TestStatus_ForeignRunningSessionLooksIdle 验证归属判定先于活跃状态：
@@ -201,7 +200,7 @@ func TestStatus_OwnerSeesRunningSession(t *testing.T) {
 	}
 }
 
-// TestStatus_MissingUserID400 验证 API Key 调用者缺少 X-User-ID 时返回 400。
+// TestStatus_MissingUserID400 验证 API Key 调用者缺少 user 标识时返回 400 错误信封。
 func TestStatus_MissingUserID400(t *testing.T) {
 	rt := agent.NewRuntimeState()
 	sqlxDB, dialect, _ := db.Open(nil, t.TempDir())
@@ -213,9 +212,8 @@ func TestStatus_MissingUserID400(t *testing.T) {
 	setIdentity(rc, "svc", "crm", "")
 	h.Serve(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("expected 400, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "缺少或非法的 user",
+		"invalid_request_error", "user", "invalid_request")
 }
 
 // TestStatus_MissingTenant403 验证 API Key 未绑定租户时返回 403。
@@ -230,7 +228,6 @@ func TestStatus_MissingTenant403(t *testing.T) {
 	setIdentity(rc, "svc", "", "u1")
 	h.Serve(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 403 {
-		t.Fatalf("expected 403, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 403, "API Key 未绑定租户",
+		"permission_error", "", "tenant_not_bound")
 }

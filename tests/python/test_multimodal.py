@@ -1,6 +1,6 @@
 """
 多模态附件集成测试
-测试 image/audio/video/file 附件透传给大模型
+测试 OpenAI content parts（image_url / input_audio / file）透传给大模型
 """
 
 import pytest
@@ -101,6 +101,29 @@ def make_test_wav(duration=0.5, sample_rate=8000, frequency=440):
     return wav
 
 
+def image_part(png_base64):
+    """构造 OpenAI image_url content part（data URL 形式）"""
+    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png_base64}"}}
+
+
+def audio_part(wav_base64, fmt="wav"):
+    """构造 OpenAI input_audio content part（data 为纯 Base64，不带 data URL 前缀）"""
+    return {"type": "input_audio", "input_audio": {"data": wav_base64, "format": fmt}}
+
+
+def file_part(filename, content_base64, mime="text/plain"):
+    """构造 OpenAI file content part；file_data 为带 MIME 前缀的 data URL"""
+    return {
+        "type": "file",
+        "file": {"filename": filename, "file_data": f"data:{mime};base64,{content_base64}"},
+    }
+
+
+def text_part(text):
+    """构造 OpenAI text content part"""
+    return {"type": "text", "text": text}
+
+
 def parse_sse_stream(response):
     """解析 OpenAI chat.completion.chunk 格式的 SSE 流（只有 data: 行，无 event: 行）
 
@@ -158,18 +181,18 @@ class TestMultimodalImage:
         png_base64 = base64.b64encode(png_bytes).decode()
 
         payload = {
-            "instruction": "请描述这张图片的内容，包括颜色和形状",
-            "attachments": [
-                {
-                    "type": "image",
-                    "name": "red_square.png",
-                    "content": png_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("请描述这张图片的内容，包括颜色和形状"),
+                    image_part(png_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -177,10 +200,14 @@ class TestMultimodalImage:
         )
 
         assert response.status_code == 200, f"请求失败: {response.text[:500]}"
-        session_id = response.headers.get("X-Session-ID")
-        assert session_id, "缺少 X-Session-ID"
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
+        assert session_id, "缺少 session_id"
 
-        result_text, tool_calls, finish_reason, _ = parse_sse_stream(response)
+        # 汇总助手回复文本（message 事件里的 content 片段）
+        result_text = "".join(
+            e["data"].get("content", "") or "" for e in sse.get_message_events()
+        )
         print(f"\n[TC-MM-001] LLM 返回结果: {result_text}")
 
         # 验证结果包含颜色/图片相关描述
@@ -195,18 +222,18 @@ class TestMultimodalImage:
         png_base64 = base64.b64encode(png_bytes).decode()
 
         payload = {
-            "instruction": "这张图片是什么颜色的？只回答颜色名称，不要其他内容",
-            "attachments": [
-                {
-                    "type": "image",
-                    "name": "green_square.png",
-                    "content": png_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("这张图片是什么颜色的？只回答颜色名称，不要其他内容"),
+                    image_part(png_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -224,18 +251,18 @@ class TestMultimodalImage:
         file_base64 = base64.b64encode(file_content.encode()).decode()
 
         payload = {
-            "instruction": "请读取附件文件的内容并告诉我里面写了什么",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "test_data.txt",
-                    "content": file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("请读取附件文件的内容并告诉我里面写了什么"),
+                    file_part("test_data.txt", file_base64, "text/plain"),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -257,15 +284,19 @@ class TestMultimodalImage:
         blue_png = base64.b64encode(make_test_png(30, 30, color=(0, 0, 255))).decode()
 
         payload = {
-            "instruction": "我上传了两张图片，请描述它们分别是什么颜色",
-            "attachments": [
-                {"type": "image", "name": "red.png", "content": red_png},
-                {"type": "image", "name": "blue.png", "content": blue_png}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("我上传了两张图片，请描述它们分别是什么颜色"),
+                    image_part(red_png),
+                    image_part(blue_png),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -283,15 +314,19 @@ class TestMultimodalImage:
         file_base64 = base64.b64encode(b"IMPORTANT: The answer is 42").decode()
 
         payload = {
-            "instruction": "看图片和文件内容，图片是什么颜色？文件里写的重要信息是什么？",
-            "attachments": [
-                {"type": "image", "name": "yellow.png", "content": png_base64},
-                {"type": "file", "name": "secret.txt", "content": file_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("看图片和文件内容，图片是什么颜色？文件里写的重要信息是什么？"),
+                    image_part(png_base64),
+                    file_part("secret.txt", file_base64, "text/plain"),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -312,18 +347,18 @@ class TestMultimodalAudio:
         wav_base64 = base64.b64encode(wav_bytes).decode()
 
         payload = {
-            "instruction": "请分析这个音频文件的基本属性，比如采样率、声道数等",
-            "attachments": [
-                {
-                    "type": "audio",
-                    "name": "test_tone.wav",
-                    "content": wav_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("请分析这个音频文件的基本属性，比如采样率、声道数等"),
+                    audio_part(wav_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -331,10 +366,13 @@ class TestMultimodalAudio:
         )
 
         assert response.status_code == 200, f"请求失败: {response.text[:500]}"
-        session_id = response.headers.get("X-Session-ID")
-        assert session_id, "缺少 X-Session-ID"
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
+        assert session_id, "缺少 session_id"
 
-        result_text, _, _, _ = parse_sse_stream(response)
+        result_text = "".join(
+            e["data"].get("content", "") or "" for e in sse.get_message_events()
+        )
         print(f"\n[TC-MM-007] LLM 返回结果: {result_text}")
 
     def test_audio_with_instruction(self, server, api_headers):
@@ -343,18 +381,18 @@ class TestMultimodalAudio:
         wav_base64 = base64.b64encode(wav_bytes).decode()
 
         payload = {
-            "instruction": "这个音频的频率大概是多少？只回答频率，不要其他内容",
-            "attachments": [
-                {
-                    "type": "audio",
-                    "name": "c5_note.wav",
-                    "content": wav_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("这个音频的频率大概是多少？只回答频率，不要其他内容"),
+                    audio_part(wav_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -373,15 +411,19 @@ class TestMultimodalAudio:
         wav_base64 = base64.b64encode(wav_bytes).decode()
 
         payload = {
-            "instruction": "我上传了一张图片和一个音频文件，请描述图片颜色和音频大致属性",
-            "attachments": [
-                {"type": "image", "name": "red_square.png", "content": png_base64},
-                {"type": "audio", "name": "tone.wav", "content": wav_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("我上传了一张图片和一个音频文件，请描述图片颜色和音频大致属性"),
+                    image_part(png_base64),
+                    audio_part(wav_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,

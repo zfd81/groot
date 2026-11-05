@@ -145,6 +145,30 @@ func TestSearchSessions_EmptyQuery(t *testing.T) {
 	}
 }
 
+// TestSearchSessions_EmptyQuerySkipsUserCheck 验证 q 为空时直接返回空列表，
+// 即使调用者缺少 user 标识也不做归属校验、不报 400。
+func TestSearchSessions_EmptyQuerySkipsUserCheck(t *testing.T) {
+	h, _, _ := newSearchTestHandler(t)
+	rc := newSearchTestContext("q=")
+	setIdentity(rc, "svc", "crm", "")
+
+	h.SearchSessions(context.Background(), rc)
+
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("expected 200, got %d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	var body struct {
+		Status  string                `json:"status"`
+		Results []memory.SearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(rc.Response.Body(), &body); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, rc.Response.Body())
+	}
+	if body.Status != "success" || len(body.Results) != 0 {
+		t.Fatalf("expected empty success, got %s", rc.Response.Body())
+	}
+}
+
 func TestSearchSessions_ForeignTenantEmpty(t *testing.T) {
 	h, mem, _ := newSearchTestHandler(t)
 	if err := mem.CreateSession("hs-ft", "crm", "u1", ""); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/logger"
@@ -93,20 +94,16 @@ func TestWebSetup_AlreadyInitialized(t *testing.T) {
 	h := newWebAuthForTest(t)
 	seedUser(t, h, "admin", "secret123")
 	rc := postJSON(h.Setup, `{"username":"other","password":"secret123"}`)
-	if rc.Response.StatusCode() != 409 {
-		t.Fatalf("expected 409, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "already_initialized")
 }
 
 // TestWebSetup_InvalidInput 密码过短或用户名为空返回 400。
 func TestWebSetup_InvalidInput(t *testing.T) {
 	h := newWebAuthForTest(t)
-	if rc := postJSON(h.Setup, `{"username":"admin","password":"short"}`); rc.Response.StatusCode() != 400 {
-		t.Errorf("short password: expected 400, got %d", rc.Response.StatusCode())
-	}
-	if rc := postJSON(h.Setup, `{"username":"  ","password":"secret123"}`); rc.Response.StatusCode() != 400 {
-		t.Errorf("blank username: expected 400, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSON(h.Setup, `{"username":"admin","password":"short"}`),
+		400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
+	assertEnvelopeError(t, postJSON(h.Setup, `{"username":"  ","password":"secret123"}`),
+		400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 	if n, _ := h.users.Count(context.Background()); n != 0 {
 		t.Errorf("no user should be created, count=%d", n)
 	}
@@ -137,12 +134,10 @@ func TestWebLogin_Success(t *testing.T) {
 func TestWebLogin_WrongPassword(t *testing.T) {
 	h := newWebAuthForTest(t)
 	seedUser(t, h, "admin", "secret123")
-	if rc := postJSON(h.Login, `{"username":"admin","password":"wrong-pass"}`); rc.Response.StatusCode() != 401 {
-		t.Errorf("wrong password: expected 401, got %d", rc.Response.StatusCode())
-	}
-	if rc := postJSON(h.Login, `{"username":"nobody","password":"secret123"}`); rc.Response.StatusCode() != 401 {
-		t.Errorf("unknown user: expected 401, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSON(h.Login, `{"username":"admin","password":"wrong-pass"}`),
+		401, errbody.TypeAuthentication, errbody.CodeInvalidAPIKey)
+	assertEnvelopeError(t, postJSON(h.Login, `{"username":"nobody","password":"secret123"}`),
+		401, errbody.TypeAuthentication, errbody.CodeInvalidAPIKey)
 }
 
 // TestWebLogin_Lockout 连续 5 次失败后第 6 次返回 429。
@@ -153,9 +148,7 @@ func TestWebLogin_Lockout(t *testing.T) {
 		postJSON(h.Login, `{"username":"admin","password":"wrong-pass"}`)
 	}
 	rc := postJSON(h.Login, `{"username":"admin","password":"secret123"}`)
-	if rc.Response.StatusCode() != 429 {
-		t.Fatalf("expected 429 after lockout, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, rc, 429, errbody.TypeRateLimit, errbody.CodeRateLimitExceeded)
 }
 
 // TestWebLogin_SecureCookie 经 https 到达（X-Forwarded-Proto）时 Cookie 置 Secure，否则不置。
@@ -236,21 +229,21 @@ func TestWebChangePassword(t *testing.T) {
 	id := seedUser(t, h, "admin", "secret123")
 
 	// 无会话
-	if rc := postJSON(h.ChangePassword, `{"old_password":"secret123","new_password":"newsecret1"}`); rc.Response.StatusCode() != 401 {
-		t.Errorf("no session: expected 401, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSON(h.ChangePassword, `{"old_password":"secret123","new_password":"newsecret1"}`),
+		401, errbody.TypeAuthentication, errbody.CodeInvalidAPIKey)
 
 	token := h.store.Create(id)
 	other := h.store.Create(id)
 
 	// 原密码错误
-	if rc := postJSONWithCookie(h.ChangePassword, `{"old_password":"wrong-old","new_password":"newsecret1"}`, token); rc.Response.StatusCode() != 401 {
-		t.Errorf("wrong old password: expected 401, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSONWithCookie(h.ChangePassword, `{"old_password":"wrong-old","new_password":"newsecret1"}`, token),
+		401, errbody.TypeAuthentication, "wrong_password")
 
-	// 新密码过短
-	if rc := postJSONWithCookie(h.ChangePassword, `{"old_password":"secret123","new_password":"short"}`, token); rc.Response.StatusCode() != 400 {
-		t.Errorf("short new password: expected 400, got %d", rc.Response.StatusCode())
+	// 新密码过短：param 必须指向请求结构里的 new_password 字段
+	rcShort := postJSONWithCookie(h.ChangePassword, `{"old_password":"secret123","new_password":"short"}`, token)
+	assertEnvelopeError(t, rcShort, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
+	if envl := envelopeOf(t, rcShort).Error; envl.Param == nil || *envl.Param != "new_password" {
+		t.Errorf("param = %v, want new_password; body=%s", envl.Param, rcShort.Response.Body())
 	}
 
 	// 成功
@@ -267,9 +260,8 @@ func TestWebChangePassword(t *testing.T) {
 	}
 
 	// 旧密码登录失败，新密码登录成功
-	if rc := postJSON(h.Login, `{"username":"admin","password":"secret123"}`); rc.Response.StatusCode() != 401 {
-		t.Errorf("old password should no longer work, got %d", rc.Response.StatusCode())
-	}
+	assertEnvelopeError(t, postJSON(h.Login, `{"username":"admin","password":"secret123"}`),
+		401, errbody.TypeAuthentication, errbody.CodeInvalidAPIKey)
 	if rc := postJSON(h.Login, `{"username":"admin","password":"newsecret1"}`); rc.Response.StatusCode() != 200 {
 		t.Errorf("new password should work, got %d", rc.Response.StatusCode())
 	}

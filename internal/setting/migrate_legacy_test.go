@@ -19,7 +19,7 @@ func TestImportLegacy_WritesNonZero(t *testing.T) {
 	lb := &config.LegacyBusiness{
 		Memory: config.MemoryConfig{HistoryWindow: 50},
 		React:  config.ReactConfig{MaxIterations: 30},
-		Auth:   config.AuthConfig{Secret: "deadbeef", HeaderName: "X-Groot-Key"},
+		Auth:   config.AuthConfig{Secret: "deadbeef"},
 		RateLimit: config.RateLimitConfig{
 			Enabled:    true,
 			DefaultQPS: 25,
@@ -43,7 +43,7 @@ func TestImportLegacy_WritesNonZero(t *testing.T) {
 		t.Errorf("step_timeout = %d, want 默认 60", r.StepTimeout)
 	}
 	a, _ := s.Auth(ctx)
-	if a.Secret != "deadbeef" || a.HeaderName != "X-Groot-Key" {
+	if a.Secret != "deadbeef" {
 		t.Errorf("auth = %+v", a)
 	}
 	sec, _ := s.Security(ctx)
@@ -136,7 +136,6 @@ schedule:
 security:
   auth:
     secret: "deadbeef"
-    header_name: X-Groot-Key
   rate_limit:
     enabled: true
     global_qps: 12.5
@@ -222,7 +221,7 @@ message:
 		rl.DefaultQPS != 25 || rl.DefaultConcurrency != 8 {
 		t.Errorf("rate_limit = %+v", rl)
 	}
-	if sec.Auth.Secret != "deadbeef" || sec.Auth.HeaderName != "X-Groot-Key" {
+	if sec.Auth.Secret != "deadbeef" {
 		t.Errorf("auth = %+v", sec.Auth)
 	}
 

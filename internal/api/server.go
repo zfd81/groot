@@ -56,13 +56,16 @@ func NewServer(
 	clusterInst *cluster.Cluster, // 集群实例：提供本机 reg_id 与消息发送能力
 	role lifecycle.Role, // 进程角色：决定健康检查的 process_mode 与是否支持重启
 ) *Server {
-	// Set a large max request body size to allow attachment handler to validate sizes
-	// Hertz returns 413 when body exceeds this limit, but we want attachment handler
-	// to return 400 with proper error code instead
+	// Set a large max request body size so the attachment handler can validate sizes
+	// and report file_too_large with the unified envelope instead of the framework's
+	// plain-text 413. Requests above this hard limit are still rejected by Hertz.
 	// Use 200MB as max to handle large attachments with Base64 encoding
 	maxBodySize := 200 * 1024 * 1024 // 200MB
 
-	// Create Hertz server with custom body size limit
+	// Create Hertz server with custom body size limit.
+	// 不开启 HandleMethodNotAllowed：方法不匹配统一走 NoRoute 返回 404 信封。
+	// 405 分支的处理链只含全局中间件，不含 apiGroup 上的鉴权中间件，会让未携带
+	// 凭证的请求直接拿到 405，等同于无鉴权的路由探测。
 	h := server.Default(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
 		server.WithMaxRequestBodySize(maxBodySize),
@@ -100,6 +103,7 @@ func NewServer(
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
 	modelsH := handler.NewModelsHandler(models, log)
+	modelsPublicH := handler.NewModelsPublicHandler(models, log)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, settings, log)
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)
 	apiKeysH := handler.NewAPIKeysHandler(apiKeys, cfg.Security, log)
@@ -135,7 +139,7 @@ func NewServer(
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, stopH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, imageH, settingH)
+		healthH, skillsH, agentsH, toolsH, modelsH, modelsPublicH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, imageH, settingH)
 
 	return &Server{
 		hertz:  h,

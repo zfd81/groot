@@ -7,10 +7,10 @@ import (
 
 	"github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/logger"
 )
@@ -93,11 +93,11 @@ func (h *AgentsHandler) Definition(ctx context.Context, rc *app.RequestContext) 
 		path = filepath.Join(h.homeDir, file)
 	} else {
 		if h.registry == nil {
-			rc.JSON(404, utils.H{"status": "not_found", "message": "Agent 不存在"})
+			errbody.Write(rc, 404, "Agent 不存在", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 			return
 		}
 		if _, ok := h.registry.Get(name); !ok {
-			rc.JSON(404, utils.H{"status": "not_found", "message": "Agent 不存在"})
+			errbody.Write(rc, 404, "Agent 不存在", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 			return
 		}
 		file = "agent.md"
@@ -110,7 +110,7 @@ func (h *AgentsHandler) Definition(ctx context.Context, rc *app.RequestContext) 
 			zap.String("agent", name),
 			zap.String("path", path),
 			zap.Error(err))
-		rc.JSON(404, utils.H{"status": "not_found", "message": "Agent 定义文件不存在"})
+		errbody.Write(rc, 404, "Agent 定义文件不存在", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 

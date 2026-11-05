@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,9 +9,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
@@ -48,72 +49,85 @@ func NewSpeechHandler(models *llm.ModelService, log *logger.Logger) *SpeechHandl
 func (h *SpeechHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	var req types.SpeechRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 
 	input := strings.TrimSpace(req.Input)
 	if input == "" {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "input 不能为空"})
+		errbody.Write(rc, 400, "input 不能为空", errbody.TypeInvalidRequest, "input", errbody.CodeInvalidRequest)
 		return
 	}
 	if utf8.RuneCountInString(input) > maxSpeechInputRunes {
-		rc.JSON(400, utils.H{
-			"status":  "invalid_request",
-			"message": fmt.Sprintf("input 超过 %d 字符上限", maxSpeechInputRunes),
-		})
+		errbody.Write(rc, 400, fmt.Sprintf("input 超过 %d 字符上限", maxSpeechInputRunes),
+			errbody.TypeInvalidRequest, "input", errbody.CodeInvalidRequest)
+		return
+	}
+	// 对外接口不提供默认音色，调用方必须显式给出。
+	voice := strings.TrimSpace(req.Voice)
+	if voice == "" {
+		errbody.Write(rc, 400, "缺少 voice", errbody.TypeInvalidRequest, "voice", errbody.CodeInvalidRequest)
 		return
 	}
 	if req.ResponseFormat != "" && !speechFormats[req.ResponseFormat] {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "不支持的 response_format"})
+		errbody.Write(rc, 400, "不支持的 response_format",
+			errbody.TypeInvalidRequest, "response_format", errbody.CodeInvalidRequest)
 		return
 	}
 
-	voice := strings.TrimSpace(req.Voice)
 	language := strings.TrimSpace(req.Language)
 	instructions := strings.TrimSpace(req.Instructions)
 	if msg, ok := checkSpeechFieldLimits(voice, language, instructions); !ok {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": msg})
+		errbody.Write(rc, 400, msg, errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 
-	// 模型名按「请求体 model → 请求头 X-Model-Name」取显式指定值，均为空时由 Resolve 回落到默认 TTS 模型。
+	// 模型名取请求体 model，为空时由 Resolve 回落到默认 TTS 模型。
 	// 显式指定的模型不要求持有 tts 默认；不存在或禁用时直接报错，不回落。
 	name := strings.TrimSpace(req.Model)
-	if name == "" {
-		name = strings.TrimSpace(string(rc.GetHeader("X-Model-Name")))
-	}
 	m, err := h.models.Resolve(ctx, name, repo.DefaultTTS)
 	if err != nil {
 		if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) ||
 			errors.Is(err, llm.ErrNoDefaultModel) {
-			rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
+			errbody.Write(rc, 400, err.Error(), errbody.TypeInvalidRequest, "model", errbody.CodeModelNotFound)
 			return
 		}
 		h.log.Error("查询 TTS 模型失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 
-	body, ct, err := llm.Speech(ctx, m, llm.SpeechRequest{
+	body, ct, upErr, err := llm.Speech(ctx, m, llm.SpeechRequest{
 		Input:          input,
 		Voice:          voice,
 		Language:       language,
 		Instructions:   instructions,
 		ResponseFormat: req.ResponseFormat,
+		Speed:          req.Speed,
 	})
 	if err != nil {
 		h.log.Warn("语音合成失败", zap.String("model", m.Name), zap.Error(err))
-		rc.JSON(502, utils.H{"status": "upstream_error", "message": err.Error()})
+		errbody.Write(rc, 502, err.Error(), errbody.TypeAPI, "", errbody.CodeUpstreamError)
+		return
+	}
+	if upErr != nil {
+		// 与转录接口同一规则：OpenAI 信封原样转发，其它（网关 HTML 页、纯文本）转成 502。
+		if isOpenAIEnvelope(upErr.Body) {
+			contentType := upErr.ContentType
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			forwardUpstream(rc, upErr.StatusCode, contentType, bytes.NewReader(upErr.Body), len(upErr.Body))
+			return
+		}
+		errbody.Write(rc, 502, llm.UpstreamMessage(upErr.Body, upErr.StatusCode),
+			errbody.TypeAPI, "", errbody.CodeUpstreamError)
 		return
 	}
 
 	// 上游音频流直接转发，不读入内存；body 实现 io.Closer，
 	// Hertz 写完响应后在 CloseBodyStream 中关闭它。
-	rc.Response.Header.Set("X-Model-Name", m.Name)
-	rc.SetContentType(ct)
-	rc.SetBodyStream(body, -1)
-	rc.SetStatusCode(200)
+	forwardUpstream(rc, 200, ct, body, -1)
 }
 
 // checkSpeechFieldLimits 逐个检查已裁剪空白的可选透传字段是否超过长度上限。

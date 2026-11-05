@@ -112,10 +112,9 @@ def _write_config(home: str, port: int) -> None:
     cfg = {
         "agent": {"name": "groot", "version": "test"},
         "server": {"host": "127.0.0.1", "port": port},
-        # 认证始终开启：只需请求头名与 JWT 签名密钥；API Key 通过 Web 端点创建
+        # 认证始终开启：只需 JWT 签名密钥；API Key 通过 Web 端点创建
         "security": {
             "auth": {
-                "header_name": "X-API-Key",
                 "secret": TEST_AUTH_SECRET,
             }
         },
@@ -165,6 +164,46 @@ def _write_grootmd(home: str, content: str) -> None:
         f.write(content)
 
 
+class _BufferedText:
+    """把已读行与剩余流拼接成完整响应文本，供 SSEClient 解析"""
+
+    def __init__(self, lines):
+        self.text = "\n".join(lines)
+
+
+def _read_first_session_id(response):
+    """从流式响应读取前几个 data: chunk，返回 ``(session_id, 已读行, iterator)``。
+
+    流式响应不再携带会话标识响应头；取到即停，让对话继续在服务端执行，
+    调用方仍可在执行期间轮询 /chat/status。
+
+    ``iterator`` 是 ``response.iter_lines()`` 返回的同一个生成器，调用方必须用它
+    读完剩余行：一旦丢弃，requests 会在生成器回收时立即关闭底层连接，之后再调
+    ``response.iter_lines()`` 只能读到 0 行。该写法的隐式前提是服务端未开启
+    客户端断连感知（``internal/api/server.go`` 未传 ``WithSenseClientDisconnection``）。
+    """
+    it = response.iter_lines()
+    lines = []
+    for line in it:
+        if not line:
+            continue
+        text = line.decode("utf-8") if isinstance(line, bytes) else line
+        lines.append(text)
+        stripped = text.strip()
+        if not stripped.startswith("data:"):
+            continue
+        body = stripped[5:].strip()
+        if not body or body == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        if chunk.get("session_id"):
+            return chunk["session_id"], lines, it
+    return None, lines, it
+
+
 def _write_subagent(home: str, name: str, description: str, body: str) -> None:
     d = os.path.join(home, "subagents", name)
     os.makedirs(d, exist_ok=True)
@@ -185,7 +224,7 @@ def _setup_echo_agent(home: str) -> None:
 
 class _Server:
     """启动一个独占 groot 进程；每个实例使用独立数据库，启动后自动：
-    - 通过 Web 端点创建 API Key（self.headers，用于 /chat 等 API 端点）
+    - 通过 Web 端点创建 API Key（self.headers，用于 /chat/completions 等 API 端点）
     - 建立 Web 登录 Cookie Session（self.web，用于 /web/tools 等端点）
     - 通过 /web/models 创建真实 LLM 模型并设为默认（模型只存数据库）"""
 
@@ -210,12 +249,12 @@ class _Server:
         # 独立数据库：为本实例创建 all 权限的 JWT API Key
         self.headers = {
             "Content-Type": "application/json",
-            "X-API-Key": bootstrap_api_key(self.base_url, name="pytest-multi-agent-llm"),
-            "X-User-ID": TEST_USER_ID,
+            "Authorization": f"Bearer {bootstrap_api_key(self.base_url, name='pytest-multi-agent-llm')}",
+            "user": TEST_USER_ID,
         }
-        # /web/* 端点需要 Web 登录 Cookie（X-API-Key 无效）
+        # /web/* 端点需要 Web 登录 Cookie（Bearer API Key 无效）
         self.web = _web_login(self.base_url)
-        # 创建真实 LLM 模型（每个实例全新数据库，必须先建模型才能 /chat）
+        # 创建真实 LLM 模型（每个实例全新数据库，必须先建模型才能 /chat/completions）
         _ensure_real_llm_model(self.base_url, self.web)
         return self
 
@@ -264,9 +303,13 @@ class TestSoloMode:
 
         with _Server(home, port) as srv:
             r = requests.post(
-                f"{srv.base_url}/chat",
-                headers={**srv.headers, "X-Agent-Name": "echo-agent"},
-                json={"instruction": "苹果"},
+                f"{srv.base_url}/chat/completions",
+                headers=srv.headers,
+                json={
+                    "messages": [{"role": "user", "content": "苹果"}],
+                    "agent_name": "echo-agent",
+                    "stream": True,
+                },
                 stream=True,
                 timeout=120,
             )
@@ -300,16 +343,20 @@ class TestSoloMode:
 
         with _Server(home, port) as srv:
             r = requests.post(
-                f"{srv.base_url}/chat",
-                headers={**srv.headers, "X-Agent-Name": "echo-agent"},
-                json={"instruction": "你好"},
+                f"{srv.base_url}/chat/completions",
+                headers=srv.headers,
+                json={
+                    "messages": [{"role": "user", "content": "你好"}],
+                    "agent_name": "echo-agent",
+                    "stream": True,
+                },
                 stream=True,
                 timeout=120,
             )
             assert r.status_code == 200
-            sid = r.headers.get("X-Session-ID")
-            assert sid, "响应未返回 X-Session-ID"
-            SSEClient(r)  # drain
+            sse = SSEClient(r)  # drain
+            sid = sse.get_session_id()
+            assert sid, "流中未返回 session_id"
 
             # 查会话详情
             sess = requests.get(
@@ -337,9 +384,12 @@ class TestSoloMode:
 
         with _Server(home, port) as srv:
             r = requests.post(
-                f"{srv.base_url}/chat",
-                headers={**srv.headers, "X-Agent-Name": "ghost"},
-                json={"instruction": "x"},
+                f"{srv.base_url}/chat/completions",
+                headers=srv.headers,
+                json={
+                    "messages": [{"role": "user", "content": "x"}],
+                    "agent_name": "ghost",
+                },
                 timeout=10,
             )
             assert r.status_code == 400
@@ -406,11 +456,14 @@ class TestOrchestrationMode:
 
         with _Server(home, port) as srv:
             r = requests.post(
-                f"{srv.base_url}/chat",
+                f"{srv.base_url}/chat/completions",
                 headers=srv.headers,
                 json={
-                    "instruction": "请委托 echo-agent 复述「测试」二字",
-                    "prompt": "你必须使用 call_agent 工具委托 echo-agent 处理；不要自己回答。",
+                    "messages": [
+                        {"role": "system", "content": "你必须使用 call_agent 工具委托 echo-agent 处理；不要自己回答。"},
+                        {"role": "user", "content": "请委托 echo-agent 复述「测试」二字"},
+                    ],
+                    "stream": True,
                 },
                 stream=True,
                 timeout=180,
@@ -463,17 +516,22 @@ class TestOrchestrationMode:
         with _Server(home, port) as srv:
             # stream 启动 chat
             r = requests.post(
-                f"{srv.base_url}/chat",
+                f"{srv.base_url}/chat/completions",
                 headers=srv.headers,
                 json={
-                    "instruction": "请通过 call_agent 让 echo-agent 复述「窗口」",
-                    "prompt": "必须用 call_agent 委托 echo-agent。",
+                    "messages": [
+                        {"role": "system", "content": "必须用 call_agent 委托 echo-agent。"},
+                        {"role": "user", "content": "请通过 call_agent 让 echo-agent 复述「窗口」"},
+                    ],
+                    "stream": True,
                 },
                 stream=True,
                 timeout=180,
             )
             assert r.status_code == 200
-            sid = r.headers.get("X-Session-ID")
+            # 流式响应不再携带会话标识响应头：从首个 chunk 取 session_id，
+            # 只读到取到就停，以便子 Agent 仍在运行时轮询 status。
+            sid, buffered, it = _read_first_session_id(r)
             assert sid
 
             # poll status 3s，期间 echo-agent 大概率在运行
@@ -494,8 +552,12 @@ class TestOrchestrationMode:
                         break
                 time.sleep(0.2)
 
-            # 即使没抓到瞬时窗口，至少 SSE 也应跑完不报错
-            SSEClient(r)
+            # 用同一个存活迭代器读完剩余事件，再与已读行拼接后整体解析，
+            # 保证整条 SSE 流仍是合法可解析的（全程不报错）。
+            for line in it:
+                if line:
+                    buffered.append(line.decode("utf-8") if isinstance(line, bytes) else line)
+            SSEClient(_BufferedText(buffered))
             # 抓不到就 xfail 而非 fail——窗口非常窄，CI 不稳定
             if not seen_subagent:
                 pytest.xfail(
@@ -532,20 +594,23 @@ class TestChildChatIDPrefix:
 
         with _Server(home, port) as srv:
             r = requests.post(
-                f"{srv.base_url}/chat",
+                f"{srv.base_url}/chat/completions",
                 headers=srv.headers,
                 json={
-                    "instruction": "用 call_agent 调 echo-agent 复述「父子」",
-                    "prompt": "必须用 call_agent。",
+                    "messages": [
+                        {"role": "system", "content": "必须用 call_agent。"},
+                        {"role": "user", "content": "用 call_agent 调 echo-agent 复述「父子」"},
+                    ],
+                    "stream": True,
                 },
                 stream=True,
                 timeout=180,
             )
             assert r.status_code == 200
-            parent_chat_id = r.headers.get("X-Chat-ID")
-            sid = r.headers.get("X-Session-ID")
+            sse = SSEClient(r)  # drain
+            parent_chat_id = sse.get_chat_id()
+            sid = sse.get_session_id()
             assert parent_chat_id and sid
-            SSEClient(r)  # drain
 
             # 等持久化稳定
             time.sleep(1.0)

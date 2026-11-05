@@ -1,16 +1,17 @@
 """
 认证功能测试（JWT API Key）
 
-新认证机制：
-- 认证始终开启，服务端配置只有 security.auth.header_name（默认 X-API-Key）
-  与 security.auth.secret（HS256 签名密钥）
+认证机制：
+- 认证始终开启，服务端配置 security.auth.secret（HS256 签名密钥）
 - API Key 本身是 JWT，只能通过 Web 端点（POST /web/apikeys）创建，保存在数据库；
-  请求时放在 X-API-Key 请求头
-- 无 Key / 无效 Key / 已删除的 Key → 401，响应体 status=unauthorized
-- Key 有效但权限不足 → 403，响应体 status=forbidden
+  请求时以 Authorization: Bearer <token> 携带
+- 无 Key / 无效 Key / 已删除的 Key → 401，错误体 error.type=authentication_error、
+  error.code=invalid_api_key
+- Key 有效但权限不足 → 403，错误体 error.code=insufficient_permissions
 - 权限点：chat / status / detail / history / session / schedule / all
-- 会话类接口（/chat、/chat/*、/sess/*）须携带 X-User-ID；认证（401）与权限（403）
-  校验先于用户标识校验，无 Key / 无效 Key 的用例无需携带
+- 会话类接口（/chat/completions、/chat/*、/sess/*）须携带 user 标识（请求体顶层 user
+  或请求头 user）；认证（401）与权限（403）校验先于用户标识校验，
+  无 Key / 无效 Key 的用例无需携带
 - /web/health 免认证
 """
 
@@ -28,38 +29,39 @@ class TestAuthenticationBasic:
     def test_no_api_key_returns_401(self, server, no_auth_headers):
         """TC-AUTH-001: 无 API Key → 401 unauthorized"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=no_auth_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True,
             timeout=10
         )
 
         assert response.status_code == 401
         data = response.json()
-        assert data["status"] == "unauthorized"
-        assert "API Key" in data["message"]
+        assert data["error"]["type"] == "authentication_error"
+        assert data["error"]["code"] == "invalid_api_key"
 
     def test_invalid_api_key_returns_401(self, server, invalid_auth_headers):
         """TC-AUTH-002: 无效 API Key（签名不合法的 JWT）→ 401"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=invalid_auth_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True,
             timeout=10
         )
 
         assert response.status_code == 401
         data = response.json()
-        assert data["status"] == "unauthorized"
+        assert data["error"]["type"] == "authentication_error"
+        assert data["error"]["code"] == "invalid_api_key"
 
     def test_valid_api_key_success(self, server, api_headers):
         """TC-AUTH-003: 有效 API Key 不被认证/权限拦截"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True,
             timeout=10
         )
@@ -71,13 +73,13 @@ class TestAuthenticationBasic:
         """TC-AUTH-004: 空 API Key → 401"""
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": ""
+            "Authorization": "Bearer "
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True,
             timeout=10
         )
@@ -89,11 +91,11 @@ class TestAuthenticationAllAPIs:
     """所有业务 API 强制认证：无 Key 一律 401"""
 
     def test_chat_api_requires_auth(self, server, no_auth_headers):
-        """TC-AUTH-005: POST /chat 无 Key → 401"""
+        """TC-AUTH-005: POST /chat/completions 无 Key → 401"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=no_auth_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True,
             timeout=10
         )
@@ -161,15 +163,15 @@ class TestPermissionSystem:
         token = bootstrap_api_key(BASE_URL, name="pytest-chat-only", permissions=["chat"])
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token,
-            "X-User-ID": TEST_USER_ID,
+            "Authorization": f"Bearer {token}",
+            "user": TEST_USER_ID,
         }
 
-        # 可以调用 POST /chat（不被认证/权限拦截）
+        # 可以调用 POST /chat/completions（不被认证/权限拦截）
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True,
             timeout=10
         )
@@ -183,25 +185,25 @@ class TestPermissionSystem:
             timeout=10
         )
         assert response.status_code == 403
-        assert "forbidden" in response.text
+        assert response.json()["error"]["code"] == "insufficient_permissions"
 
     def test_permission_status_only_forbidden_chat(self, server):
-        """TC-PERM-003: 仅 status 权限调用 POST /chat → 403"""
+        """TC-PERM-003: 仅 status 权限调用 POST /chat/completions → 403"""
         token = bootstrap_api_key(BASE_URL, name="pytest-status-only", permissions=["status"])
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token,
-            "X-User-ID": TEST_USER_ID,
+            "Authorization": f"Bearer {token}",
+            "user": TEST_USER_ID,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             timeout=10
         )
         assert response.status_code == 403
-        assert "forbidden" in response.text
+        assert response.json()["error"]["code"] == "insufficient_permissions"
 
         # status 权限本身可用
         response = requests.get(
@@ -235,8 +237,8 @@ class TestKeyRevocation:
         token = bootstrap_api_key(BASE_URL, name=name)
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": token,
-            "X-User-ID": TEST_USER_ID,
+            "Authorization": f"Bearer {token}",
+            "user": TEST_USER_ID,
         }
 
         # 删除前：token 有效

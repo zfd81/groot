@@ -5,6 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/websession"
 )
 
@@ -28,9 +29,7 @@ func WebSession(store *websession.Store) app.HandlerFunc {
 	}
 }
 
+// abortUnauthorized 写出 401 未登录信封（内部已 Abort）。
 func abortUnauthorized(rc *app.RequestContext) {
-	rc.SetContentType("application/json")
-	rc.SetStatusCode(401)
-	rc.Write([]byte(`{"status":"unauthorized","message":"未登录或会话已过期"}`))
-	rc.Abort()
+	errbody.Write(rc, 401, "未登录或会话已过期", errbody.TypeAuthentication, "", errbody.CodeInvalidAPIKey)
 }

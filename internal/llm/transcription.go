@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/zfd81/groot/internal/repo"
@@ -17,7 +16,8 @@ import (
 var (
 	// ErrUpstream 上游服务（转录、合成、图片解析）返回了错误，错误信息中透传上游原文
 	ErrUpstream = errors.New("上游服务返回错误")
-	// ErrEmptyTranscript 上游返回了空文本，通常是音频过短或无有效语音
+	// ErrEmptyTranscript 上游返回了空文本，通常是音频过短或无有效语音。
+	// 透传语义下转录不再据此报错，保留该值供旧调用方判断。
 	ErrEmptyTranscript = errors.New("未识别到有效语音")
 )
 
@@ -25,16 +25,33 @@ var (
 // 对话补全慢，留足时间，但不能无上限，否则挂起的请求会一直占用连接。
 const upstreamTimeout = 120 * time.Second
 
-// Transcribe 把音频转成文字。
+// TranscriptionParams 是转发给上游的除文件外的表单参数。
+type TranscriptionParams struct {
+	Model                  string // 上游模型名（repo.Model.Model）
+	Language               string
+	Prompt                 string
+	ResponseFormat         string   // json/text/srt/verbose_json/vtt；空按 json
+	Temperature            string   // 以字符串透传，空不下发
+	TimestampGranularities []string // 每项一个 timestamp_granularities[] 字段
+}
+
+// UpstreamResponse 是上游原始响应，调用方负责 Close。
+type UpstreamResponse struct {
+	StatusCode  int
+	ContentType string
+	Body        io.ReadCloser
+}
+
+// Transcribe 转发到上游并原样返回响应，不解析、不改写。
+// 网络/读失败返回 ErrUpstream 包装的错误；ctx 取消返回 ctx.Err()。
 //
 // 请求 {base_url}/audio/transcriptions，以 multipart 表单提交，
 // 与 OpenAI 的转录规范一致，鉴权沿用 repo.Model 中的 APIKey。
 // base_url 缺少 /v1 后缀时自动补齐，与对话、连接测试的处理一致。
 //
 // file 以流式写入上游请求体，不在内存中完整展开音频。
-// language 为空时不下发该字段，交由上游自行判断语种。
-func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
-	filename, language string) (string, error) {
+func Transcribe(ctx context.Context, m *repo.Model, file io.Reader, filename string,
+	p TranscriptionParams) (*UpstreamResponse, error) {
 
 	endpoint := transcriptionURL(m.BaseURL)
 
@@ -45,7 +62,7 @@ func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pr)
 	if err != nil {
-		return "", fmt.Errorf("构造转录请求失败: %w", err)
+		return nil, fmt.Errorf("构造转录请求失败: %w", err)
 	}
 
 	go func() {
@@ -61,11 +78,27 @@ func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
 		if _, err = io.Copy(part, file); err != nil {
 			return
 		}
-		if err = mw.WriteField("model", m.Model); err != nil {
+		if err = mw.WriteField("model", p.Model); err != nil {
 			return
 		}
-		if language != "" {
-			if err = mw.WriteField("language", language); err != nil {
+		// 可选字段为空时不下发，交由上游取默认值；response_format 例外：
+		// OpenAI 的缺省是 json，这里显式下发，避免上游实现自行解释缺省。
+		optional := []struct{ name, value string }{
+			{"language", p.Language},
+			{"prompt", p.Prompt},
+			{"response_format", responseFormatOrDefault(p.ResponseFormat)},
+			{"temperature", p.Temperature},
+		}
+		for _, f := range optional {
+			if f.value == "" {
+				continue
+			}
+			if err = mw.WriteField(f.name, f.value); err != nil {
+				return
+			}
+		}
+		for _, g := range p.TimestampGranularities {
+			if err = mw.WriteField("timestamp_granularities[]", g); err != nil {
 				return
 			}
 		}
@@ -79,32 +112,26 @@ func Transcribe(ctx context.Context, m *repo.Model, file io.Reader,
 	if err != nil {
 		// 调用方主动取消或超时不算上游故障，直接返回 ctx 的错误。
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
-		return "", fmt.Errorf("%w: %w", ErrUpstream, err)
-	}
-	defer resp.Body.Close()
-
-	// 限制响应体大小：网关的错误页可能很大，转录结果本身远小于此上限。
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", fmt.Errorf("%w: 读取响应失败: %w", ErrUpstream, err)
+		return nil, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("%w: %s", ErrUpstream, upstreamMessage(body, resp.StatusCode))
-	}
+	// 成功与否都由调用方转发：非 2xx 的 body 也要能原样读出，
+	// 因此这里不读 body、不按状态码报错，只在调用方 Close 时释放连接。
+	return &UpstreamResponse{
+		StatusCode:  resp.StatusCode,
+		ContentType: resp.Header.Get("Content-Type"),
+		Body:        resp.Body,
+	}, nil
+}
 
-	var out struct {
-		Text string `json:"text"`
+// responseFormatOrDefault 把空的 response_format 补成 OpenAI 规范的缺省值 json。
+func responseFormatOrDefault(format string) string {
+	if format == "" {
+		return "json"
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("%w: 响应不是合法 JSON: %s", ErrUpstream, truncate(string(body), 200))
-	}
-	if strings.TrimSpace(out.Text) == "" {
-		return "", ErrEmptyTranscript
-	}
-	return out.Text, nil
+	return format
 }
 
 // transcriptionURL 由 base_url 推出转录端点，缺少 /v1 后缀时补齐。
@@ -112,9 +139,15 @@ func transcriptionURL(baseURL string) string {
 	return openAIBaseURL(baseURL) + "/audio/transcriptions"
 }
 
-// upstreamMessage 从上游错误响应中提取可读信息。
+// UpstreamBody 读入完整响应体（上限 1 MiB），供 handler 在需要时透传错误体。
+// 网关的错误页可能很大，转录结果本身远小于此上限。
+func UpstreamBody(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, 1<<20))
+}
+
+// UpstreamMessage 从上游错误响应中提取可读信息。
 // 优先取 OpenAI 规范的 error.message，取不到则退回响应原文。
-func upstreamMessage(body []byte, status int) string {
+func UpstreamMessage(body []byte, status int) string {
 	var e struct {
 		Error struct {
 			Message string `json:"message"`
@@ -127,6 +160,11 @@ func upstreamMessage(body []byte, status int) string {
 		return fmt.Sprintf("HTTP %d", status)
 	}
 	return truncate(string(body), 200)
+}
+
+// upstreamMessage 是 UpstreamMessage 的内部别名，合成与图片解析沿用旧名调用。
+func upstreamMessage(body []byte, status int) string {
+	return UpstreamMessage(body, status)
 }
 
 // truncate 按字符（rune）截断，上游错误原文可能包含中文，

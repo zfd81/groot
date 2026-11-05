@@ -63,10 +63,3 @@ func defaultRateLimit() config.RateLimitConfig {
 // defaultScheduleEnabled 定时任务默认关闭：
 // 允许模型自行创建定时任务是一项需要明确开启的策略。
 func defaultScheduleEnabled() bool { return false }
-
-// DefaultAuthHeaderName API Key 请求头的默认名称。
-// 导出供接口层在响应中标注默认值（界面「恢复默认」提示用）。
-const DefaultAuthHeaderName = "X-API-Key"
-
-// defaultAuthHeaderName API Key 请求头的默认名称。
-func defaultAuthHeaderName() string { return DefaultAuthHeaderName }

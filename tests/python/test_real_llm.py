@@ -25,10 +25,10 @@ class TestRealLLMBasic:
 
     def test_real_llm_simple_question(self, server, api_headers):
         """TC-REAL-001: 真实 LLM 简单问答"""
-        payload = {"instruction": "你好，请用一句话介绍一下你自己"}
+        payload = {"messages": [{"role": "user", "content": "你好，请用一句话介绍一下你自己"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -52,10 +52,10 @@ class TestRealLLMBasic:
 
     def test_real_llm_code_generation(self, server, api_headers):
         """TC-REAL-002: 真实 LLM 代码生成"""
-        payload = {"instruction": "请用 Python 写一个计算斐波那契数列的函数"}
+        payload = {"messages": [{"role": "user", "content": "请用 Python 写一个计算斐波那契数列的函数"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -77,12 +77,15 @@ class TestRealLLMBasic:
     def test_real_llm_json_output(self, server, api_headers):
         """TC-REAL-003: 真实 LLM JSON 格式输出"""
         payload = {
-            "instruction": "请生成一个包含 name, age, city 三个字段的 JSON 对象示例",
-            "prompt": "请只输出 JSON 格式，不要添加其他解释"
+            "messages": [
+                {"role": "system", "content": "请只输出 JSON 格式，不要添加其他解释"},
+                {"role": "user", "content": "请生成一个包含 name, age, city 三个字段的 JSON 对象示例"},
+            ],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -109,32 +112,33 @@ class TestRealLLMMultiRound:
     def test_real_llm_two_round_conversation(self, server, api_headers):
         """TC-REAL-004: 真实 LLM 两轮对话"""
         # 第一轮
-        payload1 = {"instruction": "请记住这个数字：42"}
+        payload1 = {"messages": [{"role": "user", "content": "请记住这个数字：42"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True,
             timeout=120
         )
 
-        session_id = response1.headers.get("X-Session-ID")
+        sse1 = SSEClient(response1)
+        session_id = sse1.get_session_id()
         assert session_id is not None
 
-        sse1 = SSEClient(response1)
         completed1 = sse1.get_completed_event()
         assert completed1["data"]["finish_reason"] in ("stop", "tool_calls")
 
         # 第二轮（继续会话）
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "我刚才让你记住的数字是多少？"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "我刚才让你记住的数字是多少？"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True,
             timeout=120
@@ -154,30 +158,33 @@ class TestRealLLMMultiRound:
         """TC-REAL-005: 真实 LLM 三轮对话"""
         # 第一轮：设定角色
         payload1 = {
-            "instruction": "你是一个专业的 Python 编程助手",
-            "prompt": "请以专业、简洁的方式回答编程问题"
+            "messages": [
+                {"role": "system", "content": "请以专业、简洁的方式回答编程问题"},
+                {"role": "user", "content": "你是一个专业的 Python 编程助手"},
+            ],
+            "stream": True,
         }
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True,
             timeout=120
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)
+        session_id = SSEClient(response1).get_session_id()
 
         # 第二轮：提问
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "如何判断一个列表是否为空？"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "如何判断一个列表是否为空？"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True,
             timeout=120
@@ -186,14 +193,15 @@ class TestRealLLMMultiRound:
         SSEClient(response2)
 
         # 第三轮：追问
-        headers3 = api_headers.copy()
-        headers3["X-Session-ID"] = session_id
-
-        payload3 = {"instruction": "还有其他方法吗？"}
+        payload3 = {
+            "messages": [{"role": "user", "content": "还有其他方法吗？"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response3 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers3,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload3,
             stream=True,
             timeout=120
@@ -217,10 +225,10 @@ class TestRealLLMToolCall:
         with open(test_file, "w") as f:
             f.write(test_content)
 
-        payload = {"instruction": f"请读取文件 {test_file} 的内容"}
+        payload = {"messages": [{"role": "user", "content": f"请读取文件 {test_file} 的内容"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -249,18 +257,21 @@ class TestRealLLMToolCall:
         base64_content = base64.b64encode(content.encode()).decode()
 
         payload = {
-            "instruction": "请分析这个文件的内容",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "person.txt",
-                    "content": base64_content
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "请分析这个文件的内容"},
+                    {"type": "file", "file": {
+                        "filename": "person.txt",
+                        "file_data": f"data:text/plain;base64,{base64_content}",
+                    }},
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -286,14 +297,18 @@ class TestRealLLMComplexTasks:
     def test_real_llm_analysis_task(self, server, api_headers):
         """TC-REAL-008: 真实 LLM 分析任务"""
         payload = {
-            "instruction": "请分析以下这段文字的主题和关键词：" +
-            "\"人工智能正在改变我们的生活方式。" +
-            "从智能手机到智能家居，AI技术已经渗透到各个领域。" +
-            "未来，人工智能将继续推动科技进步。\""
+            "messages": [{
+                "role": "user",
+                "content": "请分析以下这段文字的主题和关键词：" +
+                           "\"人工智能正在改变我们的生活方式。" +
+                           "从智能手机到智能家居，AI技术已经渗透到各个领域。" +
+                           "未来，人工智能将继续推动科技进步。\"",
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -313,12 +328,16 @@ class TestRealLLMComplexTasks:
     def test_real_llm_translation_task(self, server, api_headers):
         """TC-REAL-009: 真实 LLM 翻译任务"""
         payload = {
-            "instruction": "请将以下中文翻译成英文：" +
-            "\"机器学习是人工智能的一个重要分支。\""
+            "messages": [{
+                "role": "user",
+                "content": "请将以下中文翻译成英文：" +
+                           "\"机器学习是人工智能的一个重要分支。\"",
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -337,10 +356,10 @@ class TestRealLLMComplexTasks:
 
     def test_real_llm_math_problem(self, server, api_headers):
         """TC-REAL-010: 真实 LLM 数学问题"""
-        payload = {"instruction": "计算：123 + 456 * 2 - 78 = ?"}
+        payload = {"messages": [{"role": "user", "content": "计算：123 + 456 * 2 - 78 = ?"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -364,10 +383,10 @@ class TestRealLLMErrorHandling:
     def test_real_llm_invalid_instruction_recovery(self, server, api_headers):
         """TC-REAL-011: 真实 LLM 无效指令恢复"""
         # 发送一个模糊的指令
-        payload = {"instruction": "..."}
+        payload = {"messages": [{"role": "user", "content": "..."}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -387,10 +406,10 @@ class TestRealLLMErrorHandling:
         """TC-REAL-012: 真实 LLM 长指令处理"""
         long_instruction = "请详细解释以下概念：" + "人工智能、机器学习、深度学习、神经网络、自然语言处理、计算机视觉、强化学习、生成式AI。" * 3
 
-        payload = {"instruction": long_instruction}
+        payload = {"messages": [{"role": "user", "content": long_instruction}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -411,12 +430,12 @@ class TestRealLLMPerformance:
 
     def test_real_llm_response_time(self, server, api_headers):
         """TC-REAL-013: 真实 LLM 响应时间"""
-        payload = {"instruction": "说一个字：好"}
+        payload = {"messages": [{"role": "user", "content": "说一个字：好"}], "stream": True}
 
         start_time = time.time()
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -438,9 +457,9 @@ class TestRealLLMPerformance:
         import concurrent.futures
 
         def send_chat(i):
-            payload = {"instruction": f"请说出数字{i}"}
+            payload = {"messages": [{"role": "user", "content": f"请说出数字{i}"}], "stream": True}
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}/chat/completions",
                 headers=api_headers,
                 json=payload,
                 stream=True,
@@ -465,18 +484,17 @@ class TestRealLLMHistory:
     def test_real_llm_history_persistence(self, server, api_headers):
         """TC-REAL-015: 真实 LLM 历史记录持久化"""
         # 进行对话
-        payload = {"instruction": "我的名字是小明"}
+        payload = {"messages": [{"role": "user", "content": "我的名字是小明"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
             timeout=120
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         # 查询历史记录
         history_response = requests.get(
@@ -500,18 +518,17 @@ class TestRealLLMHistory:
 
     def test_real_llm_chat_record_detail(self, server, api_headers):
         """TC-REAL-016: 真实 LLM 对话记录详情"""
-        payload = {"instruction": "测试对话记录"}
+        payload = {"messages": [{"role": "user", "content": "测试对话记录"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
             timeout=120
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         # 查询对话详情
         detail_response = requests.get(
@@ -535,10 +552,14 @@ class TestRealLLMSSEReliability:
 
     def test_real_llm_sse_connection_stable(self, server, api_headers):
         """TC-REAL-017: 真实 LLM SSE 连接稳定性"""
-        payload = {"instruction": "请写一首短诗，四行即可"}
+        payload = {
+            "messages": [{"role": "user", "content": "请写一首短诗，四行即可"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,
@@ -561,10 +582,10 @@ class TestRealLLMSSEReliability:
 
     def test_real_llm_no_duplicate_message(self, server, api_headers):
         """TC-REAL-018: 真实 LLM message 不应重复"""
-        payload = {"instruction": "测试message事件"}
+        payload = {"messages": [{"role": "user", "content": "测试message事件"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True,

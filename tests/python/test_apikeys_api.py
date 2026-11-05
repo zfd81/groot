@@ -10,7 +10,7 @@ GET /web/apikeys/:id/token 任意次重取结果都应与创建时返回的 toke
 - expires_in：仅 1d/7d/1mo/6mo/1y/10y → 非法 400 invalid_expires_in
 - permissions：非空且都在 ValidPermissions（chat/status/detail/history/
   session/delete/schedule/all）内 → 违反 400 invalid_permissions
-- 名称重复 → 409 name_exists
+- 名称重复 → 409 invalid_request
 - token/delete 目标 id 不存在 → 404 not_found
 
 用例点：
@@ -149,7 +149,7 @@ class TestApiKeysCreate:
         """TC-KEY-003: 空名 400"""
         resp = _create_key(web, "")
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        assert resp.json()["error"]["code"] == "invalid_request"
 
     def test_create_whitespace_name(self, web):
         """TC-KEY-003: 纯空白名称 TrimSpace 后为空 → 400"""
@@ -174,29 +174,29 @@ class TestApiKeysCreate:
         """TC-KEY-003: 保留名 "web"（Cookie 通道的 caller 名）→ 400"""
         resp = _create_key(web, "web")
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        assert resp.json()["error"]["code"] == "invalid_request"
 
     def test_create_invalid_permission(self, web):
         """TC-KEY-004: 非法权限点 400 invalid_permissions"""
         resp = _create_key(web, _key_name(), permissions=["chat", "no-such-perm"])
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_permissions"
+        assert resp.json()["error"]["code"] == "invalid_permissions"
 
     def test_create_empty_permissions(self, web):
         """TC-KEY-004: 空权限列表 400"""
         resp = _create_key(web, _key_name(), permissions=[])
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_permissions"
+        assert resp.json()["error"]["code"] == "invalid_permissions"
 
     def test_create_invalid_expires_in(self, web):
         """TC-KEY-005: 非法 expires_in 400 invalid_expires_in"""
         for bad in ("2d", "forever", ""):
             resp = _create_key(web, _key_name(), expires_in=bad)
             assert resp.status_code == 400, f"expires_in={bad!r} 应 400"
-            assert resp.json()["status"] == "invalid_expires_in"
+            assert resp.json()["error"]["code"] == "invalid_expires_in"
 
     def test_create_duplicate_name(self, web):
-        """TC-KEY-006: 重名 409 name_exists"""
+        """TC-KEY-006: 重名 409 invalid_request"""
         name = _key_name()
         key_id = None
         try:
@@ -206,7 +206,7 @@ class TestApiKeysCreate:
 
             resp2 = _create_key(web, name)
             assert resp2.status_code == 409
-            assert resp2.json()["status"] == "name_exists"
+            assert resp2.json()["error"]["code"] == "invalid_request"
         finally:
             if key_id:
                 _delete_key(web, key_id)
@@ -240,7 +240,7 @@ class TestApiKeyToken:
         """TC-KEY-008: 不存在的 id 重取 token → 404 not_found"""
         r = web.get(f"{BASE_URL}/web/apikeys/19700101000000/token", timeout=10)
         assert r.status_code == 404
-        assert r.json()["status"] == "not_found"
+        assert r.json()["error"]["code"] == "not_found"
 
 
 class TestApiKeyDelete:
@@ -256,9 +256,9 @@ class TestApiKeyDelete:
             key_id = resp.json()["id"]
             token = resp.json()["token"]
 
-            # 删除前 token 可用（all 权限访问 API 组端点；会话类接口须带 X-User-ID）
+            # 删除前 token 可用（all 权限访问 API 组端点；会话类接口须带 user 标识）
             r = requests.get(f"{BASE_URL}/sess/history",
-                             headers={"X-API-Key": token, "X-User-ID": TEST_USER_ID}, timeout=10)
+                             headers={"Authorization": f"Bearer {token}", "user": TEST_USER_ID}, timeout=10)
             assert r.status_code == 200, f"删除前 token 应可用: {r.text}"
 
             r = web.delete(f"{BASE_URL}/web/apikeys/{key_id}", timeout=10)
@@ -269,7 +269,7 @@ class TestApiKeyDelete:
 
             # 删除即吊销：JWT 签名仍有效但元数据已不在库中 → 401
             r = requests.get(f"{BASE_URL}/sess/history",
-                             headers={"X-API-Key": token, "X-User-ID": TEST_USER_ID}, timeout=10)
+                             headers={"Authorization": f"Bearer {token}", "user": TEST_USER_ID}, timeout=10)
             assert r.status_code == 401, "删除后原 token 应立即失效"
         finally:
             if key_id:
@@ -279,4 +279,4 @@ class TestApiKeyDelete:
         """TC-KEY-009: 删除不存在的 id → 404 not_found"""
         r = web.delete(f"{BASE_URL}/web/apikeys/19700101000000", timeout=10)
         assert r.status_code == 404
-        assert r.json()["status"] == "not_found"
+        assert r.json()["error"]["code"] == "not_found"

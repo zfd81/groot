@@ -3,11 +3,11 @@ package middleware
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/websession"
 	"github.com/zfd81/groot/internal/auth"
 	"github.com/zfd81/groot/internal/config"
@@ -44,11 +44,7 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			}
 		}
 
-		headerName := m.config.Auth.HeaderName
-		if headerName == "" {
-			headerName = "X-API-Key"
-		}
-		tokenStr := string(rc.GetHeader(headerName))
+		tokenStr := bearerToken(rc)
 		if tokenStr == "" {
 			writeUnauthorized(rc)
 			return
@@ -76,10 +72,8 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 		method := string(rc.Method())
 		requiredPerm := getRequiredPermission(path, method)
 		if requiredPerm != "" && !hasPermission(key.Permissions, requiredPerm) {
-			rc.SetContentType("application/json")
-			rc.SetStatusCode(403)
-			rc.Write([]byte(fmt.Sprintf(`{"status":"forbidden","message":"权限不足: 需要 %s 权限"}`, requiredPerm)))
-			rc.Abort()
+			errbody.Write(rc, 403, "权限不足: 需要 "+requiredPerm+" 权限",
+				errbody.TypePermission, "", errbody.CodeInsufficientPermissions)
 			return
 		}
 
@@ -93,11 +87,21 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 	}
 }
 
+// bearerPrefix 是 Authorization 头要求的 scheme 前缀。
+const bearerPrefix = "Bearer "
+
+// bearerToken 从 Authorization 头解析 Bearer token。
+// 前缀 "Bearer " 大小写不敏感，token 本体原样保留（仅 TrimSpace）；不合法返回空串。
+func bearerToken(rc *app.RequestContext) string {
+	value := string(rc.GetHeader("Authorization"))
+	if len(value) < len(bearerPrefix) || !strings.EqualFold(value[:len(bearerPrefix)], bearerPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(value[len(bearerPrefix):])
+}
+
 func writeUnauthorized(rc *app.RequestContext) {
-	rc.SetContentType("application/json")
-	rc.SetStatusCode(401)
-	rc.Write([]byte(`{"status":"unauthorized","message":"API Key 无效或缺失"}`))
-	rc.Abort()
+	errbody.Write(rc, 401, "API Key 无效或缺失", errbody.TypeAuthentication, "", errbody.CodeInvalidAPIKey)
 }
 
 // hasPermission 判断权限集合是否满足所需权限点。
@@ -114,13 +118,18 @@ func hasPermission(perms []string, required string) bool {
 
 // getRequiredPermission maps path to required permission
 func getRequiredPermission(path, method string) string {
-	// Chat endpoint (POST /chat)
-	if path == "/chat" && method == "POST" {
+	// OpenAI 兼容对话端点 (POST /chat/completions)：chat 权限
+	if path == "/chat/completions" && method == "POST" {
+		return "chat"
+	}
+
+	// 模型列表端点 (GET /models)：只暴露模型清单供客户端选择，归入 chat 权限
+	if path == "/models" && method == "GET" {
 		return "chat"
 	}
 
 	// Transcription endpoint (POST /audio/transcriptions)：语音输入是聊天的一种输入方式，
-	// 与 /chat 共用 chat 权限，不另设权限点
+	// 与 /chat/completions 共用 chat 权限，不另设权限点
 	if path == "/audio/transcriptions" && method == "POST" {
 		return "chat"
 	}
@@ -131,7 +140,7 @@ func getRequiredPermission(path, method string) string {
 	}
 
 	// Image understanding endpoint (POST /image/understanding)：图片解析是聊天输入的一种形式，
-	// 与 /chat 共用 chat 权限
+	// 与 /chat/completions 共用 chat 权限
 	if path == "/image/understanding" && method == "POST" {
 		return "chat"
 	}

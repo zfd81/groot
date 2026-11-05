@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/zfd81/groot/internal/memory"
 )
 
 // TestEngine_AccumulateUsage 验证按事件源 Agent 把 Usage 累加到正确的 chatID：
@@ -287,5 +289,41 @@ func TestEngine_FinishRound_NilAccumulators(t *testing.T) {
 	main, round := e.finishRound(WithMainChatID(context.Background(), "m"))
 	if main.Tokens != (TokenUsage{}) || round != (TokenUsage{}) {
 		t.Fatal("expected zero values")
+	}
+}
+
+// TestEngine_MessageOrderServerThenCallerThenUser 验证服务端历史在前、调用方历史紧随其后、
+// 最后一条 user 提问在末尾：user(旧问题) → assistant(旧回答) → user(调用方问题) →
+// assistant(调用方回答) → user(最后提问)。
+func TestEngine_MessageOrderServerThenCallerThenUser(t *testing.T) {
+	e := &Engine{agentName: MainAgentName}
+
+	// 走 Executor 传给 engine.Run 的同一合并逻辑（historyFor），
+	// 从而锁住「调用方历史必须参与合并」这一行为。
+	task := &Task{
+		HistoryMessages: []memory.Message{{Instruction: "旧问题", Result: "旧回答"}},
+		CallerHistory:   []memory.Message{{Instruction: "调用方问题", Result: "调用方回答"}},
+	}
+
+	msgs := e.buildMessageList("最后提问", historyFor(task), nil)
+
+	want := []struct {
+		role    schema.RoleType
+		content string
+	}{
+		{schema.User, "旧问题"},
+		{schema.Assistant, "旧回答"},
+		{schema.User, "调用方问题"},
+		{schema.Assistant, "调用方回答"},
+		{schema.User, "最后提问"},
+	}
+	if len(msgs) != len(want) {
+		t.Fatalf("消息条数 = %d, want %d", len(msgs), len(want))
+	}
+	for i, w := range want {
+		if msgs[i].Role != w.role || msgs[i].Content != w.content {
+			t.Errorf("第 %d 条消息 = (%s, %q), want (%s, %q)",
+				i, msgs[i].Role, msgs[i].Content, w.role, w.content)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/llm"
@@ -111,34 +112,44 @@ func writeInvalidDefaultType(rc *app.RequestContext) {
 	for _, f := range repo.AllDefaultFlags {
 		names = append(names, f.String())
 	}
-	rc.JSON(400, utils.H{"status": "invalid_request", "message": "type 取值无效，可选 " + strings.Join(names, "、")})
+	errbody.Write(rc, 400, "type 取值无效，可选 "+strings.Join(names, "、"),
+		errbody.TypeInvalidRequest, "type", errbody.CodeInvalidRequest)
 }
 
-// writeModelError 把 ModelService 错误映射为 HTTP 状态码与错误码。
+// writeModelError 把 ModelService 错误映射为 HTTP 状态码与 OpenAI 错误信封。
 // 未命中哨兵错误的内部错误只记日志，向客户端返回通用消息。
+// 模型管理不在 OpenAI 标准内，未覆盖的细分错误保留原 code 字符串，type 归一为 invalid_request_error。
 func (h *ModelsHandler) writeModelError(rc *app.RequestContext, err error) {
-	status, code := 500, "internal_error"
+	status, code := 500, errbody.CodeInternalError
+	typ := errbody.TypeAPI
 	switch {
 	case errors.Is(err, llm.ErrModelNotFound):
-		status, code = 404, "model_not_found"
+		status, code = 404, errbody.CodeModelNotFound
+		typ = errbody.TypeInvalidRequest
 	case errors.Is(err, llm.ErrNameExists):
 		status, code = 409, "model_name_exists"
+		typ = errbody.TypeInvalidRequest
 	case errors.Is(err, llm.ErrDefaultProtected):
 		status, code = 409, "default_model_protected"
+		typ = errbody.TypeInvalidRequest
 	case errors.Is(err, llm.ErrChatDefaultRequired):
 		status, code = 400, "default_chat_required"
+		typ = errbody.TypeInvalidRequest
 	case errors.Is(err, llm.ErrModelDisabled):
 		status, code = 400, "model_disabled"
+		typ = errbody.TypeInvalidRequest
 	case errors.Is(err, llm.ErrNoDefaultModel):
 		status, code = 400, "no_default_model"
+		typ = errbody.TypeInvalidRequest
 	case errors.Is(err, llm.ErrInvalidModel):
 		status, code = 400, "invalid_model_config"
+		typ = errbody.TypeInvalidRequest
 	default:
 		h.log.Error("模型管理接口内部错误: " + err.Error())
-		rc.JSON(status, utils.H{"status": code, "message": "内部错误"})
+		errbody.Write(rc, status, "内部错误", typ, "", code)
 		return
 	}
-	rc.JSON(status, utils.H{"status": code, "message": err.Error()})
+	errbody.Write(rc, status, err.Error(), typ, "", code)
 }
 
 // List 处理 GET /web/models
@@ -172,7 +183,7 @@ func (h *ModelsHandler) List(ctx context.Context, rc *app.RequestContext) {
 func (h *ModelsHandler) Create(ctx context.Context, rc *app.RequestContext) {
 	var req ModelRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	m := req.toModel()
@@ -195,7 +206,7 @@ func (h *ModelsHandler) Update(ctx context.Context, rc *app.RequestContext) {
 	name := rc.Param("name")
 	var req ModelRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	m := req.toModel()
@@ -256,7 +267,7 @@ type ModelTestRequest struct {
 func (h *ModelsHandler) Test(ctx context.Context, rc *app.RequestContext) {
 	var req ModelTestRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	apiKey := config.ExpandEnv(req.APIKey)
@@ -275,7 +286,7 @@ func (h *ModelsHandler) Test(ctx context.Context, rc *app.RequestContext) {
 		}
 	}
 	if req.BaseURL == "" || apiKey == "" {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "base_url 和 api_key 不能为空"})
+		errbody.Write(rc, 400, "base_url 和 api_key 不能为空", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	status, errMsg := llm.CheckConnection(&repo.Model{

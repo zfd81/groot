@@ -53,6 +53,7 @@ type Task struct {
 	Progress           *ProgressInfo
 	Round              int
 	HistoryMessages    []memory.Message
+	CallerHistory      []memory.Message // 调用方在 messages 中提供的历史，接在服务端上下文之后
 	ModelName          string
 	AgentName          string // Solo 模式时为子 Agent 名；编排模式空字符串
 }
@@ -123,7 +124,12 @@ func NewExecutor(
 }
 
 // Execute starts task execution
-func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Task, sse *SSEWriter) {
+// events 为事件写出目标（SSE / 聚合 / 丢弃）；传 nil 时按 NopEventWriter 处理。
+func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Task, events EventWriter) {
+	if events == nil {
+		events = NopEventWriter()
+	}
+
 	// 派生携带 session_id 的会话级 logger，本次执行链路统一使用。
 	// 同时放入 ctx，作为后续下游代码的取用入口（当前尚无 FromContext 消费方，
 	// 实际带上 session_id 的路径是下方 CallAgentToolConfig.Log 与 EngineConfig.Log）。
@@ -176,7 +182,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			if entry.AgentMdModel != "" {
 				task.ModelName = entry.AgentMdModel
 				// 同步到 SSEWriter，使 Solo 模式下 chunk.model 为 agent.md 钉死的模型名
-				sse.SetModel(entry.AgentMdModel)
+				events.SetModel(entry.AgentMdModel)
 			}
 			if entry.SkillBK != nil {
 				mw, err := einoskill.NewMiddleware(parentCtx, &einoskill.Config{Backend: entry.SkillBK})
@@ -215,7 +221,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				TokenAccumulators: e.tokenAccumulators,
 				Log:               sessionLog,
 				ParentRound:       task.Round,
-				SSE:               sse,
+				SSE:               events,
 			})
 			extraTools = append(extraTools, callAgent)
 			emitInternal = true
@@ -224,8 +230,8 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 
 	// Solo 校验失败时直接走错误持久化路径，不创建 engine
 	if soloErr != nil {
-		sse.WriteError(sseAgentName(agentName), soloErr.Error())
-		sse.WriteDone()
+		events.WriteError(sseAgentName(agentName), soloErr.Error())
+		events.WriteDone()
 		if e.memoryManager != nil {
 			endTime := time.Now()
 			record := &memory.ChatRecord{
@@ -290,7 +296,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		task.Instruction,
 		task.Prompt,
 		sessionMdContent,
-		task.HistoryMessages,
+		historyFor(task),
 		task.ModelName,
 		task.MultiModalContents,
 		&ProgressCallback{
@@ -299,7 +305,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteThinking(agentName, content)
+					return events.WriteThinking(agentName, content)
 				}
 			},
 			WriteMessage: func(agentName, content string) error {
@@ -307,7 +313,7 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteMessage(agentName, content)
+					return events.WriteMessage(agentName, content)
 				}
 			},
 			WriteToolCalls: func(agentName string, toolCalls []ToolCall) error {
@@ -315,28 +321,28 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteToolCalls(agentName, toolCalls)
+					return events.WriteToolCalls(agentName, toolCalls)
 				}
 			},
 			WriteFinish: func(agentName, reason string) error {
-				return sse.WriteFinish(agentName, reason)
+				return events.WriteFinish(agentName, reason)
 			},
 			WriteToolResult: func(agentName, toolCallID, toolName, content string, isError bool) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					return sse.WriteToolResult(agentName, toolCallID, toolName, content, isError)
+					return events.WriteToolResult(agentName, toolCallID, toolName, content, isError)
 				}
 			},
 			WriteError: func(agentName, message string) error {
-				return sse.WriteError(agentName, message)
+				return events.WriteError(agentName, message)
 			},
 			WriteUsage: func(u TokenUsage) error {
-				return sse.WriteUsage(u)
+				return events.WriteUsage(u)
 			},
 			WriteDone: func() error {
-				return sse.WriteDone()
+				return events.WriteDone()
 			},
 		},
 		agentMdContent,
@@ -355,10 +361,10 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 		sessionLog.Error("Agent execution failed: " + err.Error())
 		// 错误必须到达 SSE 流：否则用户界面表现为静默空回复
 		// （典型场景：模型配置不可用——尚未创建模型 / 模型被禁用）。
-		if writeErr := sse.WriteError(sseAgentName(agentName), err.Error()); writeErr != nil {
+		if writeErr := events.WriteError(sseAgentName(agentName), err.Error()); writeErr != nil {
 			sessionLog.Error("Failed to write SSE error: " + writeErr.Error())
 		}
-		if writeErr := sse.WriteDone(); writeErr != nil {
+		if writeErr := events.WriteDone(); writeErr != nil {
 			sessionLog.Error("Failed to write SSE done: " + writeErr.Error())
 		}
 	}
@@ -455,6 +461,13 @@ func (e *Executor) Execute(parentCtx context.Context, sessionID string, task *Ta
 			task.Error = &TaskError{Code: chatError.Code, Message: chatError.Message}
 		}
 	}
+}
+
+// historyFor 组装传给引擎的历史消息：服务端会话历史在前，调用方在 messages 中
+// 提供的历史接在其后，末条 user 提问由引擎追加。
+// 返回新切片，不修改 task 中两个切片的底层数组。
+func historyFor(task *Task) []memory.Message {
+	return append(append([]memory.Message{}, task.HistoryMessages...), task.CallerHistory...)
 }
 
 // convertSteps converts agent steps to memory steps

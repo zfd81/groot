@@ -252,8 +252,8 @@ class TestScheduleGetAPI:
         response = requests.get(f"{BASE_URL}/schedule/task-nonexistent", headers=api_headers)
         assert response.status_code == 404
         data = response.json()
-        assert "status" in data
-        assert "message" in data
+        assert data["error"]["code"] == "task_not_found"
+        assert "message" in data["error"]
 
 
 class TestScheduleDeleteAPI:
@@ -286,8 +286,7 @@ class TestScheduleDeleteAPI:
         response = requests.delete(f"{BASE_URL}/schedule/task-nonexistent", headers=api_headers)
         assert response.status_code == 500
         data = response.json()
-        assert "status" in data
-        assert "message" in data
+        assert data["error"]["code"] == "internal_error"
 
 
 class TestScheduleDisableAPI:
@@ -490,10 +489,10 @@ class TestScheduleAPIResponseFormat:
         response = requests.get(f"{BASE_URL}/schedule/task-nonexistent-xxxxx", headers=api_headers)
         assert response.status_code == 404
         data = response.json()
-        assert "status" in data
-        assert "message" in data
-        assert isinstance(data["status"], str)
-        assert isinstance(data["message"], str)
+        err = data["error"]
+        assert err["code"] == "task_not_found"
+        assert isinstance(err["message"], str)
+        assert isinstance(err["code"], str)
 
 
 class TestScheduleToolsVisible:

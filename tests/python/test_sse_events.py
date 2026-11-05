@@ -124,10 +124,14 @@ class TestSSEEventOrder:
 
     def test_event_order_basic(self, server, api_headers):
         """TC-SSE-001: 事件顺序正确性（首个 message，末尾 finish + usage）"""
-        payload = {"instruction": "帮我写一个函数"}
+        payload = {
+            "messages": [{"role": "user", "content": "帮我写一个函数"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -147,10 +151,10 @@ class TestSSEEventOrder:
 
     def test_started_is_first_event(self, server, api_headers):
         """TC-SSE-002: message 是首个事件"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -168,10 +172,14 @@ class TestSSEEventOrder:
 
     def test_completed_is_last_event(self, server, api_headers):
         """TC-SSE-003: usage 是最后一个事件，其前一个为 finish"""
-        payload = {"instruction": "测试"}
+        payload = {
+            "messages": [{"role": "user", "content": "测试"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -189,10 +197,10 @@ class TestSSEEventOrder:
 
     def test_thinking_events_exist(self, server, api_headers):
         """TC-SSE-004: thinking 事件存在且包含必要字段（不再区分 start/end）"""
-        payload = {"instruction": "帮我分析数据"}
+        payload = {"messages": [{"role": "user", "content": "帮我分析数据"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -212,10 +220,10 @@ class TestSSEEventOrder:
 
     def test_tool_call_result_pairing(self, server, api_headers):
         """TC-SSE-005: tool_calls 和 tool_result 成对"""
-        payload = {"instruction": "读取文件 /tmp/test.txt"}
+        payload = {"messages": [{"role": "user", "content": "读取文件 /tmp/test.txt"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -253,10 +261,10 @@ class TestSSEEventFields:
 
     def test_started_event_fields(self, server, api_headers):
         """TC-SSE-006: 首个 message 事件字段验证（替代旧 started）"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -274,10 +282,10 @@ class TestSSEEventFields:
 
     def test_thinking_start_event_fields(self, server, api_headers):
         """TC-SSE-007: thinking 事件字段验证"""
-        payload = {"instruction": "帮我分析数据"}
+        payload = {"messages": [{"role": "user", "content": "帮我分析数据"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -295,10 +303,10 @@ class TestSSEEventFields:
 
     def test_thinking_end_event_fields(self, server, api_headers):
         """TC-SSE-008: thinking 事件流式内容验证（不再区分 start/end）"""
-        payload = {"instruction": "帮我分析数据"}
+        payload = {"messages": [{"role": "user", "content": "帮我分析数据"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -319,10 +327,10 @@ class TestSSEEventFields:
 
     def test_thinking_event_fields(self, server, api_headers):
         """TC-SSE-009: thinking 事件字段验证"""
-        payload = {"instruction": "帮我分析数据"}
+        payload = {"messages": [{"role": "user", "content": "帮我分析数据"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -340,10 +348,10 @@ class TestSSEEventFields:
 
     def test_tool_call_event_fields(self, server, api_headers):
         """TC-SSE-010: tool_calls 事件字段验证"""
-        payload = {"instruction": "读取文件 /tmp/test.txt"}
+        payload = {"messages": [{"role": "user", "content": "读取文件 /tmp/test.txt"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -369,10 +377,10 @@ class TestSSEEventFields:
 
     def test_tool_result_event_fields(self, server, api_headers):
         """TC-SSE-011: tool_result 事件字段验证"""
-        payload = {"instruction": "读取文件 /tmp/test.txt"}
+        payload = {"messages": [{"role": "user", "content": "读取文件 /tmp/test.txt"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -392,10 +400,10 @@ class TestSSEEventFields:
 
     def test_message_start_event_fields(self, server, api_headers):
         """TC-SSE-012: message 事件字段验证（首个 message 替代旧 message_start）"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -411,10 +419,10 @@ class TestSSEEventFields:
 
     def test_message_event_fields(self, server, api_headers):
         """TC-SSE-013: message 事件字段验证"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -430,10 +438,10 @@ class TestSSEEventFields:
 
     def test_message_end_event_fields(self, server, api_headers):
         """TC-SSE-014: finish 事件字段验证（替代旧 message_end/completed）"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -450,10 +458,10 @@ class TestSSEEventFields:
 
     def test_completed_event_fields(self, server, api_headers):
         """TC-SSE-015: finish 事件字段验证（替代旧 completed）"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -473,22 +481,25 @@ class TestSSEEventFields:
 
     def test_chunk_envelope_fields(self, server, api_headers):
         """TC-SSE-030: 每条非 error 事件的原始 chunk 含 OpenAI 外层字段"""
-        payload = {"instruction": "你好"}
+        payload = {"messages": [{"role": "user", "content": "你好"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
         assert response.status_code == 200
-        chat_id = response.headers.get("X-Chat-ID")
-        assert chat_id
 
         sse = SSEClient(response)
         chunk_events = [e for e in sse.events if "choices" in e["raw"]]
         assert chunk_events, "流中应至少有一条含 choices 的 chunk"
+
+        # 流式响应不再携带会话标识响应头，chat_id 取首个含 choices chunk 的顶层 id，
+        # 并断言全流一致
+        chat_id = sse.get_chat_id()
+        assert chat_id
 
         created_values = set()
         for e in chunk_events:
@@ -510,10 +521,10 @@ class TestSSEEventFields:
         其索引之后的所有事件均为 error 类型（即不再出现含 choices 的 chunk）。
         流中没有 error 事件时本用例自然通过。
         """
-        payload = {"instruction": "你好"}
+        payload = {"messages": [{"role": "user", "content": "你好"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -538,10 +549,14 @@ class TestSSEUsageEvent:
     def test_usage_event_fields(self, server, api_headers):
         """TC-SSE-040: usage 事件：choices 为 []、三字段为非负 int 且 total == prompt + completion，
         位于 [DONE] 前且在最后一个 finish 之后"""
-        payload = {"instruction": "你好"}
+        payload = {
+            "messages": [{"role": "user", "content": "你好"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -579,32 +594,73 @@ class TestSSEUsageEvent:
 class TestSSECancelledEvent:
     """取消对话的 SSE 事件测试"""
 
+    class _BufferedResponse:
+        """把已读行与剩余流拼成完整响应文本，供 SSEClient 解析"""
+
+        def __init__(self, lines):
+            self.text = "\n".join(lines)
+
+    @classmethod
+    def _read_until_session_id(cls, response):
+        """读到首个带 session_id 的 chunk 即停，返回 (session_id, 已读的原始行, iterator)
+
+        流式响应不再携带会话标识响应头；只读到取到就停，以便对话仍在执行时
+        发取消请求。已读行全部返回，之后与剩余流拼接成完整文本再解析事件。
+
+        ``iterator`` 是 ``response.iter_lines()`` 返回的同一个生成器，调用方必须用
+        它读完剩余行：丢弃生成器会让 requests 立即关闭底层连接，之后再调用
+        ``response.iter_lines()`` 只能得到 0 行（用例会静默退化为空断言）。
+        该写法的隐式前提是服务端未开启客户端断连感知
+        （``internal/api/server.go`` 未传 ``WithSenseClientDisconnection``）。
+        """
+        it = response.iter_lines()
+        lines = []
+        for line in it:
+            if not line:
+                continue
+            text = line.decode("utf-8") if isinstance(line, bytes) else line
+            lines.append(text)
+            stripped = text.strip()
+            if not stripped.startswith("data:"):
+                continue
+            body = stripped[5:].strip()
+            if not body or body == "[DONE]":
+                continue
+            try:
+                session_id = json.loads(body).get("session_id")
+            except json.JSONDecodeError:
+                continue
+            if session_id:
+                return session_id, lines, it
+        return None, lines, it
+
     def test_cancelled_completed_event(self, server, api_headers):
-        """TC-SSE-016: 取消对话时应有 error 事件（替代旧 completed cancelled）"""
-        # 启动长任务
-        payload = {"instruction": "帮我分析大数据文件"}
+        """TC-SSE-016: 取消对话时应有 error 事件（替代旧 cancelled completed）"""
+        payload = {
+            "messages": [{"role": "user", "content": "帮我分析大数据文件"}],
+            "stream": True,
+        }
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
+        session_id, buffered, it = self._read_until_session_id(response1)
 
-        # 等待一会儿后取消
-        import time
-        time.sleep(1)
-
-        # 发送取消请求
+        # 发送取消请求（DELETE 端点已删除，恒 404）
         requests.delete(
             f"{BASE_URL}/chat/{session_id}",
             headers=api_headers
         )
 
-        # 解析 SSE
-        sse = SSEClient(response1)
+        # 用同一个存活迭代器读完剩余事件，与取消前已缓冲的行拼成完整响应文本后解析
+        for line in it:
+            if line:
+                buffered.append(line.decode("utf-8") if isinstance(line, bytes) else line)
+        sse = SSEClient(self._BufferedResponse(buffered))
 
         # 取消后应有 error 事件或 finish 事件
         error_events = sse.get_events_by_type("error")
@@ -621,6 +677,8 @@ class TestSSECancelledEvent:
             data = finish_events[0]["data"]
             # 如果是正常 finish，finish_reason 应为 stop
             assert data.get("finish_reason") in ["stop", "tool_calls", "length"]
+        else:
+            pytest.fail(f"取消后既未收到 error 也未收到 finish：{buffered!r}")
 
 
 class TestSSEMultipleRounds:
@@ -629,17 +687,17 @@ class TestSSEMultipleRounds:
     def test_round_field_increment(self, server, api_headers):
         """TC-SSE-017: 多轮对话均正常完成（finish 事件不再含 round 字段）"""
         # 第一轮
-        payload1 = {"instruction": "第一轮对话"}
+        payload1 = {"messages": [{"role": "user", "content": "第一轮对话"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
         sse1 = SSEClient(response1)
+        session_id = sse1.get_session_id()
 
         completed1 = sse1.get_completed_event()
         assert completed1 is not None
@@ -647,14 +705,15 @@ class TestSSEMultipleRounds:
         assert completed1["data"]["finish_reason"] in ["stop", "tool_calls", "length"]
 
         # 第二轮（使用相同 session_id）
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "第二轮对话"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "第二轮对话"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
@@ -668,14 +727,15 @@ class TestSSEMultipleRounds:
 
     def test_round_field_after_invalid_session(self, server, api_headers):
         """TC-SSE-018: 无效 session_id 仍可正常响应（finish 不含 round）"""
-        headers = api_headers.copy()
-        headers["X-Session-ID"] = "invalid_session"
-
-        payload = {"instruction": "测试"}
+        payload = {
+            "messages": [{"role": "user", "content": "测试"}],
+            "session_id": "invalid_session",
+            "stream": True,
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload,
             stream=True
         )

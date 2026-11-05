@@ -128,12 +128,8 @@ func TestStop_MissNoBroadcast409(t *testing.T) {
 			if rc.Response.StatusCode() != 409 {
 				t.Fatalf("status = %d, want 409; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 			}
-			body := string(rc.Response.Body())
-			for _, want := range []string{`"status":"chat_not_running"`, `"session_id":"s1"`, `"chat_id":"c1"`, "该对话未在执行"} {
-				if !strings.Contains(body, want) {
-					t.Fatalf("body = %s, want contains %s", body, want)
-				}
-			}
+			assertErrorEnvelope(t, rc, 409, "该对话未在执行",
+				"invalid_request_error", "", "chat_still_running")
 			assertCalls(t, fc, [][2]string{{"s1", "c1"}})
 		})
 	}
@@ -152,10 +148,8 @@ func TestStop_ForeignIs404(t *testing.T) {
 		if rc.Response.StatusCode() != 404 {
 			t.Fatalf("(%v) status = %d, want 404; body=%s", id, rc.Response.StatusCode(), rc.Response.Body())
 		}
-		want := `{"status":"session_not_found","message":"会话不存在"}`
-		if got := string(rc.Response.Body()); got != want {
-			t.Fatalf("(%v) body = %s, want %s", id, got, want)
-		}
+		assertErrorEnvelope(t, rc, 404, "会话不存在",
+			"invalid_request_error", "", "session_not_found")
 	}
 	assertCalls(t, fc, nil)
 }
@@ -186,9 +180,8 @@ func TestStop_MissingUser400(t *testing.T) {
 	if rc.Response.StatusCode() != 400 {
 		t.Fatalf("status = %d, want 400; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if !strings.Contains(string(rc.Response.Body()), `"status":"invalid_request"`) {
-		t.Fatalf("body = %s, want invalid_request", rc.Response.Body())
-	}
+	assertErrorEnvelope(t, rc, 400, "缺少或非法的 user",
+		"invalid_request_error", "user", "invalid_request")
 	assertCalls(t, fc, nil)
 }
 
@@ -204,6 +197,8 @@ func TestStop_EmptyTenant403(t *testing.T) {
 	if rc.Response.StatusCode() != 403 {
 		t.Fatalf("status = %d, want 403; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
+	assertErrorEnvelope(t, rc, 403, "API Key 未绑定租户",
+		"permission_error", "", "tenant_not_bound")
 	assertCalls(t, fc, nil)
 }
 
@@ -223,20 +218,19 @@ func TestStop_WebAdminBypasses(t *testing.T) {
 }
 
 func TestStop_MissingParams400(t *testing.T) {
-	for _, tc := range [][2]string{{"s1", ""}, {"", "c1"}} {
+	for _, tc := range []struct{ sid, cid, param string }{
+		{"s1", "", "chat_id"},
+		{"", "c1", "session_id"},
+	} {
 		fc := &fakeCanceller{res: agent.CancelLocal}
 		h, _ := newStopHandlerForTest(t, fc)
 
-		rc := newStopCtx(tc[0], tc[1])
+		rc := newStopCtx(tc.sid, tc.cid)
 		setIdentity(rc, "web", "", "")
 		h.Serve(context.Background(), rc)
 
-		if rc.Response.StatusCode() != 400 {
-			t.Fatalf("(%v) status = %d, want 400; body=%s", tc, rc.Response.StatusCode(), rc.Response.Body())
-		}
-		if !strings.Contains(string(rc.Response.Body()), `"status":"invalid_request"`) {
-			t.Fatalf("(%v) body = %s, want invalid_request", tc, rc.Response.Body())
-		}
+		assertErrorEnvelope(t, rc, 400, tc.param+" 参数缺失",
+			"invalid_request_error", tc.param, "invalid_request")
 		assertCalls(t, fc, nil)
 	}
 }

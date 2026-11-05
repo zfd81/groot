@@ -40,9 +40,9 @@ class TestGrootMdHotReload:
 
         # 发送 chat 请求验证内容是否注入
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "你好，请用一句话介绍自己"},
+            json={"messages": [{"role": "user", "content": "你好，请用一句话介绍自己"}], "stream": True},
             stream=True
         )
 
@@ -83,9 +83,9 @@ class TestGrootMdHotReload:
 
         # 发送请求验证
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "测试"},
+            json={"messages": [{"role": "user", "content": "测试"}], "stream": True},
             stream=True
         )
 
@@ -113,9 +113,9 @@ class TestGrootMdHotReload:
 
         # 验证已加载
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "你好"},
+            json={"messages": [{"role": "user", "content": "你好"}], "stream": True},
             stream=True
         )
         assert response.status_code == 200
@@ -131,9 +131,9 @@ class TestGrootMdHotReload:
 
         # 验证删除后仍可正常工作
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "你好"},
+            json={"messages": [{"role": "user", "content": "你好"}], "stream": True},
             stream=True
         )
 
@@ -154,9 +154,9 @@ class TestGrootMdHotReload:
 
         # 发送请求，验证服务正常
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "你好，请介绍自己"},
+            json={"messages": [{"role": "user", "content": "你好，请介绍自己"}], "stream": True},
             stream=True
         )
 
@@ -187,9 +187,9 @@ class TestGrootMdHotReload:
 
         # 验证服务正常
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "测试"},
+            json={"messages": [{"role": "user", "content": "测试"}], "stream": True},
             stream=True
         )
 
@@ -240,9 +240,9 @@ class TestGrootMdHotReload:
 
         # 验证加载
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "你好"},
+            json={"messages": [{"role": "user", "content": "你好"}], "stream": True},
             stream=True
         )
 
@@ -274,9 +274,9 @@ IMPORTANT_START_MARKER
 
         # 发送请求
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "测试 prompt 内容"},
+            json={"messages": [{"role": "user", "content": "测试 prompt 内容"}], "stream": True},
             stream=True
         )
 
@@ -311,9 +311,9 @@ class TestGrootMdMultipleChanges:
 
         # 验证
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "测试"},
+            json={"messages": [{"role": "user", "content": "测试"}], "stream": True},
             stream=True
         )
 
@@ -351,9 +351,9 @@ version: 1.0
 
         # 验证加载
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "你好"},
+            json={"messages": [{"role": "user", "content": "你好"}], "stream": True},
             stream=True
         )
 
@@ -388,9 +388,9 @@ func main() {
 
         # 验证加载
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "测试代码"},
+            json={"messages": [{"role": "user", "content": "测试代码"}], "stream": True},
             stream=True
         )
 

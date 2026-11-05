@@ -4,22 +4,18 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/zfd81/groot/internal/config"
 )
 
-// TestAuth_Defaults 空表时返回默认请求头名与空密钥
+// TestAuth_Defaults 空表时返回空密钥
 func TestAuth_Defaults(t *testing.T) {
 	s := New(config.Bootstrap{}, newFakeRepo())
 
 	a, err := s.Auth(context.Background())
 	if err != nil {
 		t.Fatalf("Auth: %v", err)
-	}
-	if a.HeaderName != "X-API-Key" {
-		t.Errorf("HeaderName = %q, want X-API-Key", a.HeaderName)
 	}
 	if a.Secret != "" {
 		t.Errorf("空表时 Secret 应为空, got %q", a.Secret)
@@ -78,24 +74,6 @@ func TestEnsureAuthSecret_NoRepo(t *testing.T) {
 	}
 }
 
-// TestAuth_HeaderNameFromTable 表中的请求头名覆盖默认值
-func TestAuth_HeaderNameFromTable(t *testing.T) {
-	r := newFakeRepo()
-	s := New(config.Bootstrap{}, r)
-	ctx := context.Background()
-
-	if err := s.SetAuthHeaderName(ctx, "X-Groot-Key"); err != nil {
-		t.Fatalf("SetAuthHeaderName: %v", err)
-	}
-	a, err := s.Auth(ctx)
-	if err != nil {
-		t.Fatalf("Auth: %v", err)
-	}
-	if a.HeaderName != "X-Groot-Key" {
-		t.Errorf("HeaderName = %q, want X-Groot-Key", a.HeaderName)
-	}
-}
-
 // TestRegenerateAuthSecret 每次生成不同密钥且落表可回读
 func TestRegenerateAuthSecret(t *testing.T) {
 	s := New(config.Bootstrap{}, newFakeRepo())
@@ -134,55 +112,5 @@ func TestRegenerateAuthSecret_NoRepo(t *testing.T) {
 	s := New(config.Bootstrap{}, nil)
 	if _, err := s.RegenerateAuthSecret(context.Background()); !errors.Is(err, ErrNoSettingStore) {
 		t.Errorf("err = %v, want ErrNoSettingStore", err)
-	}
-}
-
-// TestSetAuthHeaderName_EmptyRestoresDefault 空串删除表行，回读为默认 X-API-Key
-func TestSetAuthHeaderName_EmptyRestoresDefault(t *testing.T) {
-	s := New(config.Bootstrap{}, newFakeRepo())
-	ctx := context.Background()
-
-	if err := s.SetAuthHeaderName(ctx, "X-Groot-Key"); err != nil {
-		t.Fatalf("SetAuthHeaderName(X-Groot-Key): %v", err)
-	}
-	if err := s.SetAuthHeaderName(ctx, ""); err != nil {
-		t.Fatalf("SetAuthHeaderName(空串): %v", err)
-	}
-	a, err := s.Auth(ctx)
-	if err != nil {
-		t.Fatalf("Auth: %v", err)
-	}
-	if a.HeaderName != "X-API-Key" {
-		t.Errorf("HeaderName = %q, want X-API-Key（空串应删行恢复默认）", a.HeaderName)
-	}
-}
-
-// TestSetAuthHeaderName_Invalid 非法请求头名整体拒绝，可被 errors.Is 识别
-func TestSetAuthHeaderName_Invalid(t *testing.T) {
-	s := New(config.Bootstrap{}, newFakeRepo())
-	ctx := context.Background()
-
-	cases := []struct {
-		desc string
-		name string
-	}{
-		{"含空格", "bad name"},
-		{"含下划线", "X_API_Key"},
-		{"超 64 长度", strings.Repeat("A", 65)},
-		{"含中文", "X-密钥"},
-	}
-	for _, c := range cases {
-		if err := s.SetAuthHeaderName(ctx, c.name); !errors.Is(err, ErrInvalidSetting) {
-			t.Errorf("%s：err = %v, want ErrInvalidSetting", c.desc, err)
-		}
-	}
-
-	// 非法值不应污染表：回读仍为默认
-	a, err := s.Auth(ctx)
-	if err != nil {
-		t.Fatalf("Auth: %v", err)
-	}
-	if a.HeaderName != "X-API-Key" {
-		t.Errorf("HeaderName = %q, want X-API-Key（非法值不应写入）", a.HeaderName)
 	}
 }

@@ -8,11 +8,31 @@
 - 存储引擎配置（storage.engine）- 已删除，改为文件系统存储
 """
 
+import json
+
 import pytest
 import requests
 import time
 import concurrent.futures
 from conftest import BASE_URL, SSEClient
+
+
+def session_id_from_sse_text(text):
+    """从已读取的 SSE 文本中取首个 chunk 的顶层 session_id"""
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        body = line[5:].strip()
+        if not body or body == "[DONE]":
+            continue
+        try:
+            sid = json.loads(body).get("session_id")
+        except json.JSONDecodeError:
+            continue
+        if sid:
+            return sid
+    return None
 
 
 class TestTimeout:
@@ -23,9 +43,9 @@ class TestTimeout:
         # 发送请求并设置超时
         try:
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}/chat/completions",
                 headers=api_headers,
-                json={"instruction": "test"},
+                json={"messages": [{"role": "user", "content": "test"}], "stream": True},
                 stream=True,
                 timeout=1  # 1秒超时
             )
@@ -47,9 +67,9 @@ class TestTimeout:
         # 发送可能触发超时的请求
         # 具体行为取决于实现
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "执行长时间任务"},
+            json={"messages": [{"role": "user", "content": "执行长时间任务"}], "stream": True},
             stream=True
         )
 
@@ -68,9 +88,9 @@ class TestLLMPerformance:
         start_time = time.time()
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "写一个简单的函数"},
+            json={"messages": [{"role": "user", "content": "写一个简单的函数"}], "stream": True},
             stream=True
         )
 
@@ -87,9 +107,9 @@ class TestLLMPerformance:
         # 新版设计中 error_retry 配置保留在 react 部分
         # 默认值：2次重试
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "测试LLM调用"},
+            json={"messages": [{"role": "user", "content": "测试LLM调用"}], "stream": True},
             stream=True
         )
 
@@ -106,9 +126,9 @@ class TestMCPPerformance:
         start_time = time.time()
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "读取文件内容"},
+            json={"messages": [{"role": "user", "content": "读取文件内容"}], "stream": True},
             stream=True
         )
 
@@ -126,9 +146,9 @@ class TestReActLimits:
         """TC-PERF-007: max_iterations 配置（默认20）"""
         # 发送可能触发多次迭代的请求
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "执行复杂分析任务"},
+            json={"messages": [{"role": "user", "content": "执行复杂分析任务"}], "stream": True},
             stream=True
         )
 
@@ -147,9 +167,9 @@ class TestReActLimits:
         """TC-PERF-008: max_tokens 配置（默认100000）"""
         # 发送请求
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "生成大量文本"},
+            json={"messages": [{"role": "user", "content": "生成大量文本"}], "stream": True},
             stream=True
         )
 
@@ -162,9 +182,9 @@ class TestReActLimits:
         """TC-PERF-009: error_retry 配置（默认2次）"""
         # 发送可能失败的请求
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "读取不存在的文件"},
+            json={"messages": [{"role": "user", "content": "读取不存在的文件"}], "stream": True},
             stream=True
         )
 
@@ -176,9 +196,9 @@ class TestReActLimits:
     def test_nesting_max_depth(self, server, api_headers):
         """TC-PERF-010: nesting_max_depth 配置（默认3）"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "执行嵌套任务"},
+            json={"messages": [{"role": "user", "content": "执行嵌套任务"}], "stream": True},
             stream=True
         )
 
@@ -200,9 +220,9 @@ class TestConcurrency:
         # 创建多个新会话并发执行
         def send_request(i):
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}/chat/completions",
                 headers=api_headers,
-                json={"instruction": f"测试{i}"},
+                json={"messages": [{"role": "user", "content": f"测试{i}"}], "stream": True},
                 stream=True
             )
             SSEClient(response)
@@ -222,24 +242,25 @@ class TestConcurrency:
         # （stream=True 只拿到头就返回，不消费 body 的话会话仍在执行中，
         #   后面 3 个并发请求会全部 409）
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        _ = response.text  # 消费完 SSE 流，等待本轮结束
-
-        # 同时发送多个请求到同一会话
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
+        text = response.text  # 消费完 SSE 流，等待本轮结束
+        session_id = session_id_from_sse_text(text)
+        assert session_id
 
         def send_request(i):
+            # 续聊标识改由请求体 session_id 携带
             return requests.post(
-                f"{BASE_URL}/chat",
-                headers=headers2,
-                json={"instruction": f"test{i}"}
+                f"{BASE_URL}/chat/completions",
+                headers=api_headers,
+                json={
+                    "messages": [{"role": "user", "content": f"test{i}"}],
+                    "session_id": session_id,
+                }
             ).status_code
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -262,9 +283,9 @@ class TestResourceUsage:
         # 发送多个请求
         for i in range(10):
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}/chat/completions",
                 headers=api_headers,
-                json={"instruction": f"test{i}"},
+                json={"messages": [{"role": "user", "content": f"test{i}"}], "stream": True},
                 stream=True
             )
             SSEClient(response)

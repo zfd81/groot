@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
@@ -115,7 +116,7 @@ func TestSpeechHandler_Success(t *testing.T) {
 	up := newSpeechUpstream(t, "audio/mpeg", 200)
 	h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好"}`, nil)
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy"}`, nil)
 
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
@@ -126,17 +127,96 @@ func TestSpeechHandler_Success(t *testing.T) {
 	if ct := string(rc.Response.Header.ContentType()); ct != "audio/mpeg" {
 		t.Errorf("Content-Type = %q, want audio/mpeg", ct)
 	}
-	if mn := string(rc.Response.Header.Get("X-Model-Name")); mn != "tts-1" {
-		t.Errorf("X-Model-Name = %q, want tts-1", mn)
-	}
 	got := up.received()
 	if got["model"] != "tts-1" {
 		t.Errorf("上游收到 model = %v, want tts-1", got["model"])
 	}
-	for _, k := range []string{"voice", "language", "instructions", "response_format"} {
+	for _, k := range []string{"language", "instructions", "response_format", "speed"} {
 		if _, ok := got[k]; ok {
 			t.Errorf("%s 为空时不应下发: %v", k, got)
 		}
+	}
+}
+
+// TestSpeechHandler_VoiceRequired voice 为必填，缺失或仅空白时返回 400，param 指向 voice。
+func TestSpeechHandler_VoiceRequired(t *testing.T) {
+	for _, body := range []string{`{"input":"你好"}`, `{"input":"你好","voice":"   "}`} {
+		up := newSpeechUpstream(t, "audio/mpeg", 200)
+		h := newSpeechHandlerForTest(t, up.srv.URL, true)
+
+		rc := callJSON(h.Serve, consts.MethodPost, body, nil)
+
+		assertSpeechError(t, rc, 400, errbody.CodeInvalidRequest)
+		envl := envelopeOf(t, rc)
+		if envl.Error.Param == nil || *envl.Error.Param != "voice" {
+			t.Errorf("param = %v, want voice; body=%s", envl.Error.Param, rc.Response.Body())
+		}
+		if up.received() != nil {
+			t.Errorf("voice 缺失时不应请求上游: %v", up.received())
+		}
+	}
+}
+
+// TestSpeechHandler_SpeedPassthrough speed 原样透传给上游，未给出时不下发。
+func TestSpeechHandler_SpeedPassthrough(t *testing.T) {
+	up := newSpeechUpstream(t, "audio/mpeg", 200)
+	h := newSpeechHandlerForTest(t, up.srv.URL, true)
+
+	rc := callJSON(h.Serve, consts.MethodPost,
+		`{"input":"你好","voice":"alloy","speed":1.5}`, nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if got := up.received()["speed"]; got != 1.5 {
+		t.Errorf("上游收到 speed = %v, want 1.5", got)
+	}
+
+	up2 := newSpeechUpstream(t, "audio/mpeg", 200)
+	h2 := newSpeechHandlerForTest(t, up2.srv.URL, true)
+	rc = callJSON(h2.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy"}`, nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if got, ok := up2.received()["speed"]; ok {
+		t.Errorf("speed 未给出时不应下发: %v", got)
+	}
+}
+
+// TestSpeechHandler_NoModelHeader 成功响应不再带 X-Model-Name。
+func TestSpeechHandler_NoModelHeader(t *testing.T) {
+	up := newSpeechUpstream(t, "audio/mpeg", 200)
+	h := newSpeechHandlerForTest(t, up.srv.URL, true)
+
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy"}`, nil)
+
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if mn := string(rc.Response.Header.Get("X-Model-Name")); mn != "" {
+		t.Errorf("X-Model-Name = %q, 成功响应不应带该头", mn)
+	}
+}
+
+// TestSpeechHandler_UpstreamEnvelopePassthrough 上游非 2xx 且是 OpenAI 信封时，
+// 原样转发上游的状态码与响应体（逐字节相同）。
+func TestSpeechHandler_UpstreamEnvelopePassthrough(t *testing.T) {
+	const upstreamBody = `{"error":{"message":"Invalid voice: nope","type":"invalid_request_error","param":"voice","code":"invalid_value"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write([]byte(upstreamBody))
+	}))
+	defer srv.Close()
+
+	h := newSpeechHandlerForTest(t, srv.URL, true)
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","voice":"nope"}`, nil)
+
+	if rc.Response.StatusCode() != 400 {
+		t.Fatalf("status=%d, want 400（原样转发上游状态码）; body=%s",
+			rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if got := string(rc.Response.Body()); got != upstreamBody {
+		t.Errorf("body = %q，应与上游响应逐字节相同", got)
 	}
 }
 
@@ -221,10 +301,14 @@ func TestSpeechHandler_OptionalFieldLimits(t *testing.T) {
 			up := newSpeechUpstream(t, "audio/mpeg", 200)
 			h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
-			// 用多字节字符验证按 rune 计数
+			// 用多字节字符验证按 rune 计数；voice 本身是被测对象时它就是必填字段，
+			// 其它字段需带上合法 voice 才能走到长度校验。
 			exact := strings.Repeat("字", c.limit)
-			rc := callJSON(h.Serve, consts.MethodPost,
-				`{"input":"你好","`+c.field+`":"`+exact+`"}`, nil)
+			body := `{"input":"你好","` + c.field + `":"` + exact + `"}`
+			if c.field != "voice" {
+				body = `{"input":"你好","voice":"alloy","` + c.field + `":"` + exact + `"}`
+			}
+			rc := callJSON(h.Serve, consts.MethodPost, body, nil)
 			if rc.Response.StatusCode() != 200 {
 				t.Fatalf("恰好 %d 字应通过: status=%d body=%s", c.limit,
 					rc.Response.StatusCode(), rc.Response.Body())
@@ -237,9 +321,12 @@ func TestSpeechHandler_OptionalFieldLimits(t *testing.T) {
 			up2 := newSpeechUpstream(t, "audio/mpeg", 200)
 			h2 := newSpeechHandlerForTest(t, up2.srv.URL, true)
 			tooLong := strings.Repeat("字", c.limit+1)
-			rc = callJSON(h2.Serve, consts.MethodPost,
-				`{"input":"你好","`+c.field+`":"`+tooLong+`"}`, nil)
-			assertSpeechError(t, rc, 400, "invalid_request")
+			body = `{"input":"你好","` + c.field + `":"` + tooLong + `"}`
+			if c.field != "voice" {
+				body = `{"input":"你好","voice":"alloy","` + c.field + `":"` + tooLong + `"}`
+			}
+			rc = callJSON(h2.Serve, consts.MethodPost, body, nil)
+			assertSpeechError(t, rc, 400, errbody.CodeInvalidRequest)
 			wantMsg := fmt.Sprintf("%s 超过 %d 字符上限", c.field, c.limit)
 			if !strings.Contains(string(rc.Response.Body()), wantMsg) {
 				t.Errorf("message 应为 %q: %s", wantMsg, rc.Response.Body())
@@ -274,13 +361,13 @@ func TestSpeechHandler_PassesVoiceAndFormat(t *testing.T) {
 	}
 }
 
-func assertSpeechError(t *testing.T, rc *app.RequestContext, code int, status string) {
+func assertSpeechError(t *testing.T, rc *app.RequestContext, status int, code string) {
 	t.Helper()
-	if rc.Response.StatusCode() != code {
-		t.Fatalf("status=%d, want %d; body=%s", rc.Response.StatusCode(), code, rc.Response.Body())
+	if rc.Response.StatusCode() != status {
+		t.Fatalf("status=%d, want %d; body=%s", rc.Response.StatusCode(), status, rc.Response.Body())
 	}
-	if s := bodyStatus(t, rc); s != status {
-		t.Errorf("status = %q, want %s", s, status)
+	if c := envelopeOf(t, rc).Error.Code; c == nil || *c != code {
+		t.Errorf("code = %v, want %s", c, code)
 	}
 }
 
@@ -289,15 +376,15 @@ func TestSpeechHandler_BadJSON(t *testing.T) {
 	h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
 	rc := callJSON(h.Serve, consts.MethodPost, `{`, nil)
-	assertSpeechError(t, rc, 400, "invalid_request")
+	assertSpeechError(t, rc, 400, errbody.CodeInvalidRequest)
 }
 
 func TestSpeechHandler_EmptyInput(t *testing.T) {
 	up := newSpeechUpstream(t, "audio/mpeg", 200)
 	h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"   "}`, nil)
-	assertSpeechError(t, rc, 400, "invalid_request")
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"   ","voice":"alloy"}`, nil)
+	assertSpeechError(t, rc, 400, errbody.CodeInvalidRequest)
 	if up.received() != nil {
 		t.Error("input 为空时不应请求上游")
 	}
@@ -308,14 +395,16 @@ func TestSpeechHandler_InputTooLong(t *testing.T) {
 	h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
 	tooLong := strings.Repeat("字", maxSpeechInputRunes+1)
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"`+tooLong+`"}`, nil)
-	assertSpeechError(t, rc, 400, "invalid_request")
+	rc := callJSON(h.Serve, consts.MethodPost,
+		`{"input":"`+tooLong+`","voice":"alloy"}`, nil)
+	assertSpeechError(t, rc, 400, errbody.CodeInvalidRequest)
 	if up.received() != nil {
 		t.Error("input 超长时不应请求上游")
 	}
 
 	exact := strings.Repeat("字", maxSpeechInputRunes)
-	rc = callJSON(h.Serve, consts.MethodPost, `{"input":"`+exact+`"}`, nil)
+	rc = callJSON(h.Serve, consts.MethodPost,
+		`{"input":"`+exact+`","voice":"alloy"}`, nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("恰好 %d 字应通过: status=%d body=%s", maxSpeechInputRunes,
 			rc.Response.StatusCode(), rc.Response.Body())
@@ -326,16 +415,17 @@ func TestSpeechHandler_BadResponseFormat(t *testing.T) {
 	up := newSpeechUpstream(t, "audio/mpeg", 200)
 	h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","response_format":"midi"}`, nil)
-	assertSpeechError(t, rc, 400, "invalid_request")
+	rc := callJSON(h.Serve, consts.MethodPost,
+		`{"input":"你好","voice":"alloy","response_format":"midi"}`, nil)
+	assertSpeechError(t, rc, 400, errbody.CodeInvalidRequest)
 }
 
 func TestSpeechHandler_NoDefaultTTS(t *testing.T) {
 	up := newSpeechUpstream(t, "audio/mpeg", 200)
 	h := newSpeechHandlerForTest(t, up.srv.URL, false)
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好"}`, nil)
-	assertSpeechError(t, rc, 400, "invalid_model")
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy"}`, nil)
+	assertSpeechError(t, rc, 400, errbody.CodeModelNotFound)
 	if !strings.Contains(string(rc.Response.Body()), "TTS") {
 		t.Errorf("message 应提示未配置 TTS 模型: %s", rc.Response.Body())
 	}
@@ -345,26 +435,26 @@ func TestSpeechHandler_ExplicitModelWithoutTTSDefault(t *testing.T) {
 	up := newSpeechUpstream(t, "audio/mpeg", 200)
 	h := newSpeechHandlerForTest(t, up.srv.URL, false)
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","model":"tts-1"}`, nil)
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if mn := string(rc.Response.Header.Get("X-Model-Name")); mn != "tts-1" {
-		t.Errorf("X-Model-Name = %q, want tts-1", mn)
-	}
-}
-
-func TestSpeechHandler_HeaderModelUsed(t *testing.T) {
-	up := newSpeechUpstream(t, "audio/mpeg", 200)
-	h := newSpeechHandlerForTest(t, up.srv.URL, false)
-
-	rc := callJSONWithHeader(h.Serve, consts.MethodPost, `{"input":"你好"}`,
-		map[string]string{"X-Model-Name": "tts-1"})
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy","model":"tts-1"}`, nil)
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
 	if got := up.received(); got["model"] != "tts-1" {
 		t.Errorf("上游收到 model = %v, want tts-1", got["model"])
+	}
+}
+
+// TestSpeechHandler_IgnoresModelHeader 模型只从请求体 model 取，X-Model-Name 请求头不再生效：
+// 未配置默认 TTS 时只带请求头仍应报错。
+func TestSpeechHandler_IgnoresModelHeader(t *testing.T) {
+	up := newSpeechUpstream(t, "audio/mpeg", 200)
+	h := newSpeechHandlerForTest(t, up.srv.URL, false)
+
+	rc := callJSONWithHeader(h.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy"}`,
+		map[string]string{"X-Model-Name": "tts-1"})
+	assertSpeechError(t, rc, 400, errbody.CodeModelNotFound)
+	if up.received() != nil {
+		t.Errorf("请求头不应决定模型: %v", up.received())
 	}
 }
 
@@ -380,7 +470,8 @@ func TestSpeechHandler_BodyModelWinsOverHeader(t *testing.T) {
 		t.Fatalf("创建 tts-2: %v", err)
 	}
 
-	rc := callJSONWithHeader(h.Serve, consts.MethodPost, `{"input":"你好","model":"tts-2"}`,
+	rc := callJSONWithHeader(h.Serve, consts.MethodPost,
+		`{"input":"你好","voice":"alloy","model":"tts-2"}`,
 		map[string]string{"X-Model-Name": "tts-1"})
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
@@ -388,26 +479,33 @@ func TestSpeechHandler_BodyModelWinsOverHeader(t *testing.T) {
 	if got := up.received(); got["model"] != "tts-2" {
 		t.Errorf("上游收到 model = %v, want tts-2（请求体优先于请求头）", got["model"])
 	}
-	if mn := string(rc.Response.Header.Get("X-Model-Name")); mn != "tts-2" {
-		t.Errorf("X-Model-Name = %q, want tts-2", mn)
-	}
 }
 
 func TestSpeechHandler_ExplicitUnknownNoFallback(t *testing.T) {
 	up := newSpeechUpstream(t, "audio/mpeg", 200)
 	h := newSpeechHandlerForTest(t, up.srv.URL, true)
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","model":"nope"}`, nil)
-	assertSpeechError(t, rc, 400, "invalid_model")
+	rc := callJSON(h.Serve, consts.MethodPost,
+		`{"input":"你好","voice":"alloy","model":"nope"}`, nil)
+	assertSpeechError(t, rc, 400, errbody.CodeModelNotFound)
 	if up.received() != nil {
 		t.Error("显式模型不存在时不应回落到默认模型请求上游")
 	}
 }
 
+// TestSpeechHandler_UpstreamError 上游非 2xx 且不是 OpenAI 信封时返回 502 upstream_error。
 func TestSpeechHandler_UpstreamError(t *testing.T) {
-	up := newSpeechUpstream(t, "", 500)
-	h := newSpeechHandlerForTest(t, up.srv.URL, true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(502)
+		w.Write([]byte(`<html>Bad Gateway</html>`))
+	}))
+	defer srv.Close()
 
-	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好"}`, nil)
-	assertSpeechError(t, rc, 502, "upstream_error")
+	h := newSpeechHandlerForTest(t, srv.URL, true)
+	rc := callJSON(h.Serve, consts.MethodPost, `{"input":"你好","voice":"alloy"}`, nil)
+	assertSpeechError(t, rc, 502, errbody.CodeUpstreamError)
+	if !strings.Contains(string(rc.Response.Body()), "Bad Gateway") {
+		t.Errorf("message 应透传上游原文: %s", rc.Response.Body())
+	}
 }

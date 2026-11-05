@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,5 +57,25 @@ func TestWebSession_ValidToken(t *testing.T) {
 	uid, _ := rc.Get("web_user_id")
 	if uid != "u1" {
 		t.Errorf("web_user_id should be u1, got %v", uid)
+	}
+}
+
+// TestWebSession_Envelope 无 Cookie → 401，响应体为 OpenAI 错误信封。
+func TestWebSession_Envelope(t *testing.T) {
+	store := websession.NewStore(time.Hour)
+	rc := serveWebSession(store, func(rc *app.RequestContext) {})
+	if got := rc.Response.StatusCode(); got != 401 {
+		t.Fatalf("expected 401, got %d", got)
+	}
+	body := string(rc.Response.Body())
+	for _, want := range []string{
+		`"error":{`,
+		`"type":"authentication_error"`,
+		`"code":"invalid_api_key"`,
+		`"message":"未登录或会话已过期"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s: %s", want, body)
+		}
 	}
 }

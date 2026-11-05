@@ -12,6 +12,7 @@ export interface SseToolCall {
 // 解析后的单条 SSE 事件：即 `choices[0].delta` 摊平后再合并顶层 `finish_reason`。
 // 错误 chunk（`{"error":{...}}`）被映射为 `{ event: 'error', message, agent_name? }`。
 // 用量 chunk（`choices` 为 []、顶层 `usage` 为对象）被映射为 `{ event: 'usage', usage }`。
+// 每条事件都带上 chunk 顶层的会话标识：`session_id` 为项目扩展字段，`chat_id` 即顶层 `id`。
 export interface SseEvent {
   role?: string
   content?: string
@@ -24,7 +25,10 @@ export interface SseEvent {
   message?: string
   error?: boolean
   agent_name?: string
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  // 普通 chunk 的 usage 为 null，仅 usage chunk 携带对象
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null
+  session_id?: string
+  chat_id?: string
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -36,14 +40,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 // - `choices[0]` 存在 → `{ ...delta, finish_reason? }`
 // - `choices` 为空数组且 `usage` 为对象 → `{ event: 'usage', usage }`
 // - 其他（含非对象输入）→ null，调用方应忽略
+// 所有可识别的事件都带上顶层的会话标识：`session_id` 原样透出，`chat_id` 取顶层 `id`。
 export function flattenChunk(raw: unknown): SseEvent | null {
   if (!isRecord(raw)) return null
+
+  const meta: Pick<SseEvent, 'session_id' | 'chat_id'> = {}
+  if (typeof raw.session_id === 'string') meta.session_id = raw.session_id
+  if (typeof raw.id === 'string') meta.chat_id = raw.id
 
   const err = raw.error
   if (isRecord(err)) {
     const ev: SseEvent = {
       event: 'error',
       message: typeof err.message === 'string' ? err.message : '',
+      ...meta,
     }
     if (typeof err.agent_name === 'string') ev.agent_name = err.agent_name
     return ev
@@ -54,7 +64,7 @@ export function flattenChunk(raw: unknown): SseEvent | null {
   if (choices.length === 0) {
     const usage = raw.usage
     if (isRecord(usage)) {
-      return { event: 'usage', usage: usage as SseEvent['usage'] }
+      return { event: 'usage', usage: usage as SseEvent['usage'], ...meta }
     }
     return null
   }
@@ -66,5 +76,6 @@ export function flattenChunk(raw: unknown): SseEvent | null {
   return {
     ...delta,
     ...(finish != null ? { finish_reason: String(finish) } : {}),
+    ...meta,
   }
 }

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { speechApi } from '../api/speech'
+import { ApiError } from '../api/client'
 import { useSpeechSettingsStore } from './speechSettings'
 import { useMetaStore } from './meta'
 import { extractSentences } from '../utils/speechText'
@@ -117,7 +118,12 @@ export const useSpeechStore = defineStore('speech', () => {
           console.warn('speech synthesize failed:', err)
           if (!warned) {
             warned = true
-            ElMessage.warning(i18n.global.t('chat.speechFailed'))
+            // 未配置音色是可直接修正的配置问题，提示指向设置项而非笼统的朗读失败
+            const message =
+              err instanceof ApiError && err.code === 'voice_required'
+                ? err.message
+                : i18n.global.t('chat.speechFailed')
+            ElMessage.warning(message)
           }
           pump()
         },

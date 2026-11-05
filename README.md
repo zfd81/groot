@@ -29,10 +29,11 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 | 特性 | 说明 |
 |------|------|
 | **多轮对话** | 支持会话（Session）概念，同一会话内可进行多轮对话，Agent 自动记住历史上下文 |
-| **自然语言交互** | 接收指令 + 附件，无需编写代码逻辑，AI 自动理解意图 |
+| **自然语言交互** | 接收文字指令与图片、音频、文本类文件等内容片段，无需编写代码逻辑，AI 自动理解意图 |
 | **智能决策执行** | 自动判断意图，自主选择调用 Skills 或 MCP 工具完成任务 |
 | **多 Agent 协作** | 支持声明子 Agent，主 Agent 自动编排调度，也可直连指定子 Agent（Solo 模式） |
-| **多模型切换** | 支持创建多个 LLM 模型（Web UI 管理），按请求通过 `X-Model-Name` 指定，Web 界面可视化切换 |
+| **多模型切换** | 支持创建多个 LLM 模型（Web UI 管理），按请求通过 `model` 字段指定，Web 界面可视化切换 |
+| **OpenAI 兼容接口** | 对话、模型列表、语音、图片接口遵循 OpenAI 的路径、请求与响应形状，可直接使用 OpenAI 官方 SDK 接入（`base_url` 指向 Groot 即可） |
 | **流式进度反馈** | 实时返回执行过程和结果，调用方全程可见 |
 | **定时任务调度** | 通过对话创建定时任务，系统在指定时间自动执行，结果由 LLM 调用 MCP 工具（邮件、Webhook、IM 等）通知 |
 | **热插拔扩展** | Skills 支持动态添加，无需重启服务 |
@@ -49,9 +50,15 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 - 会话数据统一存储在数据库中（默认 SQLite，可切换 MySQL/PostgreSQL）
 
 **对话（Chat）：**
-- 每次调用 `/chat` API 都会产生一次对话
+- 每次调用 `POST /chat/completions` 都会产生一次对话
 - 对话属于某个会话，同一会话内的对话按轮次编号
 - 每次对话的详细执行记录独立存储
+
+**标识的获取方式：**
+
+- 新会话：不传 `session_id`（OpenAI 扩展字段），服务端新建会话
+- 继续会话：下一次请求的 `session_id` 传上一次拿到的值（`/chat/completions` 是请求体字段，会话类查询接口是路径中的 `sid`）
+- 会话 ID 与对话 ID 都在响应体中返回：非流式响应顶层 `session_id` 是会话 ID、`id` 是本次对话 ID；流式响应的每个 chunk 顶层同样带 `session_id`，`id` 是对话 ID
 
 **关系图：**
 
@@ -364,16 +371,37 @@ export OPENAI_API_KEY="sk-xxxx"
 
 API 认证始终开启，调用前先创建 API Key：登录 Web 界面，进入 **设置 → API Keys**，创建时设置名称、租户、过期时间与权限范围，创建后复制 Key。
 
-会话类接口（`/chat`、`/chat/*`、`/sess/*`）还需要在 `X-User-ID` 请求头中声明当前用户，groot 以（Key 所属租户，用户）记录会话归属：
+API 请求统一用 `Authorization: Bearer <API Key>` 携带凭证。会话类接口（`/chat/*`、`/sess/*`）还需要声明当前用户：`POST /chat/completions` 用请求体字段 `user`，其余会话类接口用请求头 `user`。groot 以（Key 所属租户，用户）记录会话归属：
 
 ```bash
-curl -X POST http://localhost:8080/chat \
+curl -X POST http://localhost:8080/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice" \
-  -d '{"instruction": "你好，请介绍一下你自己"}'
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -d '{"user": "alice", "messages": [{"role": "user", "content": "你好，请介绍一下你自己"}]}'
 ```
 
+响应是标准的 OpenAI `chat.completion` 对象，另带扩展字段 `session_id`：
+
+```json
+{
+  "id": "20260419103000523",
+  "object": "chat.completion",
+  "created": 1762056000,
+  "model": "qwen-max",
+  "session_id": "20260419103000523_a1b2",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "你好，我是 Groot……" },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": { "prompt_tokens": 32, "completion_tokens": 128, "total_tokens": 160 }
+}
+```
+
+> 路径不带 `/v1` 前缀，`base_url` 直接写 `http://localhost:8080` 即可。如果反向代理把 `/v1/*` 改写到 `/*`，也可以把 `base_url` 写成 `http://localhost:8080/v1`。
+>
 > 更多安装方式见 [二、安装部署](#二安装部署)，完整配置说明见 [四、配置详解](#四配置详解)，API 详细说明见 [七、REST API](#七rest-api)。
 
 ### 3.6 从老版本升级
@@ -469,7 +497,7 @@ security:
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| 模型名称 | **是** | 模型的逻辑名称，全局唯一，即 `X-Model-Name` 的取值 |
+| 模型名称 | **是** | 模型的逻辑名称，全局唯一，即请求体 `model` 字段的取值，也是 `GET /models` 列出的 `id` |
 | `base_url` | **是** | LLM API 地址（OpenAI 兼容协议），如 `http://host:8000/v1`；末尾缺少 `/v1` 时自动补齐，`http://host:8000` 与 `http://host:8000/v1` 等价 |
 | `api_key` | **是** | API 密钥，支持 `${VAR_NAME}` 引用环境变量 |
 | `model` | **是** | 实际调用时的模型名称（Model ID） |
@@ -518,27 +546,26 @@ security:
 
 限流开关与各项阈值（启用开关、默认/全局的 QPS 与并发）在 Web 设置面板中维护，见下文 [业务配置（Web 设置面板）](#业务配置web-设置面板)。
 
-**JWT 签名密钥与请求头名称**存放在数据库配置表中，不在配置文件里，登录 Web 界面后在 **设置 → 配置 → 认证** 分组中维护（本分组改动需重启服务生效）：
+**JWT 签名密钥**存放在数据库配置表中，不在配置文件里，登录 Web 界面后在 **设置 → 配置 → 认证** 分组中维护（本分组改动需重启服务生效）：
 
 - JWT 签名密钥（`security.auth.secret`）：服务首次启动时自动生成并写入配置表，`groot init` 不生成密钥。集群各节点共享同一数据库即共享同一密钥，A 节点签发的 API Key 在 B 节点可以验证
 - 密钥不以明文经界面或接口暴露，面板只展示脱敏值；需要更换时点击「重新生成」（带二次确认），**更换后所有已签发的 API Key 立即失效**，重启各节点后生效。亦可直接改数据库配置表
-- API Key 请求头名称（`security.auth.header_name`，默认 `X-API-Key`）：在同一分组中自定义，清空即恢复默认；启动时读取一次，改动需重启生效
 
 > **速率限制说明：**
 > - **限流维度**：按 API Key 名称（caller）维度限流
 > - **容错降级**：限流器配置异常时自动禁用限流，不影响服务正常启动
 
 > **API 认证说明：**
-> - **API 认证始终开启**：对外 API 请求需在请求头（默认 `X-API-Key`）中携带 API Key
+> - **API 认证始终开启**：对外 API 请求需在 `Authorization: Bearer <API Key>` 请求头中携带 API Key
 > - **API Key 管理**：登录 Web 界面，进入 **设置 → API Keys** 创建；每个 Key 设置名称、租户、过期时间（1天/7天/1个月/半年/1年/10年）与权限范围，创建后可随时查看、复制，删除后立即失效
 > - **权限点**：`chat`、`status`、`detail`、`history`、`session`、`schedule`、`all`（各权限对应的 API 见 [4.5 权限说明](#45-权限说明)）
-> - **租户与用户**：每个 Key 绑定一个租户，会话按（租户，用户）记录归属；调用会话类接口时须在 `X-User-ID` 请求头声明用户，详见 [4.5 权限说明](#45-权限说明)
+> - **租户与用户**：每个 Key 绑定一个租户，会话按（租户，用户）记录归属；调用会话类接口时须声明用户（`POST /chat/completions` 用请求体 `user`，其余会话类接口用请求头 `user`），详见 [4.5 权限说明](#45-权限说明)
 
 > **Web 登录说明：**
 > - Web 界面登录认证始终启用，无需配置；用户名和密码保存在数据库 `users` 表中（密码 bcrypt 加密），首次访问 Web 界面时引导创建
 > - 登录成功后下发 HttpOnly Cookie（`groot_web_session`），会话令牌保存在服务端内存中，进程重启后需重新登录；会话有效期固定 1 小时，活跃访问自动续期
 > - 会话 Cookie 的 `Secure` 标志自动判断：TLS 直连或反向代理注入 `X-Forwarded-Proto: https` 时置位
-> - 受 API 认证保护的端点同时接受 Cookie 与 `X-API-Key` 两种凭证，程序化调用不受影响；Web 会话通过后即赋予 `all` 等效权限（登录用户即管理员）
+> - 受 API 认证保护的端点同时接受 Cookie 与 `Authorization: Bearer` 两种凭证，程序化调用不受影响；Web 会话通过后即赋予 `all` 等效权限（登录用户即管理员）
 > - 登录失败限速以真实 TCP 对端地址为来源键（不采信 `X-Forwarded-For`）；同一来源在 10 分钟滑动窗口内失败达 5 次后暂时拒绝登录，返回 `429`；另设全局兜底，窗口内所有来源合计失败过多时一律锁定
 > - 忘记密码时在服务器上执行 `groot user reset` 重置用户，重启服务后重新创建
 
@@ -573,10 +600,9 @@ security:
 | 附件 | 允许的扩展名 | 空 | 逗号分隔（如 `.png, .jpg, .pdf`），留空表示不限制类型 |
 | 限流 | 启用限流 | 关 | 按调用方限制接口的请求速率与并发；已建立的调用方保留原上限，新调用方按新值 |
 | 限流 | 默认 QPS | `10` | 每个调用方每秒允许的请求数，`0` 表示不限制 |
-| 限流 | 默认并发 | `5` | 每个调用方同时进行的对话数上限（仅 `/chat` 生效），`0` 表示不限制 |
+| 限流 | 默认并发 | `5` | 每个调用方同时进行的对话数上限（仅 `/chat/completions` 生效），`0` 表示不限制 |
 | 限流 | 全局 QPS | `0` | 所有调用方合计的每秒请求数上限，`0` 表示不限制 |
 | 限流 | 全局并发 | `0` | 所有调用方合计的同时对话数上限，`0` 表示不限制 |
-| 认证 | 请求头名称 | `X-API-Key` | 对外 API 读取 API Key 的请求头，清空则恢复默认；**改动需重启生效** |
 | 认证 | 签名密钥 | 首次启动自动生成 | 只展示脱敏值；「重新生成」更换密钥（带二次确认），所有已签发的 API Key 立即失效；**改动需重启生效** |
 | 定时任务 | 允许创建定时任务 | 关 | 开启后模型可在对话中创建与管理定时任务（系统级清理和同步不受影响），保存后下一次对话生效 |
 
@@ -625,7 +651,7 @@ logging:
 
 | 权限 | 对应 API | 说明 |
 |------|---------|------|
-| `chat` | POST /chat、POST /chat/{sid}/{cid}/stop、POST /audio/transcriptions、POST /audio/speech、POST /image/understanding | 执行对话、中止对话、音频转录、文本转语音、图片解析 |
+| `chat` | POST /chat/completions、GET /models、POST /chat/{sid}/{cid}/stop、POST /audio/transcriptions、POST /audio/speech、POST /image/understanding | 执行对话、列出模型、中止对话、音频转录、文本转语音、图片解析 |
 | `status` | GET /chat/status/{sid} | 查询对话状态 |
 | `detail` | GET /chat/{sid}、GET /chat/{sid}/{cid} | 查询对话详情 |
 | `session` | GET /sess/{sid}、PATCH /sess/{sid}、GET /sess/search | 查询会话详情、重命名会话、搜索历史对话 |
@@ -642,10 +668,10 @@ logging:
 groot 面向多个业务系统后端提供服务，会话按（租户，用户）记录归属并隔离：
 
 - **租户由 API Key 决定**：每个 API Key 创建时绑定一个租户标识（1 到 64 个字符，仅限字母、数字、下划线、短横线），多把 Key 可以属于同一租户，便于轮换 Key 而不影响会话归属。租户不可通过请求头指定或覆盖。
-- **用户由调用方声明**：业务系统完成自身用户鉴权后，在每个请求的 `X-User-ID` 请求头中声明当前用户（格式要求同租户标识）。groot 信任持有有效 Key 的调用方对用户的声明。
-- **会话类接口**（`POST /chat`、`POST /chat/{sid}/{cid}/stop`、`GET /chat/status/{sid}`、`GET /chat/{sid}`、`GET /chat/{sid}/{cid}`、`GET /sess/{sid}`、`PATCH /sess/{sid}`、`DELETE /sess/{sid}`、`GET /sess/history`、`GET /sess/search`）要求完整归属：Key 未绑定租户返回 `403 forbidden`（消息"API Key 未绑定租户"）；`X-User-ID` 缺失或非法返回 `400 invalid_request`（消息"缺少或非法的 X-User-ID"）。
-- **归属不符等同于不存在**：读取或续写他人会话时，接口的可观测行为与会话不存在完全一致（`/chat` 续聊生成新 sid，`/chat/status` 返回 `idle`，详情、中止、重命名、删除接口返回 404），不泄漏会话 ID 是否真实存在。列表与搜索只返回当前归属的会话。
-- `/audio/transcriptions`、`/audio/speech`、`/image/understanding`、`/schedule/*` 与会话无关，不要求 `X-User-ID`。
+- **用户由调用方声明**：业务系统完成自身用户鉴权后，在每个请求中声明当前用户（格式要求同租户标识）：`POST /chat/completions` 用请求体字段 `user`，其余会话类接口用请求头 `user`。groot 信任持有有效 Key 的调用方对用户的声明。
+- **会话类接口**（`POST /chat/completions`、`POST /chat/{sid}/{cid}/stop`、`GET /chat/status/{sid}`、`GET /chat/{sid}`、`GET /chat/{sid}/{cid}`、`GET /sess/{sid}`、`PATCH /sess/{sid}`、`DELETE /sess/{sid}`、`GET /sess/history`、`GET /sess/search`）要求完整归属：Key 未绑定租户返回 `403`，错误码 `tenant_not_bound`（消息"API Key 未绑定租户"）；`user` 缺失或非法返回 `400 invalid_request`（消息"缺少或非法的 user"）。
+- **归属不符等同于不存在**：读取或续写他人会话时，接口的可观测行为与会话不存在完全一致（`/chat/completions` 续聊生成新 session_id，`/chat/status` 返回 `idle`，详情、中止、重命名、删除接口返回 404），不泄漏会话 ID 是否真实存在。列表与搜索只返回当前归属的会话。
+- `/audio/transcriptions`、`/audio/speech`、`/image/understanding`、`/models`、`/schedule/*` 与会话无关，不要求 `user`。
 - 通过 Web 界面登录的管理员不受租户与用户隔离限制，可查看、重命名、中止、删除全部会话；定时任务产生的会话归属为空，只能由 Web 管理员查看、重命名与删除。
 
 ### 4.6 配置热更新
@@ -659,7 +685,7 @@ groot 面向多个业务系统后端提供服务，会话按（租户，用户�
 
 **不支持热更新的配置：**
 - `bootstrap.yaml` 的全部配置项（Agent 元信息、Server、Logging、数据库连接、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`）需重启服务
-- JWT 签名密钥与 API Key 请求头名称（设置面板 **设置 → 配置 → 认证** 分组维护，存于数据库配置表，启动时读取一次）需重启服务
+- JWT 签名密钥（设置面板 **设置 → 配置 → 认证** 分组维护，存于数据库配置表，启动时读取一次）需重启服务
 - MCP 配置：修改 `{GROOT_HOME}/mcp/*.json` 文件需重启服务
 - 子 Agent 定义（`subagents/<name>/agent.md`）及其专属 MCP 需重启服务
 
@@ -764,7 +790,7 @@ Groot 每次对话都会自动将这些规范注入系统指令，无需每次�
 
 ```
 GROOT.md（按需读取）
-→ prompt（用户传入）
+→ 调用方系统提示（messages 中 role=system 的消息）
 → Skills 指令
 → 执行规则
 ```
@@ -919,7 +945,7 @@ MCP 配置目录固定位于 `{GROOT_HOME}/mcp`，无需在配置文件中指定
   "isActive": true,
   "baseUrl": "https://mcp-search.example.com/api",
   "headers": {
-    "X-API-Key": "${SEARCH_API_KEY}"
+    "Authorization": "Bearer ${SEARCH_API_KEY}"
   }
 }
 ```
@@ -975,25 +1001,22 @@ frontmatter 字段：
 **编排模式（默认）**：主 Agent 根据 GROOT.md 引导段与子 Agent 描述，通过 `call_agent` 工具自动调度：
 
 ```bash
-curl -X POST http://localhost:8080/chat \
+curl -X POST http://localhost:8080/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice" \
-  -d '{"instruction":"查询昨天的订单总金额"}'
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -d '{"user":"alice","messages":[{"role":"user","content":"查询昨天的订单总金额"}]}'
 ```
 
-**Solo 模式**：调用方通过 `X-Agent-Name` header 直接指定子 Agent，跳过主 Agent 编排：
+**Solo 模式**：调用方通过请求体 `agent_name` 直接指定子 Agent，跳过主 Agent 编排：
 
 ```bash
-curl -X POST http://localhost:8080/chat \
-  -H "X-Agent-Name: db-agent" \
+curl -X POST http://localhost:8080/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice" \
-  -d '{"instruction":"查询昨天的订单总金额"}'
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -d '{"agent_name":"db-agent","user":"alice","messages":[{"role":"user","content":"查询昨天的订单总金额"}]}'
 ```
 
-`X-Agent-Name: groot` 等价于不传 header（走主 Agent）。指定未注册名时返回 HTTP 400。
+`agent_name` 为 `groot` 等价于不传（走主 Agent）。指定未注册名时返回 HTTP 400，错误码 `unknown_agent`。
 
 #### 5.3.3 子 Agent 的 Model 选择
 
@@ -1003,7 +1026,7 @@ curl -X POST http://localhost:8080/chat \
 2. **主 Agent 当前 model**（编排模式默认）：编排模式下子 Agent 跟随主 Agent 实际选用的 model；Web 界面切换主 Agent 的 model 后，再触发的子 Agent 调用就用新 model
 3. **默认模型**（兜底）：以上两者都缺时使用 Web UI 中设置的默认模型
 
-Solo 模式（`X-Agent-Name` 直连子 Agent）下，第 2 步的"主 Agent 当前 model"取 `X-Model-Name` 请求头或默认模型，逻辑相同。
+Solo 模式（`agent_name` 直连子 Agent）下，第 2 步的"主 Agent 当前 model"取请求体 `model` 字段或默认模型，逻辑相同。
 
 实际效果：
 
@@ -1022,7 +1045,7 @@ Web 界面输入框左下角的 Agent 下拉可切换当前会话使用的 Agent
 | `groot` | 主 Agent（默认，编排模式），列表首位并标注「默认」 |
 | 其他 Agent 名 | 切换到指定子 Agent（Solo 模式，直连该子 Agent） |
 
-选中 `groot` 等价于不传 `X-Agent-Name`（走主 Agent 编排）。
+选中 `groot` 等价于不传 `agent_name`（走主 Agent 编排）。
 
 **编排模式下的可视化：** 主 Agent 通过 `call_agent` 调度子 Agent 时，Web 界面会将其单独渲染为「调用 Agent」步骤，而不是普通工具调用，便于一眼区分主 Agent 自身的工具调用和子 Agent 的派发。
 
@@ -1101,19 +1124,16 @@ groot
 
 ```bash
 # 编排模式：让主 Agent 自己决定调度 weather
-curl -X POST http://localhost:8080/chat \
+curl -X POST http://localhost:8080/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: 在Web界面创建的APIKey' \
-  -H 'X-User-ID: alice' \
-  -d '{"instruction":"今天北京天气怎么样？"}'
+  -H 'Authorization: Bearer 在Web界面创建的APIKey' \
+  -d '{"user":"alice","messages":[{"role":"user","content":"今天北京天气怎么样？"}]}'
 
 # Solo 模式：跳过主 Agent，直连 weather
-curl -X POST http://localhost:8080/chat \
-  -H 'X-Agent-Name: weather' \
+curl -X POST http://localhost:8080/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: 在Web界面创建的APIKey' \
-  -H 'X-User-ID: alice' \
-  -d '{"instruction":"今天北京天气怎么样？"}'
+  -H 'Authorization: Bearer 在Web界面创建的APIKey' \
+  -d '{"agent_name":"weather","user":"alice","messages":[{"role":"user","content":"今天北京天气怎么样？"}]}'
 ```
 
 **6. Web 界面中切换**
@@ -1267,18 +1287,21 @@ groot user reset -y   # 跳过确认直接执行
 
 ## 七、REST API
 
+本章的接口路径不带 `/v1` 前缀：`base_url` 直接指向服务地址即可。请求与响应形状对齐 OpenAI 的 Chat Completions 规范，可直接使用 OpenAI 官方 SDK。
+
 ### 7.1 API 列表
 
 | API | 方法 | 权限点 | 用途 |
 |-----|------|--------|------|
-| `/chat` | POST | `chat` | 执行对话，SSE 流式返回（支持多轮对话） |
+| `/chat/completions` | POST | `chat` | 执行对话（OpenAI 兼容），`stream` 控制流式或一次性返回 |
+| `/models` | GET | `chat` | 模型列表（OpenAI 格式） |
+| `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
+| `/audio/speech` | POST | `chat` | 文本转语音（返回音频二进制） |
+| `/image/understanding` | POST | `chat` | 图片解析（Base64 上传，返回文本） |
 | `/chat/status/{sid}` | GET | `status` | 查询最近一次对话状态 |
 | `/chat/{sid}` | GET | `detail` | 查询最近一次对话详情（完整步骤记录） |
 | `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
 | `/chat/{sid}/{cid}/stop` | POST | `chat` | 中止正在执行的对话 |
-| `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
-| `/audio/speech` | POST | `chat` | 文本转语音（返回音频二进制） |
-| `/image/understanding` | POST | `chat` | 图片解析（Base64 上传，返回文本） |
 | `/sess/{sid}` | GET | `session` | 查询会话详情（完整对话历史） |
 | `/sess/{sid}` | PATCH | `session` | 重命名会话 |
 | `/sess/{sid}` | DELETE | `delete` | 删除会话及其全部对话记录 |
@@ -1295,62 +1318,56 @@ groot user reset -y   # 跳过确认直接执行
 
 ### 7.2 认证方式
 
-API 认证始终开启，请求需在请求头携带 API Key：
+API 认证始终开启，请求需在 `Authorization` 请求头中以 Bearer 方式携带 API Key：
 
 ```http
-X-API-Key: 在Web界面创建的APIKey
+Authorization: Bearer 在Web界面创建的APIKey
 ```
 
-Header 名称可通过 `security.auth.header_name` 自定义。API Key 在 Web 界面 **设置 → API Keys** 中创建与管理（设置名称、租户、过期时间与权限范围），删除后立即失效。
+`Authorization` 是唯一的凭证传递位置。API Key 在 Web 界面 **设置 → API Keys** 中创建与管理（设置名称、租户、过期时间与权限范围），删除后立即失效。创建时需填写名称（1 到 64 字节，唯一，`web` 为保留名）、租户标识（1 到 64 个字符，仅限字母、数字、下划线、短横线，创建后不可修改）、有效期（`1d` / `7d` / `1mo` / `6mo` / `1y` / `10y`）与权限点（见 [4.5 权限说明](#45-权限说明)）。
 
-会话类接口（`/chat`、`/chat/*`、`/sess/*`）还需携带 `X-User-ID` 请求头声明当前用户，会话按（Key 所属租户，用户）记录归属并隔离，规则见 [4.5 权限说明](#45-权限说明)：
+会话类接口（`/chat/*`、`/sess/*`）还需声明当前用户，会话按（Key 所属租户，用户）记录归属并隔离，规则见 [4.5 权限说明](#45-权限说明)。`POST /chat/completions` 的 `user` 放在请求体里（OpenAI 标准字段）：
+
+```json
+{"user": "alice", "messages": [{"role": "user", "content": "你好"}]}
+```
+
+其余会话类接口没有请求体，使用请求头 `user`：
 
 ```http
-X-API-Key: 在Web界面创建的APIKey
-X-User-ID: alice
+Authorization: Bearer 在Web界面创建的APIKey
+user: alice
 ```
 
 在浏览器中通过 Web 界面登录后，受 API 认证保护的端点也接受登录 Cookie 作为凭证，两者任一有效即可通过认证；Cookie 凭证代表管理员，不受租户与用户隔离限制。
 
-**创建 API Key（`POST /web/apikeys`，Web 登录 Cookie 认证）**
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `name` | 是 | Key 名称，去除首尾空白后 1 到 64 字节，唯一；`web` 为保留名 |
-| `tenant_id` | 是 | 租户标识，去除首尾空白后 1 到 64 个字符，仅限字母、数字、下划线、短横线（`^[A-Za-z0-9_-]+$`）；不唯一，创建后不可修改；不合法返回 `400 invalid_tenant` |
-| `expires_in` | 是 | 有效期：`1d` / `7d` / `1mo` / `6mo` / `1y` / `10y` |
-| `permissions` | 是 | 权限点列表，见 [4.5 权限说明](#45-权限说明) |
-
-创建响应与 `GET /web/apikeys` 列表均包含 `tenant_id` 字段。
-
 ---
 
-### 7.3 POST /chat - 执行对话（核心接口）
+### 7.3 POST /chat/completions - 执行对话（核心接口）
+
+遵循 OpenAI Chat Completions 规范：请求体是 `messages`，响应体是 `chat.completion`（非流式）或 `chat.completion.chunk` 流（流式）。Groot 在标准之外增加了少量扩展字段（`session_id`、`agent_name`），标准客户端会忽略它们。
 
 **请求 Header：**
 
 | Header | 必填 | 说明 |
 |--------|------|------|
-| `X-Session-ID` | 否 | 会话ID（sid），为空则创建新会话；有值但会话不存在或不属于当前（租户，用户）则生成新sid，调用方通过响应头 `X-Session-ID` 获知实际会话 ID |
-| `X-Model-Name` | 否 | 模型名称，指定本次对话使用的模型（可选值为 Web 界面 设置 → 模型 中配置的模型名称）；为空则使用默认对话模型；指定不存在或已禁用的模型返回 400 |
-| `X-Agent-Name` | 否 | 直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 |
-| `X-User-ID` | 是 | 用户标识（1 到 64 个字符，仅限字母、数字、下划线、短横线）。新会话以（API Key 所属租户，该用户）记录归属，续聊时按同一归属校验；缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录 Cookie 凭证免此头 |
+| `Authorization` | 是 | `Bearer <API Key>`（在 Web 界面 设置 → API Keys 中创建，绑定租户） |
 | `Content-Type` | 是 | `application/json` |
-| `X-API-Key` | 是 | API Key（在 Web 界面 设置 → API Keys 中创建，绑定租户） |
 
 **请求 Body：**
 
 ```json
 {
-  "instruction": "自然语言指令",
-  "prompt": "系统提示词，设定Agent角色和行为约束（可选）",
-  "attachments": [
-    {
-      "type": "image",
-      "name": "screenshot.png",
-      "content": "base64编码内容"
-    }
-  ]
+  "model": "qwen-max",
+  "messages": [
+    { "role": "system", "content": "你是一名严谨的财务助手。" },
+    { "role": "user", "content": "帮我看下这张发票" }
+  ],
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "session_id": "20260419103000523_a1b2",
+  "agent_name": "analyst",
+  "user": "alice"
 }
 ```
 
@@ -1358,29 +1375,127 @@ X-User-ID: alice
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `instruction` | 是 | 用户任务指令 |
-| `prompt` | 否 | 系统提示词，设定Agent角色、行为约束、背景信息 |
-| `attachments` | 否 | 附件列表（Base64编码）|
+| `messages` | 是 | 消息数组，至少一条，最后一条的 `role` 必须是 `user`；`role` 仅支持 `system`、`user`、`assistant` |
+| `messages[].content` | 是 | 字符串，或内容片段数组（仅 `user` 支持数组，见下） |
+| `model` | 否 | 模型逻辑名（Web 界面 设置 → 模型 中配置的名称，即 `GET /models` 的 `id`）。为空时取默认对话模型；指定不存在或已禁用的模型返回 400 `model_not_found`，不回落 |
+| `stream` | 否 | `true` 走 SSE 流式返回，缺省或 `false` 时一次性返回 |
+| `stream_options.include_usage` | 否 | 为 `true` 时在流末尾下发 token 用量 chunk；未开启时各 chunk 的 `usage` 为 `null` |
+| `user` | 否 | 终端用户标识，作为会话归属的用户（1 到 64 个字符，仅限字母、数字、下划线、短横线）。省略时回落到请求头 `user`；两者都没有时返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录 Cookie 凭证可免 |
+| `session_id` | 否 | **扩展字段**。会话 ID，为空则新建会话；有值但会话不存在或不属于当前（租户，用户）则按新会话处理 |
+| `agent_name` | 否 | **扩展字段**。直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 `unknown_agent` |
+| `n` | 否 | 仅支持 `1`，其它取值返回 400 |
+| 其它采样参数 | 否 | `temperature`、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`presence_penalty`、`frequency_penalty`、`seed`、`response_format`、`tools`、`tool_choice`、`logprobs`、`top_logprobs` 被接受但不生效；采样参数以 Web 界面中模型记录的配置为准 |
 
-**附件字段说明：**
+`role` 为 `tool`、`function`、`developer` 的消息返回 400 `invalid_request`：Groot 的工具调用由服务端 Agent 编排产生，不接受调用方注入工具结果。
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `type` | 是 | 附件类型：`file`（文件）、`image`（图片）、`audio`（音频）、`video`（视频）|
-| `name` | 是 | 附件文件名（含扩展名）|
-| `content` | 是 | Base64 编码的附件内容。所有类型均以 Base64 data URL 透传给 LLM |
+**内容片段（`user` 消息的 `content` 为数组时）：**
 
-**响应 Header：**
+| `type` | 载荷 | 说明 |
+|--------|------|------|
+| `text` | `{"type":"text","text":"..."}` | 作为文本，多个 `text` 片段按出现顺序拼接 |
+| `image_url` | `{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}` | 图片，`url` 必须是 `data:<mime>;base64,<payload>` 形式；`detail` 被接受但忽略 |
+| `input_audio` | `{"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}` | 音频，`format` 仅支持 `wav`、`mp3` |
+| `file` | `{"type":"file","file":{"filename":"a.csv","file_data":"data:text/csv;base64,..."}}` | 文本类文件，解码后拼进该条消息的文本部分；非文本 MIME（如 `application/pdf`）返回 400 `unsupported_file_type` |
+| `video_url` | — | 不支持，出现时返回 400 |
 
-| Header | 说明 |
+`image_url`、`input_audio`、`file` 三种片段受 Web 设置面板中的附件数量、单文件体积、总体积与扩展名白名单约束，校验不通过返回错误信封，`code` 取 `invalid_request`（数量超限、缺少文件名或内容、Base64 解码失败）、`unsupported_type`（类型不在白名单内或类型无法识别）或 `file_too_large`（单文件或合计体积超限，HTTP 状态码为 413；其余为 400）。
+
+**消息组装：** 调用方传入的 `messages` 接在服务端已构造的上下文之后——`role: system` 的消息（可多条，按出现顺序以空行连接）作为本次请求的系统提示；除系统消息与最后一条 `user` 之外的其它消息作为调用方历史追加在服务端会话历史之后；最后一条 `user` 的文本部分是本轮指令。系统提示与调用方历史只作用于本次请求，不写入会话记忆。
+
+**两个非标准字段的获取方式：**
+
+`session_id`（会话 ID）与 `chat_id`（对话 ID，即响应体的 `id`）是 OpenAI 标准之外的扩展字段，不在响应头里，按以下方式读取：
+
+| 响应形态 | `session_id` | `chat_id` |
+|----------|--------------|-----------|
+| 非流式 | 响应体顶层 `session_id` | 响应体顶层 `id` |
+| 流式 | 每个 chunk 顶层的 `session_id`（首个 chunk 即可取一次，整条流内不变） | 每个 chunk 顶层的 `id` |
+
+上表说的是原始 JSON 响应体的位置。官方 SDK 会为未知的顶层字段保留属性访问（Python 的 pydantic v2 与 v1 下 `resp.session_id` 都能直接取到），pydantic v2 还会把它们收进 `model_extra` 容器。**推荐先取属性、取不到再取容器**，两种形状都做兼容：
+
+- Python（`openai`）：先取 `resp.session_id` 属性，取不到时再从 `resp.model_extra`（dict）中取 `session_id`；流式 chunk 同理（`chunk.session_id` → `chunk.model_extra`）
+- Java（`com.openai:openai-java`）：`resp._additionalProperties()`（`Map<String, JsonValue>`）中取 `session_id`，再用 `convert(String.class)` 转成 `String`；流式 chunk 同为 `chunk._additionalProperties()`
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080", api_key="在Web界面创建的APIKey")
+
+# 非流式：先取响应对象的 session_id 属性，取不到再从 model_extra 容器取
+resp = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "你好"}],
+    extra_body={"user": "alice"},
+)
+session_id = getattr(resp, "session_id", None) or (getattr(resp, "model_extra", None) or {}).get("session_id")
+
+# 流式：chunk 同样先取属性、再取容器
+stream = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "继续"}],
+    stream=True,
+    extra_body={"session_id": session_id, "user": "alice"},
+)
+for event in stream:
+    sid = getattr(event, "session_id", None) or (getattr(event, "model_extra", None) or {}).get("session_id")
+    if sid:
+        session_id = sid  # 首个 chunk 取一次即可
+    ...
+```
+
+不同 SDK 版本对未知顶层字段的处理并不一致，流式与非流式也可能表现不同。因此取值时先试属性访问、再试额外字段容器（`model_extra` / `_additionalProperties()`），两种途径都取不到时，用 `client.chat.completions.with_raw_response.create(...)`（Java 为 `client.chat().completions().withRawResponse().create(...)`）拿原始响应自行解析，或先发起一次非流式调用取得 `session_id` 再用于后续流式请求。
+
+Java 取法示例：
+
+```java
+JsonValue raw = resp._additionalProperties().get("session_id");
+String sessionId = raw == null ? null : raw.convert(String.class);
+```
+
+**非流式响应（`stream` 为 `false` 或缺省）：**
+
+```json
+{
+  "id": "20260419103000523",
+  "object": "chat.completion",
+  "created": 1762056000,
+  "model": "qwen-max",
+  "session_id": "20260419103000523_a1b2",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "这张发票的开票日期是 2026-10-21，金额 1280.00 元。" },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": { "prompt_tokens": 1024, "completion_tokens": 128, "total_tokens": 1152 }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 本次对话 ID（即 `chat_id`） |
+| `object` | 固定 `chat.completion` |
+| `created` | 本轮开始的 Unix 秒时间戳 |
+| `model` | 实际使用的模型逻辑名 |
+| `session_id` | 扩展字段，本轮对应的会话 ID |
+| `choices[0].message.content` | 模型输出的正文（主 Agent 与子 Agent 的正文全部拼接） |
+| `choices[0].message.reasoning_content` | 扩展字段，模型的思考过程；模型未产出时省略 |
+| `choices[0].message.error` | 扩展字段，执行失败时给出 `{"message":"..."}` |
+| `choices[0].finish_reason` | 结束原因，如 `stop`、`length`、`tool_calls`；执行失败时为 `"error"` |
+| `usage` | 全轮（主 Agent 与子 Agent 汇总）的 token 用量 |
+
+Agent 执行失败时 HTTP 状态码仍为 `200`，`finish_reason` 为 `"error"`，错误详情在 `message.error` 中给出。本轮未产出任何正文时，`content` 为「任务执行完成，但未获得明确结果」。
+
+**流式响应（`stream` 为 `true`）：**
+
+响应 Header：
+
+| Header | 取值 |
 |--------|------|
-| `X-Session-ID` | 会话ID（新建或传入存在的） |
-| `X-Chat-ID` | 本次对话ID |
 | `Content-Type` | `text/event-stream` |
 | `Cache-Control` | `no-cache` |
 | `Connection` | `keep-alive` |
-
-**SSE 响应格式：**
 
 响应体为 SSE 流，每条事件使用标准 `data:` 行承载一个 JSON 对象，流结束时发送 `data: [DONE]`（非 JSON）。
 
@@ -1395,12 +1510,13 @@ JSON 对象采用 OpenAI Chat Completions 流式分块格式（`chat.completion.
 
 | 字段 | 类型 | 取值 |
 |------|------|------|
-| `id` | string | 本次对话 ID，与响应头 `X-Chat-ID` 相同，整条流内不变 |
+| `id` | string | 本次对话 ID（即 `chat_id`），整条流内不变 |
 | `object` | string | 固定 `"chat.completion.chunk"` |
 | `created` | int | 对话开始时间的 Unix 秒，整条流内不变 |
 | `model` | string | 生成该事件的模型逻辑名称（Web 界面 设置 → 模型 中配置的名称）。主 Agent 事件为本次对话使用的主模型名；子 Agent 事件（`delta` 带 `agent_name`）为该子 Agent 实际使用的模型名 |
-| `choices` | array | 普通事件恒为单元素数组，`choices[0].index` 恒为 `0`；`usage` 事件为空数组 `[]` |
-| `usage` | object \| null | 普通事件为 `null`；`usage` 事件为 `{prompt_tokens, completion_tokens, total_tokens}`，为本次对话全部模型调用（主 Agent + 子 Agent）的累计 |
+| `session_id` | string | **扩展字段**，本轮对应的会话 ID；每个 chunk 都带，整条流内不变 |
+| `choices` | array | 普通事件恒为单元素数组，`choices[0].index` 恒为 `0`；usage chunk 为空数组 `[]` |
+| `usage` | object \| null | 普通事件为 `null`；开启 `stream_options.include_usage` 时，末尾的 usage chunk 为 `{prompt_tokens, completion_tokens, total_tokens}`，为本次对话全部模型调用（主 Agent + 子 Agent）的累计 |
 
 `choices[0]` 结构：
 
@@ -1409,6 +1525,8 @@ JSON 对象采用 OpenAI Chat Completions 流式分块格式（`chat.completion.
 | `index` | int | 恒为 `0` |
 | `delta` | object | 本块增量内容，事件类型由其中的字段组合判定（见下文） |
 | `finish_reason` | string \| null | 阶段结束原因，非结束块为 `null` |
+
+流内执行失败时下发一个 `data: {"error":{...}}\n\n` 事件（错误信封形状，`type` 为 `api_error`），随后紧跟 `data: [DONE]`。
 
 ---
 
@@ -1437,7 +1555,7 @@ choices[0].finish_reason 非 null      → finish 事件
 | `tool_calls` | `role:"assistant"`, `tool_calls[]` | `null` | 可见 | 「正在调用 xxx」提示；skill 调用为 `function.name == "skill"`，子 Agent 调用为 `function.name == "call_agent"` |
 | `finish` | `{}`（可含 `agent_name`） | 上游模型返回的 OpenAI 结束原因，原样透传；常见为 `"stop"` / `"tool_calls"` / `"length"` / `"content_filter"` | 可见 | 阶段结束标记，位于 `choices[0].finish_reason`；一次对话可出现多次（每轮 ReAct 一次），不展示 |
 | `tool_result` | `role:"tool"`, `tool_call_id`, `tool_name`, `content`, `error` | `null` | 忽略（Groot 扩展） | **工具调用结果区（调用详情面板）**，不放入正文；`error:true` 表示工具执行失败 |
-| `usage` | —（`choices` 为 `[]`，顶层 `usage` 对象） | — | 可见（OpenAI `include_usage` 标准形状） | 本次对话 token 用量；一次对话最多一条，紧邻 `[DONE]` 之前；对话无任何模型调用时不出现 |
+| `usage` | —（`choices` 为 `[]`，顶层 `usage` 对象） | — | 可见（OpenAI `include_usage` 标准形状） | 本次对话 token 用量；一次对话最多一条，紧邻 `[DONE]` 之前；仅在请求带 `stream_options.include_usage: true` 时下发，未开启时不出现 |
 | `error` | —（无 `choices`，顶层为 `error` 对象） | — | 可见 | **终结性**：致命错误（LLM 连接失败、Agent 执行 panic、Solo 模式子 Agent 构建失败等），之后紧跟 `[DONE]`，收到即视为对话结束 |
 | `done` | — | — | 可见 | `data: [DONE]`，对话流结束 |
 
@@ -1453,7 +1571,7 @@ choices[0].finish_reason 非 null      → finish 事件
 
 #### SSE 事件 JSON 结构
 
-以下每种事件均给出完整的 chunk 示例。`id/object/created/model` 在每条事件中都存在；`id` 与 `created` 整条流内不变。
+以下每种事件均给出完整的 chunk 示例。`id/object/created/model` 在每条事件中都存在；`id` 与 `created` 整条流内不变。示例中省略了扩展字段 `session_id`（实际每个 chunk 顶层都带，值整条流内不变）。
 
 **thinking：**
 
@@ -1592,14 +1710,14 @@ choices[0].finish_reason 非 null      → finish 事件
 {
   "error": {
     "message": "LLM 服务连接失败: ...",
-    "type": "server_error",
-    "code": null,
-    "param": null
+    "type": "api_error",
+    "param": null,
+    "code": null
   }
 }
 ```
 
-错误事件不含 `choices`。事件来自子 Agent 时，在 `error` 对象内附带 `agent_name`。错误事件是**终结性**的：之后紧跟 `data: [DONE]`，没有任何 `choices` 事件，客户端收到 `error` 即可视为本次对话结束。
+错误事件不含 `choices`。错误事件是**终结性**的：之后紧跟 `data: [DONE]`，没有任何 `choices` 事件，客户端收到 `error` 即可视为本次对话结束。
 
 **子 Agent 事件：**
 
@@ -1613,6 +1731,8 @@ choices[0].finish_reason 非 null      → finish 事件
 
 **场景1：纯 LLM 回答（无 thinking）**
 
+> 以下请求带 `stream_options.include_usage: true`；未开启该选项时末尾的 usage 事件不会下发，`[DONE]` 之前不再有该行。
+
 ```
 data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","content":"回答内容..."},"finish_reason":null}],"usage":null}
 data: {..., "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
@@ -1621,6 +1741,8 @@ data: [DONE]
 ```
 
 **场景2：LLM 回答带 thinking**
+
+> 以下请求带 `stream_options.include_usage: true`；未开启时末尾的 usage 事件不会下发。
 
 ```
 data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"思考过程..."},"finish_reason":null}],"usage":null}
@@ -1631,6 +1753,8 @@ data: [DONE]
 ```
 
 **场景3：工具调用**
+
+> 以下请求带 `stream_options.include_usage: true`；未开启时末尾的 usage 事件不会下发。
 
 ```
 data: {"id":"chat_abc","object":"chat.completion.chunk","created":1760947200,"model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"我需要读取文件"},"finish_reason":null}],"usage":null}
@@ -1652,7 +1776,7 @@ data: [DONE]
 function flattenChunk(chunk) {
   if (chunk.error) {
     // 顶层 error → 终结性错误事件
-    return { event: "error", message: chunk.error.message, agent_name: chunk.error.agent_name };
+    return { event: "error", message: chunk.error.message };
   }
   const choice = chunk.choices[0];
   // delta 字段 + finish_reason 合并为一个扁平对象
@@ -1703,126 +1827,185 @@ eventSource.onmessage = (e) => {
 
 **请求示例：**
 
-**新会话请求：**
+**新会话（非流式）：**
 ```bash
-curl -X POST http://localhost:8080/chat \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice" \
+curl -X POST http://localhost:8080/chat/completions \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
   -H "Content-Type: application/json" \
-  -d '{"instruction": "帮我分析这份PDF财务报告", "attachments": [{"type": "file", "name": "Q3_Report.pdf", "content": "base64..."}]}'
+  -d '{
+        "user": "alice",
+        "messages": [
+          {"role": "user", "content": [
+            {"type": "text", "text": "帮我分析这份 CSV 财务报告"},
+            {"type": "file", "file": {"filename": "Q3_Report.csv", "file_data": "data:text/csv;base64,..."}}
+          ]}
+        ]
+      }'
 ```
 
-**继续会话请求：**
+**继续会话（流式）：**
 ```bash
-curl -X POST http://localhost:8080/chat \
-  -H "X-Session-ID: 20260419103000523_a1b2" \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice" \
+curl -N -X POST http://localhost:8080/chat/completions \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
   -H "Content-Type: application/json" \
-  -d '{"instruction": "根据刚才的分析，生成一份总结报告"}'
+  -d '{
+        "stream": true,
+        "stream_options": {"include_usage": true},
+        "session_id": "20260419103000523_a1b2",
+        "user": "alice",
+        "messages": [{"role": "user", "content": "根据刚才的分析，生成一份总结报告"}]
+      }'
 ```
 
-续聊时 `X-User-ID` 须与会话创建时一致，且使用同一租户的 API Key；归属不符时按新会话处理并返回新的 `X-Session-ID`，即使该会话 ID 正有对话在运行也不返回 409。
+续聊时 `user` 须与会话创建时一致，且使用同一租户的 API Key；归属不符时按新会话处理并在响应中返回新的 `session_id`，即使该会话 ID 正有对话在运行也不返回 409。
 
 ---
 
-### 7.4 POST /audio/transcriptions - 音频转录
+### 7.4 GET /models - 模型列表
 
-需要携带具有 `chat` 权限的 API Key，与 `/chat` 相同。
-
-把音频转成文字。请求为 `multipart/form-data`：
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `file` | 是 | 音频文件，支持 webm、mp3、mp4、mpeg、mpga、m4a、wav、ogg、flac |
-| `model` | 否 | 转录模型名，省略时使用默认 ASR 模型 |
-| `language` | 否 | 音频语种的 ISO-639-1 代码，如 `zh`、`en`，可提升准确率 |
+需要携带具有 `chat` 权限的 API Key。返回 Groot 中配置的全部启用模型，采用 OpenAI 的列表格式，可直接供 OpenAI SDK 的模型选择与校验使用：
 
 ```bash
-curl -X POST http://localhost:8080/audio/transcriptions \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -F "file=@recording.webm" \
-  -F "model=whisper-1"
+curl http://localhost:8080/models \
+  -H "Authorization: Bearer 在Web界面创建的APIKey"
 ```
 
 响应：
 
 ```json
 {
-  "text": "打开登录日志",
-  "model": "whisper-1"
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen-max",
+      "object": "model",
+      "created": 1762000000,
+      "owned_by": "groot"
+    }
+  ]
 }
 ```
 
-**错误响应：**
+| 字段 | 说明 |
+|------|------|
+| `object` | 固定为 `list` |
+| `data[].id` | 模型逻辑名，即 `/chat/completions` 的 `model` 取值 |
+| `data[].object` | 固定为 `model` |
+| `data[].created` | 模型记录的创建时间，Unix 秒 |
+| `data[].owned_by` | 固定为 `groot` |
 
-- `400 invalid_request`：缺少 `file` 字段或识别结果为空
-- `400 unsupported_type`：扩展名不受支持
-- `400 file_too_large`：超过 `attachment.max_size`
-- `400 invalid_model`：模型不存在、已禁用或未配置默认 ASR 模型
-- `502 upstream_error`：上游转录服务出错，`message` 透传原文
-
-模型也可用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为表单 `model` → 请求头 `X-Model-Name` → 默认 ASR 模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认 ASR 模型。
+只列启用的模型；被禁用的模型不能用于对话，不会出现在列表中。模型的上游地址、密钥、默认类型等配置细节不在本接口暴露，请在 Web 界面 **设置 → 模型** 中查看。
 
 ---
 
-#### 7.4.1 POST /audio/speech - 文本转语音
+### 7.5 POST /audio/transcriptions - 音频转录
 
-需要携带具有 `chat` 权限的 API Key，与 `/chat` 相同。本接口与会话无关，不要求 `X-User-ID`。
+需要携带具有 `chat` 权限的 API Key。本接口与会话无关，不要求 `user`。
+
+把音频转成文字。请求为 `multipart/form-data`：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `file` | 是 | 音频文件，支持 `.webm`、`.mp3`、`.mp4`、`.mpeg`、`.mpga`、`.m4a`、`.wav`、`.ogg`、`.flac` |
+| `model` | 否 | 转录模型名（表单字段），省略时使用默认 ASR 模型 |
+| `language` | 否 | 音频语种的 ISO-639-1 代码，如 `zh`、`en`，可提升准确率 |
+| `prompt` | 否 | 提示文本，透传给上游 |
+| `response_format` | 否 | 响应格式：`json`、`text`、`srt`、`verbose_json`、`vtt`，缺省 `json` |
+| `temperature` | 否 | 透传给上游 |
+| `timestamp_granularities[]` | 否 | 透传给上游 |
+
+```bash
+curl -X POST http://localhost:8080/audio/transcriptions \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -F "file=@recording.webm" \
+  -F "model=whisper-1"
+```
+
+**响应：** Groot 把上游的响应体与 `Content-Type` 原样透传，不解析、不改写，也不在响应中附加字段。不同 `response_format` 的响应形态由上游决定：
+
+| `response_format` | 响应体 |
+|-------------------|--------|
+| `json`（缺省） | `{"text": "打开登录日志"}` |
+| `text` | 纯文本正文 |
+| `srt` / `vtt` | 字幕文本 |
+| `verbose_json` | 带分段与时间戳的完整对象 |
+
+上游返回非 2xx 且响应体是 OpenAI 错误信封时，原样转发上游的状态码、`Content-Type` 与响应体；其它情况（网关错误页、连接失败、超时）返回 502 `upstream_error`。
+
+**错误响应：**
+
+| HTTP 状态码 | 错误码 | 说明 |
+|------------|--------|------|
+| 400 | `invalid_request` | 缺少 `file` 字段 |
+| 400 | `unsupported_type` | 扩展名不受支持 |
+| 400 | `model_not_found` | 模型不存在、已禁用或未配置默认 ASR 模型 |
+| 413 | `file_too_large` | 超过 Web 设置面板中的单文件上限（`attachment.max_size`） |
+| 500 | `internal_error` | 内部错误 |
+| 502 | `upstream_error` | 上游转录服务出错，`message` 透传原文 |
+
+模型名取用顺序为表单 `model` → 默认 ASR 模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认 ASR 模型。
+
+---
+
+### 7.6 POST /audio/speech - 文本转语音
+
+需要携带具有 `chat` 权限的 API Key。本接口与会话无关，不要求 `user`。
 
 把文本合成为语音。请求为 `application/json`，字段与 OpenAI 语音合成规范一致：
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `input` | 是 | 要合成的文本，去除首尾空白后不能为空，最长 4096 个字符 |
+| `voice` | 是 | 音色，原样透传给上游模型（如 `alloy`），长度上限 64 个字符 |
 | `model` | 否 | 合成模型名，省略时使用默认 TTS 模型 |
-| `voice` | 否 | 音色，原样透传给上游模型（如 `alloy`）；省略时由上游取默认音色 |
-| `language` | 否 | 合成语种，取值由上游定义（如 vLLM-Omni 的 `Chinese`、`English`、`Auto`），省略时不下发，由上游自行判断 |
-| `instructions` | 否 | 风格指令（OpenAI 规范字段，如「用轻快的语气朗读」），原样透传，仅支持指令的模型有效；省略时不下发 |
+| `language` | 否 | 合成语种，取值由上游定义（如 vLLM-Omni 的 `Chinese`、`English`、`Auto`），长度上限 16 个字符；省略时不下发，由上游自行判断 |
+| `instructions` | 否 | 风格指令（OpenAI 规范字段，如「用轻快的语气朗读」），长度上限 500 个字符，原样透传，仅支持指令的模型有效；省略时不下发 |
+| `speed` | 否 | 语速，透传给上游 |
 | `response_format` | 否 | 音频格式，可选 `mp3`、`opus`、`aac`、`flac`、`wav`、`pcm`；省略时由上游决定（通常为 `mp3`） |
 
-`voice`、`language`、`instructions` 均去除首尾空白后透传，长度上限分别为 64、16、500 个字符，超出返回 400 `invalid_request`。请求体中出现的其他未知字段（如旧版的 `speaker`、`instruct`）会被忽略，不下发也不报错。
+`voice`、`language`、`instructions` 均去除首尾空白后透传，超出长度上限返回 400 `invalid_request`。请求体中出现的其他未知字段会被忽略，不下发也不报错。
 
 ```bash
 curl -X POST http://localhost:8080/audio/speech \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
   -H "Content-Type: application/json" \
   -d '{"input": "你好，欢迎使用 Groot。", "model": "tts-1", "voice": "alloy", "instructions": "用轻快的语气朗读", "response_format": "mp3"}' \
   -o out.mp3
 ```
 
-响应：
+**响应：**
 
 - 状态码 `200`，响应体为音频二进制，上游音频流直接转发
 - `Content-Type` 透传上游的值；上游未给出时按 `response_format` 推断（`mp3` → `audio/mpeg`、`opus` → `audio/ogg`、`aac` → `audio/aac`、`flac` → `audio/flac`、`wav` → `audio/wav`、`pcm` → `audio/pcm`），未指定格式时为 `audio/mpeg`
-- 响应头 `X-Model-Name`：实际使用的模型名
+- 响应不带任何自定义头
 
 **错误响应：**
 
 | HTTP 状态码 | 错误码 | 说明 |
 |------------|--------|------|
-| 400 | `invalid_request` | 请求体不是合法 JSON、`input` 为空或超过 4096 个字符、`voice` / `language` / `instructions` 超过长度上限、`response_format` 不在允许值内 |
-| 400 | `invalid_model` | 模型不存在、已禁用或未配置默认 TTS 模型 |
+| 400 | `invalid_request` | 请求体不是合法 JSON、`input` 为空或超过 4096 个字符、缺少 `voice`、`voice` / `language` / `instructions` 超过长度上限、`response_format` 不在允许值内 |
+| 400 | `model_not_found` | 模型不存在、已禁用或未配置默认 TTS 模型 |
+| 500 | `internal_error` | 内部错误 |
 | 502 | `upstream_error` | 上游语音合成服务出错，`message` 透传原文 |
-| 500 | `error` | 内部错误 |
 
-模型也可用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为 JSON `model` → 请求头 `X-Model-Name` → 默认 TTS 模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认 TTS 模型。
+模型名取用顺序为 JSON `model` → 默认 TTS 模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认 TTS 模型。
 
 ---
 
-### 7.5 POST /image/understanding - 图片解析
+### 7.7 POST /image/understanding - 图片解析
 
-需要携带具有 `chat` 权限的 API Key，与 `/chat` 相同。本接口与会话无关，不要求 `X-User-ID`。
+需要携带具有 `chat` 权限的 API Key。本接口与会话无关，不要求 `user`。
 
-提交一张图片和一段可选的解析指令，返回模型输出的文本。请求为 `application/json`，附件结构与 `/chat` 相同：
+本接口在 OpenAI 中没有对应路由，请求结构沿用 Groot 自有形状，参数命名与 OpenAI 对齐（模型名用 `model` 字段）。提交一张图片和一段可选的解析指令，返回模型输出的文本。请求为 `application/json`：
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `instruction` | 否 | 解析指令，如「把这张发票转成 JSON，字段：金额、日期、开票方」。省略或为空白时使用内置默认指令：请详细描述这张图片的内容；如果图片中包含文字，请完整识别并逐字输出。 |
 | `attachments` | 是 | 图片附件数组，长度必须为 1 |
 | `attachments[].type` | 是 | 必须为 `"image"` |
 | `attachments[].name` | 是 | 文件名，扩展名用于文件头识别失败时判定类型 |
 | `attachments[].content` | 是 | 图片的纯 Base64 内容，不带 `data:` 前缀 |
+| `instruction` | 否 | 解析指令，如「把这张发票转成 JSON，字段：金额、日期、开票方」。省略或为空白时使用内置默认指令：请详细描述这张图片的内容；如果图片中包含文字，请完整识别并逐字输出。 |
+| `model` | 否 | 模型逻辑名，省略时使用默认视觉模型 |
 
 图片类型由文件头识别（`image/*`，含 ICO）；文件头无法识别时按扩展名兜底：`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`。
 
@@ -1833,9 +2016,9 @@ curl -X POST http://localhost:8080/audio/speech \
 BASE64=$(base64 -w 0 invoice.png)   # macOS: base64 -i invoice.png | tr -d '\n'
 
 curl -X POST http://localhost:8080/image/understanding \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
   -H "Content-Type: application/json" \
-  -d '{"instruction":"把这张发票转成 JSON，字段：金额、日期、开票方",
+  -d '{"model":"qwen-vl-max","instruction":"把这张发票转成 JSON，字段：金额、日期、开票方",
        "attachments":[{"type":"image","name":"invoice.png","content":"'"$BASE64"'"}]}'
 ```
 
@@ -1857,21 +2040,21 @@ curl -X POST http://localhost:8080/image/understanding \
 
 | HTTP 状态码 | 错误码 | 说明 |
 |---|---|---|
-| 400 | `invalid_request` | 请求体非法、`attachments` 数量不为 1 |
-| 400 | `attachment_invalid_type` | 附件 `type` 不是 `image` |
-| 400 | `attachment_count_exceeded` / `attachment_size_exceeded` / `attachment_total_size_exceeded` / `attachment_type_not_allowed` / `attachment_missing_name` / `attachment_missing_content` | 附件校验失败，文案与 `/chat` 相同 |
-| 400 | `attachment_decode_error` | `content` 不是合法 Base64 |
-| 400 | `unsupported_type` | 文件头识别出明确的非图片类型，或无法识别且扩展名不匹配 |
-| 400 | `invalid_model` | 模型不存在、已禁用或未配置默认视觉模型 |
-| 500 | `error` | 内部错误（读取附件配置失败等） |
+| 400 | `invalid_request` | 请求体非法、`attachments` 数量不为 1、附件缺少文件名或内容、`content` 不是合法 Base64 |
+| 400 | `unsupported_type` | 附件 `type` 不是 `image`；文件头识别出明确的非图片类型，或无法识别且扩展名不匹配 |
+| 413 | `file_too_large` | 附件超过单文件或单次合计体积上限 |
+| 400 | `model_not_found` | 模型不存在、已禁用或未配置默认视觉模型 |
+| 499 | `client_closed_request` | 调用方在拿到响应前放弃请求（连接中断、超时取消等）。与 `502` 分开：这不是上游故障，日志记录为「图片解析已中断」而非「图片解析失败」 |
+| 500 | `internal_error` | 内部错误（读取附件配置失败等） |
 | 502 | `upstream_error` | 上游图片解析服务出错，`message` 透传上游原文 |
-| 499 | `cancelled` | 调用方在拿到响应前放弃请求（连接中断、超时取消等）。与 `502` 分开：这不是上游故障，日志记录为「图片解析已中断」而非「图片解析失败」 |
 
-模型用请求头 `X-Model-Name` 指定，与 `/chat` 的约定一致。模型名取用顺序为请求头 `X-Model-Name` → 默认视觉模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认视觉模型。
+模型名取用顺序为请求体 `model` → 默认视觉模型（在 设置 → 模型 中设置）。显式指定的模型不存在或已禁用时直接返回 400，不回落到默认视觉模型。
 
 ---
 
-### 7.6 GET /chat/status/{sid} - 查询对话状态
+### 7.8 GET /chat/status/{sid} - 查询对话状态
+
+需要携带具有 `status` 权限的 API Key，并使用请求头 `user` 声明当前用户（缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`）。
 
 查询指定会话中最近一次对话的运行状态。
 
@@ -1924,15 +2107,15 @@ curl -X POST http://localhost:8080/image/understanding \
 
 会话不存在时同样返回 `200`，`status` 为 `idle`、`round_count` 为 `0`、`chat` 为 `null`（不返回 404）。会话不属于当前（租户，用户）时与不存在完全一致：即使该会话正有对话运行，也返回 `idle`、`round_count` 为 `0`。
 
-本接口要求 `X-User-ID` 请求头：缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
-
 ---
 
-### 7.7 GET /chat/{sid}/{cid} - 查询对话详情
+### 7.9 GET /chat/{sid}/{cid} - 查询对话详情
+
+需要携带具有 `detail` 权限的 API Key，并使用请求头 `user` 声明当前用户（缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`）。
 
 查询指定会话中某次对话的完整详情，包括指令、结果、执行步骤记录。省略 `cid`（即 `GET /chat/{sid}`）时返回该会话最近一次对话的详情。
 
-只能查询当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`；`cid` 不属于该 `sid` 返回 `404 chat_not_found`。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
+只能查询当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`；`cid` 不属于该 `sid` 返回 `404 task_not_found`。
 
 **请求参数：**
 
@@ -1950,8 +2133,7 @@ curl -X POST http://localhost:8080/image/understanding \
     "chat_id": "20260419103000523",
     "round": 1,
     "instruction": "用户指令内容",
-    "attachments": ["data.csv"],
-    "result": {"summary": "执行结果..."},
+    "result": "执行结果...",
     "status": "completed",
     "started_at": "2026-04-19T10:30:00Z",
     "ended_at": "2026-04-19T10:30:45Z",
@@ -1972,9 +2154,9 @@ curl -X POST http://localhost:8080/image/understanding \
 
 ---
 
-### 7.7.1 POST /chat/{sid}/{cid}/stop - 中止对话
+### 7.10 POST /chat/{sid}/{cid}/stop - 中止对话
 
-中止会话 `sid` 中正在执行的对话 `cid`。权限点 `chat`。只能中止当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`；Web 登录的管理员可中止任意会话的对话。
+中止会话 `sid` 中正在执行的对话 `cid`。权限点 `chat`。只能中止当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`；Web 登录的管理员可中止任意会话的对话。
 
 **请求参数：**
 
@@ -1987,8 +2169,8 @@ curl -X POST http://localhost:8080/image/understanding \
 
 ```bash
 curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523/stop \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice"
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -H "user: alice"
 ```
 
 **响应：**
@@ -2016,27 +2198,31 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 本地未在执行，且集群中没有其他存活节点或广播失败 → `409`：
 ```json
 {
-  "status": "chat_not_running",
-  "session_id": "20260419103000523_a1b2",
-  "chat_id": "20260419103000523",
-  "message": "该对话未在执行"
+  "error": {
+    "message": "该对话未在执行",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "chat_still_running"
+  }
 }
 ```
 
-已经结束的对话、`cid` 与当前活跃对话不匹配，在集群中没有其他存活节点时都返回 `409 chat_not_running`。"存活"以成员心跳为准：心跳距今 7 秒内的其他成员视为存活。
+已经结束的对话、`cid` 与当前活跃对话不匹配，在集群中没有其他存活节点时都返回 `409 chat_still_running`。"存活"以成员心跳为准：心跳距今 7 秒内的其他成员视为存活。
 
 **说明：**
 
-- 中止是异步的。接口返回 `200` 时执行链路正在收尾，返回 `202` 时取消指令正在集群中传播。调用方通过 `POST /chat` 的 SSE 流结束、或 `GET /chat/status/{sid}` 回到 `idle` 确认中止完成。
+- 中止是异步的。接口返回 `200` 时执行链路正在收尾，返回 `202` 时取消指令正在集群中传播。调用方通过 `POST /chat/completions` 的 SSE 流结束、或 `GET /chat/status/{sid}` 回到 `idle` 确认中止完成。
 - 被中止的对话 SSE 流正常收尾（以 `[DONE]` 结束），对话记录以 `status` 为 `cancelled` 落库，之后仍可通过 `GET /chat/{sid}/{cid}` 与 `GET /sess/{sid}` 查看。
 - `202` 表示广播已发出，不保证远端命中：若对话此时已经结束，或 `cid` 与各节点的活跃对话都不匹配，所有节点均为空操作。
 - 多实例集群下取消指令随心跳轮询传递（周期 3 秒），远端节点收到后在下一个检查点退出。
 
 ---
 
-### 7.8 GET /sess/{sid} - 查询会话详情
+### 7.11 GET /sess/{sid} - 查询会话详情
 
-查询会话详情，包括完整对话历史（所有轮次）。只能查询当前（租户，用户）自己的会话，会话不存在或归属不符均返回 `404 session_not_found`。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。
+需要携带具有 `session` 权限的 API Key，并使用请求头 `user` 声明当前用户（缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`）。
+
+查询会话详情，包括完整对话历史（所有轮次）。只能查询当前（租户，用户）自己的会话，会话不存在或归属不符均返回 `404 session_not_found`。
 
 **请求参数：**
 
@@ -2107,9 +2293,9 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 ---
 
-### 7.8.1 PATCH /sess/{sid} - 重命名会话
+### 7.12 PATCH /sess/{sid} - 重命名会话
 
-修改会话标题。权限点 `session`。只能重命名当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员可重命名任意会话，包括定时任务产生的归属为空的会话。
+修改会话标题。权限点 `session`。只能重命名当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录的管理员可重命名任意会话，包括定时任务产生的归属为空的会话。
 
 **标题规则：**
 
@@ -2128,8 +2314,8 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 | Header | 必填 | 说明 |
 |--------|------|------|
-| `X-API-Key` | 是 | 含 `session` 权限的 API Key |
-| `X-User-ID` | 是 | 用户标识，只能操作（API Key 所属租户，该用户）的会话；Web 登录 Cookie 凭证免此头 |
+| `Authorization` | 是 | `Bearer <含 session 权限的 API Key>` |
+| `user` | 是 | 用户标识，只能操作（API Key 所属租户，该用户）的会话；Web 登录 Cookie 凭证免此头 |
 | `Content-Type` | 是 | `application/json` |
 
 **请求体：**
@@ -2142,8 +2328,8 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 ```bash
 curl -X PATCH http://localhost:8080/sess/20260419103000523_a1b2 \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice" \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -H "user: alice" \
   -H "Content-Type: application/json" \
   -d '{"title": "销售数据分析"}'
 ```
@@ -2162,49 +2348,67 @@ curl -X PATCH http://localhost:8080/sess/20260419103000523_a1b2 \
 请求体不是合法 JSON，或 `title` 类型不是字符串 → `400`：
 ```json
 {
-  "status": "invalid_request",
-  "message": "请求参数错误"
+  "error": {
+    "message": "请求参数错误",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "invalid_request"
+  }
 }
 ```
 
 `title` 为空、纯空白或超过 100 个字符 → `400`：
 ```json
 {
-  "status": "invalid_request",
-  "message": "标题不能为空，且长度不能超过 100 个字符"
+  "error": {
+    "message": "标题不能为空，且长度不能超过 100 个字符",
+    "type": "invalid_request_error",
+    "param": "title",
+    "code": "invalid_request"
+  }
 }
 ```
 
 API Key 未绑定租户 → `403`：
 ```json
 {
-  "status": "forbidden",
-  "message": "API Key 未绑定租户"
+  "error": {
+    "message": "API Key 未绑定租户",
+    "type": "permission_error",
+    "param": null,
+    "code": "tenant_not_bound"
+  }
 }
 ```
 
 会话不存在或归属不符 → `404`：
 ```json
 {
-  "status": "session_not_found",
-  "message": "会话不存在"
+  "error": {
+    "message": "会话不存在",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "session_not_found"
+  }
 }
 ```
 
-写库失败 → `500 error`，消息"重命名失败"。
+写库失败 → `500`，错误码 `internal_error`，消息"重命名失败"。
 
 ---
 
-### 7.9 GET /sess/history - 查询会话列表
+### 7.13 GET /sess/history - 查询会话列表
 
-查询当前（租户，用户）的会话列表，支持分页，`total` 同样按归属统计。参数通过 URL Query String 传递。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员看到全部会话。
+需要携带具有 `history` 权限的 API Key。
+
+查询当前（租户，用户）的会话列表，支持分页，`total` 同样按归属统计。参数通过 URL Query String 传递。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录的管理员看到全部会话。
 
 **请求示例：**
 
 ```http
 GET /sess/history?limit=10&offset=0
-X-API-Key: 在Web界面创建的APIKey
-X-User-ID: alice
+Authorization: Bearer 在Web界面创建的APIKey
+user: alice
 ```
 
 **Query 参数：**
@@ -2237,7 +2441,9 @@ X-User-ID: alice
 
 ---
 
-### 7.10 GET /sess/search - 搜索历史对话
+### 7.14 GET /sess/search - 搜索历史对话
+
+需要携带具有 `session` 权限的 API Key。`q` 为空时直接返回空结果，此时不校验 `user`；`q` 非空时要求请求头 `user`。
 
 按关键词在当前（租户，用户）历史对话（主 Agent 已完成轮次）的指令与执行结果中模糊搜索，返回轮次级结果，按轮次开始时间倒序。Web 登录的管理员搜索全部会话。
 
@@ -2245,8 +2451,8 @@ X-User-ID: alice
 
 ```http
 GET /sess/search?q=销售报表&limit=20
-X-API-Key: 在Web界面创建的APIKey
-X-User-ID: alice
+Authorization: Bearer 在Web界面创建的APIKey
+user: alice
 ```
 
 **Query 参数：**
@@ -2260,7 +2466,7 @@ X-User-ID: alice
 
 | Header | 必填 | 说明 |
 |--------|------|------|
-| `X-User-ID` | 是 | 用户标识（与 `/chat` 的 `X-User-ID` 对应），只搜索（API Key 所属租户，该用户）的会话；缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录 Cookie 凭证免此头 |
+| `user` | 是 | 用户标识（与 `/chat/completions` 请求体的 `user` 对应），只搜索（API Key 所属租户，该用户）的会话；缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录 Cookie 凭证免此头 |
 
 **响应示例：**
 
@@ -2293,9 +2499,9 @@ X-User-ID: alice
 
 ---
 
-### 7.10.1 DELETE /sess/{sid} - 删除会话
+### 7.15 DELETE /sess/{sid} - 删除会话
 
-删除会话及其全部对话记录。权限点 `delete`。只能删除当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求 `X-User-ID` 请求头，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 forbidden`。Web 登录的管理员可删除任意会话，包括定时任务产生的归属为空的会话。
+删除会话及其全部对话记录。权限点 `delete`。只能删除当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录的管理员可删除任意会话，包括定时任务产生的归属为空的会话。
 
 **请求参数：**
 
@@ -2307,8 +2513,8 @@ X-User-ID: alice
 
 ```bash
 curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
-  -H "X-API-Key: 在Web界面创建的APIKey" \
-  -H "X-User-ID: alice"
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -H "user: alice"
 ```
 
 **响应：**
@@ -2324,32 +2530,37 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 对话仍在执行 → `409`，不删除任何数据：
 ```json
 {
-  "status": "chat_still_running",
-  "session_id": "20260419103000523_a1b2",
-  "message": "对话仍在执行，请稍后重试"
+  "error": {
+    "message": "对话仍在执行，请稍后重试",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "chat_still_running"
+  }
 }
 ```
 
-删除写库失败 → `500 error`，消息"删除会话失败"。
+删除写库失败 → `500`，错误码 `internal_error`，消息"删除会话失败"。
 
 **处理流程：**
 
 1. 会话正在本节点执行对话：先中止该对话，最多等待 10 秒让执行链路收尾；超时返回 `409 chat_still_running`。
 2. 本节点没有活跃对话：集群中存在其他存活节点时广播取消该会话任意活跃对话的指令并等待 5 秒，否则跳过本步。
-3. 占住该会话再删库：等待期间若有并发的 `POST /chat` 续聊抢先注册，返回 `409 chat_still_running`，不删除任何数据；占位期间到达的 `POST /chat` 续聊收到 `409 chat_limit_exceeded`。
+3. 占住该会话再删库：等待期间若有并发的 `POST /chat/completions` 续聊抢先注册，返回 `409 chat_still_running`，不删除任何数据；占位期间到达的 `POST /chat/completions` 续聊收到 `409 chat_limit_exceeded`。
 4. 在一个事务内删除 `memory_sessions` 与 `memory_chats` 中该会话的全部记录。
 
-删除是终态：删除后对该 `sid` 的所有读取接口按"不存在"响应（`GET /sess/{sid}`、`GET /chat/{sid}` 返回 `404 session_not_found`，`GET /chat/status/{sid}` 返回 `idle`），携带该 `sid` 的 `POST /chat` 续聊开启新会话。
+删除是终态：删除后对该 `sid` 的所有读取接口按"不存在"响应（`GET /sess/{sid}`、`GET /chat/{sid}` 返回 `404 session_not_found`，`GET /chat/status/{sid}` 返回 `idle`），携带该 `sid` 的 `POST /chat/completions` 续聊开启新会话。
 
 **已知边角：**
 
 - 定时任务的执行不经过运行时状态注册，也不是对话，其会话记录只是任务执行留下的数据。Web 管理员在任务正在执行的瞬间删除其会话时，中止与等待不生效，已落库的记录被删除；任务执行完毕后尝试写回的那条对话记录，会被对话落库时的会话存在性检查拒绝（落库在事务内先查 `memory_sessions`，不存在则返回未找到），只在服务端日志留下"保存对话记录失败"，数据库中不产生任何残留。任务本身通过 `/schedule` 接口管理。
 - 多实例集群下，远端节点收尾晚于 5 秒固定等待时，同样是该轮记录被拒绝写入并记日志，不产生残留。
-- 删除接口在等待结束到占位之间若有新的 `POST /chat` 续聊抢先注册并返回 `409 chat_still_running`，之后该节点会在下一轮消息轮询（3 秒内）消费到自己刚广播的 `chat.cancel`（chat_id 为空，匹配任意对话），把这条新对话取消。这是删除意图的自然延伸，不是数据丢失。
+- 删除接口在等待结束到占位之间若有新的 `POST /chat/completions` 续聊抢先注册并返回 `409 chat_still_running`，之后该节点会在下一轮消息轮询（3 秒内）消费到自己刚广播的 `chat.cancel`（chat_id 为空，匹配任意对话），把这条新对话取消。这是删除意图的自然延伸，不是数据丢失。
 
 ---
 
-### 7.11 GET /web/health - 健康检查
+### 7.16 GET /web/health - 健康检查
+
+不需要认证和权限，可直接访问（`groot status` 也使用该端点）。
 
 查询服务健康状态，检查各组件运行情况。
 
@@ -2403,11 +2614,13 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.12 GET /schedule - 列出定时任务
+### 7.17 GET /schedule - 列出定时任务
+
+需要携带具有 `schedule` 权限的 API Key。调度接口与会话无关，不要求 `user`；错误响应同样为 OpenAI 错误信封。
 
 查询所有定时任务，支持按状态过滤。
 
-> **可用性说明：** 7.12 ~ 7.18 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
+> **可用性说明：** 7.17 ~ 7.23 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
 
 **Query 参数：**
 
@@ -2441,7 +2654,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.13 GET /schedule/:id - 查询任务详情
+### 7.18 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -2449,11 +2662,11 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 |------|------|------|------|
 | `id` | string | 是 | 任务 ID（路径参数） |
 
-**响应：** 返回完整任务定义，格式同 7.12 中单条任务。
+**响应：** 返回完整任务定义，格式同 7.17 中单条任务。
 
 ---
 
-### 7.14 DELETE /schedule/:id - 删除任务
+### 7.19 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -2473,7 +2686,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.15 POST /schedule/:id/disable - 禁用任务
+### 7.20 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -2487,7 +2700,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.16 POST /schedule/:id/enable - 启用任务
+### 7.21 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -2501,7 +2714,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.17 POST /schedule/:id/archive - 归档任务
+### 7.22 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -2515,7 +2728,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.18 GET /schedule/:id/history - 执行历史
+### 7.23 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -2543,7 +2756,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.19 定时任务创建（通过对话）
+### 7.24 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
@@ -2565,46 +2778,94 @@ Agent 自动调用 schedule_create 工具创建任务：
 
 ## 八、客户端代码示例
 
-完整的客户端代码及测试见 [`examples/`](examples/) 目录。
+Groot 的接口与 OpenAI Chat Completions 一致，接入时只需替换 `base_url` 与 `api_key`，扩展字段 `session_id`、`agent_name`、`user` 通过请求体附加。完整的客户端代码见 [`examples/`](examples/) 目录。
 
 ### 8.1 Python
 
+使用 OpenAI 官方 Python SDK（`pip install openai`）：
+
 ```python
-from groot_client import GrootClient
+from openai import OpenAI
 
-# user_id 作为 X-User-ID 请求头随每个请求发送，标识当前业务用户
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
+client = OpenAI(base_url="http://localhost:8080", api_key="在Web界面创建的APIKey")
 
-# 新会话
-result = client.execute_chat("分析这份财报", callback=lambda t, d: print(f"[{t}] {d}"))
-print(f"会话ID: {result['session_id']}")
+# 新会话：user 标识当前业务用户，session_id 由服务端生成
+resp = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "分析这份财报"}],
+    extra_body={"user": "alice"},
+)
+# 扩展字段先取响应对象的 session_id 属性，取不到再从额外字段容器 model_extra 取
+session_id = getattr(resp, "session_id", None) or (getattr(resp, "model_extra", None) or {}).get("session_id")
+print(resp.choices[0].message.content)
+print(f"会话ID: {session_id}")
 
-# 继续会话
-result2 = client.execute_chat("生成摘要", session_id=result["session_id"])
+# 继续会话：把 session_id 放在请求体里
+resp2 = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "生成摘要"}],
+    extra_body={"session_id": session_id, "user": "alice"},
+)
 
-# 图片解析（无状态，不产生会话）
-result = client.understand_image("invoice.png", instruction="把这张发票转成 JSON")
-print(result["text"])
+# 流式 + 指定子 Agent（Solo 模式）
+stream = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "生成摘要"}],
+    stream=True,
+    extra_body={"session_id": session_id, "user": "alice", "agent_name": "analyst"},
+)
+for chunk in stream:
+    if chunk.choices and chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+
+# 模型列表
+for m in client.models.list().data:
+    print(m.id)
 ```
-
-> 完整代码及 28 个测试用例：[examples/python/](examples/python/)
 
 ### 8.2 Java
 
+使用 OpenAI 官方 Java SDK（`com.openai:openai-java`）：
+
 ```java
-GrootClient client = new GrootClient("http://localhost:8080", "在Web界面创建的APIKey");
+import com.openai.client.OpenAIClient;
+import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
+import com.openai.models.chat.completions.ChatCompletion;
+import com.openai.models.chat.completions.ChatCompletionCreateParams;
+
+// OpenAIClient 是接口，实例由 OpenAIOkHttpClient.builder() 构造
+OpenAIClient client = OpenAIOkHttpClient.builder()
+        .baseUrl("http://localhost:8080")
+        .apiKey("在Web界面创建的APIKey")
+        .build();
 
 // 新会话
-ChatResult result = client.executeChat("分析这份财报", (type, data) -> {
-    System.out.println("[" + type + "] " + data);
-});
-System.out.println("会话ID: " + result.getSessionId());
+ChatCompletion resp = client.chat().completions().create(
+        ChatCompletionCreateParams.builder()
+                .model("qwen-max")
+                .addUserMessage("分析这份财报")
+                .putAdditionalBodyProperty("user", JsonValue.from("alice"))
+                .build());
+System.out.println(resp.choices().get(0).message().content().orElse(""));
+
+// session_id 在响应体的额外字段容器中，SDK 不提供专用访问器
+JsonValue raw = resp._additionalProperties().get("session_id");
+String sessionId = raw == null ? null : raw.convert(String.class);
 
 // 继续会话
-ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), null);
+ChatCompletion resp2 = client.chat().completions().create(
+        ChatCompletionCreateParams.builder()
+                .model("qwen-max")
+                .addUserMessage("生成摘要")
+                .putAdditionalBodyProperty("session_id", JsonValue.from(sessionId))
+                .putAdditionalBodyProperty("user", JsonValue.from("alice"))
+                .build());
 ```
 
-> 完整代码及 18 个测试用例：[examples/java/](examples/java/)
+> `session_id` 与 `agent_name` 是 OpenAI 标准之外的扩展字段，具体获取方式见 [7.3](#73-post-chatcompletions---执行对话核心接口)。
+>
+> 完整代码见 [examples/python/](examples/python/) 与 [examples/java/](examples/java/)。
 
 ---
 
@@ -2613,30 +2874,64 @@ ChatResult result2 = client.executeChat("生成摘要", result.getSessionId(), n
 ### 9.1 多轮文档分析
 
 ```python
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
+from openai import OpenAI
 
-# 第1轮：上传文档并分析
-result1 = client.execute_chat("分析这份财报，提取营收、利润等关键指标")
-sid = result1["session_id"]
+client = OpenAI(base_url="http://localhost:8080", api_key="在Web界面创建的APIKey")
+
+# 第1轮：上传文档（file 内容片段，文本类文件）并分析
+resp1 = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "分析这份财报，提取营收、利润等关键指标"},
+            {"type": "file", "file": {"filename": "report.csv",
+                                      "file_data": "data:text/csv;base64,...."}},
+        ],
+    }],
+    extra_body={"user": "alice"},
+)
+sid = getattr(resp1, "session_id", None) or (getattr(resp1, "model_extra", None) or {}).get("session_id")
 
 # 第2轮：追问细节
-result2 = client.execute_chat("重点分析利润增长的主要原因", session_id=sid)
+resp2 = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "重点分析利润增长的主要原因"}],
+    extra_body={"session_id": sid, "user": "alice"},
+)
 
 # 第3轮：生成报告
-result3 = client.execute_chat("生成一份分析报告摘要", session_id=sid)
+resp3 = client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "生成一份分析报告摘要"}],
+    extra_body={"session_id": sid, "user": "alice"},
+)
 ```
 
 ### 9.2 渐进式代码开发
 
 ```python
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
+from openai import OpenAI
 
-result1 = client.execute_chat("写一个 Python 数据处理工具类，包含 CSV 读取功能",
-                              prompt="你是资深 Python 开发者")
-sid = result1["session_id"]
+client = OpenAI(base_url="http://localhost:8080", api_key="在Web界面创建的APIKey")
 
-result2 = client.execute_chat("添加数据清洗功能", session_id=sid)
-result3 = client.execute_chat("写单元测试代码", session_id=sid)
+# system 消息作为本次请求的系统提示
+resp1 = client.chat.completions.create(
+    model="qwen-max",
+    messages=[
+        {"role": "system", "content": "你是资深 Python 开发者"},
+        {"role": "user", "content": "写一个 Python 数据处理工具类，包含 CSV 读取功能"},
+    ],
+    extra_body={"user": "alice"},
+)
+sid = getattr(resp1, "session_id", None) or (getattr(resp1, "model_extra", None) or {}).get("session_id")
+
+for prompt in ["添加数据清洗功能", "写单元测试代码"]:
+    client.chat.completions.create(
+        model="qwen-max",
+        messages=[{"role": "user", "content": prompt}],
+        extra_body={"session_id": sid, "user": "alice"},
+    )
 ```
 
 ### 9.3 定时任务自动化
@@ -2664,10 +2959,17 @@ result3 = client.execute_chat("写单元测试代码", session_id=sid)
 **2. 通过对话创建任务：**
 
 ```python
-client = GrootClient("http://localhost:8080", "在Web界面创建的APIKey", user_id="alice")
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080", api_key="在Web界面创建的APIKey")
 
 # 创建定时任务
-client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报表，成功后把结果 POST 到 https://hooks.example.com/xxx，失败时发邮件给 ops@example.com")
+client.chat.completions.create(
+    model="qwen-max",
+    messages=[{"role": "user", "content": "每天早上 9 点帮我生成前一天的销售数据报表，"
+               "成功后把结果 POST 到 https://hooks.example.com/xxx，失败时发邮件给 ops@example.com"}],
+    extra_body={"user": "alice"},
+)
 
 # Agent 会自动调用 schedule_create 工具，创建 cron 任务
 # 任务定义保存到数据库并自动注册到调度器
@@ -2677,7 +2979,8 @@ client.execute_chat("每天早上 9 点帮我生成前一天的销售数据报�
 
 ```bash
 # API 管理
-curl -X POST http://localhost:8080/schedule/daily-sales-report/disable   -H "X-API-Key: 在Web界面创建的APIKey"
+curl -X POST http://localhost:8080/schedule/daily-sales-report/disable \
+  -H "Authorization: Bearer 在Web界面创建的APIKey"
 ```
 
 **4. 执行结果通知：**
@@ -2717,16 +3020,18 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q3: 多轮对话时 Agent 没记住之前的内容
 
-**原因：** session_id 传错或会话不存在。
+**原因：** `session_id` 传错、会话不存在，或请求 `user` 与会话创建时不一致（归属不符按新会话处理）。
 
-**解决：** 确保每次继续对话时传入正确的 `X-Session-ID`。
+**解决：**
+1. 从上一轮响应的 `session_id` 取值：非流式读响应体顶层 `session_id`，流式读任一 chunk 顶层的 `session_id`（走官方 SDK 时优先取响应对象的 `session_id` 属性，取不到再从 `model_extra`（Python）/ `_additionalProperties()`（Java）取，见 [7.3](#73-post-chatcompletions---执行对话核心接口)）
+2. 续聊时把该值放进请求体 `session_id`，并保持 `user` 与会话创建时一致、使用同一租户的 API Key
 
 ---
 
 ### Q4: 请求返回 429 或同一会话并发调用报错
 
 **原因：**
-- `429 rate_limited`：请求频率超过配置的 QPS 或并发限制（启用 `rate_limit` 时）
+- `429 rate_limit_exceeded`：请求频率超过配置的 QPS 或并发限制（启用限流时）。按 API Key 名称维度统计：`POST /chat/completions` 计入并发与 QPS，其余接口只计 QPS；全局 QPS 与全局并发也参与判定
 - `409 chat_limit_exceeded`：同一会话只能有一个活跃对话，防止执行冲突；`DELETE /sess/{sid}` 删库前的短暂占位期间也返回此码
 
 **解决：**
@@ -2737,19 +3042,24 @@ export OPENAI_API_KEY="your-api-key"
 
 ### Q5: 附件上传失败
 
-**原因：** 附件类型不允许或大小超限。
+**原因：** 内容片段类型不允许或大小超限。
 
-**解决：** 检查 `allowed_types` 配置和 `max_size` 限制。
+**解决：**
+- 检查 Web 设置面板「配置 → 附件」中的单文件上限、单次合计上限、单次数量上限与允许的扩展名（`max_size`、`max_total_size`、`max_count`、`allowed_types`）
+- 对话接口的附件以 `messages[].content` 的内容片段表达：图片用 `image_url`（`data:<mime>;base64,...`），音频用 `input_audio`，文本类文件用 `file`；`file` 只接受文本类 MIME，其它类型返回 `400 unsupported_file_type`
+- 错误体中的 `code` 只取公开码：`file_too_large`（单文件或合计体积超限，HTTP 状态码 413）或 `invalid_request` / `unsupported_type`（400），具体原因看 `message`
 
 ---
 
 ### Q6: 认证失败 401 Unauthorized
 
-**原因：** API Key 无效、已过期、已删除或未携带。
+**原因：** API Key 缺失、格式不对、已过期、已删除，或签名密钥被重新生成。
 
-**解决：**
-1. 登录 Web 界面，在 设置 → API Keys 中确认 Key 存在且未过期，必要时重新创建
-2. 检查请求头是否携带 `X-API-Key`（或自定义的 `auth.header_name`）
+**解决（按顺序排查）：**
+1. 确认请求头是 `Authorization: Bearer <API Key>`：scheme 为 `Bearer`（大小写不敏感），token 与 `Bearer` 之间有一个空格，且没有把 Key 放进其它自定义请求头（服务端只读 `Authorization`）
+2. 登录 Web 界面，在 设置 → API Keys 中确认 Key 存在且未过期；Key 被删除或过期后立即失效，需重新创建
+3. 确认目标实例与签发 Key 的实例共享同一数据库：JWT 签名密钥随数据库共享，签名密钥被「重新生成」后所有已签发的 Key 立即失效（重启各节点后生效）
+4. 若目标接口返回的是 `403` 而非 `401`，说明 Key 有效但缺权限点（`insufficient_permissions`）或未绑定租户（`tenant_not_bound`）；若返回 `400 invalid_request`，通常是会话类接口缺少或非法的 `user`（请求头 `user`，`POST /chat/completions` 为请求体 `user`），与凭证无关
 
 ---
 
@@ -2757,7 +3067,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **说明：** 会话数据长期保留在数据库中，不做内置定时清理。
 
-- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.10.1](#7101-delete-sesssid---删除会话)
+- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.15](#715-delete-sesssid---删除会话)
 - 运维侧如需按时间批量清理，可直接对数据库执行 SQL（`memory_chats` 配有 `idx_started_at` 索引，`memory_sessions` 配有 `idx_updated_at` 索引）
 - SQLite 模式下数据库文件为 `{GROOT_HOME}/groot.db`
 
@@ -2821,7 +3131,7 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
 **需要重启的配置：**
 - `bootstrap.yaml` 的全部配置项：Agent 元信息、Server、Logging、数据库连接、Schedule 的 `max_concurrent_tasks` / `sync_interval`、Rate Limit 的 `cleanup_interval`
-- JWT 签名密钥与 API Key 请求头名称（数据库配置表，启动时读取一次）
+- JWT 签名密钥（数据库配置表，启动时读取一次）
 - MCP 配置文件（`mcp/*.json`）
 - 子 Agent 定义（`subagents/<name>/agent.md`）
 
@@ -2905,43 +3215,51 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
 ### D. 错误码速查表
 
-错误响应统一为 `{"status": "<错误码>", "message": "<说明>"}`。
+所有由应用处理的请求（含 `/sess/*`、`/schedule/*`、`/web/*` 与限流、鉴权中间件，以及未匹配的路径与方法）的错误响应统一为 OpenAI 信封：
 
-非错误但非 `success` 的状态：`202 accepted` 由 `POST /chat/{sid}/{cid}/stop` 返回，表示本节点没有该对话、中止请求已广播到集群，结果以 SSE 流结束或 `GET /chat/status/{sid}` 为准。
+```json
+{
+  "error": {
+    "message": "模型不存在: gpt-4o",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": "model_not_found"
+  }
+}
+```
 
-| HTTP 状态码 | 错误码 | 说明 |
-|------------|--------|------|
-| 400 | `invalid_request` | 请求参数错误（如 `instruction` 为空、路径参数缺失、会话类接口缺少或非法的 `X-User-ID`、`PATCH /sess/{sid}` 请求体非法或 `title` 为空/超过 100 个字符、`/audio/speech` 的 `input` 为空/超过 4096 个字符或 `response_format` 非法） |
-| 400 | `invalid_tenant` | 创建 API Key 时 `tenant_id` 为空或含非法字符 |
-| 400 | `invalid_model` | `X-Model-Name`（或 `/audio/*` 的 `model` 字段）指定的模型不存在或已禁用，或未配置对应用途的默认模型（对话 / ASR / 视觉 / TTS） |
-| 400 | `unknown_agent` | `X-Agent-Name` 指定的子 Agent 未注册 |
-| 400 | `attachment_count_exceeded` | 附件数量超限 |
-| 400 | `attachment_type_not_allowed` | 附件类型不允许 |
-| 400 | `attachment_size_exceeded` | 单个附件大小超限 |
-| 400 | `attachment_total_size_exceeded` | 附件总大小超限 |
-| 400 | `attachment_invalid_type` | 附件 `type` 字段无效（须为 file/image/audio/video）；`/image/understanding` 仅接受 image |
-| 400 | `attachment_missing_name` | 附件缺少文件名 |
-| 400 | `attachment_missing_content` | 附件缺少内容 |
-| 400 | `attachment_decode_error` | 附件 Base64 解码失败（`/chat` 与 `/image/understanding`） |
-| 400 | `attachment_validation_error` | 其他附件校验失败 |
-| 400 | `unsupported_type` | 转录音频扩展名不受支持（支持 webm/mp3/mp4/mpeg/mpga/m4a/wav/ogg/flac）；`/image/understanding` 在文件头识别出非图片或扩展名不匹配时返回（扩展名支持 png/jpg/jpeg/webp/gif/bmp） |
-| 400 | `file_too_large` | 转录音频超过 `attachment.max_size` 单文件上限 |
-| 401 | `unauthorized` | API Key 无效、过期、已删除或缺失 |
-| 403 | `forbidden` | API Key 权限不足，或调用会话类接口的 API Key 未绑定租户 |
-| 404 | `session_not_found` | 会话不存在或不属于当前（租户，用户） |
-| 404 | `chat_not_found` | 对话记录不存在或不属于该会话 |
-| 404 | `task_not_found` | 定时任务不存在 |
-| 409 | `chat_limit_exceeded` | 会话已有对话执行中 |
-| 409 | `chat_not_running` | `POST /chat/{sid}/{cid}/stop`：该对话未在本节点执行且无法广播（集群中没有其他存活节点、广播失败、对话已结束或 `cid` 不匹配） |
-| 409 | `chat_still_running` | `DELETE /sess/{sid}`：等待对话收尾超时，或等待期间有新对话抢先开始；未删除任何数据 |
-| 429 | `rate_limited` | 请求频率超过限制（QPS 或并发超限），稍后重试 |
-| 500 | `error` | 服务器内部错误 |
-| 500 | `config_error` | 配置错误 |
-| 500 | `llm_connection_error` | LLM 连接失败 |
-| 500 | `tool_call_error` | 工具调用失败 |
-| 500 | `schedule_error` | 定时任务操作失败 |
-| 502 | `upstream_error` | 上游转录、语音合成或图片解析服务出错（连接超时、鉴权失败、模型拒绝），`message` 透传上游原文 |
-| 503 | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或 `schedule.enabled` 未开启） |
+| 字段 | 说明 |
+|------|------|
+| `message` | 可读的错误描述 |
+| `type` | 错误大类：`invalid_request_error`、`authentication_error`、`permission_error`、`rate_limit_error`、`api_error` |
+| `param` | 出错的请求参数名；与具体参数无关时为 `null` |
+| `code` | 具体错误码；无细分时为 `null` |
+
+流式响应中出错时 HTTP 状态码保持 `200`，错误以 `data: {"error":{...}}\n\n` 事件下发，随后是 `data: [DONE]`。
+
+> **例外：** 请求体超过 200MB 时，由 HTTP 服务器在进入路由前直接返回 413 纯文本响应，不遵循上述错误信封。这是传输层的硬限制，客户端应在发送前自行控制请求体大小。
+
+| HTTP 状态码 | `type` | `code` | 说明 |
+|------------|--------|--------|------|
+| 400 | `invalid_request_error` | `invalid_request` | 请求参数错误（如 `messages` 为空、最后一条不是 `user`、`n` 不为 1、路径参数缺失、会话类接口缺少或非法的 `user`、`PATCH /sess/{sid}` 的 `title` 为空/超过 100 个字符、`/audio/speech` 的 `input` 为空/超过 4096 个字符或缺少 `voice`、`response_format` 非法；附件数量超限、附件缺少文件名或内容、内容片段或附件的 Base64 解码失败；未匹配的路径与方法） |
+| 400 | `invalid_request_error` | `model_not_found` | `model` 指定的模型不存在或已禁用，或未配置对应类型的默认模型（对话 / ASR / 视觉 / TTS） |
+| 400 | `invalid_request_error` | `unsupported_file_type` | `file` 内容片段不是可解码的文本类文件 |
+| 400 | `invalid_request_error` | `unsupported_type` | 不支持的类型：`/audio/transcriptions` 的音频扩展名、`/image/understanding` 的附件类型或图片类型、对话请求中不支持的内容片段类型、附件的 `type` 字段无效、附件扩展名不在允许的白名单内 |
+| 400 | `invalid_request_error` | `unknown_agent` | `agent_name` 指定的子 Agent 未注册 |
+| 401 | `authentication_error` | `invalid_api_key` | API Key 缺失、签名错误、过期或已吊销（不区分具体原因） |
+| 403 | `permission_error` | `insufficient_permissions` | API Key 缺少所需权限点 |
+| 403 | `permission_error` | `tenant_not_bound` | API Key 未绑定租户，无法确定会话归属 |
+| 404 | `invalid_request_error` | `session_not_found` | 会话不存在或不属于当前（租户，用户） |
+| 404 | `invalid_request_error` | `task_not_found` | 对话记录不存在或不属于该会话；定时任务不存在 |
+| 404 | `invalid_request_error` | `schedule_not_found` | 定时任务不存在（保留码） |
+| 409 | `invalid_request_error` | `chat_limit_exceeded` | 同一会话已有对话正在执行 |
+| 409 | `invalid_request_error` | `chat_still_running` | 会话仍在执行，暂不能删除或改名；`POST /chat/{sid}/{cid}/stop` 的对话未在本节点执行且无法广播时也返回此码 |
+| 413 | `invalid_request_error` | `file_too_large` | 上传内容超过单文件或单次合计上限（转录音频、图片附件、对话附件、`/image/understanding`） |
+| 429 | `rate_limit_error` | `rate_limit_exceeded` | 触发限流（QPS 或并发超限），稍后重试 |
+| 499 | `invalid_request_error` | `client_closed_request` | 调用方在拿到响应前放弃请求（连接中断、超时取消） |
+| 500 | `api_error` | `internal_error` | 服务端内部错误 |
+| 502 | `api_error` | `upstream_error` | 上游模型服务返回错误（连接失败、鉴权失败、模型拒绝），`message` 透传上游原文 |
+| 503 | `api_error` | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或未开启定时任务） |
 
 ### E. 联系与支持
 

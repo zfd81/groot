@@ -21,6 +21,7 @@ type Attachment struct {
 // ImageUnderstandingRequest represents image understanding request
 type ImageUnderstandingRequest struct {
 	Instruction string       `json:"instruction"`
+	Model       string       `json:"model"` // 为空时取默认视觉模型
 	Attachments []Attachment `json:"attachments"`
 }
 
@@ -312,14 +313,15 @@ type SpeechSettingsResponse struct {
 }
 
 // SpeechRequest 是 POST /audio/speech 与 POST /web/audio/speech 的请求体，
-// 字段与 OpenAI 语音合成规范一致。model 为空时取请求头 X-Model-Name，再回落到默认 TTS 模型。
+// 字段与 OpenAI 语音合成规范一致。model 为空时回落到默认 TTS 模型。
 type SpeechRequest struct {
-	Input          string `json:"input"`
-	Model          string `json:"model"`
-	Voice          string `json:"voice"`
-	Language       string `json:"language"`
-	Instructions   string `json:"instructions"`
-	ResponseFormat string `json:"response_format"`
+	Input          string   `json:"input"`
+	Model          string   `json:"model"`
+	Voice          string   `json:"voice"`
+	Language       string   `json:"language"`
+	Instructions   string   `json:"instructions"`
+	ResponseFormat string   `json:"response_format"`
+	Speed          *float64 `json:"speed"`
 }
 
 // RuntimeSettingsPayload 是 /web/settings/runtime 的请求与响应体。
@@ -390,14 +392,6 @@ type ScheduleSettings struct {
 // AuthSettingsPayload 是 /web/settings/auth 系列接口的响应体。
 // 密钥只以脱敏形式返回，界面据 secret_set 判断密钥是否已设置。
 type AuthSettingsPayload struct {
-	HeaderName        string `json:"header_name"`         // 当前生效的 API Key 请求头名
-	HeaderNameDefault string `json:"header_name_default"` // 默认请求头名，供界面「恢复默认」提示
-	SecretMasked      string `json:"secret_masked"`       // 脱敏后的 JWT 签名密钥；未设置时为空串
-	SecretSet         bool   `json:"secret_set"`          // 密钥是否已设置
-}
-
-// PutAuthSettingsRequest 是 PUT /web/settings/auth 的请求体。
-// header_name 为空串表示恢复默认请求头名。
-type PutAuthSettingsRequest struct {
-	HeaderName string `json:"header_name"`
+	SecretMasked string `json:"secret_masked"` // 脱敏后的 JWT 签名密钥；未设置时为空串
+	SecretSet    bool   `json:"secret_set"`    // 密钥是否已设置
 }

@@ -88,7 +88,6 @@ func (s *Settings) ImportLegacy(ctx context.Context, lb *config.LegacyBusiness) 
 	addTrue(KeyScheduleEnabled, lb.ScheduleEnabled)
 
 	addStr(KeyAuthSecret, lb.Auth.Secret)
-	addStr(KeyAuthHeaderName, lb.Auth.HeaderName)
 
 	if len(rows) == 0 {
 		return nil

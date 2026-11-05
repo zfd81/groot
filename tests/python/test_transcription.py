@@ -7,9 +7,9 @@
 用例点：
 - 缺少 file 字段（400 invalid_request）
 - 不支持的扩展名（400 unsupported_type）
-- 指定不存在的模型（400 invalid_model）
-- 超过附件单文件上限（400 file_too_large）
-- 未携带 API Key（401 unauthorized）
+- 指定不存在的模型（400 model_not_found）
+- 超过附件单文件上限（413 file_too_large）
+- 未携带 API Key（401 invalid_api_key）
 - 正常转录（需 GROOT_VOICE_MODEL）
 """
 import os
@@ -26,7 +26,7 @@ VOICE_MODEL = os.environ.get("GROOT_VOICE_MODEL", "")
 @pytest.fixture
 def key_headers(api_key):
     """只带 API Key，不带 Content-Type：multipart 边界由 requests 自动生成"""
-    return {"X-API-Key": api_key}
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 def _audio(name="rec.webm", size=16):
@@ -40,13 +40,19 @@ class TestTranscriptionErrors:
         """TC-ASR-001: 缺少 file 字段"""
         resp = requests.post(URL, headers=key_headers, data={"model": "x"}, timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "invalid_request"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "file"
+        assert data["error"]["code"] == "invalid_request"
 
     def test_unsupported_extension(self, server, key_headers):
         """TC-ASR-002: 扩展名不在音频白名单"""
         resp = requests.post(URL, headers=key_headers, files=_audio("notes.txt"), timeout=10)
         assert resp.status_code == 400
-        assert resp.json()["status"] == "unsupported_type"
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "file"
+        assert data["error"]["code"] == "unsupported_type"
 
     def test_unknown_model(self, server, key_headers):
         """TC-ASR-003: 指定不存在的模型"""
@@ -56,8 +62,10 @@ class TestTranscriptionErrors:
         )
         assert resp.status_code == 400
         body = resp.json()
-        assert body["status"] == "invalid_model"
-        assert "__no_such_model__" in body["message"]
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["param"] == "model"
+        assert body["error"]["code"] == "model_not_found"
+        assert "__no_such_model__" in body["error"]["message"]
 
     def test_file_too_large(self, server, key_headers):
         """TC-ASR-004: 超过附件单文件上限（大小校验先于模型校验）"""
@@ -66,15 +74,21 @@ class TestTranscriptionErrors:
             URL, headers=key_headers,
             files=big, data={"model": "__no_such_model__"}, timeout=60,
         )
-        # 大小校验先于模型校验，因此这里应命中 file_too_large 而非 invalid_model
-        assert resp.status_code == 400
-        assert resp.json()["status"] == "file_too_large"
+        # 大小校验先于模型校验，因此这里应命中 file_too_large 而非 model_not_found；
+        # 单文件超限按 spec 返回 413
+        assert resp.status_code == 413
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "file"
+        assert data["error"]["code"] == "file_too_large"
 
     def test_no_auth(self, server):
         """TC-ASR-005: 未携带 API Key"""
         resp = requests.post(URL, files=_audio(), timeout=10)
         assert resp.status_code == 401
-        assert resp.json()["status"] == "unauthorized"
+        data = resp.json()
+        assert data["error"]["type"] == "authentication_error"
+        assert data["error"]["code"] == "invalid_api_key"
 
 
 @pytest.mark.skipif(not VOICE_MODEL, reason="未设置 GROOT_VOICE_MODEL")
@@ -82,7 +96,7 @@ class TestTranscriptionSuccess:
     """成功路径，需要真实的语音模型"""
 
     def test_transcribe_wav(self, server, key_headers):
-        """TC-ASR-006: 用指定模型转录一段极短的静音 wav"""
+        """TC-ASR-006: 用指定模型转录一段极短的静音 wav（响应原样透传上游）"""
         # 44 字节的 PCM WAV 头 + 少量静音采样，足以让接口走通
         header = (
             b"RIFF" + (36 + 320).to_bytes(4, "little") + b"WAVE"
@@ -97,11 +111,10 @@ class TestTranscriptionSuccess:
             URL, headers=key_headers,
             files={"file": ("silence.wav", wav, "audio/wav")},
             data={"model": VOICE_MODEL},
-            timeout=120,
+            timeout=180,
         )
-        # 静音可能被上游判为无内容（400）或返回空串/噪声文本（200），两者都算接口打通
+        # 静音可能被上游判为无内容（400）或返回文本（200），两者都算接口打通。
+        # groot 原样转发上游 status / Content-Type / 响应体，不解析 body：
+        # 响应形态由 response_format 决定（json/text/srt/vtt/verbose_json）。
         assert resp.status_code in (200, 400), resp.text
-        if resp.status_code == 200:
-            body = resp.json()
-            assert "text" in body
-            assert body["model"] == VOICE_MODEL
+        assert resp.headers.get("Content-Type"), "上游响应应带 Content-Type"

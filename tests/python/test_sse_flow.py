@@ -28,10 +28,10 @@ class TestSSEFlowIntegrity:
         - tool_call (已替换为 tool_calls)
         - message_start / message_end (已移除)
         """
-        payload = {"instruction": "列出当前目录下的文件"}
+        payload = {"messages": [{"role": "user", "content": "列出当前目录下的文件"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -58,10 +58,10 @@ class TestSSEFlowIntegrity:
 
         started 事件是整体开始信号，必须发送
         """
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -82,10 +82,14 @@ class TestSSEFlowIntegrity:
 
         completed 事件是整体结束信号，必须发送
         """
-        payload = {"instruction": "测试"}
+        payload = {
+            "messages": [{"role": "user", "content": "测试"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -108,10 +112,10 @@ class TestSSEFlowIntegrity:
         新协议不再区分 message_start/message_end，所有消息内容均为 message 事件
         注意：如果 agent 没有产生输出（如 Mock LLM 不返回内容），可能没有 message 事件
         """
-        payload = {"instruction": "你好，介绍一下自己"}
+        payload = {"messages": [{"role": "user", "content": "你好，介绍一下自己"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -146,10 +150,10 @@ class TestSSEFlowIntegrity:
         不能只发送 tool_result 而不发送 tool_calls
         """
         # 使用明确会触发工具调用的指令
-        payload = {"instruction": "列出当前目录下的所有文件"}
+        payload = {"messages": [{"role": "user", "content": "列出当前目录下的所有文件"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -179,10 +183,10 @@ class TestSSEFlowIntegrity:
 
         tool_result（role=tool）通过 tool_call_id 字段关联 tool_calls 数组元素的 id
         """
-        payload = {"instruction": "读取文件 /tmp/test.txt"}
+        payload = {"messages": [{"role": "user", "content": "读取文件 /tmp/test.txt"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -215,10 +219,10 @@ class TestSSEFlowIntegrity:
         验证完整的事件流程：
         message → thinking → tool_calls → tool_result → finish
         """
-        payload = {"instruction": "列出当前目录下的文件"}
+        payload = {"messages": [{"role": "user", "content": "列出当前目录下的文件"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -235,10 +239,10 @@ class TestSSEFlowIntegrity:
         如果使用了工具，应该先发送 thinking 事件（不再区分 start/end）
         表示思考阶段（决定使用哪个工具）
         """
-        payload = {"instruction": "读取 /etc/hosts 文件内容"}
+        payload = {"messages": [{"role": "user", "content": "读取 /etc/hosts 文件内容"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -264,10 +268,10 @@ class TestSSEFlowIntegrity:
 
         打印完整的事件类型统计，用于诊断问题
         """
-        payload = {"instruction": "列出当前目录"}
+        payload = {"messages": [{"role": "user", "content": "列出当前目录"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -300,10 +304,10 @@ class TestSSEToolCallStrict:
         问题：用户反馈工具调用但不打印 tool_calls
         这个测试严格验证：如果有 tool_result，必须有对应的 tool_calls
         """
-        payload = {"instruction": "使用 ls 命令列出当前目录"}
+        payload = {"messages": [{"role": "user", "content": "使用 ls 命令列出当前目录"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -328,10 +332,10 @@ class TestSSEToolCallStrict:
 
         正确顺序：tool_calls → tool_result
         """
-        payload = {"instruction": "读取文件内容"}
+        payload = {"messages": [{"role": "user", "content": "读取文件内容"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -361,10 +365,10 @@ class TestSSEToolCallStrict:
 
         每个 tool_result 的 tool_call_id 必须能在此前 tool_calls[].id 中找到
         """
-        payload = {"instruction": "执行 ls 命令"}
+        payload = {"messages": [{"role": "user", "content": "执行 ls 命令"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -402,10 +406,10 @@ class TestSSEStreamingOutput:
 
         新协议不区分 message_start/message_end，所有内容均为 message 事件
         """
-        payload = {"instruction": "你好，请介绍一下你自己"}
+        payload = {"messages": [{"role": "user", "content": "你好，请介绍一下你自己"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -435,10 +439,10 @@ class TestSSEStreamingOutput:
 
         当使用工具时，thinking 也应该是流式的（不再区分 start/end）
         """
-        payload = {"instruction": "列出当前目录下的文件"}
+        payload = {"messages": [{"role": "user", "content": "列出当前目录下的文件"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -469,10 +473,14 @@ class TestSSEPrintDebug:
 
         用于诊断 SSE 流的问题
         """
-        payload = {"instruction": "列出当前目录下的文件"}
+        payload = {
+            "messages": [{"role": "user", "content": "列出当前目录下的文件"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True

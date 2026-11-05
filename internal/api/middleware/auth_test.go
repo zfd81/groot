@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ const testSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 
 func testSecurityConfig() config.SecurityConfig {
 	return config.SecurityConfig{
-		Auth: config.AuthConfig{HeaderName: "X-API-Key", Secret: testSecret},
+		Auth: config.AuthConfig{Secret: testSecret},
 	}
 }
 
@@ -102,7 +103,7 @@ func TestAuth_InvalidCookieFallsBack(t *testing.T) {
 func TestAuth_ValidToken(t *testing.T) {
 	m, _, _, token := newTestMiddleware(t)
 	rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if rc.Response.StatusCode() == 401 {
 		t.Fatal("valid token should pass")
@@ -116,7 +117,7 @@ func TestAuth_ValidToken(t *testing.T) {
 func TestAuth_InvalidToken(t *testing.T) {
 	m, _, _, _ := newTestMiddleware(t)
 	rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", "legacy-random-key")
+		rc.Request.Header.Set("Authorization", "Bearer legacy-random-key")
 	})
 	if rc.Response.StatusCode() != 401 {
 		t.Fatalf("expected 401, got %d", rc.Response.StatusCode())
@@ -130,7 +131,7 @@ func TestAuth_RevokedToken(t *testing.T) {
 		t.Fatalf("DeleteByID: %v", err)
 	}
 	rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if rc.Response.StatusCode() != 401 {
 		t.Fatalf("revoked token should 401, got %d", rc.Response.StatusCode())
@@ -142,7 +143,7 @@ func TestAuth_PermissionDenied(t *testing.T) {
 	m, _, _, token := newTestMiddleware(t)
 	// 预置 Key 只有 chat+history，访问 /schedule 需要 schedule 权限
 	rc := serveAuth(m, consts.MethodGet, "/schedule", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if rc.Response.StatusCode() != 403 {
 		t.Fatalf("expected 403, got %d", rc.Response.StatusCode())
@@ -165,7 +166,7 @@ func TestAuth_AllPermission(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	rc := serveAuth(m, consts.MethodGet, "/schedule", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if code := rc.Response.StatusCode(); code == 401 || code == 403 {
 		t.Fatalf("all permission should pass, got %d", code)
@@ -188,10 +189,165 @@ func TestAuth_EmptyPermissionsDenied(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if rc.Response.StatusCode() != 403 {
 		t.Fatalf("empty permissions should 403, got %d", rc.Response.StatusCode())
+	}
+}
+
+// TestAuthMiddleware_BearerForms Authorization 头必须是 Bearer <token> 形式，
+// 前缀大小写不敏感，token 本体原样保留；旧 X-API-Key 头不再被读取。
+func TestAuthMiddleware_BearerForms(t *testing.T) {
+	m, _, _, validToken := newTestMiddleware(t)
+	cases := []struct {
+		name   string
+		header string
+		value  string
+		want   int
+	}{
+		{"missing", "", "", 401},
+		{"bearer-only", "Authorization", "Bearer", 401},
+		{"bearer-spaces", "Authorization", "Bearer   ", 401},
+		{"prefix-without-separator", "Authorization", "Bearer" + validToken, 401},
+		{"lowercase-prefix", "Authorization", "bearer " + validToken, 200},
+		{"canonical-prefix", "Authorization", "Bearer " + validToken, 200},
+		{"wrong-scheme", "Authorization", "Token " + validToken, 401},
+		{"legacy-header", "X-API-Key", validToken, 401},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {
+				if tc.header != "" {
+					rc.Request.Header.Set(tc.header, tc.value)
+				}
+			})
+			if got := rc.Response.StatusCode(); got != tc.want {
+				t.Fatalf("header %q = %q: status %d, want %d", tc.header, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAuthMiddleware_UnauthorizedEnvelope 401 响应体为 OpenAI 错误信封。
+func TestAuthMiddleware_UnauthorizedEnvelope(t *testing.T) {
+	m, _, _, _ := newTestMiddleware(t)
+	rc := serveAuth(m, consts.MethodGet, "/sess/history", func(rc *app.RequestContext) {})
+	if got := rc.Response.StatusCode(); got != 401 {
+		t.Fatalf("expected 401, got %d", got)
+	}
+	if ct := string(rc.Response.Header.ContentType()); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("content-type = %q, want application/json", ct)
+	}
+	body := string(rc.Response.Body())
+	for _, want := range []string{
+		`"type":"authentication_error"`,
+		`"code":"invalid_api_key"`,
+		`"message":"API Key 无效或缺失"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s: %s", want, body)
+		}
+	}
+}
+
+// TestAuthMiddleware_PermissionDeniedEnvelope Key 权限只有 status，请求 POST /chat/completions 返回 403 信封。
+func TestAuthMiddleware_PermissionDeniedEnvelope(t *testing.T) {
+	m, keys, _, _ := newTestMiddleware(t)
+	created := time.Now().Truncate(time.Second)
+	k := &repo.APIKey{
+		ID: "20260902120003", Name: "status-only", Permissions: []string{"status"},
+		ExpiresAt: created.AddDate(0, 0, 7), CreatedAt: created,
+	}
+	if err := keys.Create(context.Background(), k); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	token, err := auth.Sign(k, testSecret)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	rc := serveAuth(m, consts.MethodPost, "/chat/completions", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
+	})
+	if got := rc.Response.StatusCode(); got != 403 {
+		t.Fatalf("expected 403, got %d", got)
+	}
+	body := string(rc.Response.Body())
+	for _, want := range []string{
+		`"type":"permission_error"`,
+		`"code":"insufficient_permissions"`,
+		`"message":"权限不足: 需要 chat 权限"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s: %s", want, body)
+		}
+	}
+}
+
+// TestAuthMiddleware_PermissionsForNewRoutes 持 chat 权限的 Key 可访问 /chat/completions 与 /models；
+// 只持 session 权限的 Key 访问 /chat/completions 返回 403。
+func TestAuthMiddleware_PermissionsForNewRoutes(t *testing.T) {
+	m, keys, _, chatToken := newTestMiddleware(t)
+	created := time.Now().Truncate(time.Second)
+	k := &repo.APIKey{
+		ID: "20260902120004", Name: "session-only", Permissions: []string{"session"},
+		ExpiresAt: created.AddDate(0, 0, 7), CreatedAt: created,
+	}
+	if err := keys.Create(context.Background(), k); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	sessionToken, err := auth.Sign(k, testSecret)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		method string
+		uri    string
+		token  string
+		want   int
+	}{
+		{"chat-completions-with-chat", consts.MethodPost, "/chat/completions", chatToken, 200},
+		{"models-with-chat", consts.MethodGet, "/models", chatToken, 200},
+		{"chat-completions-with-session", consts.MethodPost, "/chat/completions", sessionToken, 403},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := serveAuth(m, tc.method, tc.uri, func(rc *app.RequestContext) {
+				rc.Request.Header.Set("Authorization", "Bearer "+tc.token)
+			})
+			if got := rc.Response.StatusCode(); got != tc.want {
+				t.Fatalf("%s %s: status %d, want %d", tc.method, tc.uri, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBearerToken 直接验证 Authorization 头解析：前缀大小写不敏感，token 原样保留。
+func TestBearerToken(t *testing.T) {
+	cases := []struct{ name, header, want string }{
+		{"no-header", "", ""},
+		{"bearer-only", "Bearer", ""},
+		{"space-only", "Bearer   ", ""},
+		{"canonical", "Bearer tok", "tok"},
+		{"lowercase", "bearer tok", "tok"},
+		{"mixed-case", "bEaReR tok", "tok"},
+		{"token-whitespace-trimmed", "Bearer  tok  ", "tok"},
+		{"token-case-preserved", "Bearer ToKeN", "ToKeN"},
+		{"no-separator", "Bearertok", ""},
+		{"wrong-scheme", "Token tok", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := app.NewContext(0)
+			if tc.header != "" {
+				rc.Request.Header.Set("Authorization", tc.header)
+			}
+			if got := bearerToken(rc); got != tc.want {
+				t.Errorf("bearerToken(%q) = %q, want %q", tc.header, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -202,7 +358,9 @@ func TestGetRequiredPermission(t *testing.T) {
 		method string
 		want   string
 	}{
-		{"/chat", consts.MethodPost, "chat"},
+		{"/chat/completions", consts.MethodPost, "chat"},
+		{"/models", consts.MethodGet, "chat"},
+		{"/models", consts.MethodPost, "all"},
 		{"/audio/transcriptions", consts.MethodPost, "chat"},
 		{"/audio/transcriptions", consts.MethodGet, "all"},
 		{"/audio/speech", consts.MethodPost, "chat"},
@@ -227,8 +385,8 @@ func TestGetRequiredPermission(t *testing.T) {
 // TestAuth_InjectsTenantAndUserID JWT 分支注入 Key 所属租户与 trim 后的 X-User-ID。
 func TestAuth_InjectsTenantAndUserID(t *testing.T) {
 	m, _, _, token := newTestMiddleware(t)
-	rc := serveAuth(m, consts.MethodPost, "/chat", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+	rc := serveAuth(m, consts.MethodPost, "/chat/completions", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 		rc.Request.Header.Set(UserIDHeader, " u1 ")
 	})
 	if GetTenant(rc) != "crm" || GetUserID(rc) != "u1" {
@@ -239,8 +397,8 @@ func TestAuth_InjectsTenantAndUserID(t *testing.T) {
 // TestAuth_InvalidUserIDBecomesEmpty 非法 X-User-ID 归一为空串，中间件不因此拒绝请求。
 func TestAuth_InvalidUserIDBecomesEmpty(t *testing.T) {
 	m, _, _, token := newTestMiddleware(t)
-	rc := serveAuth(m, consts.MethodPost, "/chat", func(rc *app.RequestContext) {
-		rc.Request.Header.Set("X-API-Key", token)
+	rc := serveAuth(m, consts.MethodPost, "/chat/completions", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
 		rc.Request.Header.Set(UserIDHeader, "bad id")
 	})
 	if rc.Response.StatusCode() == 401 {

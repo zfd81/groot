@@ -15,20 +15,32 @@ export interface VoiceSettings {
 
 export interface TranscriptionResult {
   text: string
-  model: string
+}
+
+// 从错误信封 {"error":{"message","type","param","code"}} 取消息与 code。
+function envelopeError(data: any, status: number): ApiError {
+  const err = data && typeof data === 'object' ? data.error : null
+  const message =
+    (err && typeof err.message === 'string' && err.message) ||
+    t('error.requestFailed', { status })
+  const code =
+    err && typeof err === 'object' ? (err.code ?? err.type ?? undefined) : undefined
+  return new ApiError(status, message, code)
 }
 
 export const voiceApi = {
-  // transcribe 上传音频并返回识别文本。识别模型经请求头 X-Model-Name 传递，
-  // 由设置中选定的模型决定，不依赖服务端的默认语音模型。
+  // transcribe 上传音频并返回识别文本。识别模型走 multipart 的 model 字段，
+  // 由设置中选定的模型决定，不依赖服务端的默认语音模型；
+  // response_format 固定 json，界面按 {"text":"..."} 解析。
   async transcribe(blob: Blob, filename: string, model: string): Promise<TranscriptionResult> {
     const fd = new FormData()
     fd.append('file', blob, filename)
+    fd.append('model', model)
+    fd.append('response_format', 'json')
 
     const resp = await fetch('/web/audio/transcriptions', {
       method: 'POST',
       body: fd,
-      headers: { 'X-Model-Name': model },
       credentials: 'same-origin',
     })
     if (resp.status === 401) {
@@ -36,11 +48,7 @@ export const voiceApi = {
       throw new ApiError(401, t('error.unauthorized'))
     }
     const data = await resp.json().catch(() => null)
-    if (!resp.ok) {
-      const message =
-        data?.message || data?.error || t('error.requestFailed', { status: resp.status })
-      throw new ApiError(resp.status, message, data?.status ?? undefined)
-    }
+    if (!resp.ok) throw envelopeError(data, resp.status)
     // 2xx 但响应体不是 JSON：按请求失败处理，不把 null 交给调用方
     if (!data) throw new ApiError(resp.status, t('error.requestFailed', { status: resp.status }))
     return data as TranscriptionResult

@@ -135,7 +135,7 @@ def ensure_default_model(base_url, username=None, password=None):
 
 
 # 系统测试统一使用的租户与用户标识：API Key 绑定租户 TEST_TENANT，
-# 会话类接口（/chat、/chat/*、/sess/*）请求头 X-User-ID 携带 TEST_USER_ID
+# 会话类接口（/chat、/chat/*、/sess/*）以请求体顶层 user（或请求头 user）携带 TEST_USER_ID
 TEST_TENANT = "pytest"
 TEST_USER_ID = "pytest-user"
 
@@ -257,6 +257,22 @@ class SSEClient:
 
         return raw
 
+    def get_session_id(self):
+        """首个带 session_id 的 chunk 的顶层 session_id（Groot 扩展字段）"""
+        for e in self.events:
+            sid = e["raw"].get("session_id")
+            if sid:
+                return sid
+        return None
+
+    def get_chat_id(self):
+        """首个 chunk 的顶层 id（OpenAI 标准字段）"""
+        for e in self.events:
+            cid = e["raw"].get("id")
+            if cid:
+                return cid
+        return None
+
     @staticmethod
     def _infer_event_type(data: dict) -> str:
         """根据 JSON 字段推断 SSE 事件类型（见 docs/superpowers/specs/2026-10-20-openai-sse-format-design.md 1.3.6 节）"""
@@ -377,10 +393,9 @@ def server():
         "agent": {"name": "groot", "version": "1.0.0"},
         "server": {"host": "0.0.0.0", "port": int(TEST_PORT)},
         # skills/mcp/api directory 已移除配置，使用固定位置
-        # 认证始终开启：只需配置请求头名与 JWT 签名密钥
+        # 认证始终开启：只需配置 JWT 签名密钥
         "security": {
             "auth": {
-                "header_name": "X-API-Key",
                 "secret": TEST_AUTH_SECRET
             }
         },
@@ -460,11 +475,11 @@ def api_key(server):
 
 @pytest.fixture
 def api_headers(api_key):
-    """标准 API Headers（携带 JWT API Key 与会话类接口必需的 X-User-ID）"""
+    """标准 API Headers（携带 JWT API Key 与会话类接口必需的 user 标识）"""
     return {
         "Content-Type": "application/json",
-        "X-API-Key": api_key,
-        "X-User-ID": TEST_USER_ID,
+        "Authorization": f"Bearer {api_key}",
+        "user": TEST_USER_ID,
     }
 
 
@@ -479,7 +494,7 @@ def invalid_auth_headers():
     """无效认证 Headers：格式像 JWT 但签名无效"""
     return {
         "Content-Type": "application/json",
-        "X-API-Key": "eyJhbGciOiJIUzI1NiJ9.invalid.invalid"
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.invalid.invalid"
     }
 
 

@@ -1,6 +1,7 @@
 """
 附件处理测试
-测试附件上传、大小限制、类型限制、数量限制等
+测试 OpenAI content parts（image_url / input_audio / file）的上传、
+大小限制、类型限制、数量限制等
 """
 
 import pytest
@@ -9,24 +10,37 @@ import base64
 from conftest import BASE_URL, SSEClient
 
 
+def file_part(filename, content_b64, mime="text/csv"):
+    """构造 OpenAI file content part；file_data 为带 MIME 前缀的 data URL"""
+    return {
+        "type": "file",
+        "file": {"filename": filename, "file_data": f"data:{mime};base64,{content_b64}"},
+    }
+
+
+def text_part(text):
+    """构造 OpenAI text content part"""
+    return {"type": "text", "text": text}
+
+
 class TestAttachmentBasic:
     """基础附件处理测试"""
 
     def test_single_attachment(self, server, api_headers, test_file_base64):
         """TC-ATT-001: 单个附件上传"""
         payload = {
-            "instruction": "分析这个文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "test.csv",
-                    "content": test_file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析这个文件"),
+                    file_part("test.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -37,40 +51,48 @@ class TestAttachmentBasic:
         assert sse.get_completed_event()["data"]["finish_reason"] in ("stop", "tool_calls")
 
     def test_url_attachment(self, server, api_headers):
-        """TC-ATT-002: URL 类型附件（不被支持，返回 400）"""
+        """TC-ATT-002: 不支持的视频片段（video_url）返回 400 unsupported_type"""
         payload = {
-            "instruction": "获取这个URL的内容",
-            "attachments": [
-                {
-                    "type": "url",
-                    "name": "external.pdf",
-                    "url": "https://example.com/doc.pdf"
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("获取这个URL的内容"),
+                    {"type": "video_url", "video_url": {"url": "https://example.com/doc.mp4"}},
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        # url 类型不在 [file, image, audio, video] 中，返回 400
+        # OpenAI 无 video_url 片段，服务端按不支持的类型拒绝
         assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        assert data["error"]["code"] == "unsupported_type"
 
     def test_multiple_attachments(self, server, api_headers, test_file_base64, pdf_file_base64):
         """TC-ATT-003: 多个附件上传"""
         payload = {
-            "instruction": "分析这些文件",
-            "attachments": [
-                {"type": "file", "name": "file1.csv", "content": test_file_base64},
-                {"type": "file", "name": "file2.pdf", "content": pdf_file_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析这些文件"),
+                    file_part("file1.csv", test_file_base64, "text/csv"),
+                    # file 片段只接受文本类 MIME，PDF 名沿用但按纯文本装载
+                    file_part("file2.pdf", pdf_file_base64, "text/plain"),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -87,100 +109,111 @@ class TestAttachmentLimits:
     def test_attachment_count_exceeded(self, server, api_headers, test_file_base64):
         """TC-ATT-004: 附件数量超限（超过10个）"""
         # 生成11个附件
-        attachments = [
-            {"type": "file", "name": f"file{i}.csv", "content": test_file_base64}
+        parts = [
+            file_part(f"file{i}.csv", test_file_base64)
             for i in range(11)
         ]
 
         payload = {
-            "instruction": "分析这些文件",
-            "attachments": attachments
+            "messages": [{"role": "user", "content": [text_part("分析这些文件")] + parts}],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
         data = response.json()
-        assert data["status"] == "attachment_count_exceeded"
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        # 数量超限属于请求本身不合法
+        assert data["error"]["code"] == "invalid_request"
 
     def test_attachment_size_exceeded(self, server, api_headers, large_file_base64):
         """TC-ATT-005: 单个附件大小超限（超过50MB）"""
         payload = {
-            "instruction": "分析大文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "huge.pdf",
-                    "content": large_file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析大文件"),
+                    # 用文本类 MIME 让请求通过片段解析，由附件校验报出体积超限
+                    file_part("huge.pdf", large_file_base64, "text/plain"),
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 413
         data = response.json()
-        assert data["status"] == "attachment_size_exceeded"
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        assert data["error"]["code"] == "file_too_large"
 
     def test_attachment_type_not_allowed(self, server, api_headers):
         """TC-ATT-006: 附件类型不允许（exe文件）"""
         exe_content = base64.b64encode(b"fake exe content").decode()
 
         payload = {
-            "instruction": "执行程序",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "malware.exe",
-                    "content": exe_content
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("执行程序"),
+                    file_part("malware.exe", exe_content, "application/octet-stream"),
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
         data = response.json()
-        assert data["status"] == "attachment_type_not_allowed"
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        # file 片段只接受文本类 MIME，非文本 MIME 在片段解析阶段就被拒绝
+        assert data["error"]["code"] == "unsupported_file_type"
 
     def test_attachment_total_size_exceeded(self, server, api_headers):
         """TC-ATT-007: 附件总大小超限"""
         # 生成多个文件，总大小超过100MB
-        # 使用 .txt 文件类型（在白名单内）
+        # 使用 .txt 文件类型（在白名单内，且走文本 MIME）
         large_content = "x" * (30 * 1024 * 1024)  # 30MB
         large_base64 = base64.b64encode(large_content.encode()).decode()
 
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {"type": "file", "name": "file1.txt", "content": large_base64},
-                {"type": "file", "name": "file2.txt", "content": large_base64},
-                {"type": "file", "name": "file3.txt", "content": large_base64},
-                {"type": "file", "name": "file4.txt", "content": large_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    file_part("file1.txt", large_base64, "text/plain"),
+                    file_part("file2.txt", large_base64, "text/plain"),
+                    file_part("file3.txt", large_base64, "text/plain"),
+                    file_part("file4.txt", large_base64, "text/plain"),
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 413
         data = response.json()
-        assert data["status"] == "attachment_total_size_exceeded"
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        assert data["error"]["code"] == "file_too_large"
 
 
 class TestAttachmentErrors:
@@ -189,67 +222,85 @@ class TestAttachmentErrors:
     def test_attachment_decode_error(self, server, api_headers):
         """TC-ATT-008: Base64 解码失败"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "invalid.pdf",
-                    "content": "invalid_base64_content!!!"
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "invalid.pdf",
+                            "file_data": "data:text/plain;base64,invalid_base64_content!!!",
+                        },
+                    },
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
         data = response.json()
-        assert data["status"] == "attachment_decode_error"
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        # 片段内容解不出属请求本身不合法
+        assert data["error"]["code"] == "invalid_request"
 
     def test_attachment_missing_content(self, server, api_headers):
-        """TC-ATT-009: file 类型缺少 content"""
+        """TC-ATT-009: file 片段缺少 file_data"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "test.pdf"
-                    # 缺少 content
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    {
+                        "type": "file",
+                        "file": {"filename": "test.pdf"}
+                        # 缺少 file_data
+                    },
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        assert data["error"]["code"] == "invalid_request"
 
     def test_attachment_missing_url(self, server, api_headers):
-        """TC-ATT-010: url 类型缺少 url"""
+        """TC-ATT-010: 未知内容片段类型返回 400 unsupported_type"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {
-                    "type": "url",
-                    "name": "external.pdf"
-                    # 缺少 url
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    {"type": "unknown_part", "foo": "bar"},
+                ],
+            }],
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["type"] == "invalid_request_error"
+        assert data["error"]["param"] == "messages"
+        assert data["error"]["code"] == "unsupported_type"
 
 
 class TestAttachmentFilenameSafety:
@@ -258,25 +309,26 @@ class TestAttachmentFilenameSafety:
     def test_filename_with_slash(self, server, api_headers, test_file_base64):
         """TC-ATT-011: 文件名包含斜杠"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "path/to/file.csv",
-                    "content": test_file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    file_part("path/to/file.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
         assert response.status_code == 200
-        session_id = response.headers.get("X-Session-ID")
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 附件不落盘：文件名安全处理（斜杠替换为下划线）在服务端校验层完成，
         # 此处只验证请求被正常接受
@@ -285,18 +337,18 @@ class TestAttachmentFilenameSafety:
     def test_filename_with_backslash(self, server, api_headers, test_file_base64):
         """TC-ATT-012: 文件名包含反斜杠"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "path\\to\\file.csv",
-                    "content": test_file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    file_part("path\\to\\file.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -307,18 +359,18 @@ class TestAttachmentFilenameSafety:
     def test_filename_with_dots(self, server, api_headers, test_file_base64):
         """TC-ATT-013: 文件名包含路径穿越字符"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "../../../etc/passwd.csv",
-                    "content": test_file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    file_part("../../../etc/passwd.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -331,37 +383,43 @@ class TestAttachmentFilenameSafety:
         """TC-ATT-014: 同名文件覆盖"""
         # 第一次上传
         payload1 = {
-            "instruction": "上传文件",
-            "attachments": [
-                {"type": "file", "name": "data.csv", "content": test_file_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("上传文件"),
+                    file_part("data.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)
+        sse1 = SSEClient(response1)
+        session_id = sse1.get_session_id()
 
-        # 第二次上传同名文件（继续会话）
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
+        # 第二次上传同名文件（请求体携带 session_id 继续会话）
         new_content = base64.b64encode(b"new content").decode()
         payload2 = {
-            "instruction": "更新文件",
-            "attachments": [
-                {"type": "file", "name": "data.csv", "content": new_content}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("更新文件"),
+                    file_part("data.csv", new_content),
+                ],
+            }],
+            "session_id": session_id,
+            "stream": True,
         }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
@@ -376,21 +434,25 @@ class TestAttachmentStorage:
     def test_attachment_saved_to_correct_path(self, server, api_headers, test_file_base64):
         """TC-ATT-015: 附件保存路径正确"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {"type": "file", "name": "test.csv", "content": test_file_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    file_part("test.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 附件不落盘（服务端只做校验），无磁盘路径可验证；请求成功即视为通过
         assert session_id
@@ -398,21 +460,25 @@ class TestAttachmentStorage:
     def test_attachment_recorded_in_history(self, server, api_headers, test_file_base64):
         """TC-ATT-016: 带附件的对话被记录到会话历史（消息不回显 attachments 字段）"""
         payload = {
-            "instruction": "分析文件",
-            "attachments": [
-                {"type": "file", "name": "test.csv", "content": test_file_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    text_part("分析文件"),
+                    file_part("test.csv", test_file_base64),
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         # 查询会话详情
         detail_response = requests.get(

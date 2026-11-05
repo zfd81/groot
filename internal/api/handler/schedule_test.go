@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/jmoiron/sqlx"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/repo/scheduledb"
@@ -63,12 +64,7 @@ func TestScheduleHandler_NilManagerReturns503(t *testing.T) {
 	h, _ := newScheduleHandlerForTest(t, nil, true)
 
 	rc := callJSON(h.List, consts.MethodGet, "", nil)
-	if rc.Response.StatusCode() != 503 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if got := bodyStatus(t, rc); got != "schedule_unavailable" {
-		t.Fatalf("status=%q, want schedule_unavailable", got)
-	}
+	assertEnvelopeError(t, rc, 503, errbody.TypeAPI, errbody.CodeScheduleUnavailable)
 	if !strings.Contains(string(rc.Response.Body()), "不可用") {
 		t.Fatalf("nil 管理器应提示不可用, body=%s", rc.Response.Body())
 	}
@@ -78,12 +74,7 @@ func TestScheduleHandler_DisabledSwitchReturns503(t *testing.T) {
 	h, _ := newScheduleHandlerForTest(t, &schedule.Manager{}, false)
 
 	rc := callJSON(h.List, consts.MethodGet, "", nil)
-	if rc.Response.StatusCode() != 503 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if got := bodyStatus(t, rc); got != "schedule_unavailable" {
-		t.Fatalf("status=%q, want schedule_unavailable", got)
-	}
+	assertEnvelopeError(t, rc, 503, errbody.TypeAPI, errbody.CodeScheduleUnavailable)
 	if !strings.Contains(string(rc.Response.Body()), "未启用") {
 		t.Fatalf("开关关闭应提示未启用, body=%s", rc.Response.Body())
 	}
@@ -111,9 +102,7 @@ func TestScheduleHandler_SwitchReadFromTable(t *testing.T) {
 	if ok || mgr != nil {
 		t.Fatalf("表内开关为 false 时应拒绝, ok=%v mgr=%v", ok, mgr)
 	}
-	if rc.Response.StatusCode() != 503 || bodyStatus(t, rc) != "schedule_unavailable" {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 503, errbody.TypeAPI, errbody.CodeScheduleUnavailable)
 }
 
 func TestScheduleHandler_AllEndpointsGated(t *testing.T) {
@@ -137,12 +126,7 @@ func TestScheduleHandler_AllEndpointsGated(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rc := callJSON(tc.fn, tc.method, "", tc.params)
-			if rc.Response.StatusCode() != 503 {
-				t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-			}
-			if got := bodyStatus(t, rc); got != "schedule_unavailable" {
-				t.Fatalf("status=%q, want schedule_unavailable", got)
-			}
+			assertEnvelopeError(t, rc, 503, errbody.TypeAPI, errbody.CodeScheduleUnavailable)
 		})
 	}
 }
@@ -165,4 +149,41 @@ func TestScheduleHandler_EnabledListPassesThrough(t *testing.T) {
 	if got := strings.TrimSpace(string(rc.Response.Body())); got != "[]" {
 		t.Fatalf("空表应返回 [] 而非 %q", got)
 	}
+}
+
+// TestScheduleHandler_GetNotFound404 覆盖 Get 的任务不存在分支：
+// 真实 SQLite 仓库查不到 id ⇒ 404 + invalid_request_error + task_not_found + param=id。
+func TestScheduleHandler_GetNotFound404(t *testing.T) {
+	sqlxDB, dialect := newScheduleTestDB(t)
+	settings := newScheduleSettings(t, sqlxDB, dialect, true)
+	mgr := schedule.NewManager(
+		schedule.NewStorage(scheduledb.New(sqlxDB, dialect), logger.NewNop()),
+		nil, nil, logger.NewNop(),
+	)
+	h := NewScheduleHandler(&mgr, settings, logger.NewNop())
+
+	rc := callJSON(h.Get, consts.MethodGet, "", map[string]string{"id": "no-such-task"})
+	assertEnvelopeError(t, rc, 404, errbody.TypeInvalidRequest, errbody.CodeTaskNotFound)
+	if envl := envelopeOf(t, rc).Error; envl.Param == nil || *envl.Param != "id" {
+		t.Errorf("param = %v, want id; body=%s", envl.Param, rc.Response.Body())
+	}
+}
+
+// TestScheduleHandler_HistoryError500 覆盖 History 的 500 分支：
+// 查询执行记录失败（表被删）⇒ api_error + internal_error。
+func TestScheduleHandler_HistoryError500(t *testing.T) {
+	sqlxDB, dialect := newScheduleTestDB(t)
+	settings := newScheduleSettings(t, sqlxDB, dialect, true)
+	mgr := schedule.NewManager(
+		schedule.NewStorage(scheduledb.New(sqlxDB, dialect), logger.NewNop()),
+		nil, nil, logger.NewNop(),
+	)
+	h := NewScheduleHandler(&mgr, settings, logger.NewNop())
+
+	if _, err := sqlxDB.Exec(`DROP TABLE schedule_executions`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	rc := callJSON(h.History, consts.MethodGet, "", map[string]string{"id": "any-task"})
+	assertEnvelopeError(t, rc, 500, errbody.TypeAPI, errbody.CodeInternalError)
 }

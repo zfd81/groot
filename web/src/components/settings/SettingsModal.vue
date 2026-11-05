@@ -25,7 +25,6 @@ import {
 import { useRuntimeStore } from '../../stores/runtime'
 import {
   fetchAuthSettings,
-  saveAuthHeaderName,
   regenerateAuthSecret,
   type AuthSettings,
 } from '../../api/authSettings'
@@ -145,55 +144,16 @@ const allowedTypesText = computed({
 })
 
 // ---- 认证配置 ----
-// 重启后生效的一组，无其他页面消费，不进 store，面板内自管理。
-// authSettings 保存服务端最近一次回读值，请求头名的输入框绑定独立副本，
-// 保存失败时用回读值回滚，避免把服务端已拒绝的值留在界面上。
+// 只展示签名密钥的脱敏值，并提供重新生成；重启后生效。
+// 无其他页面消费，不进 store，面板内自管理。
 const authSettings = ref<AuthSettings | null>(null)
-const authHeaderName = ref('')
-const authSaving = ref(false)
 const authRegenerating = ref(false)
 
 async function loadAuthSettings() {
   try {
-    const s = await fetchAuthSettings()
-    authSettings.value = s
-    authHeaderName.value = s.header_name
+    authSettings.value = await fetchAuthSettings()
   } catch (e: any) {
     ElMessage.error(t('settings.authLoadFailed', { msg: e?.message || '' }))
-  }
-}
-
-// saveAuthHeader 保存 API Key 请求头名。空串即恢复默认，由服务端裁决；
-// 保存成功用回传值覆盖本地（恢复默认时回读即默认值）。
-//
-// 保存必须串行，原因同 saveRuntime：并发两个 PUT 时先发后到的响应会覆盖后来的改动。
-// 保存进行中再触发只记脏标记，由正在跑的那次收尾时再发一轮。
-let authDirty = false
-async function saveAuthHeader() {
-  // 读取失败时本地没有可信的服务端状态，先挡掉，避免盲写
-  if (!authSettings.value) {
-    ElMessage.warning(t('settings.saveBlockedNotLoaded'))
-    return
-  }
-  if (authSaving.value) {
-    authDirty = true
-    return
-  }
-  authSaving.value = true
-  try {
-    let s = authSettings.value
-    do {
-      authDirty = false
-      s = await saveAuthHeaderName(authHeaderName.value)
-    } while (authDirty)
-    authSettings.value = s
-    authHeaderName.value = s.header_name
-    ElMessage.success(t('settings.authSaved'))
-  } catch (e: any) {
-    ElMessage.error(t('settings.authSaveFailed', { msg: e?.message || '' }))
-    authHeaderName.value = authSettings.value.header_name // 回滚到服务端生效值
-  } finally {
-    authSaving.value = false
   }
 }
 
@@ -215,9 +175,7 @@ async function confirmRegenerateSecret() {
   }
   authRegenerating.value = true
   try {
-    const s = await regenerateAuthSecret()
-    authSettings.value = s
-    authHeaderName.value = s.header_name
+    authSettings.value = await regenerateAuthSecret()
     ElMessage.success(t('settings.authRegenerateSuccess'))
   } catch (e: any) {
     ElMessage.error(t('settings.authRegenerateFailed', { msg: e?.message || '' }))
@@ -833,18 +791,6 @@ async function openAgentTools(a: AgentInfo) {
 
           <div class="config-group">
             <div class="group-title">{{ t('settings.configAuth') }}</div>
-            <div class="row">
-              <div class="row-label">
-                <div class="label-title">{{ t('settings.authHeaderName') }}</div>
-                <div class="label-desc">{{ t('settings.authHeaderNameDesc') }}</div>
-              </div>
-              <el-input
-                v-model="authHeaderName"
-                style="width: 220px"
-                :placeholder="authSettings?.header_name_default || 'X-API-Key'"
-                @change="saveAuthHeader"
-              />
-            </div>
             <div class="row">
               <div class="row-label">
                 <div class="label-title">{{ t('settings.authSecret') }}</div>

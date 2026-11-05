@@ -5,10 +5,10 @@ import (
 
 	"github.com/cloudwego/eino/adk/middlewares/skill"
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/utils"
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/logger"
 )
@@ -46,12 +46,14 @@ func (h *SkillsHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			// 配置缺失：服务端未注入 SubAgentRegistry。生产路径不应出现。
 			h.log.Info("X-Agent-Name 校验失败：SubAgentRegistry 未初始化",
 				zap.String("requested_agent", requestedAgent))
-			rc.JSON(400, utils.H{"status": "unknown_agent", "message": "Unknown agent: " + requestedAgent})
+			errbody.Write(rc, 400, "Unknown agent: "+requestedAgent,
+				errbody.TypeInvalidRequest, "X-Agent-Name", errbody.CodeUnknownAgent)
 			return
 		}
 		entry, ok := h.registry.Get(requestedAgent)
 		if !ok {
-			rc.JSON(400, utils.H{"status": "unknown_agent", "message": "Unknown agent: " + requestedAgent})
+			errbody.Write(rc, 400, "Unknown agent: "+requestedAgent,
+				errbody.TypeInvalidRequest, "X-Agent-Name", errbody.CodeUnknownAgent)
 			return
 		}
 		backend = entry.SkillBK

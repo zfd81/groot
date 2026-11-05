@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/memory"
 )
@@ -36,16 +37,12 @@ func (h *StopHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 	chatID := rc.Param("cid")
 
 	if sessionID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"session_id 参数缺失"}`))
+		writeMissingSessionID(rc)
 		return
 	}
 
 	if chatID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"chat_id 参数缺失"}`))
+		writeMissingChatID(rc)
 		return
 	}
 
@@ -56,9 +53,7 @@ func (h *StopHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 
 	// 归属不符与不存在同样返回 404，与 GET /sess/{sid} 保持一致
 	if !ownsOrAdmin(h.memory, owner, sessionID) {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(404)
-		rc.Write([]byte(`{"status":"session_not_found","message":"会话不存在"}`))
+		writeSessionNotFound(rc)
 		return
 	}
 
@@ -83,11 +78,7 @@ func (h *StopHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 			h.log.Warn("广播中止请求失败",
 				zap.String("session_id", sessionID), zap.String("chat_id", chatID), zap.Error(err))
 		}
-		rc.JSON(409, utils.H{
-			"status":     "chat_not_running",
-			"session_id": sessionID,
-			"chat_id":    chatID,
-			"message":    "该对话未在执行",
-		})
+		errbody.Write(rc, 409, "该对话未在执行",
+			errbody.TypeInvalidRequest, "", errbody.CodeChatStillRunning)
 	}
 }

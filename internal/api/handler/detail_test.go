@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -47,10 +46,6 @@ func seedChat(t *testing.T, mem *memory.Manager, sid, tenant, user, cid string) 
 	}
 }
 
-func detailSessionNotFoundBody(sid string) string {
-	return fmt.Sprintf(`{"status":"session_not_found","session_id":"%s","message":"会话不存在"}`, sid)
-}
-
 func TestDetail_ForeignSessionIs404(t *testing.T) {
 	_, mem, _ := newSearchTestHandler(t)
 	seedChat(t, mem, "s1", "crm", "u1", "c1")
@@ -63,8 +58,8 @@ func TestDetail_ForeignSessionIs404(t *testing.T) {
 	if rc.Response.StatusCode() != 404 {
 		t.Fatalf("status = %d, want 404; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if got := string(rc.Response.Body()); got != detailSessionNotFoundBody("s1") {
-		t.Fatalf("body = %s, want %s", got, detailSessionNotFoundBody("s1"))
+	if got := string(rc.Response.Body()); got != sessionNotFoundBody {
+		t.Fatalf("body = %s, want %s", got, sessionNotFoundBody)
 	}
 }
 
@@ -80,8 +75,8 @@ func TestDetail_ForeignUserIs404(t *testing.T) {
 	if rc.Response.StatusCode() != 404 {
 		t.Fatalf("status = %d, want 404; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if got := string(rc.Response.Body()); got != detailSessionNotFoundBody("s1") {
-		t.Fatalf("body = %s, want %s", got, detailSessionNotFoundBody("s1"))
+	if got := string(rc.Response.Body()); got != sessionNotFoundBody {
+		t.Fatalf("body = %s, want %s", got, sessionNotFoundBody)
 	}
 }
 
@@ -91,18 +86,13 @@ func TestDetail_ForeignChatIs404(t *testing.T) {
 	seedChat(t, mem, "s2", "crm", "u1", "c2")
 	h := NewDetailHandler(mem)
 
-	// s2 归属正确，但 c1 属于 s1 → chat_not_found
+	// s2 归属正确，但 c1 属于 s1 → task_not_found
 	rc := newDetailContext("s2", "c1")
 	setIdentity(rc, "svc", "crm", "u1")
 	h.Serve(context.Background(), rc)
 
-	if rc.Response.StatusCode() != 404 {
-		t.Fatalf("status = %d, want 404; body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	want := `{"status":"chat_not_found","session_id":"s2","chat_id":"c1","message":"对话记录不存在"}`
-	if got := string(rc.Response.Body()); got != want {
-		t.Fatalf("body = %s, want %s", got, want)
-	}
+	assertErrorEnvelope(t, rc, 404, "对话记录不存在",
+		"invalid_request_error", "", "task_not_found")
 }
 
 func TestDetail_OwnerOK(t *testing.T) {
@@ -145,8 +135,8 @@ func TestGetLatest_ForeignSessionIs404(t *testing.T) {
 	if rc.Response.StatusCode() != 404 {
 		t.Fatalf("status = %d, want 404; body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	if got := string(rc.Response.Body()); got != detailSessionNotFoundBody("s1") {
-		t.Fatalf("body = %s, want %s", got, detailSessionNotFoundBody("s1"))
+	if got := string(rc.Response.Body()); got != sessionNotFoundBody {
+		t.Fatalf("body = %s, want %s", got, sessionNotFoundBody)
 	}
 }
 

@@ -144,7 +144,7 @@ class TestWebSetupAndMe:
             timeout=5,
         )
         assert r.status_code == 409, r.text
-        assert r.json()["status"] == "already_initialized"
+        assert r.json()["error"]["code"] == "already_initialized"
 
     def test_me_needs_setup_false(self, server):
         """TC-WEB-009: 用户已存在时 needs_setup 为 false"""
@@ -163,7 +163,7 @@ class TestWebPassword:
             timeout=5,
         )
         assert r.status_code == 401, r.text
-        assert r.json()["status"] == "wrong_password"
+        assert r.json()["error"]["code"] == "wrong_password"
         # 旧密码错误不影响当前会话
         assert s.get(f"{BASE_URL}/web/me", timeout=5).json()["authenticated"] is True
 
@@ -176,7 +176,7 @@ class TestWebPassword:
             timeout=5,
         )
         assert r.status_code == 400, r.text
-        assert r.json()["status"] == "invalid_request"
+        assert r.json()["error"]["code"] == "invalid_request"
 
     def test_change_password_flow(self, server):
         """TC-WEB-011: 修改成功后旧密码登录失败、新密码登录成功；测后必须改回原密码。

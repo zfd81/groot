@@ -7,7 +7,8 @@ import i18n from '../i18n'
 
 const t = i18n.global.t
 
-// 两个字段均为空串时不放进合成请求体，由上游模型取其默认行为。
+// voice 是合成接口的必填项；instructions 为空时不放进请求体，
+// 由上游模型取其默认行为。speed 暂不设界面控件，故不下发。
 export interface SpeechSettings {
   // 音色
   voice: string
@@ -16,11 +17,16 @@ export interface SpeechSettings {
 }
 
 export const speechApi = {
-  // synthesize 把文本合成为 mp3 音频。params 中非空的字段才放进请求体，
-  // 空字段由上游决定默认行为；signal 用于用户中途停止朗读时取消请求。
+  // synthesize 把文本合成为 mp3 音频。voice 为空时不发请求，直接以错误结束，
+  // 让调用方（朗读队列）走统一失败提示；instructions 非空才放进请求体；
+  // signal 用于用户中途停止朗读时取消请求。
   async synthesize(input: string, params: SpeechSettings, signal?: AbortSignal): Promise<Blob> {
-    const body: Record<string, string> = { input, response_format: 'mp3' }
-    if (params.voice) body.voice = params.voice
+    const voice = (params.voice || '').trim()
+    if (!voice) {
+      // code 供调用方识别「未配置音色」，提示文案由调用方决定
+      throw new ApiError(400, t('settings.speechVoiceRequired'), 'voice_required')
+    }
+    const body: Record<string, string> = { input, response_format: 'mp3', voice }
     if (params.instructions) body.instructions = params.instructions
 
     const resp = await fetch('/web/audio/speech', {
@@ -36,9 +42,13 @@ export const speechApi = {
     }
     if (!resp.ok) {
       const data = await resp.json().catch(() => null)
+      const err = data && typeof data === 'object' ? data.error : null
       const message =
-        data?.message || data?.error || t('error.requestFailed', { status: resp.status })
-      throw new ApiError(resp.status, message, data?.status ?? undefined)
+        (err && typeof err.message === 'string' && err.message) ||
+        t('error.requestFailed', { status: resp.status })
+      const code =
+        err && typeof err === 'object' ? (err.code ?? err.type ?? undefined) : undefined
+      throw new ApiError(resp.status, message, code)
     }
     return resp.blob()
   },

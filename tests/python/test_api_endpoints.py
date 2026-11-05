@@ -30,15 +30,58 @@ def get_web_session():
     return _web_session
 
 
+def read_first_session_id(response):
+    """从流式响应读取到首个带 session_id 的 chunk 即停止，返回 ``(session_id, iterator)``。
+
+    流式响应不再携带会话标识响应头；只读到取到就停，以便对话仍在执行时
+    查询 /chat/status（完整解析 response.text 会等待本轮结束）。
+
+    ``iterator`` 是 ``response.iter_lines()`` 返回的同一个生成器，必须交给
+    :func:`drain` 继续消费：一旦丢弃，requests 会在生成器回收时立即关闭底层
+    连接，之后的 drain 便读不到任何内容（等待对话完成的意图落空）。
+    该写法的隐式前提是服务端未开启客户端断连感知（``internal/api/server.go``
+    未传 ``WithSenseClientDisconnection``），本文件无需主动中止请求。
+    """
+    it = response.iter_lines()
+    for line in it:
+        if not line:
+            continue
+        text = line.decode("utf-8") if isinstance(line, bytes) else line
+        text = text.strip()
+        if not text.startswith("data:"):
+            continue
+        body = text[5:].strip()
+        if not body or body == "[DONE]":
+            continue
+        try:
+            session_id = json.loads(body).get("session_id")
+        except json.JSONDecodeError:
+            continue
+        if session_id:
+            return session_id, it
+    return None, it
+
+
+def drain(it):
+    """消费迭代器里剩余的 SSE 行，等待对话执行完毕"""
+    for _ in it:
+        pass
+
+
 class TestChatAPI:
-    """POST /chat API 测试"""
+    """POST /chat/completions API 测试"""
 
     def test_new_session_basic(self, server, api_headers):
         """TC-001: 新会话基本对话（无附件）"""
-        payload = {"instruction": "帮我写一个Python快速排序函数"}
+        payload = {
+            "messages": [{"role": "user", "content": "帮我写一个Python快速排序函数"}],
+            "stream": True,
+            # 断言末尾 usage chunk，需要 include_usage
+            "stream_options": {"include_usage": True},
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -47,15 +90,14 @@ class TestChatAPI:
         assert response.status_code == 200
         assert response.headers["Content-Type"] == "text/event-stream"
 
-        # 验证响应 Headers
-        session_id = response.headers.get("X-Session-ID")
-        chat_id = response.headers.get("X-Chat-ID")
+        # 解析 SSE 事件（会话标识由 chunk 顶层字段承载，不再是响应头）
+        sse = SSEClient(response)
+
+        session_id = sse.get_session_id()
+        chat_id = sse.get_chat_id()
 
         assert_session_id_format(session_id)
         assert_chat_id_format(chat_id)
-
-        # 解析 SSE 事件
-        sse = SSEClient(response)
 
         # 验证事件顺序
         assert sse.verify_event_order()
@@ -78,18 +120,21 @@ class TestChatAPI:
     def test_new_session_with_attachment(self, server, api_headers, test_file_base64):
         """TC-002: 新会话带附件对话"""
         payload = {
-            "instruction": "帮我分析这个CSV数据",
-            "attachments": [
-                {
-                    "type": "file",
-                    "name": "test_data.csv",
-                    "content": test_file_base64
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "帮我分析这个CSV数据"},
+                    {"type": "file", "file": {
+                        "filename": "test_data.csv",
+                        "file_data": f"data:text/csv;base64,{test_file_base64}",
+                    }},
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -97,10 +142,10 @@ class TestChatAPI:
 
         assert response.status_code == 200
 
-        session_id = response.headers.get("X-Session-ID")
-        assert_session_id_format(session_id)
-
         sse = SSEClient(response)
+
+        session_id = sse.get_session_id()
+        assert_session_id_format(session_id)
 
         # 验证事件流有内容
         assert len(sse.events) > 0
@@ -121,15 +166,26 @@ class TestChatAPI:
     def test_multi_attachments(self, server, api_headers, test_file_base64, pdf_file_base64):
         """TC-003: 多附件请求"""
         payload = {
-            "instruction": "对比分析这两个文件",
-            "attachments": [
-                {"type": "file", "name": "file1.csv", "content": test_file_base64},
-                {"type": "file", "name": "file2.pdf", "content": pdf_file_base64}
-            ]
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "对比分析这两个文件"},
+                    {"type": "file", "file": {
+                        "filename": "file1.csv",
+                        "file_data": f"data:text/csv;base64,{test_file_base64}",
+                    }},
+                    # file 片段只接受文本类 MIME，PDF 名沿用但按纯文本装载
+                    {"type": "file", "file": {
+                        "filename": "file2.pdf",
+                        "file_data": f"data:text/plain;base64,{pdf_file_base64}",
+                    }},
+                ],
+            }],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -145,15 +201,25 @@ class TestChatAPI:
     def test_with_custom_prompt(self, server, api_headers, pdf_file_base64):
         """TC-004: 自定义系统提示词"""
         payload = {
-            "instruction": "分析这份报告",
-            "prompt": "你是一个财务分析师，重点关注利润增长率和潜在风险点。输出JSON格式。",
-            "attachments": [
-                {"type": "file", "name": "report.pdf", "content": pdf_file_base64}
-            ]
+            "messages": [
+                {"role": "system", "content": "你是一个财务分析师，重点关注利润增长率和潜在风险点。输出JSON格式。"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "分析这份报告"},
+                        # file 片段只接受文本类 MIME，PDF 名沿用但按纯文本装载
+                        {"type": "file", "file": {
+                            "filename": "report.pdf",
+                            "file_data": f"data:text/plain;base64,{pdf_file_base64}",
+                        }},
+                    ],
+                },
+            ],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -169,126 +235,135 @@ class TestChatAPI:
     def test_continue_session(self, server, api_headers):
         """TC-005: 多轮对话继续会话"""
         # 第一轮：获取 session_id
-        payload1 = {"instruction": "帮我写一个Python快速排序函数"}
+        payload1 = {"messages": [{"role": "user", "content": "帮我写一个Python快速排序函数"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
         assert response1.status_code == 200
-        session_id = response1.headers.get("X-Session-ID")
-        chat_id1 = response1.headers.get("X-Chat-ID")
 
         sse1 = SSEClient(response1)
+        session_id = sse1.get_session_id()
+        chat_id1 = sse1.get_chat_id()
+
         assert sse1.get_completed_event() is not None
 
-        # 第二轮：使用相同 session_id 继续
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "根据刚才的函数，添加注释和类型提示"}
+        # 第二轮：请求体携带相同 session_id 继续
+        payload2 = {
+            "messages": [{"role": "user", "content": "根据刚才的函数，添加注释和类型提示"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
 
         assert response2.status_code == 200
-        assert response2.headers.get("X-Session-ID") == session_id
-        chat_id2 = response2.headers.get("X-Chat-ID")
-        assert chat_id2 != chat_id1  # 新的 chat_id
 
         sse2 = SSEClient(response2)
+        assert sse2.get_session_id() == session_id
+        chat_id2 = sse2.get_chat_id()
+        assert chat_id2 != chat_id1  # 新的 chat_id
+
         assert sse2.get_completed_event() is not None
 
     def test_invalid_session_id_creates_new(self, server, api_headers):
         """TC-006: 无效 session_id 自动创建新会话"""
-        headers = api_headers.copy()
-        headers["X-Session-ID"] = "invalid_session_id_12345"
-
-        payload = {"instruction": "测试指令"}
+        payload = {
+            "messages": [{"role": "user", "content": "测试指令"}],
+            "session_id": "invalid_session_id_12345",
+            "stream": True,
+        }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload,
             stream=True
         )
 
         assert response.status_code == 200
 
+        sse = SSEClient(response)
+
         # 应返回新的 session_id（不是请求中的 invalid 值）
-        session_id = response.headers.get("X-Session-ID")
+        session_id = sse.get_session_id()
         assert session_id != "invalid_session_id_12345"
         assert_session_id_format(session_id)
 
-        sse = SSEClient(response)
         assert sse.get_completed_event() is not None
 
     def test_concurrent_session_conflict(self, server, api_headers):
         """TC-007: 会话并发执行冲突（409）"""
         # 先获取一个 session_id
-        payload = {"instruction": "帮我写一个Python快速排序函数"}
+        payload = {"messages": [{"role": "user", "content": "帮我写一个Python快速排序函数"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
+        # 只读到首个 chunk 拿到 session_id，让对话仍在执行时查询 status
+        session_id, it1 = read_first_session_id(response1)
 
         # 在第一个请求还在执行时，发起第二个请求
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
-        payload2 = {"instruction": "另一个任务"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "另一个任务"}],
+            "session_id": session_id,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2
         )
 
         # 应返回 409 Conflict
         assert response2.status_code == 409
         data = response2.json()
-        assert data["status"] == "chat_limit_exceeded"
-        assert "正在执行" in data["message"] or "冲突" in data["message"]
+        assert data["error"]["code"] == "chat_limit_exceeded"
+        assert data["error"]["type"] == "invalid_request_error"
+        assert "正在执行" in data["error"]["message"] or "冲突" in data["error"]["message"]
+
+        drain(it1)
 
     def test_empty_instruction(self, server, api_headers):
-        """TC-008: 空指令返回 400"""
-        payload = {"instruction": ""}
+        """TC-008: 空 messages 返回 400"""
+        payload = {"messages": []}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
         data = response.json()
-        assert data["status"] == "invalid_request"
+        assert data["error"]["code"] == "invalid_request"
 
     def test_missing_instruction(self, server, api_headers):
-        """TC-009: 缺少指令字段返回 400"""
+        """TC-009: 缺少 messages 字段返回 400"""
         payload = {}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload
         )
 
         assert response.status_code == 400
         data = response.json()
-        assert data["status"] == "invalid_request"
+        assert data["error"]["code"] == "invalid_request"
 
 
 class TestDeleteChatAPI:
@@ -323,16 +398,17 @@ class TestChatStatusAPI:
     def test_get_running_status(self, server, api_headers):
         """TC-012: 查询执行中的对话状态"""
         # 启动任务
-        payload = {"instruction": "帮我分析数据"}
+        payload = {"messages": [{"role": "user", "content": "帮我分析数据"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
+        # 只读到首个 chunk 拿到 session_id，让对话仍在执行时查询 status
+        session_id, it1 = read_first_session_id(response1)
 
         # 查询状态
         response2 = requests.get(
@@ -349,6 +425,8 @@ class TestChatStatusAPI:
         assert "progress" in data["chat"]
         assert "started_at" in data["chat"]
         assert "elapsed_time" in data["chat"]
+
+        drain(it1)
 
     def test_get_no_running_status(self, server, api_headers):
         """TC-013: 查询无执行会话状态"""
@@ -370,17 +448,16 @@ class TestChatDetailAPI:
     def test_get_chat_detail(self, server, api_headers):
         """TC-014: 查询最近对话详情（完整步骤）"""
         # 先完成一次对话
-        payload = {"instruction": "帮我写一个函数"}
+        payload = {"messages": [{"role": "user", "content": "帮我写一个函数"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)  # 等待完成
+        session_id = SSEClient(response1).get_session_id()  # 等待完成
 
         # 查询详情
         response2 = requests.get(
@@ -419,26 +496,27 @@ class TestSessionDetailAPI:
     def test_get_session_detail(self, server, api_headers):
         """TC-015: 查询会话完整历史"""
         # 先完成多轮对话
-        payload1 = {"instruction": "第一轮对话"}
+        payload1 = {"messages": [{"role": "user", "content": "第一轮对话"}], "stream": True}
 
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload1,
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)
+        session_id = SSEClient(response1).get_session_id()
 
         # 第二轮
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-        payload2 = {"instruction": "第二轮对话"}
+        payload2 = {
+            "messages": [{"role": "user", "content": "第二轮对话"}],
+            "session_id": session_id,
+            "stream": True,
+        }
 
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
             json=payload2,
             stream=True
         )
@@ -485,9 +563,9 @@ class TestSessionHistoryAPI:
         """TC-016: 查询会话列表（分页）"""
         # 先创建几个会话
         for i in range(3):
-            payload = {"instruction": f"测试对话{i}"}
+            payload = {"messages": [{"role": "user", "content": f"测试对话{i}"}], "stream": True}
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}/chat/completions",
                 headers=api_headers,
                 json=payload,
                 stream=True
@@ -671,15 +749,16 @@ class TestAPIResponseFormat:
     def test_error_response_format(self, server, no_auth_headers):
         """TC-025: 错误响应统一格式"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=no_auth_headers,
-            json={"instruction": "test"}
+            json={"messages": [{"role": "user", "content": "test"}]}
         )
 
         assert response.status_code == 401
         data = response.json()
 
-        # 错误响应应包含 status 和 message
-        assert "status" in data
-        assert "message" in data
-        assert data["status"] == "unauthorized"
+        # 错误响应为 OpenAI 错误信封：error.type / error.code / error.message
+        assert "error" in data
+        assert data["error"]["type"] == "authentication_error"
+        assert data["error"]["code"] == "invalid_api_key"
+        assert "message" in data["error"]

@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/memory"
 	"github.com/zfd81/groot/internal/repo"
@@ -18,16 +19,14 @@ func requireOwner(rc *app.RequestContext) (owner *repo.SessionOwner, ok bool) {
 	}
 	tenant := middleware.GetTenant(rc)
 	if tenant == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(403)
-		rc.Write([]byte(`{"status":"forbidden","message":"API Key 未绑定租户"}`))
+		errbody.Write(rc, 403, "API Key 未绑定租户",
+			errbody.TypePermission, "", errbody.CodeTenantNotBound)
 		return nil, false
 	}
 	userID := middleware.GetUserID(rc)
 	if userID == "" {
-		rc.SetContentType("application/json")
-		rc.SetStatusCode(400)
-		rc.Write([]byte(`{"status":"invalid_request","message":"缺少或非法的 X-User-ID"}`))
+		errbody.Write(rc, 400, "缺少或非法的 user",
+			errbody.TypeInvalidRequest, "user", errbody.CodeInvalidRequest)
 		return nil, false
 	}
 	return &repo.SessionOwner{TenantID: tenant, UserID: userID}, true
@@ -42,10 +41,20 @@ func ownsOrAdmin(mem *memory.Manager, owner *repo.SessionOwner, sid string) bool
 	return mem.OwnsSession(sid, owner.TenantID, owner.UserID)
 }
 
-// ownerFields 展开归属信息为 (tenantID, userID)；owner 为 nil（Web 管理员）时两者为空串。
-func ownerFields(owner *repo.SessionOwner) (tenantID, userID string) {
-	if owner == nil {
-		return "", ""
-	}
-	return owner.TenantID, owner.UserID
+// writeMissingSessionID 写出 400 session_id 缺失响应。
+func writeMissingSessionID(rc *app.RequestContext) {
+	errbody.Write(rc, 400, "session_id 参数缺失",
+		errbody.TypeInvalidRequest, "session_id", errbody.CodeInvalidRequest)
+}
+
+// writeMissingChatID 写出 400 chat_id 缺失响应。
+func writeMissingChatID(rc *app.RequestContext) {
+	errbody.Write(rc, 400, "chat_id 参数缺失",
+		errbody.TypeInvalidRequest, "chat_id", errbody.CodeInvalidRequest)
+}
+
+// writeSessionNotFound 写出 404 会话不存在响应；归属不符与会话确实不存在共用此响应。
+func writeSessionNotFound(rc *app.RequestContext) {
+	errbody.Write(rc, 404, "会话不存在",
+		errbody.TypeInvalidRequest, "", errbody.CodeSessionNotFound)
 }

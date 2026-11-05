@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/agent"
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
@@ -64,13 +65,13 @@ func (h *SettingHandler) GetVoice(ctx context.Context, rc *app.RequestContext) {
 	v, modelSet, err := h.settings.Voice(ctx)
 	if err != nil {
 		h.log.Error("读取语音配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	if !modelSet {
 		model, initErr := h.initVoiceModel(ctx)
 		if initErr != nil {
-			rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+			errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 			return
 		}
 		v.Model = model
@@ -106,7 +107,7 @@ func (h *SettingHandler) initVoiceModel(ctx context.Context) (string, error) {
 func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 	var req types.VoiceSettingsRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 
@@ -114,11 +115,11 @@ func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 	if name != "" {
 		if _, err := h.models.GetByName(ctx, name); err != nil {
 			if errors.Is(err, llm.ErrModelNotFound) || errors.Is(err, llm.ErrModelDisabled) {
-				rc.JSON(400, utils.H{"status": "invalid_model", "message": err.Error()})
+				errbody.Write(rc, 400, err.Error(), errbody.TypeInvalidRequest, "model", errbody.CodeModelNotFound)
 				return
 			}
 			h.log.Error("校验识别模型失败", zap.String("model", name), zap.Error(err))
-			rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+			errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 			return
 		}
 	}
@@ -129,7 +130,7 @@ func (h *SettingHandler) PutVoice(ctx context.Context, rc *app.RequestContext) {
 	})
 	if err != nil {
 		h.log.Error("保存语音配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, utils.H{"status": "ok"})
@@ -140,7 +141,7 @@ func (h *SettingHandler) GetSpeech(ctx context.Context, rc *app.RequestContext) 
 	v, err := h.settings.Speech(ctx)
 	if err != nil {
 		h.log.Error("读取语音合成配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, types.SpeechSettingsResponse{
@@ -155,7 +156,7 @@ func (h *SettingHandler) GetSpeech(ctx context.Context, rc *app.RequestContext) 
 func (h *SettingHandler) PutSpeech(ctx context.Context, rc *app.RequestContext) {
 	var req types.SpeechSettingsRequest
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 
@@ -165,13 +166,13 @@ func (h *SettingHandler) PutSpeech(ctx context.Context, rc *app.RequestContext) 
 	}
 	// language 不属于 Web 朗读配置，传空串占位，只校验 voice 与 instructions
 	if msg, ok := checkSpeechFieldLimits(v.Voice, "", v.Instructions); !ok {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": msg})
+		errbody.Write(rc, 400, msg, errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 
 	if err := h.settings.SetSpeech(ctx, v); err != nil {
 		h.log.Error("保存语音合成配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, utils.H{"status": "ok"})
@@ -184,7 +185,7 @@ func (h *SettingHandler) GetRuntime(ctx context.Context, rc *app.RequestContext)
 	r, err := h.settings.Runtime(ctx)
 	if err != nil {
 		h.log.Error("读取运行时配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 	rc.JSON(200, runtimeToPayload(r))
@@ -202,26 +203,26 @@ func (h *SettingHandler) GetRuntime(ctx context.Context, rc *app.RequestContext)
 func (h *SettingHandler) PutRuntime(ctx context.Context, rc *app.RequestContext) {
 	var req types.RuntimeSettingsPayload
 	if err := rc.BindJSON(&req); err != nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "请求参数错误"})
+		errbody.Write(rc, 400, "请求参数错误", errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 		return
 	}
 	if req.RateLimit == nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "缺少 rate_limit 分区"})
+		errbody.Write(rc, 400, "缺少 rate_limit 分区", errbody.TypeInvalidRequest, "rate_limit", errbody.CodeInvalidRequest)
 		return
 	}
 	if req.Schedule == nil {
-		rc.JSON(400, utils.H{"status": "invalid_request", "message": "缺少 schedule 分区"})
+		errbody.Write(rc, 400, "缺少 schedule 分区", errbody.TypeInvalidRequest, "schedule", errbody.CodeInvalidRequest)
 		return
 	}
 
 	next := payloadToRuntime(req, h.settings.RuntimeStatic())
 	if err := h.settings.SetRuntime(ctx, next); err != nil {
 		if errors.Is(err, setting.ErrInvalidSetting) {
-			rc.JSON(400, utils.H{"status": "invalid_request", "message": err.Error()})
+			errbody.Write(rc, 400, err.Error(), errbody.TypeInvalidRequest, "", errbody.CodeInvalidRequest)
 			return
 		}
 		h.log.Error("保存运行时配置失败", zap.Error(err))
-		rc.JSON(500, utils.H{"status": "error", "message": "内部错误"})
+		errbody.Write(rc, 500, "内部错误", errbody.TypeAPI, "", errbody.CodeInternalError)
 		return
 	}
 

@@ -1,15 +1,17 @@
 // internal/api/handler/auth_setting_test.go
-// 认证配置接口的单元测试：脱敏展示、请求头名读写与校验、密钥重新生成。
+// 认证配置接口的单元测试：脱敏展示与密钥重新生成。
 package handler
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
@@ -38,6 +40,28 @@ func newAuthSettingHandlerForTest(t *testing.T) (*SettingHandler, repo.SettingRe
 	return h, settingRepo
 }
 
+// decodeAuthPayload 解析认证配置响应体并核对字段集合恰为 secret_masked 与 secret_set。
+func decodeAuthPayload(t *testing.T, body []byte) types.AuthSettingsPayload {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("解析响应: %v", err)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("响应字段应恰为两个, got %v（body=%s）", raw, body)
+	}
+	for _, k := range []string{"secret_masked", "secret_set"} {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("响应缺少字段 %q: %s", k, body)
+		}
+	}
+	var out types.AuthSettingsPayload
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("解析响应: %v", err)
+	}
+	return out
+}
+
 // getAuthPayload 调 GET 并解析响应体。
 func getAuthPayload(t *testing.T, h *SettingHandler) types.AuthSettingsPayload {
 	t.Helper()
@@ -45,11 +69,7 @@ func getAuthPayload(t *testing.T, h *SettingHandler) types.AuthSettingsPayload {
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("GetAuthSettings status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	var out types.AuthSettingsPayload
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
-	}
-	return out
+	return decodeAuthPayload(t, rc.Response.Body())
 }
 
 func TestAuthSettings_GetMasked(t *testing.T) {
@@ -68,19 +88,12 @@ func TestAuthSettings_GetMasked(t *testing.T) {
 	if strings.Contains(string(rc.Response.Body()), secret) {
 		t.Errorf("响应体不应含完整密钥: %s", rc.Response.Body())
 	}
-	var out types.AuthSettingsPayload
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
-	}
+	out := decodeAuthPayload(t, rc.Response.Body())
 	if out.SecretMasked != "****1234" {
 		t.Errorf("secret_masked = %q, want ****1234", out.SecretMasked)
 	}
 	if !out.SecretSet {
 		t.Errorf("secret_set = false, want true")
-	}
-	if out.HeaderName != "X-API-Key" || out.HeaderNameDefault != "X-API-Key" {
-		t.Errorf("header_name = %q / default = %q, want 均为 X-API-Key",
-			out.HeaderName, out.HeaderNameDefault)
 	}
 }
 
@@ -93,57 +106,6 @@ func TestAuthSettings_GetNoSecret(t *testing.T) {
 	}
 	if out.SecretMasked != "" {
 		t.Errorf("secret_masked = %q, want 空串", out.SecretMasked)
-	}
-}
-
-func TestAuthSettings_PutHeaderName(t *testing.T) {
-	h, _ := newAuthSettingHandlerForTest(t)
-
-	rc := callJSON(h.PutAuthSettings, consts.MethodPut, `{"header_name":"X-Groot-Key"}`, nil)
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	var out types.AuthSettingsPayload
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
-	}
-	if out.HeaderName != "X-Groot-Key" {
-		t.Errorf("PUT 响应 header_name = %q, want X-Groot-Key", out.HeaderName)
-	}
-	if got := getAuthPayload(t, h); got.HeaderName != "X-Groot-Key" {
-		t.Errorf("GET 回读 header_name = %q, want X-Groot-Key", got.HeaderName)
-	}
-}
-
-func TestAuthSettings_PutHeaderNameInvalid(t *testing.T) {
-	h, _ := newAuthSettingHandlerForTest(t)
-
-	rc := callJSON(h.PutAuthSettings, consts.MethodPut, `{"header_name":"bad name"}`, nil)
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("status=%d, want 400", rc.Response.StatusCode())
-	}
-	if s := bodyStatus(t, rc); s != "invalid_request" {
-		t.Errorf("status = %q, want invalid_request", s)
-	}
-	// 非法值不改表：回读仍为默认
-	if got := getAuthPayload(t, h); got.HeaderName != "X-API-Key" {
-		t.Errorf("非法值后回读 header_name = %q, want X-API-Key", got.HeaderName)
-	}
-}
-
-func TestAuthSettings_PutHeaderNameEmptyRestoresDefault(t *testing.T) {
-	h, _ := newAuthSettingHandlerForTest(t)
-
-	rc := callJSON(h.PutAuthSettings, consts.MethodPut, `{"header_name":"X-Groot-Key"}`, nil)
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("预设 header_name status=%d", rc.Response.StatusCode())
-	}
-	rc = callJSON(h.PutAuthSettings, consts.MethodPut, `{"header_name":""}`, nil)
-	if rc.Response.StatusCode() != 200 {
-		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if got := getAuthPayload(t, h); got.HeaderName != "X-API-Key" {
-		t.Errorf("空串后回读 header_name = %q, want X-API-Key", got.HeaderName)
 	}
 }
 
@@ -161,10 +123,7 @@ func TestAuthSettings_RegenerateSecret(t *testing.T) {
 	if rc.Response.StatusCode() != 200 {
 		t.Fatalf("status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
 	}
-	var out types.AuthSettingsPayload
-	if err := json.Unmarshal(rc.Response.Body(), &out); err != nil {
-		t.Fatalf("解析响应: %v", err)
-	}
+	out := decodeAuthPayload(t, rc.Response.Body())
 	if !out.SecretSet {
 		t.Errorf("secret_set = false, want true")
 	}
@@ -183,4 +142,38 @@ func TestAuthSettings_RegenerateSecret(t *testing.T) {
 	if strings.Contains(string(rc.Response.Body()), row.Value) {
 		t.Errorf("响应体不应含新密钥明文: %s", rc.Response.Body())
 	}
+}
+
+// failingSettingRepo 让 ListByScope 恒失败，覆盖 500 错误信封分支。
+type failingSettingRepo struct {
+	repo.SettingRepo
+}
+
+func (failingSettingRepo) Get(context.Context, repo.Scope, string, string) (*repo.Setting, error) {
+	return nil, errors.New("db down")
+}
+
+func (failingSettingRepo) ListByScope(context.Context, repo.Scope, string) ([]*repo.Setting, error) {
+	return nil, errors.New("db down")
+}
+
+func (failingSettingRepo) Upsert(context.Context, ...*repo.Setting) error {
+	return errors.New("db down")
+}
+
+func (failingSettingRepo) Delete(context.Context, repo.Scope, string, string) error {
+	return errors.New("db down")
+}
+
+// TestAuthSettings_RepoErrorEnvelope 配置表读失败时返回 500 信封，且不泄漏底层错误。
+func TestAuthSettings_RepoErrorEnvelope(t *testing.T) {
+	h := NewSettingHandler(SettingHandlerDeps{
+		Settings: setting.New(config.Bootstrap{}, failingSettingRepo{}),
+		Log:      logger.NewNop(),
+	})
+
+	assertEnvelopeError(t, callJSON(h.GetAuthSettings, consts.MethodGet, "", nil),
+		500, errbody.TypeAPI, errbody.CodeInternalError)
+	assertEnvelopeError(t, callJSON(h.RegenerateAuthSecret, consts.MethodPost, "", nil),
+		500, errbody.TypeAPI, errbody.CodeInternalError)
 }

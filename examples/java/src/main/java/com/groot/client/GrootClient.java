@@ -1,401 +1,226 @@
 /*
- * Groot AI Agent Java 客户端
+ * Groot AI Agent Java 示例（OpenAI 官方 Java SDK）。
  *
- * Usage:
- *   GrootClient client = new GrootClient("http://localhost:8080", "your-api-key");
+ * Groot 对外提供 OpenAI 兼容的 REST 接口，因此客户端直接使用官方
+ * com.openai:openai-java，**只需替换 baseUrl 与 apiKey**：
  *
- *   // 新建会话
- *   GrootClient.ChatResult result = client.executeChat("帮我分析数据", (type, data) -> {
- *       System.out.println("[" + type + "] " + data);
- *   });
- *   System.out.println("会话ID: " + result.getSessionId());
+ *   - 接口路径：POST /chat/completions（没有 /v1 前缀，baseUrl 也不带 /v1）
+ *   - 认证方式：Authorization: Bearer <apiKey>
+ *   - 模型列表：GET /models
  *
- *   // 继续会话（多轮对话）
- *   GrootClient.ChatResult result2 = client.executeChat("生成图表", result.getSessionId(), null);
+ * 在 OpenAI 标准字段之外，Groot 额外支持三个扩展字段，放在**请求体顶层**
+ * （通过 SDK 的 putAdditionalBodyProperty 透传）：
+ *
+ *   session_id  会话 ID。不传则创建新会话；服务端在响应体顶层返回它，
+ *               后续请求带上同一个 session_id 即为多轮对话。
+ *   agent_name  指定使用的智能体名称，省略时使用默认智能体。
+ *   user        业务用户标识（1~64 个字符，字母/数字/下划线/短横线），
+ *               用于会话归属与隔离。
+ *
+ * 用法：
+ *   mvn -q package
+ *   java -cp target/classes:<依赖> com.groot.client.GrootClient
+ * 或直接看 {@link #main(String[])} 里的调用。
  */
 
 package com.groot.client;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import okhttp3.*;
+import com.openai.client.OpenAIClient;
+import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
+import com.openai.core.http.StreamResponse;
+import com.openai.models.chat.completions.ChatCompletion;
+import com.openai.models.chat.completions.ChatCompletionChunk;
+import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.models.Model;
 
-import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
-
+/**
+ * Groot 客户端：官方 {@link OpenAIClient} 的薄包装，只负责拼装 Groot 的
+ * 三个扩展字段并给出读取回调。
+ */
 public class GrootClient implements AutoCloseable {
 
-    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    private final String baseUrl;
-    private final OkHttpClient httpClient;
+    private final OpenAIClient client;
+    private final String user;
 
     /**
-     * 创建客户端实例。
-     *
-     * @param baseUrl Groot 服务地址，如 "http://localhost:8080"
-     * @param apiKey  API 密钥（可为 null，对应未启用认证的场景）
+     * @param baseUrl Groot 服务地址，如 "http://localhost:8080"（不要带 /v1）
+     * @param apiKey  Web 界面创建的 API Key，SDK 以 Bearer 方式发送
+     * @param user    业务用户标识；为业务用户标识的扩展字段 user 随每个请求发送，可为 null
      */
+    public GrootClient(String baseUrl, String apiKey, String user) {
+        this.client = OpenAIOkHttpClient.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .build();
+        this.user = user;
+    }
+
     public GrootClient(String baseUrl, String apiKey) {
-        this.baseUrl = baseUrl.replaceAll("/$", "");
+        this(baseUrl, apiKey, null);
+    }
 
-        OkHttpClient.Builder builder = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.SECONDS);  // SSE 长连接，不设读超时
+    /** 暴露底层 SDK 客户端，便于调用任意标准 OpenAI 接口。 */
+    public OpenAIClient openai() {
+        return client;
+    }
 
-        if (apiKey != null && !apiKey.isEmpty()) {
-            builder.addInterceptor(chain -> {
-                Request req = chain.request().newBuilder()
-                        .header("X-API-Key", apiKey)
-                        .build();
-                return chain.proceed(req);
+    // ==================== 请求参数组装 ====================
+
+    /**
+     * 组装请求参数：标准字段 + Groot 扩展字段（请求体顶层）。
+     * 为 null 的扩展字段不下发，由服务端使用默认值。
+     */
+    private ChatCompletionCreateParams.Builder params(String model, String message,
+                                                      String sessionId, String agentName) {
+        ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
+                .model(model)
+                .addUserMessage(message);
+        if (sessionId != null && !sessionId.isEmpty()) {
+            builder.putAdditionalBodyProperty("session_id", JsonValue.from(sessionId));
+        }
+        if (agentName != null && !agentName.isEmpty()) {
+            builder.putAdditionalBodyProperty("agent_name", JsonValue.from(agentName));
+        }
+        if (user != null && !user.isEmpty()) {
+            builder.putAdditionalBodyProperty("user", JsonValue.from(user));
+        }
+        return builder;
+    }
+
+    // ==================== 非流式 ====================
+
+    /** 一次性返回完整回答。 */
+    public ChatResult chat(String model, String message, String sessionId, String agentName) {
+        ChatCompletion resp = client.chat().completions().create(
+                params(model, message, sessionId, agentName).build());
+        String content = resp.choices().get(0).message().content().orElse("");
+        return new ChatResult(content, extra(resp._additionalProperties(), "session_id"), resp.model());
+    }
+
+    // ==================== 流式 ====================
+
+    /**
+     * 流式返回，逐条把增量文本交给 listener；session_id 出现在每个 chunk 的顶层，
+     * 拿到即通过 {@link StreamListener#onSessionId(String)} 回调（通常首条 chunk 就有）。
+     */
+    public void chatStream(String model, String message, String sessionId, String agentName,
+                           StreamListener listener) {
+        ChatCompletionCreateParams request = params(model, message, sessionId, agentName).build();
+        StringBuilder text = new StringBuilder();
+        try (StreamResponse<ChatCompletionChunk> stream =
+                     client.chat().completions().createStreaming(request)) {
+            stream.stream().forEach(chunk -> {
+                String sid = extra(chunk._additionalProperties(), "session_id");
+                if (sid != null) {
+                    listener.onSessionId(sid);
+                }
+                chunk.choices().forEach(choice -> choice.delta().content().ifPresent(delta -> {
+                    text.append(delta);
+                    listener.onDelta(delta);
+                }));
             });
         }
-
-        this.httpClient = builder.build();
+        listener.onComplete(text.toString());
     }
 
-    // ==================== 数据模型 ====================
+    // ==================== 模型列表（标准 OpenAI 接口）====================
 
-    /** 对话执行结果 */
-    public static class ChatResult {
-        private String sessionId;
-        private String chatId;
-        private String status;
-        private String result;
-        private String error;
-
-        public String getSessionId() { return sessionId; }
-        public void setSessionId(String sessionId) { this.sessionId = sessionId; }
-        public String getChatId() { return chatId; }
-        public void setChatId(String chatId) { this.chatId = chatId; }
-        /** 流中出现 error 事件时为 "error"，否则为 null。 */
-        public String getStatus() { return status; }
-        public void setStatus(String status) { this.status = status; }
-        public String getResult() { return result; }
-        public void setResult(String result) { this.result = result; }
-        /** error 事件的 message 文本（无错误时为 null）。 */
-        public String getError() { return error; }
-        public void setError(String error) { this.error = error; }
-    }
-
-    /** 附件 */
-    public static class Attachment {
-        private String type;
-        private String name;
-        private String content;
-
-        public Attachment(String type, String name, String content) {
-            this.type = type;
-            this.name = name;
-            this.content = content;
+    /** GET /models，返回可用模型 ID 列表。 */
+    public java.util.List<String> listModels() {
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (Model m : client.models().list().data()) {
+            ids.add(m.id());
         }
-
-        public String getType() { return type; }
-        public String getName() { return name; }
-        public String getContent() { return content; }
+        return ids;
     }
-
-    // ==================== 核心接口 ====================
-
-    /**
-     * 执行对话（SSE 流式返回）。
-     *
-     * <p>服务端以 OpenAI {@code chat.completion.chunk} 格式逐条推送 {@code data:} 行，
-     * 以 {@code data: [DONE]} 结束。客户端把每个 chunk 摊平为扁平事件对象
-     * （{@code choices[0].delta} 的内容，附带非空的 {@code finish_reason}；
-     * 顶层 {@code error} 对象则摊平为 {@code {event:"error", message, error}}），
-     * 据此推断事件类型后回调。
-     *
-     * @param instruction 用户任务指令
-     * @param callback    事件回调 callback(eventType, flatJsonString)，
-     *                    eventType 取值：thinking / message / tool_calls / tool_result / finish / error / unknown
-     * @return ChatResult 包含 sessionId、chatId；出现 error 事件时 status 为 "error"
-     */
-    public ChatResult executeChat(String instruction,
-                                   BiConsumer<String, String> callback) throws IOException {
-        return executeChat(instruction, null, null, null, null, callback);
-    }
-
-    /**
-     * 执行对话（SSE 流式返回）—— 完整参数版本。
-     *
-     * @param instruction 用户指令
-     * @param sessionId   会话 ID（null 则创建新会话）
-     * @param prompt      系统提示词（可选）
-     * @param modelName   模型名称（可选）
-     * @param attachments 附件列表（可选）
-     * @param callback    事件回调
-     */
-    public ChatResult executeChat(String instruction,
-                                   String sessionId,
-                                   String prompt,
-                                   String modelName,
-                                   List<Attachment> attachments,
-                                   BiConsumer<String, String> callback) throws IOException {
-
-        // 构建请求体
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("instruction", instruction);
-        if (prompt != null) body.put("prompt", prompt);
-        if (attachments != null) {
-            List<Map<String, String>> list = new ArrayList<>();
-            for (Attachment a : attachments) {
-                Map<String, String> m = new LinkedHashMap<>();
-                m.put("type", a.getType());
-                m.put("name", a.getName());
-                m.put("content", a.getContent());
-                list.add(m);
-            }
-            body.put("attachments", list);
-        }
-
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(baseUrl + "/chat")
-                .post(RequestBody.create(MAPPER.writeValueAsString(body), JSON));
-
-        if (sessionId != null) reqBuilder.header("X-Session-ID", sessionId);
-        if (modelName != null) reqBuilder.header("X-Model-Name", modelName);
-
-        Request request = reqBuilder.build();
-        Response response = httpClient.newCall(request).execute();
-
-        if (!response.isSuccessful()) {
-            String err = response.body() != null ? response.body().string() : "";
-            response.close();
-            throw new IOException("HTTP " + response.code() + ": " + err);
-        }
-
-        ChatResult result = new ChatResult();
-        result.setSessionId(response.header("X-Session-ID"));
-        result.setChatId(response.header("X-Chat-ID"));
-
-        // 逐行读取 SSE
-        String line;
-        while ((line = response.body().source().readUtf8Line()) != null) {
-            if (!line.startsWith("data:")) continue;
-            String data = line.substring(5).trim();
-            if ("[DONE]".equals(data)) break;
-
-            JsonNode parsed;
-            try {
-                parsed = MAPPER.readTree(data);
-            } catch (JsonProcessingException e) {
-                continue;
-            }
-
-            // 摊平 chunk 为扁平事件对象后推断事件类型
-            parsed = flattenChunk(parsed);
-            String eventType = classifyEvent(parsed);
-            if (callback != null) callback.accept(eventType, parsed.toString());
-
-            if ("error".equals(eventType)) {
-                result.setStatus("error");
-                JsonNode msg = parsed.get("message");
-                result.setError(msg != null && !msg.isNull() ? msg.asText() : data);
-            }
-        }
-
-        response.close();
-        return result;
-    }
-
-    /** 取消指定会话中正在执行的对话。 */
-    public JsonNode cancelChat(String sessionId) throws IOException {
-        Request req = new Request.Builder()
-                .url(baseUrl + "/chat/" + sessionId)
-                .delete()
-                .build();
-        return executeJson(req);
-    }
-
-    /** 查询指定会话最近一次对话的运行状态。 */
-    public JsonNode getChatStatus(String sessionId) throws IOException {
-        Request req = new Request.Builder()
-                .url(baseUrl + "/chat/status/" + sessionId)
-                .get()
-                .build();
-        return executeJson(req);
-    }
-
-    /** 查询指定会话中某次对话的完整详情。 */
-    public JsonNode getChatDetail(String sessionId, String chatId) throws IOException {
-        Request req = new Request.Builder()
-                .url(baseUrl + "/chat/" + sessionId + "/" + chatId)
-                .get()
-                .build();
-        return executeJson(req);
-    }
-
-    /** 查询会话详情（包含完整对话历史）。 */
-    public JsonNode getSessionDetail(String sessionId) throws IOException {
-        Request req = new Request.Builder()
-                .url(baseUrl + "/sess/" + sessionId)
-                .get()
-                .build();
-        return executeJson(req);
-    }
-
-    /** 分页查询会话列表。 */
-    public JsonNode listSessions(int limit, int offset) throws IOException {
-        HttpUrl url = HttpUrl.parse(baseUrl + "/sess/history").newBuilder()
-                .addQueryParameter("limit", String.valueOf(limit))
-                .addQueryParameter("offset", String.valueOf(offset))
-                .build();
-        Request req = new Request.Builder().url(url).get().build();
-        return executeJson(req);
-    }
-
-    /**
-     * 音频转文字。
-     *
-     * @param audioFile 音频文件（webm / mp3 / wav 等）
-     * @param model     转录模型名；null 或空串表示使用服务端的默认语音模型
-     * @param language  语种提示（如 "zh"）；null 或空串表示不指定
-     * @return 含 text（识别文本）与 model（实际使用的模型）的 JSON
-     */
-    public JsonNode transcribe(java.io.File audioFile, String model, String language) throws IOException {
-        MultipartBody.Builder form = new MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("file", audioFile.getName(),
-                        RequestBody.create(audioFile, MediaType.get("application/octet-stream")));
-        if (model != null && !model.isEmpty()) {
-            form.addFormDataPart("model", model);
-        }
-        if (language != null && !language.isEmpty()) {
-            form.addFormDataPart("language", language);
-        }
-        Request req = new Request.Builder()
-                .url(baseUrl + "/audio/transcriptions")
-                .post(form.build())
-                .build();
-        return executeJson(req);
-    }
-
-    // ==================== 查询接口 ====================
-
-    /** 健康检查。 */
-    public JsonNode healthCheck() throws IOException {
-        Request req = new Request.Builder().url(baseUrl + "/health").get().build();
-        return executeJson(req);
-    }
-
-    /** 列出可用 Skills。 */
-    public JsonNode listSkills() throws IOException {
-        Request req = new Request.Builder().url(baseUrl + "/skills").get().build();
-        return executeJson(req);
-    }
-
-    /** 列出可用 MCP 工具。 */
-    public JsonNode listTools() throws IOException {
-        Request req = new Request.Builder().url(baseUrl + "/tools").get().build();
-        return executeJson(req);
-    }
-
-    // ==================== 内部方法 ====================
 
     @Override
     public void close() {
-        httpClient.dispatcher().executorService().shutdown();
-        httpClient.connectionPool().evictAll();
+        client.close();
     }
 
-    private JsonNode executeJson(Request request) throws IOException {
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String err = response.body() != null ? response.body().string() : "";
-                throw new IOException("HTTP " + response.code() + ": " + err);
-            }
-            ResponseBody body = response.body();
-            if (body == null) throw new IOException("empty response body");
-            return MAPPER.readTree(body.string());
+    /** 从模型的扩展属性里取字符串字段；不存在时返回 null。 */
+    private static String extra(java.util.Map<String, JsonValue> additional, String key) {
+        JsonValue value = additional.get(key);
+        if (value == null) {
+            return null;
         }
+        // JsonValue 继承自原始类型 JsonField，asString() 会被擦除为原始 Optional，
+        // 这里用 convert 拿到强类型 String。
+        return value.convert(String.class);
     }
 
-    /**
-     * 将 OpenAI {@code chat.completion.chunk} 摊平为扁平事件对象。
-     *
-     * <ul>
-     *   <li>含 {@code error} 字段：返回 {@code {event:"error", message:<error.message>, error:<error 对象>}}</li>
-     *   <li>含非空 {@code choices} 数组：返回 {@code choices[0].delta} 的深拷贝；
-     *       {@code finish_reason} 非 null 时并入</li>
-     *   <li>{@code choices} 为空数组且顶层 {@code usage} 为对象：返回
-     *       {@code {event:"usage", usage:<usage 对象>}}</li>
-     *   <li>其他：原样返回</li>
-     * </ul>
-     */
-    static JsonNode flattenChunk(JsonNode raw) {
-        if (raw == null || !raw.isObject()) return raw;
+    // ==================== 结果与回调 ====================
 
-        if (raw.has("error")) {
-            JsonNode err = raw.get("error");
-            ObjectNode flat = MAPPER.createObjectNode();
-            flat.put("event", "error");
-            String message = "";
-            if (err != null && err.isObject() && err.has("message") && !err.get("message").isNull()) {
-                message = err.get("message").asText();
-            }
-            flat.put("message", message);
-            flat.set("error", err);
-            return flat;
+    /** 非流式结果。 */
+    public static class ChatResult {
+        private final String content;
+        private final String sessionId;
+        private final String model;
+
+        public ChatResult(String content, String sessionId, String model) {
+            this.content = content;
+            this.sessionId = sessionId;
+            this.model = model;
         }
 
-        JsonNode choices = raw.get("choices");
-        if (choices != null && choices.isArray() && choices.size() > 0) {
-            JsonNode choice = choices.get(0);
-            JsonNode delta = choice.get("delta");
-            ObjectNode flat = (delta != null && delta.isObject())
-                    ? ((ObjectNode) delta).deepCopy()
-                    : MAPPER.createObjectNode();
-            JsonNode finishReason = choice.get("finish_reason");
-            if (finishReason != null && !finishReason.isNull()) {
-                flat.set("finish_reason", finishReason);
-            }
-            return flat;
-        }
-
-        JsonNode usage = raw.get("usage");
-        if (choices != null && choices.isArray() && usage != null && usage.isObject()) {
-            ObjectNode flat = MAPPER.createObjectNode();
-            flat.put("event", "usage");
-            flat.set("usage", usage);
-            return flat;
-        }
-
-        return raw;
+        public String getContent() { return content; }
+        /** 服务端在响应体顶层返回的会话 ID。 */
+        public String getSessionId() { return sessionId; }
+        public String getModel() { return model; }
     }
 
-    /**
-     * 根据摊平后的事件对象推断 SSE 事件类型。
-     *
-     * <ul>
-     *   <li>{@code event == "error"} → error</li>
-     *   <li>{@code event == "usage"} → usage</li>
-     *   <li>{@code role == "tool"} → tool_result</li>
-     *   <li>含 {@code tool_calls} → tool_calls</li>
-     *   <li>含 {@code finish_reason} → finish（finish 事件不带 role）</li>
-     *   <li>{@code role == "assistant"} 且含 {@code reasoning_content} → thinking；含 {@code content} → message</li>
-     *   <li>其他 → unknown</li>
-     * </ul>
-     */
-    static String classifyEvent(JsonNode data) {
-        if (data == null || !data.isObject()) return "unknown";
-        JsonNode event = data.get("event");
-        if (event != null && "error".equals(event.asText())) return "error";
-        if (event != null && "usage".equals(event.asText())) return "usage";
-        JsonNode role = data.get("role");
-        if (role != null && "tool".equals(role.asText())) return "tool_result";
-        if (data.has("tool_calls")) return "tool_calls";
-        if (data.has("finish_reason")) return "finish";
-        if (role != null && "assistant".equals(role.asText())) {
-            if (data.has("reasoning_content")) return "thinking";
-            if (data.has("content")) return "message";
+    /** 流式回调。 */
+    public interface StreamListener {
+        /** 收到一条增量文本。 */
+        void onDelta(String delta);
+        /** 从 chunk 顶层读到 session_id 时回调。 */
+        void onSessionId(String sessionId);
+        /** 全部增量拼接完成。 */
+        void onComplete(String fullText);
+    }
+
+    // ==================== 演示 ====================
+
+    public static void main(String[] args) {
+        String baseUrl = System.getenv().getOrDefault("GROOT_BASE_URL", "http://localhost:8080");
+        String apiKey = System.getenv().getOrDefault("GROOT_API_KEY", "your-api-key");
+        String model = System.getenv().getOrDefault("GROOT_MODEL", "qwen-max");
+
+        try (GrootClient groot = new GrootClient(baseUrl, apiKey, "alice")) {
+            System.out.println("== 可用模型 ==");
+            for (String id : groot.listModels()) {
+                System.out.println(" - " + id);
+            }
+
+            // 1. 非流式：首次提问，服务端创建新会话并在响应顶层返回 session_id
+            System.out.println("\n== 非流式 ==");
+            ChatResult result = groot.chat(model, "用一句话介绍你自己", null, "analyst");
+            System.out.println("回答: " + result.getContent());
+            System.out.println("会话 ID: " + result.getSessionId());
+
+            // 2. 流式：带上上一步的 session_id 继续多轮对话
+            System.out.println("\n== 流式（续用同一会话）==");
+            final String[] sessionId = {result.getSessionId()};
+            groot.chatStream(model, "继续，再说一句", sessionId[0], "analyst",
+                    new StreamListener() {
+                        @Override
+                        public void onDelta(String delta) {
+                            System.out.print(delta);
+                            System.out.flush();
+                        }
+
+                        @Override
+                        public void onSessionId(String sid) {
+                            sessionId[0] = sid;
+                        }
+
+                        @Override
+                        public void onComplete(String fullText) {
+                            System.out.println("\n会话 ID: " + sessionId[0]);
+                        }
+                    });
         }
-        return "unknown";
     }
 }

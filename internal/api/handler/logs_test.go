@@ -118,8 +118,11 @@ func TestLogsHandler_EmptySid(t *testing.T) {
 		t.Fatalf("expected 400, got %d body=%s", got, rc.Response.Body())
 	}
 	body := string(rc.Response.Body())
-	if !contains(body, `"invalid_request"`) || !contains(body, "session_id 参数缺失") {
-		t.Errorf("400 响应体不符合契约: %s", body)
+	if !contains(body, `"code":"invalid_request"`) || !contains(body, "session_id 参数缺失") {
+		t.Errorf("400 响应体不符合错误信封契约: %s", body)
+	}
+	if !contains(body, `"type":"invalid_request_error"`) || !contains(body, `"param":"session_id"`) {
+		t.Errorf("400 响应体缺少 type/param: %s", body)
 	}
 }
 

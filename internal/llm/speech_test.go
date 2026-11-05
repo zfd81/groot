@@ -51,7 +51,7 @@ func TestSpeech_Success(t *testing.T) {
 		_, _ = w.Write(audio)
 	})
 
-	body, ct, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{
+	body, ct, upErr, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{
 		Input:          "你好，世界",
 		Voice:          "alloy",
 		Language:       "zh",
@@ -60,6 +60,9 @@ func TestSpeech_Success(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Speech() error = %v", err)
+	}
+	if upErr != nil {
+		t.Fatalf("upErr = %+v, want nil", upErr)
 	}
 	defer body.Close()
 
@@ -109,7 +112,7 @@ func TestSpeech_OmitsEmptyOptionalFields(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	body, _, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{Input: "hi"})
+	body, _, _, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{Input: "hi"})
 	if err != nil {
 		t.Fatalf("Speech() error = %v", err)
 	}
@@ -139,7 +142,7 @@ func TestSpeech_ContextCanceled(t *testing.T) {
 		cancel()
 	}()
 
-	body, _, err := Speech(ctx, speechModel(srv.URL), SpeechRequest{Input: "hi"})
+	body, _, _, err := Speech(ctx, speechModel(srv.URL), SpeechRequest{Input: "hi"})
 	if body != nil {
 		body.Close()
 	}
@@ -166,7 +169,7 @@ func TestSpeech_ContentTypeFallback(t *testing.T) {
 				_, _ = w.Write([]byte("x"))
 			})
 
-			body, ct, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{
+			body, ct, _, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{
 				Input:          "hi",
 				ResponseFormat: c.format,
 			})
@@ -188,16 +191,54 @@ func TestSpeech_UpstreamError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"bad voice"}}`))
 	})
 
-	body, _, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{Input: "hi", Voice: "nope"})
+	body, _, upErr, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{Input: "hi", Voice: "nope"})
 	if body != nil {
 		t.Errorf("body should be nil on error")
 		body.Close()
 	}
-	if !errors.Is(err, ErrUpstream) {
-		t.Fatalf("err = %v, want ErrUpstream", err)
+	if err != nil {
+		t.Fatalf("err = %v, want nil（非 2xx 不算函数错误）", err)
 	}
-	if !strings.Contains(err.Error(), "bad voice") {
-		t.Errorf("err = %q, want to contain %q", err.Error(), "bad voice")
+	if upErr == nil {
+		t.Fatal("upErr = nil, want 上游原始响应")
+	}
+	if upErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("StatusCode = %d, want 400", upErr.StatusCode)
+	}
+	if upErr.ContentType != "application/json" {
+		t.Errorf("ContentType = %q, want application/json", upErr.ContentType)
+	}
+	if !strings.Contains(string(upErr.Body), "bad voice") {
+		t.Errorf("Body = %q, want 上游原文", upErr.Body)
+	}
+}
+
+// TestSpeech_SpeedPassthrough speed 非 nil 时下发，nil 时请求体不含该键。
+func TestSpeech_SpeedPassthrough(t *testing.T) {
+	srv, rec := newSpeechServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	speed := 1.5
+	body, _, _, err := Speech(context.Background(), speechModel(srv.URL), SpeechRequest{Input: "hi", Speed: &speed})
+	if err != nil {
+		t.Fatalf("Speech() error = %v", err)
+	}
+	body.Close()
+	if rec.fields["speed"] != 1.5 {
+		t.Errorf("json[speed] = %v, want 1.5", rec.fields["speed"])
+	}
+
+	srv2, rec2 := newSpeechServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	body, _, _, err = Speech(context.Background(), speechModel(srv2.URL), SpeechRequest{Input: "hi"})
+	if err != nil {
+		t.Fatalf("Speech() error = %v", err)
+	}
+	body.Close()
+	if _, ok := rec2.fields["speed"]; ok {
+		t.Errorf("speed 为 nil 时不应下发: %v", rec2.fields)
 	}
 }
 
@@ -206,7 +247,7 @@ func TestSpeech_BaseURLWithV1(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	body, _, err := Speech(context.Background(), speechModel(srv.URL+"/v1"), SpeechRequest{Input: "hi"})
+	body, _, _, err := Speech(context.Background(), speechModel(srv.URL+"/v1"), SpeechRequest{Input: "hi"})
 	if err != nil {
 		t.Fatalf("Speech() error = %v", err)
 	}

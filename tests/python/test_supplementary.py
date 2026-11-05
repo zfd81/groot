@@ -4,9 +4,9 @@
 用例清单（裁剪后）：
 - TestMCPConnectionTypes    MCP 连接类型配置（stdio/sse/streamable_http/env 引用）
 - TestSkillsDependencies    Skill dependencies 递归调用
-- TestPromptValidation      /chat 的 prompt 参数
+- TestPromptValidation      /chat/completions 的 system 消息
 - TestHealthDetailedChecks  /web/health 详细检查（llm、mcp、skills、memory、uptime、version）
-- TestWebEndpointAccess     /web/* 端点访问控制（Cookie 才 200；X-API-Key 打 /web/* 401）
+- TestWebEndpointAccess     /web/* 端点访问控制（Cookie 才 200；Bearer API Key 打 /web/* 401）
 - TestReActExecutionDetails ReAct 步骤（SSE thinking 事件 + /chat/:sid 的 steps 持久化）
 - TestSessionHandlingDetails 会话处理（新会话/续会话/无效 session_id）
 - TestMetricsInHealth       /web/health 的 metrics 字段
@@ -24,7 +24,7 @@ from conftest import BASE_URL, SSEClient, _web_login
 
 @pytest.fixture(scope="module")
 def web(server):
-    """Web 登录 Cookie Session（/web/* 端点只认 Cookie，X-API-Key 无效）"""
+    """Web 登录 Cookie Session（/web/* 端点只认 Cookie，Bearer API Key 无效）"""
     return _web_login(BASE_URL)
 
 
@@ -194,10 +194,10 @@ description: "子Skill"
         time.sleep(5)
 
         # 发送请求调用主 Skill
-        payload = {"instruction": "使用 main_skill 处理任务"}
+        payload = {"messages": [{"role": "user", "content": "使用 main_skill 处理任务"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -226,17 +226,20 @@ description: "子Skill"
 
 
 class TestPromptValidation:
-    """prompt 参数验证测试"""
+    """system 消息（原 prompt 参数）验证测试"""
 
     def test_prompt_parameter_accepted(self, server, api_headers):
-        """TC-PROMPT-001: prompt 参数正常接受"""
+        """TC-PROMPT-001: system 消息正常接受"""
         payload = {
-            "instruction": "分析数据",
-            "prompt": "你是一个数据分析专家，输出JSON格式结果"
+            "messages": [
+                {"role": "system", "content": "你是一个数据分析专家，输出JSON格式结果"},
+                {"role": "user", "content": "分析数据"},
+            ],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -250,20 +253,23 @@ class TestPromptValidation:
         assert completed["data"]["finish_reason"] in ("stop", "tool_calls")
 
     def test_prompt_empty_allowed(self, server, api_headers):
-        """TC-PROMPT-002: prompt 为空允许"""
+        """TC-PROMPT-002: 空 system 消息允许"""
         payload = {
-            "instruction": "测试",
-            "prompt": ""
+            "messages": [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": "测试"},
+            ],
+            "stream": True,
         }
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        # 空 prompt 应被忽略，正常执行
+        # 空 system 消息应被忽略，正常执行
         assert response.status_code == 200
 
 
@@ -357,7 +363,7 @@ class TestWebEndpointAccess:
     """/web/* 端点访问控制测试
 
     语义：/web/skills /web/tools /web/agents 需要 Web 登录 Cookie；
-    X-API-Key（JWT）只对 API 端点（/chat /sess /schedule）有效，
+    Bearer API Key（JWT）只对 API 端点（/chat/completions /sess /schedule）有效，
     拿它打 /web/* 应得到 401。
     """
 
@@ -370,11 +376,11 @@ class TestWebEndpointAccess:
             )
 
     def test_web_endpoints_reject_api_key(self, server, api_headers):
-        """TC-PERM-011: 拿 X-API-Key（无 Cookie）打 /web/* → 401"""
+        """TC-PERM-011: 拿 Bearer API Key（无 Cookie）打 /web/* → 401"""
         for endpoint in ["/web/skills", "/web/tools", "/web/agents"]:
             response = requests.get(f"{BASE_URL}{endpoint}", headers=api_headers)
             assert response.status_code == 401, (
-                f"{endpoint} 仅认 Cookie，X-API-Key 应返回 401，实际 {response.status_code}"
+                f"{endpoint} 仅认 Cookie，Bearer API Key 应返回 401，实际 {response.status_code}"
             )
 
     def test_web_endpoints_reject_anonymous(self, server, no_auth_headers):
@@ -384,11 +390,11 @@ class TestWebEndpointAccess:
             assert response.status_code == 401
 
     def test_api_endpoint_accepts_api_key(self, server, api_headers):
-        """TC-PERM-013: all 权限 API Key 可访问 API 端点（/chat）"""
+        """TC-PERM-013: all 权限 API Key 可访问 API 端点（/chat/completions）"""
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "test"},
+            json={"messages": [{"role": "user", "content": "test"}], "stream": True},
             stream=True
         )
         assert response.status_code == 200
@@ -400,10 +406,10 @@ class TestReActExecutionDetails:
 
     def test_reasoning_step_emitted(self, server, api_headers):
         """TC-REACT-001: Reasoning 步骤事件"""
-        payload = {"instruction": "写一个函数"}
+        payload = {"messages": [{"role": "user", "content": "写一个函数"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
@@ -426,16 +432,16 @@ class TestReActExecutionDetails:
         SSE 事件不携带 step_id 等字段；步骤详情通过 GET /chat/:sid
         返回的 steps 数组断言（step_id/type/name/status 等）。
         """
-        payload = {"instruction": "读取文件 /tmp/test.txt"}
+        payload = {"messages": [{"role": "user", "content": "读取文件 /tmp/test.txt"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)  # drain 至完成
+        sse = SSEClient(response)  # drain 至完成
+        session_id = sse.get_session_id()
 
         detail = requests.get(f"{BASE_URL}/chat/{session_id}", headers=api_headers)
         assert detail.status_code == 200
@@ -451,16 +457,16 @@ class TestReActExecutionDetails:
 
     def test_step_timing_fields(self, server, api_headers):
         """TC-REACT-003: 步骤含起止时间与嵌套层级字段"""
-        payload = {"instruction": "测试对话"}
+        payload = {"messages": [{"role": "user", "content": "测试对话"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        sse = SSEClient(response)
+        session_id = sse.get_session_id()
 
         detail = requests.get(f"{BASE_URL}/chat/{session_id}", headers=api_headers)
         assert detail.status_code == 200
@@ -478,17 +484,16 @@ class TestSessionHandlingDetails:
 
     def test_new_session_history_empty(self, server, api_headers):
         """TC-SESS-001: 新会话历史为空"""
-        payload = {"instruction": "测试"}
+        payload = {"messages": [{"role": "user", "content": "测试"}], "stream": True}
 
         response = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
             json=payload,
             stream=True
         )
 
-        session_id = response.headers.get("X-Session-ID")
-        SSEClient(response)
+        session_id = SSEClient(response).get_session_id()
 
         # 查询会话历史
         history_response = requests.get(
@@ -505,23 +510,23 @@ class TestSessionHandlingDetails:
         """TC-SESS-002: 继续会话加载历史"""
         # 第一轮
         response1 = requests.post(
-            f"{BASE_URL}/chat",
+            f"{BASE_URL}/chat/completions",
             headers=api_headers,
-            json={"instruction": "第一轮"},
+            json={"messages": [{"role": "user", "content": "第一轮"}], "stream": True},
             stream=True
         )
 
-        session_id = response1.headers.get("X-Session-ID")
-        SSEClient(response1)
+        session_id = SSEClient(response1).get_session_id()
 
         # 第二轮（继续）
-        headers2 = api_headers.copy()
-        headers2["X-Session-ID"] = session_id
-
         response2 = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers2,
-            json={"instruction": "第二轮"},
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
+            json={
+                "messages": [{"role": "user", "content": "第二轮"}],
+                "session_id": session_id,
+                "stream": True,
+            },
             stream=True
         )
 
@@ -540,23 +545,22 @@ class TestSessionHandlingDetails:
 
     def test_invalid_session_creates_new(self, server, api_headers):
         """TC-SESS-003: 无效 session_id 创建新会话"""
-        headers = api_headers.copy()
-        headers["X-Session-ID"] = "invalid_session_id_xyz"
-
         response = requests.post(
-            f"{BASE_URL}/chat",
-            headers=headers,
-            json={"instruction": "测试"},
+            f"{BASE_URL}/chat/completions",
+            headers=api_headers,
+            json={
+                "messages": [{"role": "user", "content": "测试"}],
+                "session_id": "invalid_session_id_xyz",
+                "stream": True,
+            },
             stream=True
         )
 
         # 应返回新的 session_id
-        new_session_id = response.headers.get("X-Session-ID")
+        new_session_id = SSEClient(response).get_session_id()
 
         # 新 ID 不等于无效 ID
         assert new_session_id != "invalid_session_id_xyz"
-
-        SSEClient(response)
 
 
 class TestMetricsInHealth:

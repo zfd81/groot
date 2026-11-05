@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/repo"
 	grootsync "github.com/zfd81/groot/internal/sync"
 )
@@ -90,7 +91,7 @@ func TestNormalizeSyncPaths(t *testing.T) {
 }
 
 // TestSyncHandler_DisabledEndpoints 端到端锁定 SQLite（SyncResource 为 nil）链路：
-// resources 传 nil 时三个端点都应返回 409 且 body 含 sync_disabled。
+// resources 传 nil 时三个端点都应返回 409，信封 code 保留 sync_disabled。
 func TestSyncHandler_DisabledEndpoints(t *testing.T) {
 	h := NewSyncHandler(t.TempDir(), nil)
 	endpoints := []struct {
@@ -105,12 +106,7 @@ func TestSyncHandler_DisabledEndpoints(t *testing.T) {
 		t.Run(e.name, func(t *testing.T) {
 			rc := jsonCtx(consts.MethodPost, `{"paths":[]}`)
 			e.call(context.Background(), rc)
-			if rc.Response.StatusCode() != 409 {
-				t.Fatalf("status = %d, want 409, body=%s", rc.Response.StatusCode(), rc.Response.Body())
-			}
-			if !strings.Contains(string(rc.Response.Body()), "sync_disabled") {
-				t.Errorf("响应体缺少 sync_disabled: %s", rc.Response.Body())
-			}
+			assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "sync_disabled")
 		})
 	}
 }
@@ -132,12 +128,7 @@ func TestSyncHandler_InvalidJSONWriteReturns400(t *testing.T) {
 			// 缺右括号的非法 JSON
 			rc := jsonCtx(consts.MethodPost, `{"paths":["skills/x"]`)
 			e.call(context.Background(), rc)
-			if rc.Response.StatusCode() != 400 {
-				t.Fatalf("status = %d, want 400, body=%s", rc.Response.StatusCode(), rc.Response.Body())
-			}
-			if !strings.Contains(string(rc.Response.Body()), "invalid_request") {
-				t.Errorf("响应体缺少 invalid_request: %s", rc.Response.Body())
-			}
+			assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 		})
 	}
 }
@@ -148,12 +139,7 @@ func TestSyncHandler_InvalidJSONDiffLenient(t *testing.T) {
 	h := NewSyncHandler(t.TempDir(), nil)
 	rc := jsonCtx(consts.MethodPost, `{"paths":["skills/x"]`)
 	h.Diff(context.Background(), rc)
-	if rc.Response.StatusCode() != 409 {
-		t.Fatalf("status = %d, want 409, body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "sync_disabled") {
-		t.Errorf("响应体缺少 sync_disabled: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "sync_disabled")
 }
 
 // TestSyncHandler_EmptyBodyWriteFullSync 验证空 body 的写操作仍是全量同步
@@ -162,12 +148,7 @@ func TestSyncHandler_EmptyBodyWriteFullSync(t *testing.T) {
 	h := NewSyncHandler(t.TempDir(), nil)
 	rc := jsonCtx(consts.MethodPost, ``)
 	h.Push(context.Background(), rc)
-	if rc.Response.StatusCode() != 409 {
-		t.Fatalf("status = %d, want 409, body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "sync_disabled") {
-		t.Errorf("响应体缺少 sync_disabled: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 409, errbody.TypeInvalidRequest, "sync_disabled")
 }
 
 // fakeResourceRepo 是内存版 ResourceRepo，仅供端到端测试构造 enabled 的 handler。
@@ -230,10 +211,5 @@ func TestSyncHandler_EnabledInvalidPathReturns400(t *testing.T) {
 	h := NewSyncHandler(t.TempDir(), newFakeResourceRepo())
 	rc := jsonCtx(consts.MethodPost, `{"paths":["../../etc/passwd"]}`)
 	h.Diff(context.Background(), rc)
-	if rc.Response.StatusCode() != 400 {
-		t.Fatalf("status = %d, want 400, body=%s", rc.Response.StatusCode(), rc.Response.Body())
-	}
-	if !strings.Contains(string(rc.Response.Body()), "invalid_request") {
-		t.Errorf("响应体缺少 invalid_request: %s", rc.Response.Body())
-	}
+	assertEnvelopeError(t, rc, 400, errbody.TypeInvalidRequest, errbody.CodeInvalidRequest)
 }
