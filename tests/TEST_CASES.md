@@ -484,6 +484,17 @@
 
 ---
 
+### 1.15 对话历史开关测试
+
+位于 `internal/api/handler/chat_req_test.go`、`internal/api/handler/chat_test.go`。
+
+覆盖点：
+
+- `no_history` 解析（`TestParseChatRequest_NoHistory`）：缺省、显式 `false` 均为关闭；显式 `true` 为开启
+- `no_history` 语义（`TestChatHandler_NoHistorySkipsOnlyServerHistory`）：带 `session_id` 续接时，开启后本轮仍归入该会话、轮次照常累加（预置 2 轮后续接为第 3 轮）、会话与留档保留，但 `HistoryMessages` 为空；关闭时服务端历史照常带入；调用方在 `messages` 中自带的历史两种情况下都保留
+
+---
+
 ## 二、系统测试（Python）
 
 位于 `tests/python/` 目录，使用 pytest 框架。

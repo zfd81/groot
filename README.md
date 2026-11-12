@@ -47,6 +47,7 @@ Groot 是面向业务系统的 AI Agent 服务。通过 REST API 接入，让你
 **会话（Session）：**
 - 会话是多轮对话的容器，每个会话有唯一的 `session_id`
 - 会话内的所有对话共享历史上下文，Agent 能记住之前的交流
+- 会话可以按“只归组留档”的方式使用：请求带 `no_history: true` 时，对话照常归入会话并按轮次留档，但服务端不把该会话的历史作为上下文，每轮独立回答
 - 会话数据统一存储在数据库中（默认 SQLite，可切换 MySQL/PostgreSQL）
 
 **对话（Chat）：**
@@ -1350,7 +1351,7 @@ user: alice
 
 ### 7.3 POST /chat/completions - 执行对话（核心接口）
 
-遵循 OpenAI Chat Completions 规范：请求体是 `messages`，响应体是 `chat.completion`（非流式）或 `chat.completion.chunk` 流（流式）。Groot 在标准之外增加了少量扩展字段（`session_id`、`agent_name`），标准客户端会忽略它们。
+遵循 OpenAI Chat Completions 规范：请求体是 `messages`，响应体是 `chat.completion`（非流式）或 `chat.completion.chunk` 流（流式）。Groot 在标准之外增加了少量扩展字段（`session_id`、`no_history`、`agent_name`），标准客户端会忽略它们。
 
 **请求 Header：**
 
@@ -1387,6 +1388,7 @@ user: alice
 | `stream_options.include_usage` | 否 | 为 `true` 时在流末尾下发 token 用量 chunk；未开启时各 chunk 的 `usage` 为 `null` |
 | `user` | 否 | 终端用户标识，作为会话归属的用户（1 到 64 个字符，仅限字母、数字、下划线、短横线）。省略时回落到请求头 `user`；两者都没有时返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录 Cookie 凭证可免 |
 | `session_id` | 否 | **扩展字段**。会话 ID，为空则新建会话；有值但会话不存在或不属于当前（租户，用户）则按新会话处理 |
+| `no_history` | 否 | **扩展字段**。为 `true` 时本轮仍归入 `session_id` 指定的会话并按轮次留档，但不把该会话的历史作为上下文，每轮独立回答；缺省或 `false` 时按会话历史构建上下文。未传 `session_id` 时无实际影响 |
 | `agent_name` | 否 | **扩展字段**。直连指定子 Agent（Solo 模式，见 5.3.2）；为空或 `groot` 走主 Agent 编排；指定未注册名返回 400 `unknown_agent` |
 | `n` | 否 | 仅支持 `1`，其它取值返回 400 |
 | 其它采样参数 | 否 | `temperature`、`top_p`、`max_tokens`、`max_completion_tokens`、`stop`、`presence_penalty`、`frequency_penalty`、`seed`、`response_format`、`tools`、`tool_choice`、`logprobs`、`top_logprobs` 被接受但不生效；采样参数以 Web 界面中模型记录的配置为准 |
@@ -1405,7 +1407,7 @@ user: alice
 
 `image_url`、`input_audio`、`file` 三种片段受 Web 设置面板中的附件数量、单文件体积、总体积与扩展名白名单约束，校验不通过返回错误信封，`code` 取 `invalid_request`（数量超限、缺少文件名或内容、Base64 解码失败）、`unsupported_type`（类型不在白名单内或类型无法识别）或 `file_too_large`（单文件或合计体积超限，HTTP 状态码为 413；其余为 400）。
 
-**消息组装：** 调用方传入的 `messages` 接在服务端已构造的上下文之后——`role: system` 的消息（可多条，按出现顺序以空行连接）作为本次请求的系统提示；除系统消息与最后一条 `user` 之外的其它消息作为调用方历史追加在服务端会话历史之后；最后一条 `user` 的文本部分是本轮指令。系统提示与调用方历史只作用于本次请求，不写入会话记忆。
+**消息组装：** 调用方传入的 `messages` 接在服务端已构造的上下文之后——`role: system` 的消息（可多条，按出现顺序以空行连接）作为本次请求的系统提示；除系统消息与最后一条 `user` 之外的其它消息作为调用方历史追加在服务端会话历史之后；最后一条 `user` 的文本部分是本轮指令。系统提示与调用方历史只作用于本次请求，不写入会话记忆。请求中 `no_history` 为 `true` 时，服务端会话历史这一步为空，模型只看到本次请求自带的系统提示、调用方历史与本轮问题。
 
 **两个非标准字段的获取方式：**
 

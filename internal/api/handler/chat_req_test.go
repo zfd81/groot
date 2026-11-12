@@ -299,3 +299,28 @@ func TestParseChatRequest_SystemAndHistory(t *testing.T) {
 		t.Errorf("CallerHistory[1].Result = %q", got.CallerHistory[1].Result)
 	}
 }
+
+// TestParseChatRequest_NoHistory 验证 no_history 开关的解析：缺省与 false 都表示
+// 沿用现有行为（带服务端历史），只有显式 true 才关闭历史上下文。
+func TestParseChatRequest_NoHistory(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"缺省", `{"messages":[{"role":"user","content":"hi"}]}`, false},
+		{"显式false", `{"messages":[{"role":"user","content":"hi"}],"no_history":false}`, false},
+		{"显式true", `{"messages":[{"role":"user","content":"hi"}],"no_history":true}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, perr := parseChatRequest([]byte(tc.body))
+			if perr != nil {
+				t.Fatalf("期望解析成功，实际错误: %+v", perr)
+			}
+			if p.NoHistory != tc.want {
+				t.Errorf("NoHistory = %v, want %v", p.NoHistory, tc.want)
+			}
+		})
+	}
+}

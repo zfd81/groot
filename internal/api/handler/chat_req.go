@@ -23,6 +23,7 @@ type chatRequest struct {
 	Stream              bool            `json:"stream"`
 	StreamOptions       *streamOptions  `json:"stream_options"`
 	SessionID           string          `json:"session_id"`
+	NoHistory           bool            `json:"no_history"`
 	AgentName           string          `json:"agent_name"`
 	User                string          `json:"user"`
 	N                   *int            `json:"n"`
@@ -81,6 +82,7 @@ type parsedRequest struct {
 	User          string
 	Stream        bool
 	IncludeUsage  bool
+	NoHistory     bool
 }
 
 // requestError 承载校验失败时的 OpenAI 信封字段，handler 直接转成响应。
@@ -147,6 +149,7 @@ func parseChatRequest(body []byte) (*parsedRequest, *requestError) {
 		Stream:    req.Stream,
 		// stream=false 时 include_usage 无意义，按「接受但忽略」处理。
 		IncludeUsage: req.Stream && req.StreamOptions != nil && req.StreamOptions.IncludeUsage,
+		NoHistory:    req.NoHistory,
 	}
 
 	var systemParts []string

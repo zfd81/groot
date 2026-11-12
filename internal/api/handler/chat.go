@@ -179,15 +179,21 @@ func (h *ChatHandler) Handle(ctx context.Context, rc *app.RequestContext) {
 		historyMessages = []memory.Message{}
 	} else {
 		round = h.memory.GetRoundCount(sessionID) + 1
-		historyMessages, err = h.memory.GetContextMessagesWithTokenLimit(
-			sessionID,
-			rt.Memory.HistoryWindow,
-			mdl.MaxContextTokens,
-		)
-		if err != nil {
-			h.log.Error("获取会话上下文失败", zap.String("session_id", sessionID), zap.Error(err))
-			errbody.Write(rc, 500, "获取上下文失败", errbody.TypeAPI, "", errbody.CodeInternalError)
-			return
+		// no_history 只关闭上下文读取：本轮仍归入该会话并正常留档，轮次照常累加，
+		// 但不取服务端历史，模型只看到本次请求自带的消息。
+		if p.NoHistory {
+			historyMessages = []memory.Message{}
+		} else {
+			historyMessages, err = h.memory.GetContextMessagesWithTokenLimit(
+				sessionID,
+				rt.Memory.HistoryWindow,
+				mdl.MaxContextTokens,
+			)
+			if err != nil {
+				h.log.Error("获取会话上下文失败", zap.String("session_id", sessionID), zap.Error(err))
+				errbody.Write(rc, 500, "获取上下文失败", errbody.TypeAPI, "", errbody.CodeInternalError)
+				return
+			}
 		}
 	}
 

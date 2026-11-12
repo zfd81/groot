@@ -202,6 +202,7 @@ data: [DONE]
 | `stream` | 否 | `true` 走 SSE 流式返回，缺省或 `false` 走一次性返回 |
 | `stream_options.include_usage` | 否 | 为 `true` 时在流末尾下发 token 用量 chunk |
 | `session_id` | 否 | 扩展字段。为空则新建会话；非空则在既有会话上继续 |
+| `no_history` | 否 | 扩展字段。为 `true` 时本轮仍归入 `session_id` 指定的会话并正常留档，但不把该会话的历史作为上下文；缺省或 `false` 时按会话历史构建上下文。未传 `session_id` 时无实际影响 |
 | `agent_name` | 否 | 扩展字段。指定执行本轮对话的子 Agent 名称；为空或等于主 Agent 名时走编排流程 |
 | `user` | 否 | 终端用户标识，作为会话归属的 `user`。仅允许字母、数字、下划线、连字符，长度 1..64 |
 | `n` | 否 | 仅支持 `1`，其它取值报 400 |
@@ -244,7 +245,7 @@ Groot 的附件校验按文件名校验扩展名，而 OpenAI 的内容片段不
 一次对话请求最终交给 Agent 引擎的消息序列按以下顺序组装：
 
 1. **系统指令**：由 Agent 引擎按既有规则生成，包含 GROOT.md（编排模式）或子 Agent 定义（Solo 模式）、会话级记忆、以及本次请求的系统提示。
-2. **服务端上下文**：续接既有会话时，按 `memory.history_window` 与模型的 `max_context_tokens` 取出该会话的历史轮次。
+2. **服务端上下文**：续接既有会话时，按 `memory.history_window` 与模型的 `max_context_tokens` 取出该会话的历史轮次。请求中 `no_history` 为 `true` 时这一步为空，模型只收到调用方提供的消息。
 3. **调用方历史**：`messages` 中除 `system` 与最后一条 `user` 之外的消息，按原顺序追加。
 4. **本次用户消息**：`messages` 的最后一条 `user`，其文本部分为 `instruction`，内容片段为多模态输入。
 
@@ -265,7 +266,7 @@ Groot 的附件校验按文件名校验扩展名，而 OpenAI 的内容片段不
 `session_id` 非空时：
 
 1. 校验会话存在且归属于当前 `(tenant_id, user)`。不存在或不属于当前调用方时按「新建会话」处理，报错会暴露其它租户的会话是否存在，因此这里静默新建。
-2. 轮次为既有轮次加 1，上下文按 1.4.3 第 2 步取出。
+2. 轮次为既有轮次加 1，上下文按 1.4.3 第 2 步取出；`no_history` 为 `true` 时服务端上下文为空，轮次累加与对话留档不受影响。
 
 Web Cookie 调用方视为管理员，不受 `(tenant_id, user)` 限制。
 
@@ -668,6 +669,7 @@ Web 界面端点保持 Cookie 会话鉴权，路径与用途不变：
 
 - `X-Model-Name` 请求头 → 请求体 `model`（`/chat/completions`、`/image/understanding`、`/audio/speech`；`/audio/transcriptions` 维持 `model` 表单字段）。
 - `X-Session-ID` 请求头 → 请求体 `session_id`（扩展字段）。
+- 新增扩展字段 `no_history`：为 `true` 时本轮只把会话用于归组与留档，不把会话历史作为上下文交给模型；缺省时行为不变。
 - `X-Agent-Name` 请求头 → 请求体 `agent_name`（扩展字段）。
 - `X-User-ID` 请求头 → `user`：`/chat/completions` 用请求体 `user`，无请求体的接口用请求头 `user`。
 - `/chat` 的 `instruction`、`prompt`、`attachments` 由 `messages` 与 content parts 表达：

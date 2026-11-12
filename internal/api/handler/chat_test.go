@@ -864,3 +864,87 @@ func TestChatHandler_NewSessionGetsTruncatedTitle(t *testing.T) {
 		t.Fatalf("标题 rune 数 = %d，期望 %d", got, memory.MaxTitleRunes)
 	}
 }
+
+// TestChatHandler_NoHistorySkipsOnlyServerHistory 验证 no_history 只关闭服务端历史：
+// 传了 session_id 与 no_history=true 时，本轮仍归入该会话、轮次照常累加、
+// 调用方自带的 messages 历史照常生效，唯独 HistoryMessages 为空。
+func TestChatHandler_NoHistorySkipsOnlyServerHistory(t *testing.T) {
+	cases := []struct {
+		name        string
+		noHistory   bool
+		wantHistory int
+	}{
+		{"未开启", false, 2},
+		{"开启", true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newChatEnv(t, agent.NewRegistryForTest(1), false)
+			env.exec.messages = []string{"本轮回答"}
+
+			const sid = "sess_seed_001"
+			if err := env.mem.CreateSession(sid, "crm", "u1", "归档会话"); err != nil {
+				t.Fatalf("创建会话失败: %v", err)
+			}
+			for i := 1; i <= 2; i++ {
+				rec := &memory.ChatRecord{
+					ChatID:      "seed_chat_" + strconv.Itoa(i),
+					SessionID:   sid,
+					Instruction: "旧问题" + strconv.Itoa(i),
+					Result:      "旧回答" + strconv.Itoa(i),
+					Status:      "completed",
+					StartedAt:   time.Now(),
+					EndedAt:     time.Now(),
+				}
+				if err := env.mem.SaveChatRecord(sid, rec); err != nil {
+					t.Fatalf("预置历史失败: %v", err)
+				}
+			}
+
+			body := `{"messages":[` +
+				`{"role":"user","content":"调用方历史问题"},` +
+				`{"role":"assistant","content":"调用方历史回答"},` +
+				`{"role":"user","content":"本轮问题"}],` +
+				`"session_id":"` + sid + `",` +
+				`"no_history":` + strconv.FormatBool(tc.noHistory) + `}`
+			rc := newChatPostContext(body)
+			setIdentity(rc, "svc", "crm", "u1")
+
+			env.h.Handle(context.Background(), rc)
+			if got := rc.Response.StatusCode(); got != 200 {
+				t.Fatalf("期望 200，实际 %d body=%s", got, rc.Response.Body())
+			}
+
+			var resp struct {
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(rc.Response.Body(), &resp); err != nil {
+				t.Fatalf("响应体不是合法 JSON: %v", err)
+			}
+			if resp.SessionID != sid {
+				t.Errorf("session_id = %q, 期望归入 %q", resp.SessionID, sid)
+			}
+
+			_, gotSID, task := env.exec.snapshot()
+			if gotSID != sid {
+				t.Errorf("执行器 sessionID = %q, 期望 %q", gotSID, sid)
+			}
+			if task == nil {
+				t.Fatal("执行器未收到 task")
+			}
+			if task.Round != 3 {
+				t.Errorf("round = %d, 期望 3（轮次照常累加）", task.Round)
+			}
+			if len(task.HistoryMessages) != tc.wantHistory {
+				t.Errorf("HistoryMessages 长度 = %d, 期望 %d: %+v",
+					len(task.HistoryMessages), tc.wantHistory, task.HistoryMessages)
+			}
+			if len(task.CallerHistory) != 2 {
+				t.Errorf("CallerHistory 长度 = %d, 期望 2（调用方历史不受 no_history 影响）", len(task.CallerHistory))
+			}
+			if !env.mem.ExistsSession(sid) {
+				t.Error("会话应保留（留档）")
+			}
+		})
+	}
+}
