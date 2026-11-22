@@ -6,10 +6,12 @@ import 'element-plus/es/components/message-box/style/css'
 import { MoreFilled } from '@element-plus/icons-vue'
 import { api, ApiError } from '../../api/client'
 import { useMetaStore } from '../../stores/meta'
+import { useVoiceStore } from '../../stores/voice'
 import type { ModelInfo, ModelsResp, ModelForm, ModelTestResp, DefaultType } from '../../api/types'
 
 const { t } = useI18n()
 const meta = useMetaStore()
+const voiceStore = useVoiceStore()
 
 const models = ref<ModelInfo[]>([])
 const loading = ref(false)
@@ -230,6 +232,7 @@ async function handleTest() {
 async function refreshAll() {
   await loadModels()
   await meta.reload() // 同步刷新聊天下拉框的模型列表
+  await voiceStore.reload() // 同步识别模型配置，让聊天输入框跟随禁用/删除/改名
 }
 
 // "···" 菜单命令分发

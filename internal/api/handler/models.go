@@ -7,6 +7,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
+	"go.uber.org/zap"
 
 	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
@@ -14,16 +15,18 @@ import (
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/repo"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 // ModelsHandler 模型配置管理（/web/models 系列端点）
 type ModelsHandler struct {
-	models *llm.ModelService
-	log    *logger.Logger
+	models   *llm.ModelService
+	settings *setting.Settings
+	log      *logger.Logger
 }
 
-func NewModelsHandler(models *llm.ModelService, log *logger.Logger) *ModelsHandler {
-	return &ModelsHandler{models: models, log: log}
+func NewModelsHandler(models *llm.ModelService, settings *setting.Settings, log *logger.Logger) *ModelsHandler {
+	return &ModelsHandler{models: models, settings: settings, log: log}
 }
 
 // ModelRequest 创建/更新模型的请求体（api_key 为空表示更新时保持原值）
@@ -214,14 +217,43 @@ func (h *ModelsHandler) Update(ctx context.Context, rc *app.RequestContext) {
 		h.writeModelError(rc, err)
 		return
 	}
+	h.syncVoiceModel(ctx, name, m)
 	rc.JSON(200, utils.H{"status": "ok"})
+}
+
+// syncVoiceModel 在模型更新后让语音识别模型配置跟随变化：
+// 模型被禁用或改名时，仍指向该模型的 voice.model 相应清空或改名；
+// 同步失败只记录日志，模型变更已落库，不回滚也不改变成功响应。
+func (h *ModelsHandler) syncVoiceModel(ctx context.Context, name string, m *repo.Model) {
+	var err error
+	switch {
+	case !m.Enabled:
+		err = h.settings.ClearVoiceModelIf(ctx, name)
+	case m.Name != name:
+		err = h.settings.RenameVoiceModelIf(ctx, name, m.Name)
+	default:
+		return
+	}
+	if err != nil {
+		h.logVoiceSyncError(name, err)
+	}
+}
+
+// logVoiceSyncError 记录语音识别模型配置同步失败。模型变更已落库，
+// 同步失败不影响本次请求的结果，仅留日志供排查。
+func (h *ModelsHandler) logVoiceSyncError(name string, err error) {
+	h.log.Error("同步识别模型配置失败", zap.String("model", name), zap.Error(err))
 }
 
 // Delete 处理 DELETE /web/models/:name
 func (h *ModelsHandler) Delete(ctx context.Context, rc *app.RequestContext) {
-	if err := h.models.Delete(ctx, rc.Param("name")); err != nil {
+	name := rc.Param("name")
+	if err := h.models.Delete(ctx, name); err != nil {
 		h.writeModelError(rc, err)
 		return
+	}
+	if err := h.settings.ClearVoiceModelIf(ctx, name); err != nil {
+		h.logVoiceSyncError(name, err)
 	}
 	rc.JSON(200, utils.H{"status": "ok"})
 }

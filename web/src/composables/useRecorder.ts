@@ -35,13 +35,15 @@ function audioContextCtor(): AudioContextCtor | null {
   return w.AudioContext ?? w.webkitAudioContext ?? null
 }
 
-// isRecordingSupported 在组件挂载时用于决定话筒按钮是否可用。
-export function isRecordingSupported(): boolean {
-  return (
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices?.getUserMedia &&
-    audioContextCtor() !== null
-  )
+export type RecordingUnavailable = 'insecure' | 'unsupported'
+
+// recordingUnavailable 返回当前环境无法录音的原因；null 表示可以录音。
+// 缺少麦克风 API 时区分安全上下文：非 HTTPS/localhost 是浏览器策略，
+// 而不是浏览器能力不足，两者提示不同。
+export function recordingUnavailable(): RecordingUnavailable | null {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'unsupported'
+  if (!!navigator.mediaDevices?.getUserMedia && audioContextCtor()) return null
+  return window.isSecureContext === false ? 'insecure' : 'unsupported'
 }
 
 function writeAscii(view: DataView, offset: number, text: string): void {
@@ -84,7 +86,7 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([view.buffer], { type: 'audio/wav' })
 }
 
-export type RecorderError = 'permission_denied' | 'no_device' | 'unsupported' | 'failed'
+export type RecorderError = 'permission_denied' | 'no_device' | 'unsupported' | 'insecure' | 'failed'
 
 // RecordResult 是 stop() 的返回值。
 // ok 携带音频；empty 表示点击过快或时长不足；silent 表示采集到的
@@ -156,6 +158,9 @@ export function useRecorder() {
   // 由调用方映射为面向使用者的提示文案。
   async function start(): Promise<void> {
     if (ctx || starting) return
+
+    const reason = recordingUnavailable()
+    if (reason) throw reason
 
     const Ctor = audioContextCtor()
     if (!Ctor) throw 'unsupported' as RecorderError

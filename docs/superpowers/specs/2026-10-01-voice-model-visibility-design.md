@@ -138,6 +138,7 @@ Python 系统测试（使用者运行）：`GET/PUT /web/settings/voice` 的请�
 - 新增：`Settings.SetVoiceModel`；`Settings.Voice` 增加返回 `modelSet`。
 - 移除：保存语音设置时「未选模型须存在默认语音模型」的校验。
 - 调整：话筒警告态由「开关已开、未选模型且无默认语音模型」改为「所选模型已禁用或删除」。
+- 调整（2026-11-22）：话筒可见性只由 `voice.model` 是否为空决定，环境问题（非 HTTPS/localhost、缺少麦克风 API、权限被拒）在点击时提示，按钮外观不再随环境或模型有效性变化；识别模型被禁用/删除时后端清空 `voice.model` 配置，重命名时跟随更新。详见 `2026-11-22-voice-mic-availability-design.md`。
 - 调整：转录请求总是携带 `X-Model-Name`。
 - 调整：识别模型为空时自动发送开关不可操作。
 - 同步更新：`2026-09-24-voice-input-design.md` 与 `2026-09-30-model-default-types-design.md` 中语音设置相关段落。

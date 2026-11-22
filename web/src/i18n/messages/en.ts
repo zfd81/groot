@@ -87,6 +87,7 @@ export default {
     recordNoPermission: 'Microphone access denied, allow it in your browser settings and retry',
     recordNoDevice: 'No microphone detected',
     recordUnsupported: 'Recording is not supported in this browser',
+    recordInsecure: 'Voice input requires HTTPS or localhost; the current page environment does not allow microphone access',
     recordFailed: 'Recording failed, please try again',
     transcribeFailed: 'Transcription failed: {msg}',
     recordNoModel: 'The selected transcription model is unavailable. Pick another in Settings',

@@ -247,6 +247,37 @@ func (s *Settings) SetVoiceModel(ctx context.Context, model string) error {
 	)
 }
 
+// ClearVoiceModelIf 当 voice.model 等于 model 时写入空串。
+// 写入空串而非删除行：行存在表示识别模型已确定，不再被默认 ASR 初值填充。
+func (s *Settings) ClearVoiceModelIf(ctx context.Context, model string) error {
+	return s.setVoiceModelIf(ctx, model, "")
+}
+
+// RenameVoiceModelIf 当 voice.model 等于 oldName 时改为 newName。
+func (s *Settings) RenameVoiceModelIf(ctx context.Context, oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
+	return s.setVoiceModelIf(ctx, oldName, newName)
+}
+
+// setVoiceModelIf 条件写入 voice.model：仅当该行已存在且当前值等于 expected 时
+// 才写入 newValue，使模型改名/删除只影响仍指向该模型的选择，用户已改选的值不受波及。
+// 没有配置存储或行不存在时静默返回，没有可处理的配置不算错误。
+func (s *Settings) setVoiceModelIf(ctx context.Context, expected, newValue string) error {
+	if s.repo == nil {
+		return nil
+	}
+	v, modelSet, err := s.Voice(ctx)
+	if err != nil {
+		return err
+	}
+	if !modelSet || v.Model != expected {
+		return nil
+	}
+	return s.SetVoiceModel(ctx, newValue)
+}
+
 // Speech 读取语音合成配置。表内缺失的字段由代码默认值填充。
 // 出错时返回值无意义，调用方须先检查 error。
 func (s *Settings) Speech(ctx context.Context) (SpeechSettings, error) {

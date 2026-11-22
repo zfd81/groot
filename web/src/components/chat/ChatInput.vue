@@ -6,7 +6,7 @@ import { ElMessage } from 'element-plus'
 import { useMetaStore } from '../../stores/meta'
 import { storeToRefs } from 'pinia'
 import type { ChatAttachment } from '../../api/sse'
-import { useRecorder, isRecordingSupported, type RecorderError } from '../../composables/useRecorder'
+import { useRecorder, type RecorderError } from '../../composables/useRecorder'
 import { voiceApi } from '../../api/voice'
 import { useVoiceStore } from '../../stores/voice'
 
@@ -29,20 +29,19 @@ const MAIN_AGENT = 'groot'
 const text = ref('')
 const selectedModel = ref('')
 
-// 语音输入状态。语音配置来自 store，与设置面板共享，
-// 设置里改动后这里立即跟随，无需刷新页面。
+// 语音输入状态。语音配置来自 store，与设置面板共享：
+// 在设置面板保存语音分组后立即跟随；后端侧禁用、删除或改名识别模型时，
+// 由设置 → 模型 面板在刷新时回源同步。
 const voiceStore = useVoiceStore()
 const voice = computed(() => voiceStore.settings)
 const transcribing = ref(false)
 const { recording, duration, start, stop, cancel } = useRecorder()
-const recordSupported = isRecordingSupported()
 
-// 话筒按钮的显示条件：设置中选了识别模型 + 浏览器支持。
-// 两者缺一就不渲染，而不是渲染成禁用态，避免留下一个永远点不动的按钮。
-const showMic = computed(() => !!voice.value.model && recordSupported)
+// 话筒按钮只由设置中是否选了识别模型决定：两者不再耦合浏览器能力。
+// 环境问题（非安全上下文、缺少 API、权限被拒）留到点击时提示，按钮外观不变。
+const showMic = computed(() => !!voice.value.model)
 
-// 所选识别模型已被禁用或删除：话筒显示警告态，点击只提示、不录音。
-// 隐藏会让使用者误以为语音输入消失却无从得知原因，警告态直接指向设置页。
+// 所选识别模型已被禁用或删除：开始录音前提示、不录音。
 // 模型列表未加载或拉取失败（列表为空）时不判定，避免误报；真正失效时由转录接口报错提示。
 const micWarn = computed(
   () =>
@@ -52,10 +51,6 @@ const micWarn = computed(
     !models.value.some((m) => m.enabled && m.name === voice.value.model)
 )
 
-// 麦克风权限被拒后置灰。浏览器会记住拒绝结果，再点也只会立刻失败，
-// 置灰比反复弹同一条提示更明确。
-const micDenied = ref(false)
-
 // 录音计时的 mm:ss 展示
 const durationText = computed(() => {
   const m = Math.floor(duration.value / 60)
@@ -63,15 +58,16 @@ const durationText = computed(() => {
   return `${m}:${String(s).padStart(2, '0')}`
 })
 
-// 话筒按钮的提示文案：警告态 > 识别中 > 常态
+// 话筒按钮的提示文案：识别中 > 常态
 const micTitle = computed(() =>
-  micWarn.value ? t('chat.recordNoModel') : transcribing.value ? t('chat.transcribing') : t('chat.recordStart')
+  transcribing.value ? t('chat.transcribing') : t('chat.recordStart')
 )
 
 const recorderErrorKey: Record<RecorderError, string> = {
   permission_denied: 'chat.recordNoPermission',
   no_device: 'chat.recordNoDevice',
   unsupported: 'chat.recordUnsupported',
+  insecure: 'chat.recordInsecure',
   failed: 'chat.recordFailed',
 }
 
@@ -84,7 +80,6 @@ async function startRecording() {
     await start()
   } catch (e) {
     const err = e as RecorderError
-    if (err === 'permission_denied') micDenied.value = true
     ElMessage.warning(t(recorderErrorKey[err] || 'chat.recordFailed'))
   }
 }
@@ -374,9 +369,8 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
             v-else-if="showMic"
             circle
             class="action-btn"
-            :class="{ 'mic-warn': micWarn }"
             :loading="transcribing"
-            :disabled="transcribing || props.sending || micDenied"
+            :disabled="transcribing || props.sending"
             :title="micTitle"
             :aria-label="micTitle"
             @click="startRecording"
@@ -558,10 +552,5 @@ function onUpload(options: UploadRequestOptions): Promise<void> {
   color: var(--el-color-danger);
   font-variant-numeric: tabular-nums;
   margin-right: 4px;
-}
-/* 所选识别模型不可用：话筒按警告色显示，提醒去设置页重新选择 */
-.mic-warn {
-  color: var(--el-color-warning);
-  border-color: var(--el-color-warning);
 }
 </style>

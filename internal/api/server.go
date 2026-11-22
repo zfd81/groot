@@ -102,7 +102,7 @@ func NewServer(
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
-	modelsH := handler.NewModelsHandler(models, log)
+	modelsH := handler.NewModelsHandler(models, settings, log)
 	modelsPublicH := handler.NewModelsPublicHandler(models, log)
 	scheduleH := handler.NewScheduleHandler(scheduleMgr, settings, log)
 	webAuthH := handler.NewWebAuthHandler(users, webStore, log)

@@ -399,6 +399,88 @@ func TestSettings_SpeechRepoError(t *testing.T) {
 	}
 }
 
+func TestSettings_ClearVoiceModelIf(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("匹配时写入空串并保留行", func(t *testing.T) {
+		f := newFakeRepo()
+		f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)] = "arabic"
+		s := New(config.Bootstrap{}, f)
+
+		if err := s.ClearVoiceModelIf(ctx, "arabic"); err != nil {
+			t.Fatalf("ClearVoiceModelIf: %v", err)
+		}
+		v, modelSet, err := s.Voice(ctx)
+		if err != nil {
+			t.Fatalf("Voice: %v", err)
+		}
+		if v.Model != "" {
+			t.Errorf("Model = %q, want 空串", v.Model)
+		}
+		if !modelSet {
+			t.Error("清空后 voice.model 行应仍存在（modelSet 为 true）")
+		}
+	})
+
+	t.Run("不匹配时保持不变", func(t *testing.T) {
+		f := newFakeRepo()
+		f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)] = "whisper-1"
+		s := New(config.Bootstrap{}, f)
+
+		if err := s.ClearVoiceModelIf(ctx, "arabic"); err != nil {
+			t.Fatalf("ClearVoiceModelIf: %v", err)
+		}
+		v, _, err := s.Voice(ctx)
+		if err != nil {
+			t.Fatalf("Voice: %v", err)
+		}
+		if v.Model != "whisper-1" {
+			t.Errorf("Model = %q, want whisper-1", v.Model)
+		}
+	})
+
+	t.Run("无配置仓储时无操作", func(t *testing.T) {
+		if err := New(config.Bootstrap{}, nil).ClearVoiceModelIf(ctx, "arabic"); err != nil {
+			t.Errorf("ClearVoiceModelIf = %v, want nil", err)
+		}
+	})
+}
+
+func TestSettings_RenameVoiceModelIf(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("匹配时改为新名称", func(t *testing.T) {
+		f := newFakeRepo()
+		f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)] = "arabic"
+		s := New(config.Bootstrap{}, f)
+
+		if err := s.RenameVoiceModelIf(ctx, "arabic", "arabic-2"); err != nil {
+			t.Fatalf("RenameVoiceModelIf: %v", err)
+		}
+		v, _, _ := s.Voice(ctx)
+		if v.Model != "arabic-2" {
+			t.Errorf("Model = %q, want arabic-2", v.Model)
+		}
+	})
+
+	t.Run("不匹配时保持不变", func(t *testing.T) {
+		f := newFakeRepo()
+		f.data[key(repo.ScopeGlobal, "", KeyVoiceModel)] = "whisper-1"
+		s := New(config.Bootstrap{}, f)
+
+		if err := s.RenameVoiceModelIf(ctx, "arabic", "arabic-2"); err != nil {
+			t.Fatalf("RenameVoiceModelIf: %v", err)
+		}
+		v, _, err := s.Voice(ctx)
+		if err != nil {
+			t.Fatalf("Voice: %v", err)
+		}
+		if v.Model != "whisper-1" {
+			t.Errorf("Model = %q, want whisper-1", v.Model)
+		}
+	})
+}
+
 func TestParseBool(t *testing.T) {
 	cases := []struct {
 		raw      string

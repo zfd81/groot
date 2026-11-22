@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,21 +13,163 @@ import (
 
 	"github.com/zfd81/groot/internal/api/errbody"
 	"github.com/zfd81/groot/internal/api/types"
+	"github.com/zfd81/groot/internal/config"
 	"github.com/zfd81/groot/internal/db"
 	"github.com/zfd81/groot/internal/llm"
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/repo/modeldb"
+	"github.com/zfd81/groot/internal/repo/settingdb"
+	"github.com/zfd81/groot/internal/setting"
 )
 
 func newModelsHandlerForTest(t *testing.T) *ModelsHandler {
+	t.Helper()
+	h, _ := newModelsHandlerAndSettingsForTest(t)
+	return h
+}
+
+func newModelsHandlerAndSettingsForTest(t *testing.T) (*ModelsHandler, *setting.Settings) {
 	t.Helper()
 	sqlxDB, dialect, err := db.Open(nil, t.TempDir())
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() { sqlxDB.Close() })
-	return NewModelsHandler(llm.NewModelService(modeldb.New(sqlxDB, dialect)), logger.NewNop())
+	settings := setting.New(config.Bootstrap{}, settingdb.New(sqlxDB, dialect))
+	h := NewModelsHandler(llm.NewModelService(modeldb.New(sqlxDB, dialect)), settings, logger.NewNop())
+	return h, settings
+}
+
+// modelBody 拼装创建/更新模型的请求体，name 同时用作模型标识。
+func modelBody(name string, enabled bool) string {
+	return fmt.Sprintf(`{"name":%q,"model":%q,"base_url":"https://api.openai.com/v1",`+
+		`"api_key":"sk-test-1234abcd","temperature":0,"top_p":1,"stop":[],"enabled":%t}`,
+		name, name, enabled)
+}
+
+// seedDefaultModel 先创建一个占位默认模型：库中首个模型会被强制设为默认并启用，
+// 后续用例创建的模型才允许禁用/删除。
+func seedDefaultModel(t *testing.T, h *ModelsHandler) {
+	t.Helper()
+	rc := callJSON(h.Create, consts.MethodPost, modelBody("placeholder", true), nil)
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("创建占位默认模型 status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+}
+
+func voiceModel(t *testing.T, settings *setting.Settings) (string, bool) {
+	t.Helper()
+	v, modelSet, err := settings.Voice(context.Background())
+	if err != nil {
+		t.Fatalf("Voice: %v", err)
+	}
+	return v.Model, modelSet
+}
+
+func TestModelsHandler_DisableClearsVoiceModel(t *testing.T) {
+	h, settings := newModelsHandlerAndSettingsForTest(t)
+	seedDefaultModel(t, h)
+	callJSON(h.Create, consts.MethodPost, modelBody("arabic", true), nil)
+	if err := settings.SetVoiceModel(context.Background(), "arabic"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	rc := callJSON(h.Update, consts.MethodPut, modelBody("arabic", false), map[string]string{"name": "arabic"})
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Update status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	model, modelSet := voiceModel(t, settings)
+	if model != "" || !modelSet {
+		t.Errorf("禁用识别模型后 voice.model = %q modelSet=%v, want \"\" true", model, modelSet)
+	}
+}
+
+func TestModelsHandler_DeleteClearsVoiceModel(t *testing.T) {
+	h, settings := newModelsHandlerAndSettingsForTest(t)
+	seedDefaultModel(t, h)
+	callJSON(h.Create, consts.MethodPost, modelBody("arabic", true), nil)
+	if err := settings.SetVoiceModel(context.Background(), "arabic"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	rc := callJSON(h.Delete, consts.MethodDelete, "", map[string]string{"name": "arabic"})
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Delete status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	model, modelSet := voiceModel(t, settings)
+	if model != "" || !modelSet {
+		t.Errorf("删除识别模型后 voice.model = %q modelSet=%v, want \"\" true", model, modelSet)
+	}
+}
+
+func TestModelsHandler_RenameFollowsVoiceModel(t *testing.T) {
+	h, settings := newModelsHandlerAndSettingsForTest(t)
+	seedDefaultModel(t, h)
+	callJSON(h.Create, consts.MethodPost, modelBody("arabic", true), nil)
+	if err := settings.SetVoiceModel(context.Background(), "arabic"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	rc := callJSON(h.Update, consts.MethodPut, modelBody("arabic-2", true), map[string]string{"name": "arabic"})
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Update status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if model, _ := voiceModel(t, settings); model != "arabic-2" {
+		t.Errorf("改名后 voice.model = %q, want arabic-2", model)
+	}
+}
+
+func TestModelsHandler_DisableKeepsUnrelatedVoiceModel(t *testing.T) {
+	h, settings := newModelsHandlerAndSettingsForTest(t)
+	seedDefaultModel(t, h)
+	callJSON(h.Create, consts.MethodPost, modelBody("arabic", true), nil)
+	if err := settings.SetVoiceModel(context.Background(), "whisper-1"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	rc := callJSON(h.Update, consts.MethodPut, modelBody("arabic", false), map[string]string{"name": "arabic"})
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Update status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if model, _ := voiceModel(t, settings); model != "whisper-1" {
+		t.Errorf("禁用无关模型后 voice.model = %q, want whisper-1", model)
+	}
+}
+
+func TestModelsHandler_UpdateWithoutEnabledKeepsVoiceModel(t *testing.T) {
+	h, settings := newModelsHandlerAndSettingsForTest(t)
+	seedDefaultModel(t, h)
+	callJSON(h.Create, consts.MethodPost, modelBody("arabic", true), nil)
+	if err := settings.SetVoiceModel(context.Background(), "arabic"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	body := `{"name":"arabic","model":"arabic","base_url":"https://api.openai.com/v1","api_key":"sk-test-1234abcd","stop":[]}`
+	rc := callJSON(h.Update, consts.MethodPut, body, map[string]string{"name": "arabic"})
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Update status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if model, _ := voiceModel(t, settings); model != "arabic" {
+		t.Errorf("省略 enabled 的更新后 voice.model = %q, want arabic", model)
+	}
+}
+
+func TestModelsHandler_RenameAndDisableClearsVoiceModel(t *testing.T) {
+	h, settings := newModelsHandlerAndSettingsForTest(t)
+	seedDefaultModel(t, h)
+	callJSON(h.Create, consts.MethodPost, modelBody("arabic", true), nil)
+	if err := settings.SetVoiceModel(context.Background(), "arabic"); err != nil {
+		t.Fatalf("SetVoiceModel: %v", err)
+	}
+
+	rc := callJSON(h.Update, consts.MethodPut, modelBody("arabic-2", false), map[string]string{"name": "arabic"})
+	if rc.Response.StatusCode() != 200 {
+		t.Fatalf("Update status=%d body=%s", rc.Response.StatusCode(), rc.Response.Body())
+	}
+	if model, _ := voiceModel(t, settings); model != "" {
+		t.Errorf("改名并禁用后 voice.model = %q, want \"\"", model)
+	}
 }
 
 func callJSON(h func(context.Context, *app.RequestContext), method, body string, params map[string]string) *app.RequestContext {

@@ -87,6 +87,7 @@ export default {
     recordNoPermission: '麦克风权限被拒绝，请在浏览器设置中允许后重试',
     recordNoDevice: '未检测到麦克风设备',
     recordUnsupported: '当前浏览器不支持录音',
+    recordInsecure: '语音输入需通过 HTTPS 或 localhost 访问，当前页面环境不允许使用麦克风',
     recordFailed: '录音失败，请重试',
     transcribeFailed: '语音识别失败：{msg}',
     recordNoModel: '所选识别模型不可用，请在设置中重新选择',
