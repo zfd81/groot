@@ -18,7 +18,7 @@ const emit = defineEmits<{
 }>()
 
 const meta = useMetaStore()
-const { models, defaultModel, agents, loaded: metaLoaded } = storeToRefs(meta)
+const { models, chatModels, defaultModel, agents, loaded: metaLoaded } = storeToRefs(meta)
 const { t } = useI18n()
 
 // 主 Agent 的哨兵值：与后端 agent.MainAgentName 一致。用非空值而非空串，
@@ -165,20 +165,20 @@ function removeAttachment(index: number) {
   attachments.value.splice(index, 1)
 }
 
-// 模型必须始终有选中项：元数据加载后，若尚未选择则回落到默认模型，
-// 默认模型缺失时取列表首项，确保选择框不为空。
+// 模型选择必须在对话模型列表内：未选择、或已选模型不再属于对话模型
+// （例如被标记为 ASR/TTS）时，回落到默认对话模型，默认模型不在列表中则取首项。
 watch(
-  [defaultModel, models],
+  [defaultModel, chatModels],
   ([def, list]) => {
-    if (selectedModel.value) return
-    if (def) selectedModel.value = def
-    else if (list.length) selectedModel.value = list[0].name
+    if (selectedModel.value && list.some((m) => m.name === selectedModel.value)) return
+    const fallback = list.some((m) => m.name === def) ? def : list[0]?.name || ''
+    selectedModel.value = fallback
   },
   { immediate: true }
 )
 
 const modelOptions = computed(() =>
-  models.value.filter((m) => m.enabled).map((m) => ({
+  chatModels.value.map((m) => ({
     label: m.name,
     value: m.name,
     isDefault: m.name === defaultModel.value,

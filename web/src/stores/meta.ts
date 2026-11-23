@@ -10,6 +10,13 @@ export const useMetaStore = defineStore('meta', () => {
   const defaults = ref<DefaultModels>({ chat: '', asr: '', vision: '', tts: '' })
   // 默认对话模型，聊天输入区的模型下拉框以它标注「默认」
   const defaultModel = computed(() => defaults.value.chat)
+  // 对话模型列表：排除禁用模型，以及持有 asr/tts 标记的语音模型。
+  // default_types 缺失时按非语音模型处理，避免旧响应导致整个下拉为空。
+  const chatModels = computed(() =>
+    models.value.filter(
+      (m) => m.enabled && !m.default_types?.includes('asr') && !m.default_types?.includes('tts')
+    )
+  )
   const agents = ref<string[]>([])
   const loaded = ref(false)
 
@@ -41,5 +48,5 @@ export const useMetaStore = defineStore('meta', () => {
     await load()
   }
 
-  return { models, defaults, defaultModel, agents, loaded, load, reload }
+  return { models, defaults, defaultModel, chatModels, agents, loaded, load, reload }
 })
