@@ -1,0 +1,8 @@
+pytest
+httpx
+python-multipart
+fastapi
+uvicorn[standard]
+numpy
+scipy
+soundfile

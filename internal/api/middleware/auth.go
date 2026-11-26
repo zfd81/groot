@@ -15,18 +15,29 @@ import (
 	"github.com/zfd81/groot/internal/repo"
 )
 
+// ServicePermissionResolver 解析子服务声明的权限点；名字不存在或子服务无效时 found 为 false。
+type ServicePermissionResolver interface {
+	ServicePermission(name string) (string, bool)
+}
+
 // AuthMiddleware 提供 API Key（JWT）/ Web Cookie 认证，始终开启。
 type AuthMiddleware struct {
-	config   config.SecurityConfig
-	webStore *websession.Store
-	apiKeys  repo.APIKeyRepo
-	log      *logger.Logger
+	config      config.SecurityConfig
+	webStore    *websession.Store
+	apiKeys     repo.APIKeyRepo
+	log         *logger.Logger
+	servicePerm ServicePermissionResolver
 }
 
 // NewAuthMiddleware creates a new auth middleware.
 // webStore 为 Web 登录会话存储；传 nil 表示不启用 Cookie 凭证。
 func NewAuthMiddleware(cfg config.SecurityConfig, webStore *websession.Store, apiKeys repo.APIKeyRepo, log *logger.Logger) *AuthMiddleware {
 	return &AuthMiddleware{config: cfg, webStore: webStore, apiKeys: apiKeys, log: log}
+}
+
+// SetServicePermissionResolver 注入子服务权限解析器；传 nil 时服务路径沿用默认权限。
+func (m *AuthMiddleware) SetServicePermissionResolver(r ServicePermissionResolver) {
+	m.servicePerm = r
 }
 
 // Serve returns a Hertz middleware handler
@@ -67,10 +78,16 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			return
 		}
 
-		// 权限检查以数据库行为准
+		// 权限检查以数据库行为准；命中 /services/<单段> 时以子服务声明的权限点覆盖默认映射
 		path := string(rc.URI().Path())
 		method := string(rc.Method())
 		requiredPerm := getRequiredPermission(path, method)
+		if name, ok := serviceNameFromPath(path); ok && m.servicePerm != nil {
+			// 空权限点一律不接受：resolver 返回空串时沿用静态默认（all，最严格），避免绕过检查
+			if perm, found := m.servicePerm.ServicePermission(name); found && perm != "" {
+				requiredPerm = perm
+			}
+		}
 		if requiredPerm != "" && !hasPermission(key.Permissions, requiredPerm) {
 			errbody.Write(rc, 403, "权限不足: 需要 "+requiredPerm+" 权限",
 				errbody.TypePermission, "", errbody.CodeInsufficientPermissions)
@@ -102,6 +119,20 @@ func bearerToken(rc *app.RequestContext) string {
 
 func writeUnauthorized(rc *app.RequestContext) {
 	errbody.Write(rc, 401, "API Key 无效或缺失", errbody.TypeAuthentication, "", errbody.CodeInvalidAPIKey)
+}
+
+// serviceNameFromPath 从 /services/<单段> 路径提取子服务名；
+// /services/、多段路径及非服务路径一律不命中。
+func serviceNameFromPath(path string) (string, bool) {
+	const prefix = "/services/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	name := path[len(prefix):]
+	if name == "" || strings.Contains(name, "/") {
+		return "", false
+	}
+	return name, true
 }
 
 // hasPermission 判断权限集合是否满足所需权限点。

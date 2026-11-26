@@ -1,0 +1,9 @@
+# asr-router 业务依赖（fastapi、uvicorn、python-multipart 由上级 requirements.txt 提供）。
+# 用范围而不是固定版本：共享解释器的 Python 版本由使用者决定（mlx 要求 ≥3.10），
+# 固定到某个小版本会让其它 Python 版本找不到预编译 wheel。
+mlx>=0.32,<1
+numpy>=1.26,<3
+scipy>=1.14
+soundfile>=0.13
+kaldiio>=2.18
+kaldi-native-fbank>=1.22

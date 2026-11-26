@@ -428,6 +428,146 @@ func TestAuth_WebCookieHasNoTenant(t *testing.T) {
 	}
 }
 
+// stubServicePerms 固定返回表的服务权限解析器，用于隔离测试中间件的权限覆盖逻辑。
+type stubServicePerms map[string]string
+
+func (s stubServicePerms) ServicePermission(name string) (string, bool) {
+	perm, ok := s[name]
+	return perm, ok
+}
+
+// newKeyToken 创建指定权限的 Key 并返回其 token。
+func newKeyToken(t *testing.T, keys repo.APIKeyRepo, id, name string, perms []string) string {
+	t.Helper()
+	created := time.Now().Truncate(time.Second)
+	k := &repo.APIKey{
+		ID: id, Name: name, Permissions: perms,
+		ExpiresAt: created.AddDate(0, 0, 7), CreatedAt: created,
+	}
+	if err := keys.Create(context.Background(), k); err != nil {
+		t.Fatalf("Create key: %v", err)
+	}
+	token, err := auth.Sign(k, testSecret)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	return token
+}
+
+// TestServiceNameFromPath 只匹配 /services/<单段>，多段、空名与非服务路径均不命中。
+func TestServiceNameFromPath(t *testing.T) {
+	cases := []struct {
+		path   string
+		want   string
+		wantOK bool
+	}{
+		{"/services/asr-router", "asr-router", true},
+		{"/services/asr-router/detect", "", false},
+		{"/services/", "", false},
+		{"/chat", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := serviceNameFromPath(tc.path)
+		if got != tc.want || ok != tc.wantOK {
+			t.Errorf("serviceNameFromPath(%q) = (%q, %v), want (%q, %v)", tc.path, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
+// TestAuth_ServicePermissionAllowsMatch 服务路径按 resolver 返回的权限点校验，持有 chat 的 Key 放行。
+func TestAuth_ServicePermissionAllowsMatch(t *testing.T) {
+	m, _, _, token := newTestMiddleware(t) // 预置 Key 含 chat
+	m.SetServicePermissionResolver(stubServicePerms{"asr-router": "chat"})
+	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
+	})
+	if code := rc.Response.StatusCode(); code == 401 || code == 403 {
+		t.Fatalf("chat key should pass /services/asr-router, got %d", code)
+	}
+}
+
+// TestAuth_ServicePermissionRejectsMismatch resolver 声明的权限与 Key 不匹配时返回 403 insufficient_permissions。
+func TestAuth_ServicePermissionRejectsMismatch(t *testing.T) {
+	m, keys, _, _ := newTestMiddleware(t)
+	token := newKeyToken(t, keys, "20260902120100", "status-only", []string{"status"})
+	m.SetServicePermissionResolver(stubServicePerms{"asr-router": "chat"})
+	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
+	})
+	if got := rc.Response.StatusCode(); got != 403 {
+		t.Fatalf("expected 403, got %d", got)
+	}
+	body := string(rc.Response.Body())
+	for _, want := range []string{
+		`"code":"insufficient_permissions"`,
+		`"message":"权限不足: 需要 chat 权限"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s: %s", want, body)
+		}
+	}
+}
+
+// TestAuth_ServicePermissionNilResolverFallsBackToAll 未注入 resolver 时服务路径沿用默认 all 校验。
+func TestAuth_ServicePermissionNilResolverFallsBackToAll(t *testing.T) {
+	m, keys, _, _ := newTestMiddleware(t)
+	token := newKeyToken(t, keys, "20260902120101", "chat-only", []string{"chat"})
+	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
+	})
+	if got := rc.Response.StatusCode(); got != 403 {
+		t.Fatalf("expected 403 for default all, got %d", got)
+	}
+}
+
+// TestAuth_ServicePermissionUnknownNameKeepsAll resolver 返回 found=false 时沿用默认 all，chat-only Key 被拒。
+func TestAuth_ServicePermissionUnknownNameKeepsAll(t *testing.T) {
+	m, keys, _, _ := newTestMiddleware(t)
+	token := newKeyToken(t, keys, "20260902120102", "chat-only", []string{"chat"})
+	m.SetServicePermissionResolver(stubServicePerms{}) // asr-router 不在表中 → ("", false)
+	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
+	})
+	if got := rc.Response.StatusCode(); got != 403 {
+		t.Fatalf("unknown service should keep default all and reject, got %d", got)
+	}
+	if body := string(rc.Response.Body()); !strings.Contains(body, `"code":"insufficient_permissions"`) {
+		t.Errorf("body missing insufficient_permissions: %s", body)
+	}
+}
+
+// TestAuth_ServicePermissionEmptyPermFailsClosed resolver 返回 ("", true) 时空权限不得绕过检查，仍按默认 all 拒绝。
+func TestAuth_ServicePermissionEmptyPermFailsClosed(t *testing.T) {
+	m, keys, _, _ := newTestMiddleware(t)
+	token := newKeyToken(t, keys, "20260902120103", "chat-only", []string{"chat"})
+	m.SetServicePermissionResolver(stubServicePerms{"asr-router": ""}) // ("", true)
+	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Authorization", "Bearer "+token)
+	})
+	if got := rc.Response.StatusCode(); got != 403 {
+		t.Fatalf("empty permission must fail closed, got %d", got)
+	}
+	if body := string(rc.Response.Body()); !strings.Contains(body, `"code":"insufficient_permissions"`) {
+		t.Errorf("body missing insufficient_permissions: %s", body)
+	}
+}
+
+// TestAuth_CookieBypassesServicePermission Web Cookie 分支不检查权限点，服务路径直接放行。
+func TestAuth_CookieBypassesServicePermission(t *testing.T) {
+	m, _, _, _ := newTestMiddleware(t)
+	m.SetServicePermissionResolver(stubServicePerms{"asr-router": "all"})
+	webToken := m.webStore.Create("u1")
+	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+		rc.Request.Header.Set("Cookie", websession.CookieName+"="+webToken)
+	})
+	if code := rc.Response.StatusCode(); code == 401 || code == 403 {
+		t.Fatalf("valid cookie should bypass service permission, got %d", code)
+	}
+	if GetCaller(rc) != "web" {
+		t.Errorf("caller should be web, got %q", GetCaller(rc))
+	}
+}
+
 // TestGetRequiredPermission_StopAndDelete 中止对话与删除会话的权限映射，
 // 且不影响既有的 session / status 映射。
 func TestGetRequiredPermission_StopAndDelete(t *testing.T) {

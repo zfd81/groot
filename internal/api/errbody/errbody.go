@@ -2,9 +2,14 @@ package errbody
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
+
+// ErrBodyTooLarge 表示请求体读取过程中超过硬上限；由 BodyLimit 包装的请求体返回，
+// 代理层据此映射为 413 file_too_large。
+var ErrBodyTooLarge = errors.New("request body too large")
 
 // Envelope 是 OpenAI 错误响应的完整响应体。
 type Envelope struct {
@@ -48,6 +53,7 @@ const (
 	CodeInternalError           = "internal_error"
 	CodeUpstreamError           = "upstream_error"
 	CodeScheduleUnavailable     = "schedule_unavailable"
+	CodeServiceUnavailable      = "service_unavailable"
 	CodeUnknownAgent            = "unknown_agent"
 )
 

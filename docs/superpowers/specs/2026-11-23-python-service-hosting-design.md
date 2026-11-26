@@ -1,69 +1,95 @@
-# Python 服务宿主与 ASR 语种识别服务设计文档
+# Python 服务与 ASR 语种识别子服务设计文档
 
 ## 一、功能设计
 
 ### 1.1 功能概述
 
-Groot 在运行期托管一组以 Python 编写的本地服务。服务放置在 `{GROOT_HOME}/services/<服务名>/` 目录中，Groot 启动时扫描这些目录，按统一协议拉起对应的 Python 子进程，并在自己唯一的对外端口上以 `/services/<服务名>/...` 路径暴露这些服务的能力。
+Groot 在运行期托管一个 **Python 服务**。它是一个由 Groot 启动与监督的 Python 进程，监听本机环回地址上的一个临时端口；`{GROOT_HOME}/services/` 下的每个目录是它的一个**子服务**，在进程内对应一个路径 `/<子服务名>` 与一个处理函数，没有下级路径。Groot 在自己唯一的对外端口上以 `/services/<子服务名>` 暴露这些子服务，请求经鉴权后代理到 Python 服务的对应路径。
 
-调用方访问这些接口时使用与 Groot 其他接口完全相同的 API Key。请求经过相同的验签、吊销检查、权限点校验与限流，然后由 Groot 代理到本地 Python 进程。Python 服务不直接对外，不实现面向调用方的鉴权，也无法通过网络被其他主机访问。
+每个 Groot 实例拥有一个自己的 Python 服务，一对一归属：Groot 退出或重启时它随之结束，不同实例之间不共享。端口由内核在启动时分配，不配置、不固定。
 
-服务与 Groot 实例一对一所属：每个 Groot 工作进程只托管由它自己拉起的子进程，Groot 退出或重启时这些子进程随之结束，不同实例之间不共享 Python 进程。
+调用方访问子服务时使用与 Groot 其他接口完全相同的 API Key。请求经过相同的验签、吊销检查、权限点校验与限流，然后由 Groot 代理到 Python 服务。Python 服务不直接对外，不实现面向调用方的鉴权，也无法通过网络被其他主机访问。
 
-第一个托管服务是 `asr-router`，承担语音语种识别：接收一段音频，识别其语种，返回语种代码、置信度与候选语种列表。语种识别结果供上层应用自行决定后续调用哪个 ASR 模型；Groot 与本服务都不做「语言到 ASR 模型」的映射。语种识别后端在 v1 采用 FireRedLID，后端实现封装在服务内部，替换后端不改变对外协议，也不改动 Groot。
+`groot services init` 在 `{GROOT_HOME}` 下创建 `services/` 及其固定布局：`.sdk/` 目录、全局配置 `service.yaml` 模板、基础依赖清单 `requirements.txt` 模板，以及新建子服务用的模板目录 `_template/`。布局与共享虚拟环境由 `groot services init` 独立负责；`groot init` 只准备工作目录根与资源目录，不创建 `services/` 及其内容。
+
+第一个子服务是 `asr-router`，承担语音语种识别：接收一段音频，识别其语种，返回语种代码、置信度与候选语种列表。结果供上层应用自行决定后续调用哪个 ASR 模型；Groot 与本子服务都不做「语言到 ASR 模型」的映射。语种识别后端在 v1 采用 FireRedLID 的 MLX INT8 转换版本，后端实现封装在子服务内部，替换后端不改变对外协议，也不改动 Groot。
 
 该能力解决的问题：
 
 - 语音、视觉、语言识别等模型以 Python 生态为主，无法在 Go 进程内直接加载使用。
 - 逐次命令行调用需要重复加载模型权重，启动耗时与内存开销不可接受。
-- 若每个 Python 服务各自监听端口并各自实现鉴权，会产生多端口暴露、重复鉴权逻辑与分散的密钥管理。
+- 若每个 Python 能力各自监听端口并各自实现鉴权，会产生多端口暴露、重复鉴权逻辑与分散的密钥管理。
 - 上层应用需要一个稳定的语种识别接口，接口不应随底层 LID 模型的更换而变化。
 
 ### 1.2 能力清单
 
 | 能力 | 说明 |
 |---|---|
-| 目录发现 | 扫描 `{GROOT_HOME}/services/*/`，识别符合标准结构的 Python 服务 |
+| 子服务发现 | 扫描 `{GROOT_HOME}/services/*/`，识别符合标准结构的子服务 |
+| 单进程托管 | 每个 Groot 实例拉起一个 Python 服务，所有子服务注册其中 |
+| 一子服务一地址 | 每个子服务对应进程内的一个路径 `/<子服务名>` 与一个处理函数 |
 | 生命周期托管 | 拉起、就绪握手、崩溃重启、优雅停止、Groot 退出时级联结束 |
-| 单端口暴露 | 所有服务通过 Groot 的对外端口以 `/services/<服务名>/...` 访问 |
+| 单端口暴露 | 所有子服务通过 Groot 的对外端口以 `/services/<子服务名>` 访问 |
 | 统一鉴权 | 复用 API Key 验签、吊销检查、权限点与限流，不新增鉴权实现 |
-| 身份透传 | 向服务注入调用方、租户、用户、请求 ID，服务无需解析 API Key |
-| 内部令牌 | 每个服务进程、每次启动生成独立令牌，仅 Groot 与该子进程知道 |
-| 流式代理 | 请求体与响应体流式转发，不整体缓冲，支持大文件上传与流式响应 |
-| 进程隔离 | Python 崩溃不影响 Groot；单个服务不可用不影响其他服务 |
-| 多实例共存 | 同一主机可运行多个 Groot 实例，各自拉起并管理自己的服务进程 |
+| 身份透传 | 向子服务注入调用方、租户、用户、请求 ID，子服务无需解析 API Key |
+| 内部令牌 | Python 服务每次启动生成独立令牌，仅 Groot 与该进程知道 |
+| 透明代理 | 方法、状态码与响应头原样透传；请求体与响应体边读边转发，大文件不整体进内存 |
+| 子服务级隔离 | 某个子服务加载失败或请求出错，不影响同进程的其他子服务 |
+| 多实例共存 | 同一主机可运行多个 Groot 实例，各自拉起并管理自己的 Python 服务 |
 | 跨平台 | Linux、macOS、Windows 使用同一套协议 |
-| 语种识别 | `POST /services/asr-router/detect`，返回 `language`、`confidence` 与候选列表 |
-| 后端可替换 | LID 后端抽象为服务内部接口，v1 实现为 FireRedLID |
+| 状态可见 | 健康检查接口与 `groot status` 展示 Python 服务与每个子服务的运行状态 |
+| 语种识别 | `POST /services/asr-router`，返回 `language`、`confidence` 与候选列表 |
+| 后端可替换 | LID 后端抽象为子服务内部接口，v1 实现为 FireRedLID |
 
 ### 1.3 模块边界
 
 | 模块 | 职责 |
 |---|---|
-| Groot 宿主（`internal/pysvc`） | 发现服务、解析清单、拉起与监督子进程、就绪握手、反向代理、权限解析、日志收编 |
+| Groot 宿主（`internal/pysvc`） | 发现子服务、读取全局配置、解压 SDK、拉起与监督 Python 服务、就绪握手、反向代理、权限解析、日志收编、状态汇总 |
 | Groot 认证中间件 | 对 `/services/...` 执行与其他接口一致的 API Key 鉴权、权限点与限流 |
-| Python SDK（`groot_service_sdk`） | 标准启动器、令牌校验、环回地址绑定、就绪上报、身份头解析、统一错误信封、健康端点 |
-| Python 服务（`services/asr-router`） | 业务逻辑、模型加载与推理、业务路由 |
+| Python SDK（`groot_service_sdk`） | Python 服务的启动器：加载并注册全部子服务、令牌校验、环回地址绑定、就绪上报、身份头解析、统一错误信封、健康端点 |
+| 子服务（如 `services/asr-router`） | 业务逻辑、模型加载与推理、一个处理函数 |
 | 上层应用 | 根据返回的语种自行选择 ASR 模型，再调用 Groot 的转录接口 |
 
-Groot 不感知服务的业务语义，只处理进程与 HTTP。SDK 不包含业务逻辑，只实现宿主与服务的公共协议。服务作者只编写业务路由。
+Groot 不感知子服务的业务语义，只处理进程与 HTTP。SDK 不包含业务逻辑，只实现宿主与子服务的公共协议。子服务作者只编写处理函数与启动、停止钩子。
 
-### 1.4 服务目录与识别标准
+### 1.4 目录与契约
 
 #### 1.4.1 目录结构
 
 ```
-{GROOT_HOME}/services/<服务名>/
-├── service.yaml          # 可选；只承载授权与超时策略
-├── requirements.txt      # 必须；业务依赖清单
-├── app/
-│   ├── __init__.py
-│   └── main.py           # 必须暴露名为 app 的 ASGI 对象
-├── .venv/                # 可选；存在时优先使用，否则使用共享环境
-└── models/               # 可选；模型权重等运行资源
+{GROOT_HOME}/services/            # Python 服务的根目录
+├── service.yaml                  # 全局配置，可选；缺省时使用默认值
+├── requirements.txt              # 基础依赖（fastapi、uvicorn、python-multipart），所有子服务共用
+├── .venv/                        # 共享 Python 环境；不参与子服务扫描
+├── .sdk/                         # Groot 解压的 Python SDK；不参与子服务扫描
+├── _template/                    # 新建子服务的模板；不参与子服务扫描
+│   ├── requirements.txt
+│   └── app/
+│       ├── __init__.py
+│       └── main.py
+└── <子服务名>/
+    ├── requirements.txt          # 必须；业务依赖清单，可为空
+    ├── app/
+    │   ├── __init__.py
+    │   └── main.py               # 必须定义处理函数 handle
+    └── models/                   # 可选；模型权重等运行资源
 ```
 
 Windows 上 `{GROOT_HOME}` 为 `%USERPROFILE%\.groot`。
+
+| 路径 | 内容 | 归属 |
+|---|---|---|
+| `services/service.yaml` | 全局配置：启动超时、请求超时、子服务权限点 | `groot services init` 创建模板，使用者维护 |
+| `services/requirements.txt` | 基础依赖：fastapi、uvicorn、python-multipart | `groot services init` 创建模板 |
+| `services/.venv/` | 第三方 Python 库，所有子服务共用 | `groot services init` 创建并安装基础依赖 |
+| `services/.sdk/` | `groot_service_sdk` 协议库，随 Groot 发布 | `groot services init` 创建目录，Groot 启动时解压 |
+| `services/_template/` | 子服务骨架，复制改名即为新子服务 | `groot services init` 创建 |
+| `services/<子服务名>/app/` | 子服务业务代码 | 子服务开发者 |
+| `services/<子服务名>/requirements.txt` | 该子服务的业务依赖 | 子服务开发者 |
+| `services/<子服务名>/models/` | 第三方模型权重（如 FireRedLID）；可选，无模型的子服务不创建 | 使用者准备 |
+
+第三方依赖库与 Groot 自有的 SDK 分开：前者进虚拟环境，后者按版本解压到 `.sdk`。模型权重单独放在子服务目录的 `models/` 下，不进虚拟环境，也不进代码仓库。
 
 #### 1.4.2 固定约定
 
@@ -71,81 +97,182 @@ Windows 上 `{GROOT_HOME}` 为 `%USERPROFILE%\.groot`。
 
 | 项 | 固定值 |
 |---|---|
-| 服务名 | 目录名；必须匹配 `[a-z0-9][a-z0-9_-]*` |
-| 对外路径 | `/services/<目录名>/...` |
-| 入口 | `app/main.py` 中的 `app` 对象 |
-| 解释器 | 服务目录存在 `.venv` 时用 `<服务目录>/.venv/{bin/python 或 Scripts/python.exe}`，否则用 `{GROOT_HOME}/venv/...` |
+| 子服务名 | 目录名；必须匹配 `[a-z0-9][a-z0-9_-]*` |
+| 对外路径 | `/services/<子服务名>` |
+| 进程内路径 | `/<子服务名>` |
+| 入口 | `app/main.py` 中的函数 `handle` |
+| 进程内模块名 | `groot_services.<子服务名>.app`，子服务名中的 `-` 换为 `_` |
+| 解释器 | 唯一环境 `{GROOT_HOME}/services/.venv/bin/python`（Windows 为 `Scripts\python.exe`） |
 | 启动命令 | `<解释器> -m groot_service_sdk.launcher` |
-| 工作目录 | 服务目录 |
-| 令牌传递 | stdin 首行 |
+| 工作目录 | `{GROOT_HOME}/services` |
+| 进程数 | 每个 Groot 实例一个 |
+| 进程归属 | 每个 Groot 实例一个，随实例创建与退出，实例间不共享进程、端口与令牌 |
+| 启动条件 | 存在至少一个通过校验的子服务且共享解释器存在；否则不拉起进程，状态保持 `disabled` |
+| Python 环境 | `{GROOT_HOME}/services/.venv` 全局唯一，所有子服务共用，不按子服务创建环境 |
+| 访问入口 | 仅 Groot 的 `/services/<子服务名>`；Python 端口只在环回地址可达，且除 `/healthz` 外需内部令牌 |
+| 监听地址 | `127.0.0.1`，端口由内核分配 |
+| 令牌传递 | stdin 第一行 |
+| 子服务清单传递 | stdin 第二行 |
 | 就绪上报 | stdout 结构化就绪行 |
 | 健康端点 | `GET /healthz`，由 SDK 提供 |
+| 全局配置 | `{GROOT_HOME}/services/service.yaml` |
+| 停止等待 | 固定 10 秒，超时强制杀死 |
 
 #### 1.4.3 共享 Python 环境
 
-所有服务默认共用 `{GROOT_HOME}/venv`，与操作系统 Python 隔离。服务作者自行为该环境安装依赖：
+所有子服务共用 `{GROOT_HOME}/services/.venv`，与操作系统 Python 隔离。环境全局唯一，子服务不单独拥有虚拟环境；子服务目录中即使出现 `.venv` 也不参与解析。使用者执行 `groot services init` 创建共享环境并安装基础依赖，子服务业务依赖由使用者安装：
 
 ```
-python3 -m venv {GROOT_HOME}/venv
-{GROOT_HOME}/venv/bin/pip install -r {GROOT_HOME}/services/<服务名>/requirements.txt
+{GROOT_HOME}/services/.venv/bin/pip install -r {GROOT_HOME}/services/<子服务名>/requirements.txt
 ```
 
-Windows 对应 `{GROOT_HOME}\venv\Scripts\python.exe`。
+Windows 把 `bin/pip` 换成 `Scripts\pip.exe`。
 
-单个服务目录内如存在自己的 `.venv`，Groot 自动改用该环境，无需配置。这一后路用于个别服务依赖冲突时做隔离。
+`fastapi`、`uvicorn` 与 `python-multipart`（表单/文件上传所需）只在 `services/requirements.txt` 中声明一次；每个子服务的 `requirements.txt` 只列业务依赖，没有额外依赖时保留注释即为空清单。所有子服务运行在同一个解释器中，依赖版本须互相兼容，由子服务开发者在开发期保证。
 
-Groot 不执行 `pip install`，不下载模型权重，不创建或修复虚拟环境。
+Groot 运行期不安装或修复依赖，不下载模型权重；基础依赖安装失败时由使用者按命令输出的手动安装命令补装。
 
-#### 1.4.4 识别与校验
+#### 1.4.4 子服务入口契约
 
-1. Groot 扫描 `{GROOT_HOME}/services/` 的直接子目录，忽略以 `.` 开头的目录。
-2. 目录名不符合命名规则、缺少 `app/main.py`、`app/main.py` 缺失 `app` 对象的目录不视为服务。
-3. 服务名重复（目录名在大小写不敏感文件系统上的冲突）视为配置错误，只保留一个并记录警告。
-4. `requirements.txt` 缺失时该服务被禁用，记录错误日志。
-5. 解释器不存在时该服务被禁用，记录错误日志，并提示创建环境的命令。
-6. `service.yaml` 字段非法时该服务被禁用，记录错误日志；不影响 Groot 启动与其他服务。
+所有子服务运行在同一个 Python 服务进程中，进程入口统一为 SDK 启动器。启动器持有唯一的 FastAPI 应用，按固定契约加载每个子服务目录下的 `app/main.py`，把其中的 `handle` 函数注册为路径 `/<子服务名>` 的处理器。子服务作者不创建 FastAPI 应用、不写路由装饰器、不写入口函数、不写 `if __name__ == "__main__"`。
 
-`app/main.py` 是否真的暴露了可用的 `app` 对象，由启动时的导入结果判定：导入失败表现为进程退出，错误输出进入 Groot 日志。
+**模块名**：启动器把 `<子服务目录>/app/` 注册为包 `groot_services.<子服务名>.app`，子服务名中的 `-` 换为 `_`，例如 `asr-router` 的入口模块为 `groot_services.asr_router.app.main`。多个子服务的 `app` 包因此互不冲突，各自的模块级变量相互隔离。目录名换算后相同（如 `asr-router` 与 `asr_router`）视为重名。
+
+`app/main.py` 的模板（即 `_template/app/main.py` 的内容）：
+
+```python
+import logging
+from fastapi import File, UploadFile
+
+from .lid import create_backend          # 子服务内部模块一律相对导入
+
+log = logging.getLogger(__name__)        # 记录器名自带子服务名
+
+METHODS = ["POST"]                       # 可选；接口接受的 HTTP 方法，默认 ["POST"]
+
+_backend = None                          # 子服务状态放模块级变量，各子服务模块相互隔离
+
+async def startup() -> None:             # 可选；进程启动时调用一次，加载模型等重资源
+    global _backend
+    _backend = create_backend()
+    _backend.load()
+    log.info("模型加载完成")
+
+async def shutdown() -> None:            # 可选；进程停止时调用一次，释放资源
+    pass
+
+async def handle(file: UploadFile = File(...)) -> dict:   # 必须；本子服务唯一的处理函数
+    ...
+    return {"language": "zh", "confidence": 0.97}
+```
+
+| 名称 | 必须 | 说明 |
+|---|---|---|
+| `handle` | 是 | 处理函数，签名按 FastAPI 规则声明参数（表单、文件、查询、JSON 体、`Depends`）；返回值按 FastAPI 规则序列化，也可直接返回 `Response` |
+| `METHODS` | 否 | 字符串列表，接口接受的 HTTP 方法；缺省 `["POST"]` |
+| `startup` | 否 | 无参协程或普通函数，进程启动时按子服务目录名顺序逐个调用；抛出异常则该子服务标为失败并不注册 |
+| `shutdown` | 否 | 无参协程或普通函数，进程停止时按启动的逆序调用；异常只记日志 |
+
+子服务代码的要求：
+
+1. `app/main.py` 中存在名为 `handle` 的可调用对象。缺失时该子服务加载失败。
+2. 启动阶段逻辑（加载模型等）写在 `startup`，释放写在 `shutdown`。不定义 FastAPI 应用，不使用 `lifespan` 或 `on_event`。
+3. 子服务不绑定端口、不启动 uvicorn、不读 stdin、不写就绪行、不实现令牌校验、不定义 `/healthz`；这些由 SDK 启动器完成。
+4. 子服务不读取 API Key；调用方身份通过 `Depends(groot_identity)` 声明为 `handle` 的参数获取（见 1.9）。
+5. 子服务只有 `/<子服务名>` 一个路径。需要多个操作时，建多个子服务目录，或在请求体中用字段区分。
+6. 子服务内部的模块引用使用相对导入（`from .lid import ...`）；绝对导入 `import app.xxx` 不可用。
+7. 子服务通过自身文件位置定位资源目录（如 `Path(__file__).resolve().parent.parent / "models"`），不依赖进程工作目录。
+8. 日志使用 `logging.getLogger(__name__)`，不自行配置 handler；启动器把根 logger 接到 stdout，由 Groot 收编。
+9. 子服务不修改进程级状态：不调用 `sys.exit`、`os.chdir`、`os.environ` 写入、`signal.signal`，不重新配置根 logger，不启动守护进程。线程池、GPU 句柄等资源归子服务模块持有，在 `shutdown` 中释放。
+10. 子服务返回业务错误时抛出 SDK 的 `APIError`（见 1.9）；不自行注册异常处理器。
+11. 子服务不负责调用启动器；启动不需要导入 SDK，只有需要身份或错误信封时才导入 SDK 辅助接口。
+
+新增子服务的步骤：复制 `_template/` 为 `<子服务名>/`，编写 `app/main.py` 与 `requirements.txt`，安装依赖，重启 Groot。
+
+#### 1.4.5 全局配置
+
+`{GROOT_HOME}/services/service.yaml` 承载 Python 服务的公共配置。`groot services init` 创建全注释模板，已存在时跳过，不覆盖使用者内容：
+
+```yaml
+# Python 服务全局配置；取消注释即生效，缺省值如下。
+# startup_timeout: 180s
+# request_timeout: 120s
+# permission:
+#   asr-router: chat
+```
+
+| 项 | 默认 | 说明 |
+|---|---|---|
+| `startup_timeout` | `180s` | 等待 Python 服务就绪行的上限，覆盖全部子服务 `startup` 的总时间；模型多或下载慢时调大 |
+| `request_timeout` | `120s` | 代理到子服务的首字节超时 |
+| `permission` | `{}` | 子服务名到权限点的映射；未列出的子服务使用 `all` |
+
+三项均在启动时读取，改动后重启生效。模板等价于全部默认值；安装 `asr-router` 时取消 `permission` 两行注释，即把该子服务归入 `chat` 权限。
+
+配置文件不存在时使用全部默认值。解析失败或出现未知字段时记录错误日志并按默认值运行；默认权限 `all` 是更严格的取值，回退不会放宽访问。`permission` 中出现未识别的子服务名时记录警告并忽略；权限点不在已知集合中时该子服务使用 `all` 并记录错误。
+
+`bootstrap.yaml` 不新增相关配置节。子服务的启用范围由目录本身决定：目录存在且通过校验即加载。
+
+#### 1.4.6 识别与校验
+
+子服务的识别只由 Groot 做一次，结果通过 stdin 交给启动器；启动器不自行扫描目录（`--dev` 调试模式除外）。
+
+Groot 扫描 `{GROOT_HOME}/services/` 的直接子目录，忽略以 `.` 或 `_` 开头的目录；目录名符合命名规则、存在 `app/__init__.py`、`app/main.py` 与 `requirements.txt` 的目录视为子服务。`app/__init__.py` 让启动器能把 `app/` 注册为包并支持子服务内部的相对导入。`healthz` 是 SDK 健康端点 `/healthz` 的保留名称，同名目录视为 `invalid`，避免子服务遮蔽健康端点。
+
+1. 不符合规则的目录记为 `invalid`，记录错误日志并给出修复提示，不注册路由；请求由现有兜底处理器返回 404，与访问任意不存在的路径行为一致。
+2. 子服务名重复（目录名在大小写不敏感文件系统上的冲突，或 `-`/`_` 换算后相同）视为配置错误，只保留一个并记录警告。
+3. 通过校验的子服务注册 `/services/<子服务名>` 路由，并进入交给启动器的清单。
+4. 共享解释器不存在时不拉起 Python 服务，记录一条错误并提示创建环境的命令，所有子服务不可用。
+5. 清单为空时不拉起 Python 服务。
+
+启动器按清单逐个加载：
+
+1. 某个子服务导入失败（语法错误、依赖缺失、无 `handle`）或 `startup` 抛出异常，记录该子服务的错误，不注册其路径，继续处理其余子服务；进程照常就绪。
+2. 加载结果随就绪行上报，Groot 据此把失败的子服务标为 `failed`，对其请求返回 503。
+3. 全部子服务都加载失败时进程仍就绪，所有子服务返回 503，错误原因在状态中逐项可见。
 
 ### 1.5 运行时协议
 
 #### 1.5.1 启动顺序
 
-1. Groot 在创建 HTTP 服务器之前完成服务扫描，得到服务名、权限点与就绪状态，用于路由注册与权限解析。
-2. HTTP 服务器开始监听后，Groot 异步启动各服务，不阻塞对外端口就绪。
-3. 对每个服务：
-   1. 解析解释器路径。
-   2. 生成 32 字节随机令牌，十六进制编码。
-   3. 创建 stdin、stdout、stderr 三条管道。
-   4. 以服务目录为工作目录执行 `<解释器> -m groot_service_sdk.launcher`，环境变量继承 Groot 进程，并设置 `PYTHONPATH={GROOT_HOME}/sdk/<sdk版本>`、`PYTHONUNBUFFERED=1`。
-   5. 向 stdin 写入令牌一行，保留写端不关闭。
-   6. 读取 stdout，等待就绪行；同时把其余 stdout/stderr 行写入 Groot 日志。
+1. Groot 在创建 HTTP 服务器之前完成子服务扫描与全局配置读取，得到子服务名、权限点与可注册状态，用于路由注册与权限解析。
+2. Groot 构造 HTTP 服务器后，与服务器开始监听同时异步调用 `Manager.Start`。SDK 解压发生在 `Manager.Start` 内部、拉起 Python 进程之前：把嵌入的 SDK 解压到 `{GROOT_HOME}/services/.sdk/<sdk版本>/`（见 1.9）；解压失败时进程状态记为 `failed`，不拉起子服务。
+3. Python 服务的拉起不阻塞对外端口就绪，`Manager.Start` 在后台完成以下动作：
+   1. 生成 32 字节随机令牌，十六进制编码。
+   2. 创建 stdin、stdout、stderr 三条管道。
+   3. 以 `{GROOT_HOME}/services` 为工作目录执行 `<解释器> -m groot_service_sdk.launcher`。环境变量继承 Groot 进程，`PYTHONPATH` 前置 SDK 目录（已有值时保留在其后），并设置 `PYTHONUNBUFFERED=1`、`GROOT_LOG_LEVEL=<Groot 日志级别>`。
+   4. 向 stdin 写入两行：第一行令牌，第二行通过校验的子服务名 JSON 数组（如 `["asr-router","ocr"]`）。保留写端不关闭。
+   5. 读取 stdout，等待就绪行；其余 stdout/stderr 行写入 Groot 日志。
 
 #### 1.5.2 就绪握手
 
-Python SDK 启动器完成以下动作后向 stdout 输出一行就绪消息：
+启动器完成以下动作后向 stdout 输出一行就绪消息：
 
-1. 从 stdin 读取第一行作为内部令牌，随后启动后台线程继续读 stdin。
-2. 创建 TCP socket 并绑定 `127.0.0.1:0`，由内核分配端口。
-3. 以该已绑定 socket 启动 uvicorn。
-4. 等待 ASGI lifespan 启动完成（服务可在此加载模型）。
-5. 输出就绪行。
+1. 从 stdin 读取第一行作为内部令牌、第二行作为子服务清单，随后启动后台线程继续读 stdin（生命线，见 1.5.3）。
+2. 配置进程日志：根 logger 输出到 stdout，格式含记录器名，级别取环境变量 `GROOT_LOG_LEVEL`（缺省 `INFO`）。
+3. 创建唯一的 FastAPI 应用，注册令牌校验中间件、`GET /healthz`，以及 `APIError`、`HTTPException`、`RequestValidationError` 与通用 `Exception` 四类错误信封处理器。
+4. 按清单顺序逐个把 `<子服务目录>/app/` 注册为 `groot_services.<子服务名>.app` 并导入其 `main`。导入失败或缺少 `handle` 的子服务记录错误并跳过。
+5. 创建 TCP socket 并绑定 `127.0.0.1:0`，由内核分配端口。
+6. 以该已绑定 socket 启动 uvicorn。应用的 lifespan 启动阶段按清单顺序逐个调用各子服务的 `startup`；成功的子服务随即以 `app.add_api_route("/<子服务名>", handle, methods=METHODS)` 注册路径，失败的记录错误、不注册。
+7. 输出就绪行。
 
 就绪行格式：
 
 ```
-GROOT_SERVICE_READY {"port":53124,"pid":1234,"sdk":"1.0.0"}
+GROOT_SERVICE_READY {"port":53124,"pid":1234,"sdk":"1.0.0","services":{"asr-router":"ok","ocr":"error: No module named 'torch'"}}
 ```
 
-Groot 在 `startup_timeout` 内未读到就绪行、或进程提前退出，判定启动失败。端口只来自该就绪行，Groot 不解析 uvicorn 日志、不预先选端口。
+`services` 为子服务名到加载结果的映射：`ok` 表示已注册路径，`error: <原因>` 表示该子服务未注册。
 
-绑定地址由 SDK 固定为 `127.0.0.1`，不接受服务配置覆盖，不解析 `localhost`，不允许 `0.0.0.0`。
+Groot 在 `startup_timeout` 内未读到就绪行、或进程提前退出，判定启动失败。端口只来自该就绪行，Groot 不解析 uvicorn 日志、不预先选端口。`sdk` 字段与宿主嵌入的 SDK 版本不一致时判定启动失败并记录错误，避免 `PYTHONPATH` 被其他来源的同名包覆盖。
+
+绑定地址由 SDK 固定为 `127.0.0.1`，不接受配置覆盖，不解析 `localhost`，不允许 `0.0.0.0`。
 
 #### 1.5.3 生命线
 
-stdin 管道同时是父进程生命线。Groot 写完令牌后保持写端打开；Python 的后台线程持续读取，读到 EOF 即说明 Groot 已退出或崩溃，启动器随即触发优雅停止并退出。
+stdin 管道同时是父进程生命线。Groot 写完两行后保持写端打开；Python 的后台线程持续读取，读到 EOF 即说明 Groot 已退出或崩溃，启动器随即触发优雅停止并退出。
 
-该机制覆盖三平台，不依赖 Linux `PR_SET_PDEATHSIG` 或 Windows Job Object，避免 Groot 被强制杀死后留下孤儿进程。
+该机制覆盖 Linux、macOS 与 Windows，避免 Groot 被强制杀死后留下孤儿进程。
 
 #### 1.5.4 令牌与身份头
 
@@ -156,38 +283,41 @@ Groot 代理请求时：
 
 | 请求头 | 内容 |
 |---|---|
-| `X-Groot-Internal-Token` | 本服务进程本次启动的令牌 |
-| `X-Groot-Caller` | API Key 名称 |
-| `X-Groot-Tenant-Id` | API Key 所属租户 |
-| `X-Groot-User-Id` | 请求头解析出的用户标识，可能为空 |
-| `X-Groot-Request-Id` | 本次请求的随机 ID，用于两端日志关联 |
-| `X-Groot-Service` | 服务名 |
+| `X-Groot-Internal-Token` | Python 服务本次启动的令牌 |
+| `X-Groot-Caller` | API Key 名称；Web 会话为 `web` |
+| `X-Groot-Tenant-Id` | API Key 所属租户；Web 会话为空串 |
+| `X-Groot-User-Id` | 请求头解析出的用户标识；Web 会话为 Web 用户 ID |
+| `X-Groot-Request-Id` | Groot 为本次请求生成的随机 ID，写入两端日志用于关联 |
+| `X-Groot-Service` | 子服务名 |
 
-Python SDK 对除 `/healthz` 外的全部请求校验 `X-Groot-Internal-Token`，使用常数时间比较；不匹配一律返回 401 错误信封，且校验发生在路由解析与请求体读取之前。
+SDK 对除 `/healthz` 外的全部请求校验 `X-Groot-Internal-Token`，使用常数时间比较；不匹配一律返回 401 错误信封，且校验发生在路由解析与请求体读取之前。所有子服务共用这一道校验，子服务代码不参与。
 
-令牌不写入命令行参数、环境变量、磁盘或日志。每次服务启动重新生成，旧进程退出后旧令牌立即失效。
+令牌不写入命令行参数、环境变量、磁盘或日志。每次进程启动重新生成，旧进程退出后旧令牌立即失效。
+
+Python 服务只绑定 `127.0.0.1` 上的临时端口，端口不写入配置、不作为公开信息提供。调用方因此只能经 Groot 的 `/services/<子服务名>` 访问子服务：外部主机无法建立连接；本机其他应用即使探测到端口，也因缺少内部令牌而不通过校验，业务请求一律返回 401。唯一例外是 `GET /healthz`，它不校验令牌，只返回进程与子服务的就绪状态，不包含业务数据。
 
 #### 1.5.5 停止
 
-1. Groot 关闭该服务的 stdin 写端，触发 SDK 的生命线退出。
-2. 同时发送终止信号（Linux/macOS 为 `SIGTERM`，Windows 走进程终止）。
-3. 等待 `shutdown_timeout`（默认 10 秒），超时强制杀死。
-4. Groot 自身关闭时，先停止接受新请求，再依次停止全部服务。
+1. Groot 关闭 stdin 写端，触发 SDK 的生命线退出；Linux/macOS 同时发送 `SIGTERM`。Windows 无等价信号，优雅停止只依赖生命线。
+2. 启动器停止接受新连接，等待进行中的请求结束，按 `startup` 的逆序调用各子服务的 `shutdown`，再关闭 uvicorn。
+3. Groot 等待固定 10 秒，超时强制杀死。
+4. Groot 自身关闭时，先停止接受新请求，再停止 Python 服务。
 
 #### 1.5.6 重启策略
 
 - 进程非正常退出、启动超时、就绪后异常退出，均按退避序列重启：1s、2s、4s、8s、16s、30s，之后保持 30s。
-- 存活时间少于 60 秒的退出计为快速失败。连续快速失败达到 10 次后停止重启，服务保持不可用，直到 Groot 下次启动。
+- 存活时间少于 60 秒的退出计为快速失败。连续快速失败达到 10 次后停止重启，全部子服务保持不可用，直到 Groot 下次启动。
 - 每次重启生成新令牌、新端口；旧代理目标随之替换。
+- 重启粒度是整个进程：单个子服务的加载失败不触发重启，只在状态中标为 `failed`；进程级崩溃（段错误、OOM、未捕获的致命异常）导致全部子服务一起重启。
 
 ### 1.6 HTTP 网关
 
 #### 1.6.1 路由
 
-- 每个已发现的服务注册一组路由：`/services/<服务名>/*path`。
-- 转发时去掉 `/services/<服务名>` 前缀，其余路径、查询串、方法、请求体原样转发。例如 `POST /services/asr-router/detect` 转发为 `POST /detect`。
-- 路径中若出现 `..` 或解码后越界的路径段，返回 400 错误信封，不转发。
-- 未发现的服务名不注册路由，由现有兜底处理器返回 404 错误信封。
+- 每个通过校验的子服务注册一条路由：`/services/<子服务名>`，接受任意 HTTP 方法；方法是否允许由 Python 侧的 `METHODS` 决定，不允许时 Python 服务返回 405 信封并原样透传。
+- 转发时去掉 `/services` 前缀，查询串、方法、请求头、请求体原样转发。`POST /services/asr-router` 转发为 `POST /asr-router`。
+- `/services/<子服务名>/` 之下的任何多级路径不注册，由现有兜底处理器返回 404 错误信封。仅带尾斜杠的 `/services/<子服务名>/` 沿用框架全局行为，301 重定向到无斜杠路径。
+- 未通过校验的子服务名不注册路由，同样返回 404。
 
 #### 1.6.2 鉴权与权限点
 
@@ -198,114 +328,171 @@ Python SDK 对除 `/healthz` 外的全部请求校验 `X-Groot-Internal-Token`�
 3. 权限点校验。
 4. 限流。
 
-权限点由服务的 `service.yaml` 声明；未声明时取 `all`。权限点取值限定为现有已知集合，非法值使该服务被禁用。`asr-router` 声明 `chat`，与转录、合成、图片解析一致，不新增权限点。
+权限点来自全局配置 `permission` 映射；未声明的子服务取 `all`。`asr-router` 配置为 `chat`，与转录、合成、图片解析一致，不新增权限点。
 
-认证中间件的路径到权限点映射引入可注入的解析器：宿主实现 `/services/<服务名>` 的查询，其余路径沿用现有静态规则。
+认证中间件的路径到权限点映射引入可注入的解析器：宿主实现 `/services/<子服务名>` 的查询，其余路径沿用现有静态规则。
+
+Web 会话 Cookie 访问 `/services/...` 时沿用现有 Web 语义：视为持有 `all` 权限，不检查子服务声明的权限点。子服务需要区分调用来源时读取 `caller`。
 
 #### 1.6.3 转发细节
 
 | 项 | 行为 |
 |---|---|
-| 请求体 | 以流方式转发，不解析表单，不整体读入内存 |
+| 请求体 | 以流方式转发，不解析表单，不整体读入内存；受 Groot 现有 200MB 请求体上限约束 |
 | 响应体 | 以流方式回写，不缓冲 |
 | 逐跳头 | 移除 `Connection`、`Keep-Alive`、`Transfer-Encoding`、`Upgrade` 等 |
 | 上游地址 | `127.0.0.1:<就绪行中的端口>` |
-| 首字节超时 | `request_timeout`，默认 120 秒，覆盖连接与等待响应头 |
-| 响应体传输 | 首字节到达后不再设总时长上限；客户端断开即取消上游请求 |
-| 请求 ID | 无客户端传入的关联 ID 时由 Groot 生成 |
+| 连接超时 | 固定 5 秒，不随配置变化；连接失败（含超时）映射为 502 |
+| 首字节超时 | 等待上游响应头的超时为 `request_timeout`，默认 120 秒；超时映射为 504 |
+| 响应体传输 | 首字节到达后不再设总时长上限；客户端断开时取消上游 HTTP 请求。若子服务已在 `asyncio.to_thread` 中开始推理，该次推理会继续执行完毕（不排队新请求），之后不再产生新的上游工作 |
+
+代理层不要求子服务采用流式响应。普通 JSON 响应与 SSE 等长连接响应走同一条转发路径，是否使用流式由各子服务的 `handle` 返回值决定；Groot 只保证不额外缓冲、不截断，也不强制统一响应形态。
 
 #### 1.6.4 错误映射
 
 | 场景 | 状态码 | 错误码 |
 |---|---|---|
-| 服务名不存在 | 404 | `invalid_request` |
-| 服务已发现但未就绪 / 重启中 | 503 | `service_unavailable` |
+| 子服务名不存在、未通过校验或路径带下级段 | 404 | `invalid_request` |
+| Python 服务未就绪 / 重启中 / 已放弃重启；或该子服务加载失败 | 503 | `service_unavailable` |
 | 连接被拒、上游读写失败 | 502 | `upstream_error` |
 | 首字节超时 | 504 | `upstream_error` |
-| 服务自身返回的错误 | 原状态码原响应体 | 由服务决定 |
+| Python 服务自身返回的错误（含 405） | 原状态码原响应体 | 由 Python 服务决定 |
 
-SDK 生成的服务端错误使用与 Groot 相同的 OpenAI 错误信封结构，保证调用方只需一套解析逻辑。`errbody` 新增错误码 `service_unavailable`。
+SDK 生成的错误使用与 Groot 相同的 OpenAI 错误信封结构，调用方只需一套解析逻辑。`errbody` 新增错误码 `service_unavailable`。
+
+#### 1.6.5 状态展示
+
+健康检查 `GET /web/health` 的 `checks` 新增 `services` 项，描述 Python 服务与每个已识别的子服务：
+
+```json
+"services": {
+  "status": "degraded",
+  "info": {
+    "process": {"status": "running", "pid": 1234, "port": 53124,
+                "restarts": 0, "started_at": "2026-11-23T10:00:00Z"},
+    "services": [
+      {"name": "asr-router", "status": "running"},
+      {"name": "ocr", "status": "failed", "error": "No module named 'torch'"},
+      {"name": "broken", "status": "invalid", "error": "缺少 app/main.py"}
+    ]
+  }
+}
+```
+
+| `process.status` | 含义 |
+|---|---|
+| `running` | Python 服务已就绪 |
+| `starting` | 已拉起，等待就绪行；含退避等待中的重启 |
+| `failed` | 连续快速失败达到上限，已放弃重启 |
+| `disabled` | 未拉起：共享解释器缺失或没有任何子服务 |
+| `stopped` | 已按关闭流程停止；仅在 Groot 关闭期间可见 |
+
+| 子服务 `status` | 含义 |
+|---|---|
+| `running` | 已注册路径，可接受请求 |
+| `failed` | 启动器加载失败或 `startup` 抛出异常，`error` 为原因 |
+| `invalid` | 未通过目录校验，未注册路由 |
+| `pending` | Python 服务未就绪，尚无加载结果 |
+
+`process` 的 `pid`、`port`、`started_at` 仅 `running` 时给出；`restarts` 为本次 Groot 启动以来的重启次数；除 `running` 与 `stopped` 外的状态带 `error` 说明最近一次失败原因。
+
+`services` 项的 `status`：`process` 为 `running` 且全部子服务 `running`，或没有任何子服务时为 `healthy`；其余情况为 `degraded`。该状态只描述 Python 服务，不改变顶层 `status`。
+
+`groot status` 在「组件状态」区新增一行汇总，并在其下逐行列出非 `running` 的子服务：
+
+```
+组件状态:
+  LLM:         healthy (gpt-4o)
+  MCP Servers: healthy (2 个)
+  Skills:      healthy (5 个)
+  Memory:      healthy (12 个会话)
+  Services:    degraded (1/3 运行中, 进程 pid 1234)
+    ocr         failed     No module named 'torch'
+    broken      invalid    缺少 app/main.py
+```
+
+全部运行时只显示汇总行，如 `Services:    healthy (3/3 运行中, 进程 pid 1234)`。Python 服务非 `running` 时汇总行显示进程状态与原因，如 `Services:    degraded (进程 starting: 等待就绪行超时, 已重启 2 次)`。没有任何子服务目录时显示 `Services:    healthy (0 个)`。
 
 ### 1.7 多实例与平台
 
 #### 1.7.1 实例归属
 
-- 服务子进程由 Groot 工作进程直接创建，一对一归属。受监督模式下只有工作进程拉起服务，监督进程不加载业务资源。
-- 服务进程不跨实例复用。同一主机运行多个 Groot 实例时，每个实例拥有自己的子进程、令牌与端口。
-- 不同 `GROOT_HOME` 的实例完全隔离：服务代码、虚拟环境、模型权重各自独立。
-- 共用同一 `GROOT_HOME` 的实例共享服务代码、共享虚拟环境与模型文件（运行期只读），但各自加载模型、各自占用内存或显存。
-- 每个服务绑定 `127.0.0.1:0`，端口由内核分配，实例之间不会冲突。
-- 日志中的每条服务输出带服务名与子进程 PID；接入集群时附带 `reg_id`。
+- Python 服务由 Groot 工作进程直接创建，一对一归属。受监督模式下只有工作进程拉起它，监督进程不加载业务资源。
+- Python 服务不跨实例复用。同一主机运行多个 Groot 实例时，每个实例拥有自己的进程、令牌与端口。
+- 不同 `GROOT_HOME` 的实例完全隔离：子服务代码、虚拟环境、模型权重各自独立。
+- 共用同一 `GROOT_HOME` 的实例共享子服务代码、虚拟环境与模型文件（运行期只读），但各自的进程各自加载模型、各自占用内存或显存；这些实例都会加载全部已识别子服务。
+- 进程绑定 `127.0.0.1:0`，端口由内核分配，实例之间不会冲突。
+- Groot 收编进程 stdout/stderr 时每行带 Python 进程 PID（日志字段 `service_pid`），不带 `reg_id`。子服务级归属由记录器名体现（`groot_services.<子服务名>...`），子服务代码使用 `logging.getLogger(__name__)` 即可。
 
-#### 1.7.2 按实例启停
+#### 1.7.2 平台差异
 
-`bootstrap.yaml` 提供实例级覆盖：
+三平台使用同一协议：TCP 环回、stdin 令牌与清单与生命线、stdout 就绪行。差异只有两处：
 
-```yaml
-services:
-  enabled: true          # 默认 true；false 时本实例不启动任何服务
-  disable: [asr-router]  # 本实例额外跳过的服务
-```
-
-该配置只影响启动行为，改动后需重启。清单中的 `enabled` 是全局默认，实例级 `disable` 在其之上做减法。
-
-#### 1.7.3 平台差异
-
-| 平台 | 实现 |
-|---|---|
-| Linux / macOS | 同一协议；解释器路径 `.venv/bin/python` |
-| Windows | 同一协议；解释器路径 `.venv\Scripts\python.exe`；进程终止与超时行为由 Groot 统一封装 |
-
-三平台都使用 TCP 环回与内部令牌，不使用 Unix domain socket，避免传输方式分叉。
+| 项 | Linux / macOS | Windows |
+|---|---|---|
+| 解释器路径 | `services/.venv/bin/python` | `services\.venv\Scripts\python.exe` |
+| 停止方式 | 关闭 stdin 并发送 `SIGTERM` | 只关闭 stdin，依赖生命线退出 |
 
 ### 1.8 故障处理
 
 | 故障 | 行为 |
 |---|---|
-| 清单非法、目录结构不完整 | 跳过该服务，记录错误；其他服务与 Groot 正常 |
-| 虚拟环境或解释器缺失 | 跳过该服务，日志给出创建环境的命令 |
-| 模型加载失败、导入失败 | 进程退出，Groot 记录 stderr，按退避重启 |
-| 启动超时 | 杀死进程，按退避重启 |
-| 运行中崩溃 | 按退避重启，新端口、新令牌 |
-| 连续快速失败 10 次 | 停止重启，服务不可用直到 Groot 重启 |
-| 单个服务不可用 | `/services/<该服务>/...` 返回 503；其他服务与 Groot 其他接口不受影响 |
-| 请求超时 | 返回 504；上游请求被取消 |
-| 客户端断开 | 取消上游请求，不继续消耗推理资源 |
-| Groot 被 `kill -9` | 子进程读到 stdin EOF 后自行退出 |
+| 子服务目录结构不完整、缺少依赖清单 | 该子服务 `invalid`，不注册路由；其他子服务与 Groot 正常 |
+| 共享解释器缺失 | 不拉起 Python 服务，记录错误并提示创建环境的命令；Groot 其他功能正常 |
+| 全局配置非法 | 使用默认值并记录错误；默认权限 `all` 不放宽访问 |
+| SDK 版本不一致 | 判定启动失败，记录错误，按退避重启 |
+| 某个子服务导入失败、缺少 `handle` 或 `startup` 抛异常 | 该子服务 `failed`，返回 503；Python 服务与其他子服务正常 |
+| 某个子服务 `handle` 抛出未捕获异常 | 该请求返回 500 信封，堆栈进日志；Python 服务与其他子服务正常 |
+| Python 服务启动超时 | 杀死进程，按退避重启 |
+| Python 服务崩溃（段错误、OOM 等） | 全部子服务一起按退避重启，新端口、新令牌 |
+| 连续快速失败 10 次 | 停止重启，全部子服务不可用直到 Groot 重启 |
+| 连接上游超时或失败 | 连接超时固定 5 秒；返回 502 `upstream_error` |
+| 等待上游响应头超时 | `request_timeout`（默认 120 秒）内未收到响应头，返回 504 `upstream_error`；上游 HTTP 请求被取消 |
+| 客户端断开 | 取消上游 HTTP 请求；若子服务已在 `asyncio.to_thread` 中开始推理，该次推理会执行完毕（不排队新请求）。Windows 上宿主使用的 HTTP 传输层对带流式请求体的请求不做断连探测，取消要等到 `request_timeout` 到期 |
+| Groot 被 `kill -9` | Python 服务读到 stdin EOF 后自行退出 |
 
 ### 1.9 Python SDK
 
-SDK 以 Python 源码形式嵌在 Groot 二进制中，启动时解压到 `{GROOT_HOME}/sdk/<sdk版本>/`，通过 `PYTHONPATH` 暴露给服务进程。解压采用临时目录加原子改名，已存在且完整时跳过。
+SDK 以 Python 源码形式嵌在 Groot 二进制中，Groot 启动时解压到 `{GROOT_HOME}/services/.sdk/<sdk版本>/`，通过 `PYTHONPATH` 暴露给 Python 服务。解压采用临时目录加原子改名，已存在且完整时跳过。
 
-不把 SDK 安装进虚拟环境的原因：
+SDK 不安装进虚拟环境，版本始终与宿主一致，使用者无需额外安装步骤。就绪行中的 `sdk` 字段用于宿主核对版本。
 
-- SDK 版本始终与宿主一致，不会出现协议错配。
-- 使用者无需额外执行安装步骤。
-- 服务升级 SDK 不会影响其他服务。
+启动器 `groot_service_sdk.launcher` 承担 1.5.2 列出的全部协议动作，子服务作者不调用它。
 
-`PYTHONPATH` 位于 `sys.path` 前部，即使虚拟环境中安装了同名包，也以嵌入版本为准。
+对外辅助接口，子服务按需导入：
 
-启动器职责：
+```python
+from fastapi import Depends, File, UploadFile
+from groot_service_sdk import APIError, GrootIdentity, groot_identity
 
-1. 读取 stdin 令牌。
-2. 绑定 `127.0.0.1:0`，启动 uvicorn。
-3. 等待 lifespan 完成，输出就绪行。
-4. 安装令牌校验中间件。
-5. 提供 `/healthz`，返回 `200` 与 SDK 版本。
-6. 解析并暴露身份头：`caller`、`tenant_id`、`user_id`、`request_id`。
-7. 提供错误信封辅助函数。
-8. 监听 stdin EOF，触发优雅停止。
+async def handle(
+    file: UploadFile = File(...),
+    identity: GrootIdentity = Depends(groot_identity),
+) -> dict:
+    if not file.filename.endswith((".wav", ".mp3")):
+        raise APIError(400, "不支持的音频格式",
+                       type="invalid_request_error", code="unsupported_type")
+    return {"caller": identity.caller, "tenant_id": identity.tenant_id}
+```
 
-依赖约定：`requirements.txt` 必须包含 `fastapi` 与 `uvicorn`。SDK 除这两项外只使用 Python 标准库。
+| 接口 | 用途 |
+|---|---|
+| `GrootIdentity` | 调用方身份，字段 `caller`、`tenant_id`、`user_id`、`request_id`、`service` |
+| `groot_identity` | FastAPI 依赖，从 `X-Groot-*` 请求头解析身份，作为 `handle` 的参数声明 |
+| `APIError` | 抛出后由启动器注册的处理器转为 OpenAI 错误信封 |
 
-调试模式：启动器接受 `--dev`，跳过令牌校验，但仍只绑定 `127.0.0.1`，供开发者不经 Groot 手动调试。Groot 正常启动时不使用该参数。
+启动器在应用上统一注册四类处理器：`APIError` 按其字段输出信封；`HTTPException` 映射为同状态码的信封，`code` 为 `invalid_request`；`RequestValidationError` 映射为 400 信封，`param` 取首个出错字段；其余未捕获异常映射为 500 信封并记录堆栈到日志，响应体不含堆栈。
 
-### 1.10 ASR 语种识别服务
+依赖约定：`fastapi`、`uvicorn` 与 `python-multipart` 由 `services/requirements.txt` 提供，SDK 除这几项外只使用 Python 标准库。
+
+调试模式：启动器接受 `--dev`，不读 stdin，自行按 1.4.6 的规则扫描工作目录，跳过令牌校验，身份字段全部为空串，仍只绑定 `127.0.0.1`，并把端口打印到 stderr，供开发者不经 Groot 手动调试。`--dev --only <子服务名>` 只加载指定子服务。Groot 正常启动时不使用这些参数。
+
+### 1.10 ASR 语种识别子服务
 
 #### 1.10.1 接口
 
 ```
-POST /services/asr-router/detect
+POST /services/asr-router
 Content-Type: multipart/form-data
 ```
 
@@ -313,13 +500,14 @@ Content-Type: multipart/form-data
 |---|---|---|
 | `file` | 是 | 音频文件 |
 
-支持格式：`wav`、`mp3`、`m4a`、`flac`、`ogg`、`webm`。非音频扩展名返回 400 `unsupported_type`。文件大小上限 50MB，超出返回 413 `file_too_large`。
+支持格式：`wav`、`mp3`、`m4a`、`flac`、`ogg`、`webm`。非音频扩展名返回 400 `unsupported_type`。文件大小上限 50MB，超出返回 413 `file_too_large`。音频时长须在 1.5 到 35 秒之间，超出返回 400 `invalid_request` 并说明范围。权限点在全局配置中设为 `chat`。
 
 成功响应：
 
 ```json
 {
   "language": "zh",
+  "dialect": "mandarin",
   "confidence": 0.97,
   "alternatives": [
     {"language": "en", "confidence": 0.02},
@@ -332,166 +520,102 @@ Content-Type: multipart/form-data
 | 字段 | 说明 |
 |---|---|
 | `language` | ISO 639-1 两字母代码；无法判定时为 `und` |
+| `dialect` | 可选；模型给出的方言或口音标签（如 `mandarin`、`yue`、`wu`），没有时省略 |
 | `confidence` | 首要语种置信度，0 到 1 |
-| `alternatives` | 其余候选，按置信度降序，最多 3 项，可为空数组 |
+| `alternatives` | 其余候选，按置信度降序，最多 2 项（当前后端 beam=3），可为空数组 |
 | `duration_ms` | 音频时长，毫秒 |
-
-语种标签由服务内部归一化：FireRedLID 的原始标签在服务内映射为 ISO 639-1。更换后端时只替换映射与推理实现，对外字段不变。
 
 #### 1.10.2 后端抽象
 
-服务内部定义语种识别后端接口：
+子服务内部定义语种识别后端接口，输入为预处理后的 16kHz 单声道 PCM，输出为候选语言、方言与置信度：
 
 ```python
 class LIDBackend(Protocol):
     def load(self) -> None: ...
-    def detect(self, audio: AudioBuffer) -> list[tuple[str, float]]: ...
+    def detect(self, pcm: np.ndarray) -> list[tuple[str, str | None, float]]: ...
 ```
 
-v1 实现为 `FireRedLIDBackend`。后端选择在服务代码的工厂函数中完成，不引入外部配置。更换后端时，新增实现类并调整工厂即可，接口、错误信封与响应格式保持不变。
+v1 实现为 `FireRedLIDBackend`。后端选择在子服务代码的工厂函数 `create_backend()` 中完成，不引入外部配置。更换后端时，新增实现类并调整工厂即可，接口、错误信封与响应格式保持不变。
+
+v1 使用 `aufklarer/FireRedLID-887M-MLX-8bit`，这是 `FireRedTeam/FireRedLID` 的 MLX INT8 转换版本，revision 固定为 `1ae1296262c51cfd38de0f134011e6fa4b657543`。模型目录必须包含 `config.json`、`cmvn.ark`、`dict.txt`、`model.safetensors`、`frontend.py`、`mlx_model.py`。
+
+- 目录来源：优先取环境变量 `GROOT_SERVICE_MODELS_DIR`；未设置时取 `services/asr-router/models/`。两者都不存在时子服务启动失败，错误信息给出下载命令。
+- 获取方式：`huggingface-cli download aufklarer/FireRedLID-887M-MLX-8bit --revision 1ae1296262c51cfd38de0f134011e6fa4b657543 --local-dir <模型目录>`。权重不进入代码仓库。
+- 加载方式：以唯一模块名从模型目录导入 `frontend.py` 与 `mlx_model.py`（避免与其他子服务的同名模块冲突）；用 `mlx.core.load` 读取 `model.safetensors`，用 `FireRedTokenDictionary.load` 读取 `dict.txt`，构造 `FireRedLIDModel`；用 `FireRedFrontend(cmvn.ark)` 构造前端。
+- 音频预处理：优先用 `soundfile` 读取其支持的格式（wav/flac/ogg），不支持的格式（mp3/m4a/webm）用 `ffmpeg` 解码为 32 位浮点 PCM；统一重采样为 16kHz、单声道后交给 `FireRedFrontend.extract_pcm`，全程在内存中完成，不产生临时文件。`ffmpeg` 只在解码 soundfile 不支持的格式时需要，写入 README。
+- 特征与推理：`frontend.extract_pcm(pcm, 16000)` 得到 80 维 Kaldi fbank 特征；`model.identify_features(mx.array(features[None]), beam_size=3, nbest=3)` 返回最多 3 个假设。
+- 标签归一化：假设文本形如 `zh mandarin`、`en`。第一个字段是语言代码，映射为 ISO 639-1 后作为 `language`；第二个字段若为方言或口音标签（`mandarin`、`yue`、`wu`、`xiang`、`xinan`、`north`、`min` 等），作为 `dialect` 返回，否则省略。首个假设作为主结果，其余两个作为 `alternatives`。
+- `und` 判定：仅在无有效语音、解码失败或首个标签无法映射时返回 `und`。
+- 平台：MLX 只在 Apple Silicon 的 macOS 上运行。子服务在 `startup` 中检测平台，不满足时抛出明确错误，状态标为 `failed`；宿主、Groot 与其他子服务不受影响。Linux 与 Windows 上要使用本能力，需新增 PyTorch 后端实现，放在同一个 `LIDBackend` 接口之后。
 
 #### 1.10.3 运行特征
 
-- 模型在 lifespan 启动阶段加载一次，就绪行在加载完成后输出，因此就绪即代表可推理。
-- 推理在受限线程池中执行，默认同时只跑 1 个推理任务，避免多个请求争抢 GPU 或导致内存峰值叠加；排队请求受 Groot 首字节超时约束。
-- 音频解码与重采样在服务内部完成，必要时使用系统 `ffmpeg`；`ffmpeg` 作为部署前置依赖写入服务 README。
-- 上传音频只在处理期间存在，不写入磁盘、不进入日志、不落库。
-- 模型权重默认位于 `services/asr-router/models/`，可由环境变量 `GROOT_SERVICE_MODELS_DIR` 覆盖。
+- 模型在 `startup` 中加载一次，就绪即代表可推理。加载耗时计入全局 `startup_timeout`，与同进程其他子服务的 `startup` 时间累加；首次下载较慢时在 `services/service.yaml` 中调大。
+- 推理通过 `asyncio.to_thread` 交给默认线程池，后端内部用锁保证同时只跑 1 个推理任务，避免多个请求争抢 GPU 或导致内存峰值叠加；排队请求受 Groot 首字节超时约束。该限制只作用于本子服务，不影响同进程其他子服务。`shutdown` 调用后端的可选 `close()` 释放资源。
+- 模型的上游训练音频范围为 1.5 到 35 秒；超出范围的输入由子服务在推理前拒绝。
 
-#### 1.10.4 权限与路径
-
-- 服务名：`asr-router`
-- 对外路径：`/services/asr-router/detect`
-- 权限点：`chat`
-
-### 1.11 配置项
-
-#### 1.11.1 bootstrap.yaml
-
-```yaml
-services:
-  enabled: true
-  disable: []
-```
-
-| 项 | 默认 | 生效方式 |
-|---|---|---|
-| `services.enabled` | `true` | 重启 |
-| `services.disable` | `[]` | 重启 |
-
-#### 1.11.2 service.yaml
-
-```yaml
-permission: chat
-enabled: true
-startup_timeout: 180s
-request_timeout: 120s
-```
-
-| 项 | 默认 | 说明 |
-|---|---|---|
-| `permission` | `all` | 调用该服务所需权限点，必须是已知权限点 |
-| `enabled` | `true` | 是否启动 |
-| `startup_timeout` | `180s` | 等待就绪行的上限 |
-| `request_timeout` | `120s` | 首字节超时 |
-
-未知字段按错误处理，避免拼写错误被静默忽略。
-
-### 1.12 目录规范与测试
+### 1.11 目录规范与测试
 
 仓库新增与调整：
 
 ```
 groot/
-├── internal/pysvc/          # Go 宿主：发现、监督、代理、权限解析
+├── internal/pysvc/          # Go 宿主：发现、监督、代理、权限解析、状态
 │   ├── sdk/                 # 嵌入二进制的 Python SDK 源码
+│   ├── template/            # 嵌入二进制的 _template 与 service.yaml、requirements.txt 模板，供 groot services init 写出
 │   └── *_test.go
-├── services/                # Python 服务源码
+├── services/                # 子服务源码
 │   └── asr-router/
-│       ├── service.yaml
 │       ├── requirements.txt
 │       ├── README.md
 │       ├── app/
 │       └── models/          # 仅占位；权重不进仓库
 └── tests/
     └── services/
-        └── asr-router/      # 服务的 pytest 测试
+        ├── sdk/             # SDK 的 pytest 测试
+        └── asr-router/      # 子服务的 pytest 测试
 ```
 
-同步更新 `CLAUDE.md` 的目录结构规范，新增 `services/` 与 `tests/services/`。
+`groot services init` 写出的 `_template/`、`service.yaml`、`requirements.txt` 以嵌入资源的形式放在 `internal/pysvc/template/`，与 SDK 一样随二进制发布；仓库的 `services/` 只放真实子服务的源码。
 
-测试归属：
+同步更新 `CLAUDE.md` 的目录结构规范与测试规范，新增 `services/` 与 `tests/services/`。
 
-| 类型 | 位置 |
+| 测试类型 | 位置 |
 |---|---|
 | Go 宿主单元测试 | `internal/pysvc/*_test.go` |
-| Python SDK 与 asr-router 单元测试 | `tests/services/asr-router/`（pytest） |
+| Python SDK 单元测试 | `tests/services/sdk/`（pytest） |
+| asr-router 单元测试 | `tests/services/asr-router/`（pytest） |
 | 端到端系统测试 | `tests/python/`（用户执行） |
 
-### 1.13 非目标
+### 1.12 非目标
 
-- 不接受服务热加载：新增或修改服务需重启 Groot。
-- 不自动安装依赖、不自动下载模型权重、不创建虚拟环境。
-- 不为非 Python 服务提供 SDK；协议本身与语言无关，其他语言可按协议自行实现。
-- 不提供跨节点服务调用：每个节点只代理本机服务。
-- 不在 Web 界面提供服务管理页面。
+- 不接受子服务热加载：新增或修改子服务需重启 Groot。
+- 运行期不自动安装依赖、不自动下载模型权重、不创建或修复虚拟环境；初始化命令 `groot services init` 创建虚拟环境并尝试安装基础依赖，失败时只提示手动安装。
+- 不为非 Python 子服务提供 SDK；协议本身与语言无关，其他语言可按协议自行实现。
+- 不提供跨节点调用：每个节点只代理本机的 Python 服务。
+- 不在 Web 界面提供管理页面；状态只通过健康检查接口与 `groot status` 查看。
+- 不按子服务拆分进程：所有子服务共用一个进程，进程级故障影响全部子服务。
+- 一个子服务不提供多个路径：需要多个操作时建多个子服务。
+- v1 的 asr-router 只在 Apple Silicon 的 macOS 上可运行；其余平台需另加 PyTorch 后端。
 - 不强制资源限额（CPU、内存、GPU）；资源约束由部署环境负责。
-- 不主动轮询服务健康：以进程存活、请求超时与重启策略作为可用性依据。
+- 不主动轮询健康：以进程存活、请求超时与重启策略作为可用性依据。
 
-## 二、设计决策
+## 二、迭代说明
 
-### 2.1 集成方式：本机 HTTP 服务
+宿主能力为首次引入；后续命令调整见 2.1。
 
-| 方案 | 结论 |
-|---|---|
-| 命令行逐次调用 | 每次调用重新加载模型权重，延迟与资源不可接受；无并发与健康状态 |
-| Go 内嵌 Python（CGO / 嵌入解释器） | 需要 CGO 与 ABI 对齐，Python 侧崩溃会带崩 Groot，依赖升级与打包复杂 |
-| 本机 HTTP 常驻服务 | 模型常驻、并发可控、崩溃隔离、便于替换实现，选此方案 |
-
-### 2.2 交付方式：外置服务目录
-
-- **外置目录**（选用）：服务放在 `{GROOT_HOME}/services/`，虚拟环境、依赖与权重由使用者准备，Groot 只发现与托管。
-- **二进制内置并自动安装**（未选用）：首启解压、建环境、装依赖、下权重。三平台下 torch 变体、Python 版本、VC++ 运行库、权重下载差异过大，安装失败难以诊断，宿主也会变得难以预测。
-
-选择外置目录，同时保留 `go:embed` 嵌入 SDK，使协议实现随宿主升级而不会错配。
-
-### 2.3 传输方式：TCP 环回与内部令牌
-
-- **Unix domain socket**：隔离更彻底，但 uvicorn 在 Windows 不支持 `--uds`，会导致传输方式分叉。
-- **TCP 127.0.0.1 随机端口 + 内部令牌**（选用）：三平台同一实现；其他主机不可达；同机其他进程可以建立连接，但没有令牌无法通过校验；令牌仅经 stdin 下发，不入 argv 与环境变量。
-
-### 2.4 令牌传递：stdin 管道
-
-| 方式 | 可行性 |
-|---|---|
-| 命令行参数 | `/proc/<pid>/cmdline` 通常全局可读，`ps` 可见 |
-| 环境变量 | 同用户可读 `/proc/<pid>/environ`，并被后续子进程继承 |
-| stdin 管道（选用） | 只有子进程可读，读后即止；同时充当父进程生命线 |
-
-令牌每次启动随机生成，不持久化、不配置、不记录日志。
-
-### 2.5 运行环境：默认共享，服务级可覆盖
-
-- 默认所有服务共用 `{GROOT_HOME}/venv`。服务由同一开发者维护，依赖冲突在开发期控制，共享环境减少磁盘占用、简化升级。
-- 服务目录存在 `.venv` 时自动改用独立环境，无需配置。冲突出现时按服务隔离，不改宿主。
-- SDK 不进入任何虚拟环境，由 `PYTHONPATH` 指向嵌入版本。
-
-### 2.6 语种识别边界：只识别，不路由
-
-`asr-router` 只返回语种。ASR 模型选择属于上层应用的业务规则，不进入 Groot，也不进入本服务。上层应用拿到语种后，可通过现有 `POST /audio/transcriptions` 显式指定模型完成转录。
-
-### 2.7 固定约定优先于配置
-
-目录结构、入口位置、解释器路径、启动命令、就绪协议、令牌与身份头均为固定标准；`service.yaml` 只保留授权与超时这类策略项。新增服务不需要编写启动代码或协议代码，减少配置错误面。
-
-## 三、迭代说明
-
-本能力为首次引入，无上一版实现。
-
-- 新增 Python 服务宿主：目录发现、进程监督、就绪握手、反向代理、多实例行为。
-- 新增 `/services/<服务名>/...` 路由与对应的权限点解析。
+- 新增 Python 服务宿主：子服务发现、单进程监督、就绪握手、反向代理、多实例行为。
+- 新增 `/services/<子服务名>` 路由与对应的权限点解析。
 - 新增内部令牌与身份头协议，新增 `service_unavailable` 错误码。
-- 新增嵌入式 Python SDK。
-- 新增第一个托管服务 `asr-router` 及其语种识别接口 `POST /services/asr-router/detect`。
-- 新增 `bootstrap.yaml` 的 `services` 配置节。
+- 健康检查 `checks` 新增 `services` 项，`groot status` 新增 Services 行。
+- 新增嵌入式 Python SDK，启动器负责加载各子服务的 `handle` 并注册为 `/<子服务名>`。
+- 新增第一个子服务 `asr-router` 及其语种识别接口 `POST /services/asr-router`。
+- 新增 `{GROOT_HOME}/services/service.yaml` 全局配置与 `services/requirements.txt` 基础依赖清单；首次引入时 `groot init` 创建 `services/`、`.sdk/`、`_template/` 及这两份模板。
 - 目录规范新增 `services/` 与 `tests/services/`。
+
+### 2.1 Python 服务初始化命令调整
+
+- 新增：`groot services init` 命令，创建 `services/` 固定布局与共享虚拟环境 `.venv`，并尝试安装基础依赖。
+- 移除：`groot init` 不再创建 `services/`；基础依赖不再要求使用者从零手动安装。
+- 调整：基础依赖由初始化命令安装，失败只提示手动安装、不影响命令成功；子服务业务依赖仍由使用者安装。
+- 调整：启动时 `services/` 目录不存在、不是目录或无法访问，以及共享解释器缺失的停用文案分别说明原因并指向 `groot services init`。

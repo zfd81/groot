@@ -10,6 +10,7 @@ import (
 	"github.com/zfd81/groot/internal/api/handler"
 	"github.com/zfd81/groot/internal/api/middleware"
 	"github.com/zfd81/groot/internal/api/websession"
+	"github.com/zfd81/groot/internal/pysvc"
 )
 
 // registerFallbackHandlers 为未匹配的路径与方法注册统一错误信封。
@@ -54,6 +55,7 @@ func RegisterRoutes(h *server.Hertz,
 	speechH *handler.SpeechHandler,
 	imageH *handler.ImageHandler,
 	settingH *handler.SettingHandler,
+	pyMgr *pysvc.Manager,
 ) {
 	// 未匹配的路径与方法也返回统一的 OpenAI 错误信封，避免框架默认的纯文本响应。
 	registerFallbackHandlers(h)
@@ -130,6 +132,17 @@ func RegisterRoutes(h *server.Hertz,
 	// API group with auth + rate limit
 	apiGroup := h.Group("/")
 	apiGroup.Use(authMW.Serve(), rateLimitMW.Serve())
+
+	// Python 子服务代理：为每个通过校验的子服务注册精确路径 /services/<name>。
+	// 无效子服务不注册路由；不注册下级路径，代理 handler 只接受精确匹配。
+	if pyMgr != nil {
+		for _, svc := range pyMgr.Services() {
+			if svc.Invalid != "" {
+				continue
+			}
+			apiGroup.Any("/services/"+svc.Name, pyMgr.Proxy(svc.Name))
+		}
+	}
 
 	// Chat endpoints - 多轮对话
 	apiGroup.POST("/chat/completions", chatH.Serve)

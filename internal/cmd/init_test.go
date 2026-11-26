@@ -214,3 +214,20 @@ func TestRunInit_NoLegacyFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestRunInit_NoServicesLayout 验证 groot init 不再创建 services/ 布局，
+// Python 服务布局改由 `groot services init` 负责。
+func TestRunInit_NoServicesLayout(t *testing.T) {
+	home := t.TempDir()
+
+	if err := RunInit(home); err != nil {
+		t.Fatalf("RunInit() error = %v", err)
+	}
+
+	servicesDir := filepath.Join(home, "services")
+	if _, err := os.Stat(servicesDir); err == nil {
+		t.Errorf("init 不应创建 services 目录，但该目录已存在: %s", servicesDir)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("检查 services 目录失败（既非存在也非不存在）: %v", err)
+	}
+}

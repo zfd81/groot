@@ -21,6 +21,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
+	"github.com/zfd81/groot/internal/pysvc"
 	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/schedule"
@@ -55,11 +56,12 @@ func NewServer(
 	settings *setting.Settings, // 配置对象：YAML 与配置表的统一读取入口
 	clusterInst *cluster.Cluster, // 集群实例：提供本机 reg_id 与消息发送能力
 	role lifecycle.Role, // 进程角色：决定健康检查的 process_mode 与是否支持重启
+	pyMgr *pysvc.Manager, // Python 服务管理器；为 nil 时不代理子服务、健康检查不含 services 项
 ) *Server {
-	// Set a large max request body size so the attachment handler can validate sizes
-	// and report file_too_large with the unified envelope instead of the framework's
-	// plain-text 413. Requests above this hard limit are still rejected by Hertz.
-	// Use 200MB as max to handle large attachments with Base64 encoding
+	// 放宽框架自身的请求体上限，200MB 硬上限由下面的 BodyLimit 中间件统一执行并以
+	// file_too_large 错误信封拒绝（框架默认行为是纯文本 413）。取 200MB 以容纳
+	// Base64 编码的大附件。已知长度在读取前拒绝；流式请求体在读取中拒绝，代理路由
+	// 映射为 413 信封，非代理路由可能在 handler 读取时退化为 400。
 	maxBodySize := 200 * 1024 * 1024 // 200MB
 
 	// Create Hertz server with custom body size limit.
@@ -69,7 +71,18 @@ func NewServer(
 	h := server.Default(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
 		server.WithMaxRequestBodySize(maxBodySize),
+		// 请求体以流方式读取，代理转发大文件时不整体读入内存。
+		// 关闭 multipart 预解析，保证转发到 Python 服务的请求体原样透传；
+		// 需要表单的 handler（FormFile/PostForm）在访问时按需解析。
+		server.WithStreamBody(true),
+		server.WithDisablePreParseMultipartForm(true),
+		// 客户端断开时取消请求 context，代理据此取消上游请求。
+		server.WithSenseClientDisconnection(true),
 	)
+
+	// 请求体硬上限：开启流式读取后 Hertz 不再因 ErrBodyTooLarge 拒绝请求，
+	// 由中间件在读取前（已知长度）或读取中（未知长度）强制 200MB 上限。
+	h.Use(middleware.BodyLimit(int64(maxBodySize)))
 
 	// Web 登录会话存储：认证始终启用，会话固定 1 小时且活跃时滑动续期。
 	webStore := websession.NewStore(time.Hour)
@@ -99,6 +112,13 @@ func NewServer(
 	stopH := handler.NewStopHandler(canceller, mem, log)
 	sessionH := handler.NewSessionHandler(mem, runtime, canceller)
 	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log, role.ProcessMode())
+
+	// Python 子服务集成：权限解析器供鉴权中间件使用，状态来源供健康检查使用。
+	// manager 为 nil 时保持默认权限、健康检查不含 services 项。
+	if pyMgr != nil {
+		authMW.SetServicePermissionResolver(pyMgr)
+		healthH.SetServiceStatusProvider(pyMgr)
+	}
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
 	toolsH := handler.NewToolsHandler(mcpMgr, subAgentReg, log)
@@ -139,7 +159,7 @@ func NewServer(
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, stopH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, modelsPublicH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, imageH, settingH)
+		healthH, skillsH, agentsH, toolsH, modelsH, modelsPublicH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, imageH, settingH, pyMgr)
 
 	return &Server{
 		hertz:  h,

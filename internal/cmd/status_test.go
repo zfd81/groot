@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/zfd81/groot/internal/api/types"
+	"github.com/zfd81/groot/internal/pysvc"
 )
 
 func TestParseStatusFlags(t *testing.T) {
@@ -491,5 +492,137 @@ func TestStatusPort_NoFiles(t *testing.T) {
 	}
 	if port != 8080 {
 		t.Errorf("port = %d, want 8080", port)
+	}
+}
+
+// renderServicesToString 用 renderServices 渲染单个检查项。
+func renderServicesToString(check types.CheckInfo) string {
+	var buf bytes.Buffer
+	renderServices(&buf, check)
+	return buf.String()
+}
+
+// TestRenderServices_AllRunning 全部 running 时只显示汇总行。
+func TestRenderServices_AllRunning(t *testing.T) {
+	out := renderServicesToString(types.CheckInfo{
+		Status: "healthy",
+		Info: pysvc.Status{
+			Process: pysvc.ProcessStatus{Status: "running", PID: 1234},
+			Services: []pysvc.ServiceStatus{
+				{Name: "a", Status: "running"},
+				{Name: "b", Status: "running"},
+				{Name: "c", Status: "running"},
+			},
+		},
+	})
+
+	for _, want := range []string{"Services:", "healthy", "3/3 运行中", "进程 pid 1234"} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("output should contain %q, got:\n%s", want, out)
+		}
+	}
+	// 全部 running 时不列明细：只有汇总行一行。
+	if lines := bytes.Count([]byte(out), []byte("\n")); lines != 1 {
+		t.Errorf("output should have exactly 1 line, got %d:\n%s", lines, out)
+	}
+}
+
+// TestRenderServices_DegradedListsFailures 非 running 子服务逐行列出名称、状态与原因。
+func TestRenderServices_DegradedListsFailures(t *testing.T) {
+	out := renderServicesToString(types.CheckInfo{
+		Status: "degraded",
+		Info: pysvc.Status{
+			Process: pysvc.ProcessStatus{Status: "running", PID: 1234},
+			Services: []pysvc.ServiceStatus{
+				{Name: "asr-router", Status: "running"},
+				{Name: "ocr", Status: "failed", Error: "No module named 'torch'"},
+				{Name: "broken", Status: "invalid", Error: "缺少 app/main.py"},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Services:",
+		"degraded",
+		"1/3 运行中",
+		"进程 pid 1234",
+		"    ocr         failed     No module named 'torch'",
+		"    broken      invalid    缺少 app/main.py",
+	} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("output should contain %q, got:\n%s", want, out)
+		}
+	}
+	// running 的子服务不出现在明细中
+	if bytes.Contains([]byte(out), []byte("    asr-router")) {
+		t.Errorf("running service should not be listed, got:\n%s", out)
+	}
+}
+
+// TestRenderServices_NoServices 没有子服务时显示 (0 个)。
+func TestRenderServices_NoServices(t *testing.T) {
+	out := renderServicesToString(types.CheckInfo{
+		Status: "healthy",
+		Info:   pysvc.Status{Process: pysvc.ProcessStatus{Status: "disabled"}},
+	})
+
+	for _, want := range []string{"Services:", "healthy", "(0 个)"} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("output should contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderServices_ProcessNotRunning 进程未运行时汇总行显示进程状态、原因与重启次数。
+func TestRenderServices_ProcessNotRunning(t *testing.T) {
+	out := renderServicesToString(types.CheckInfo{
+		Status: "degraded",
+		Info: pysvc.Status{
+			Process: pysvc.ProcessStatus{Status: "starting", Restarts: 2, Error: "等待就绪行超时"},
+			Services: []pysvc.ServiceStatus{
+				{Name: "ocr", Status: "pending"},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Services:",
+		"degraded",
+		"进程 starting: 等待就绪行超时, 已重启 2 次",
+	} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("output should contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderServices_JSONDecodedInfo 处理 JSON 解码后的 map 形态（生产路径）。
+func TestRenderServices_JSONDecodedInfo(t *testing.T) {
+	out := renderServicesToString(types.CheckInfo{
+		Status: "degraded",
+		Info: map[string]interface{}{
+			"process": map[string]interface{}{
+				"status":   "running",
+				"pid":      float64(1234),
+				"restarts": float64(0),
+			},
+			"services": []interface{}{
+				map[string]interface{}{"name": "ocr", "status": "failed", "error": "boom"},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Services:",
+		"degraded",
+		"0/1 运行中",
+		"进程 pid 1234",
+		"ocr",
+		"failed",
+		"boom",
+	} {
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("output should contain %q, got:\n%s", want, out)
+		}
 	}
 }

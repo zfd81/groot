@@ -73,6 +73,8 @@ func RunInit(homeDir string) error {
 		}
 	}
 
+	// Python 服务布局（services/）由 `groot services init` 负责，init 不再创建。
+
 	// 创建配置文件 bootstrap.yaml（启动配置，默认全注释 → SQLite 本地模式）
 	if err := createBootstrapFile(homeDir); err != nil {
 		return err
@@ -177,4 +179,5 @@ func printNextSteps(homeDir string) {
 	fmt.Println("  3. 打开 Web 界面，在设置面板中配置模型与其他业务项")
 	fmt.Println("  4. （可选）编辑 GROOT.md，填写主 Agent 需始终遵守的规则、风格、目标，每轮对话作为 system 提示注入")
 	fmt.Printf("     vim %s/GROOT.md\n", shortPath)
+	fmt.Println("  5. （可选）启用 Python 子服务：groot services init")
 }

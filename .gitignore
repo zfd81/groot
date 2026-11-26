@@ -42,6 +42,7 @@ __pycache__/
 
 # Python 测试环境（tests/python 目录 - 正式测试）
 tests/python/.venv/
+tests/services/.venv/
 tests/python/.pytest_cache/
 tests/python/__pycache__/
 tests/python/venv/
@@ -76,3 +77,7 @@ web/auto-imports.d.ts
 web/components.d.ts
 # 头脑风暴可视化伴侣产物
 .superpowers/
+
+# asr-router 模型权重（仅保留占位）
+services/asr-router/models/*
+!services/asr-router/models/.gitkeep

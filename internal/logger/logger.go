@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/zfd81/groot/internal/config"
 )
@@ -211,4 +212,10 @@ func (l *Logger) With(fields ...zap.Field) *Logger {
 		zap:    l.zap.With(fields...),
 		config: l.config,
 	}
+}
+
+// NewObserved 返回一个把日志记录到内存的 logger 及其观测器，供测试断言日志内容。
+func NewObserved() (*Logger, *observer.ObservedLogs) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	return &Logger{zap: zap.New(core)}, logs
 }

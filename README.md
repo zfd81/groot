@@ -209,6 +209,13 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │       │   └── {mcp-name}.json
 │       └── skills/                # 子 Agent 专属 Skills（可选）
 │           └── {skill-name}/SKILL.md
+├── services/                      # Python 子服务根目录（groot services init 创建布局）
+│   ├── service.yaml               # 全局配置（启动/请求超时、子服务权限点）
+│   ├── requirements.txt           # 基础依赖（fastapi、uvicorn、python-multipart）
+│   ├── .venv/                     # 共享虚拟环境，由 groot services init 创建
+│   ├── .sdk/                      # 运行时解压的 Python SDK
+│   ├── _template/                 # 新建子服务模板
+│   └── {service-name}/            # 子服务（如 asr-router）
 ├── logs/                          # 日志目录
 │   └── groot-{date}.log           # 日志文件
 ```
@@ -226,6 +233,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `skills/` | Skills 定义目录（固定位置），支持热插拔 |
 | `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
 | `subagents/` | 子 Agent 定义目录（固定位置），存放各子 Agent 的 `agent.md` 与专属 mcp/skills |
+| `services/` | Python 子服务根目录（固定位置），`groot services init` 创建布局，详见 [7.8](#78-python-服务---子服务托管与-servicesname) |
 
 **可配置目录（支持相对/绝对路径）：**
 
@@ -303,7 +311,7 @@ kill -SIGTERM <pid>
 groot init
 ```
 
-初始化会在 `~/.groot` 下生成 `bootstrap.yaml`（全注释模板，权限 0600）、`GROOT.md` 及资源目录（skills/mcp/subagents/logs）。JWT 签名密钥由服务首次启动时自动生成并存入数据库，init 不生成密钥。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置bootstrapyaml)。
+初始化会在 `~/.groot` 下生成 `bootstrap.yaml`（全注释模板，权限 0600）、`GROOT.md` 及资源目录（skills/mcp/subagents/logs）。JWT 签名密钥由服务首次启动时自动生成并存入数据库，init 不生成密钥。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置bootstrapyaml)。如需 Python 子服务能力，执行 `groot services init` 创建布局、共享虚拟环境并安装基础依赖（可选）。
 
 ### 3.2 启动服务
 
@@ -1157,7 +1165,7 @@ curl -X POST http://localhost:8080/chat/completions \
 
 ## 六、CLI 命令参考
 
-Groot 提供一套命令行工具用于初始化工作目录、查看实例状态、查看日志和重置 Web 用户。
+Groot 提供一套命令行工具用于初始化工作目录、初始化与进入 Python 子服务环境、查看实例状态、查看日志和重置 Web 用户。
 
 ### 6.1 命令总览
 
@@ -1165,6 +1173,8 @@ Groot 提供一套命令行工具用于初始化工作目录、查看实例状�
 |------|------|
 | `groot` | 启动 Groot 服务 |
 | `groot init` | 初始化工作目录 |
+| `groot services` | 进入 Python 子服务环境（工作目录为 `services`，共享虚拟环境已激活，`exit` 或 Ctrl+C 退出） |
+| `groot services init` | 初始化 Python 子服务环境（布局、共享虚拟环境、基础依赖） |
 | `groot status` | 查看运行中实例的状态 |
 | `groot tail` | 实时日志查看 |
 | `groot user reset` | 重置 Web 登录用户（删除用户表全部数据） |
@@ -1216,9 +1226,74 @@ groot init
 | `bootstrap.yaml` | 配置文件（全注释模板，权限 0600；默认全注释即 SQLite 本地模式） |
 | `GROOT.md` | 主 Agent 全局指导文件（初始为空，内容每轮作为 system 提示注入，按需填写规则、风格、目标） |
 
+> Python 子服务环境由 `groot services init` 单独初始化。
+>
 > 会话、定时任务、集群等运行时数据存储在数据库中，init 不创建对应目录。init 不生成 JWT 签名密钥——密钥由服务首次启动时自动生成并存入数据库配置表。
 
-### 6.4 查看实例状态（groot status）
+### 6.4 初始化 Python 子服务环境（groot services init）
+
+创建 `{GROOT_HOME}/services/` 的固定目录布局、所有子服务共用的虚拟环境 `services/.venv`，并在该环境中安装基础依赖（fastapi、uvicorn、python-multipart）。命令幂等：已存在的目录、模板与虚拟环境跳过，不覆盖使用者维护的内容。
+
+```bash
+groot services init                             # 自动探测 Python 解释器
+groot services init --py /usr/bin/python3.12    # 指定解释器
+```
+
+| 选项 | 说明 |
+|------|------|
+| `--py <路径>` | 指定 Python 解释器；指定后只使用该解释器，不再自动探测 |
+| `-h, --help` | 显示帮助 |
+
+创建的目录和文件：
+
+| 目录/文件 | 说明 |
+|------|------|
+| `services/` | 子服务根目录 |
+| `services/service.yaml` | 全局配置模板（全注释，等价于全部默认值） |
+| `services/requirements.txt` | 基础依赖清单（fastapi、uvicorn、python-multipart） |
+| `services/_template/` | 新建子服务模板 |
+| `services/.sdk/` | Python SDK 目录（Groot 启动时解压） |
+| `services/.venv/` | 共享虚拟环境，并安装基础依赖 |
+
+Python 要求 3.9+；本机没有可用解释器或版本过低时初始化失败，并打印各平台安装指引。`--py` 指定后只使用该解释器，失败直接报错、不回退。基础依赖安装失败不影响退出码：命令打印 pip 输出末尾与手动安装命令，仍以成功结束。子服务的业务依赖不在命令范围内，由使用者在复制子服务目录后安装。
+
+**退出码**：初始化成功（含基础依赖安装失败）为 0；目录布局创建失败、解释器不可用或版本过低、虚拟环境创建或校验失败为 1。
+
+### 6.5 进入 Python 子服务环境（groot services）
+
+不带子命令时，`groot services` 在 `{GROOT_HOME}/services` 下启动交互式 shell，并激活所有子服务共用的虚拟环境：
+
+```bash
+groot services     # 进入 Python 子服务环境（exit 或 Ctrl+C 退出）
+```
+
+进入后的环境：
+
+| 项目 | 说明 |
+|------|------|
+| 激活变量 | `VIRTUAL_ENV` 指向 `{GROOT_HOME}/services/.venv`；其 `bin/`（Windows 为 `Scripts/`）前置到 `PATH` |
+| 工作目录 | `{GROOT_HOME}/services` |
+| shell | Unix 取 `$SHELL`（未设置时用 `/bin/sh`），Windows 取 `%COMSPEC%`（未设置时用 `cmd.exe`） |
+| 退出 | 输入 `exit` 或在提示符处按 Ctrl+C 退出（退出码 130）；Ctrl+D 不退出；运行命令时 Ctrl+C 仍只中断该命令。shell 的退出码原样作为 `groot services` 的退出码 |
+
+进入的 zsh/bash 先加载用户自己的配置（`~/.zshrc`、`~/.bashrc`），再重新激活 `{GROOT_HOME}/services/.venv`，因此配置中激活的其它虚拟环境不会覆盖共享环境；其它 shell 只通过环境变量激活。
+
+共享虚拟环境不存在时，命令输出 `共享虚拟环境不存在: <venv>` 并询问 `是否现在初始化？[y/N]`：回答 `y` 后执行与 `groot services init` 相同的初始化，成功后再进入；其它回答以退出码 1 结束，并提示先执行 `groot services init`。`.venv` 目录存在但解释器缺失时同样走上面的确认初始化，初始化失败会给出 `rm -rf <venv>` 重建提示；解释器路径为目录（环境已损坏）时直接报错，并给出相同的 `rm -rf <venv>` 重建提示。
+
+该命令固定进入 `services` 根目录，不会自动进入某个子服务目录。安装子服务依赖可在进入环境后自行切换目录：
+
+```bash
+groot services
+pip install -r asr-router/requirements.txt
+```
+
+命令需要在交互终端中运行；stdin 或 stdout 不是字符设备（管道、重定向、CI 等）时报错退出，退出码为 1：
+
+```
+groot services 需要在交互终端中运行；初始化环境请执行: groot services init
+```
+
+### 6.6 查看实例状态（groot status）
 
 查看运行中 Groot 实例的状态和组件健康信息。
 
@@ -1249,6 +1324,7 @@ PID:       12345
   MCP Servers:  healthy (3 个)
   Skills:       healthy (5 个)
   Memory:       healthy (12 个会话)
+  Services:     healthy (1/1 运行中, 进程 pid 1234)
 
 活跃对话: 1
 ```
@@ -1260,7 +1336,7 @@ PID:       12345
 提示: 请确认 Groot 是否已启动，或使用 -p 指定其他端口
 ```
 
-### 6.5 日志查看（groot tail）
+### 6.7 日志查看（groot tail）
 
 实时查看 Groot 日志，类似 `tail -f`，支持格式化和过滤。
 
@@ -1280,7 +1356,7 @@ groot tail -k "api_request" # 过滤包含关键词的日志
 
 退出方式：按 `Ctrl+C`。
 
-### 6.6 重置 Web 登录用户（groot user reset）
+### 6.8 重置 Web 登录用户（groot user reset）
 
 删除数据库用户表中的全部数据。重置后再次访问 Web 界面将重新进入创建用户流程，适用于忘记密码等场景。
 
@@ -1304,6 +1380,7 @@ groot user reset -y   # 跳过确认直接执行
 | `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
 | `/audio/speech` | POST | `chat` | 文本转语音（返回音频二进制） |
 | `/image/understanding` | POST | `chat` | 图片解析（Base64 上传，返回文本） |
+| `/services/{name}` | 任意（由子服务 `METHODS` 决定） | 子服务声明（默认 `all`） | 代理到 Python 子服务（如 `asr-router` 语种识别），见 7.8 |
 | `/chat/status/{sid}` | GET | `status` | 查询最近一次对话状态 |
 | `/chat/{sid}` | GET | `detail` | 查询最近一次对话详情（完整步骤记录） |
 | `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
@@ -2059,7 +2136,114 @@ curl -X POST http://localhost:8080/image/understanding \
 
 ---
 
-### 7.8 GET /chat/status/{sid} - 查询对话状态
+### 7.8 Python 服务 - 子服务托管与 /services/{name}
+
+Groot 可托管 Python 子服务并对外代理。`groot services init` 在 `{GROOT_HOME}/services/` 下创建固定布局：
+
+```
+services/
+├── service.yaml               # 全局配置：启动/请求超时、子服务权限点（全注释模板）
+├── requirements.txt           # 基础依赖：fastapi、uvicorn、python-multipart（所有子服务共用）
+├── .sdk/                      # 运行时解压的 Python SDK（由 Groot 维护）
+├── _template/                 # 新建子服务的模板
+└── .venv/                     # 共享虚拟环境，由 groot services init 创建
+```
+
+`groot services init` **不会**创建 `services/asr-router`。仓库自带的语种识别子服务需要从源码树或发布包
+（`services/asr-router/`）复制到 `{GROOT_HOME}/services/` 后再安装依赖与模型：
+
+```bash
+cp -r services/asr-router "$GROOT_HOME/services/"
+```
+
+自定义子服务同样放进 `{GROOT_HOME}/services/<子服务名>/`，目录结构与 `_template/` 一致。
+
+子服务通过 `/services/<子服务名>` 访问（路由接受任意方法，实际允许的方法由子服务的 `METHODS` 决定），
+复用与其它接口一致的 API Key 验签、吊销检查、权限点与限流；请求去掉 `/services` 前缀后转发给
+Python 进程。Python 进程只监听本机环回地址，不直接对外。
+
+运行模型与访问边界：
+
+- **一对一**：每个 Groot 实例启动时拉起自己的 Python 进程，退出时随之结束；实例之间不共享进程、令牌与端口。受监督模式下由工作进程负责拉起，监督进程不加载业务资源。
+- **按需启用**：只有 `{GROOT_HOME}/services/` 下存在通过校验的子服务时才启动 Python 进程；没有有效子服务、或共享解释器 `.venv` 缺失时进程保持停用，`/web/health` 的 `checks.services` 与 `groot status` 显示停用原因，Groot 主服务与其它接口不受影响。
+- **共享环境**：所有子服务共用一个 `services/.venv`，运行在同一个 Python 进程中；子服务不单独创建虚拟环境，子服务目录中即使出现 `.venv` 也不参与解析，因此各子服务的依赖版本必须互相兼容。
+- **访问边界**：子服务只能通过 Groot 的 `/services/<子服务名>` 访问。Python 进程只绑定 `127.0.0.1` 上的临时端口，除 `GET /healthz` 外所有请求都要求携带每次启动随机生成、不落盘的内部令牌；外部主机无法连接，本机其他应用即使探测到端口也无法调用子服务。
+
+#### 安装运行环境与依赖
+
+执行 `groot services init` 创建布局与共享虚拟环境，并在其中安装基础依赖（fastapi、uvicorn、python-multipart）。
+基础依赖安装失败时命令只打印 pip 输出与手动安装命令，仍以成功结束；此时先补装基础依赖，再安装子服务业务依赖，例如 asr-router：
+
+```bash
+groot services init        # 创建布局与共享虚拟环境，安装基础依赖
+groot services             # 进入已激活共享虚拟环境的 shell（工作目录为 services）
+pip install -r requirements.txt
+pip install -r asr-router/requirements.txt
+```
+
+不进入交互式 shell 时，也可以直接用绝对路径调用共享环境的 pip：
+
+```bash
+"$GROOT_HOME/services/.venv/bin/pip" install -r "$GROOT_HOME/services/requirements.txt"
+"$GROOT_HOME/services/.venv/bin/pip" install -r "$GROOT_HOME/services/asr-router/requirements.txt"
+```
+
+`fastapi`、`uvicorn` 与 `python-multipart`（表单/文件上传所需）只在 `services/requirements.txt` 中声明一次；每个子服务的 `requirements.txt`
+只列业务依赖。缺少 `.venv` 时 Python 服务保持停用，停用原因提示运行 `groot services init`，Groot 主服务与其它接口不受影响。
+
+#### 配置子服务权限
+
+`services/service.yaml` 是全局配置模板，默认全注释（等价于全部默认值）：
+
+```yaml
+# startup_timeout: 180s
+# request_timeout: 120s
+# permission:
+#   asr-router: chat
+```
+
+取消 `permission` 两行注释即把 `asr-router` 归入 `chat` 权限点；未列出的子服务使用 `all`。改动在重启后生效。
+`/web/health` 的 `checks.services` 报告子服务整体状态（没有子服务时为 `healthy`）。
+
+#### asr-router 语种识别
+
+`POST /services/asr-router` 接收一段音频（multipart 字段 `file`），返回 ISO 639-1 语言码、可选方言、置信度
+与候选语种。支持 `wav`、`mp3`、`m4a`、`flac`、`ogg`、`webm`，时长 1.5–35 秒；其中 `mp3`、`m4a`、`webm`
+需要系统中的 `ffmpeg`。模型权重不随仓库发布，需按固定 revision 下载：
+
+```bash
+huggingface-cli download aufklarer/FireRedLID-887M-MLX-8bit \
+  --revision 1ae1296262c51cfd38de0f134011e6fa4b657543 \
+  --local-dir {GROOT_HOME}/services/asr-router/models
+```
+
+也可用环境变量 `GROOT_SERVICE_MODELS_DIR` 把模型目录指向仓库之外（如已有的 Hugging Face 缓存快照）。
+
+```bash
+curl -X POST http://localhost:8080/services/asr-router \
+  -H "Authorization: Bearer 在Web界面创建的APIKey" \
+  -F "file=@sample.wav"
+```
+
+```json
+{
+  "language": "zh",
+  "dialect": "mandarin",
+  "confidence": 0.97,
+  "alternatives": [
+    {"language": "en", "confidence": 0.02}
+  ],
+  "duration_ms": 3200
+}
+```
+
+> **平台限制：** asr-router 的推理后端为 MLX，只能在 **Apple Silicon 的 macOS** 上运行。Linux、Windows
+> 与 Intel Mac 上该子服务启动失败（`checks.services.status` 为 `degraded`），Groot 与其它子服务不受影响；
+> 如需在这些平台使用语种识别，需为子服务另加 PyTorch 后端。
+
+---
+
+### 7.9 GET /chat/status/{sid} - 查询对话状态
 
 需要携带具有 `status` 权限的 API Key，并使用请求头 `user` 声明当前用户（缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`）。
 
@@ -2116,7 +2300,7 @@ curl -X POST http://localhost:8080/image/understanding \
 
 ---
 
-### 7.9 GET /chat/{sid}/{cid} - 查询对话详情
+### 7.10 GET /chat/{sid}/{cid} - 查询对话详情
 
 需要携带具有 `detail` 权限的 API Key，并使用请求头 `user` 声明当前用户（缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`）。
 
@@ -2161,7 +2345,7 @@ curl -X POST http://localhost:8080/image/understanding \
 
 ---
 
-### 7.10 POST /chat/{sid}/{cid}/stop - 中止对话
+### 7.11 POST /chat/{sid}/{cid}/stop - 中止对话
 
 中止会话 `sid` 中正在执行的对话 `cid`。权限点 `chat`。只能中止当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`；Web 登录的管理员可中止任意会话的对话。
 
@@ -2225,7 +2409,7 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 ---
 
-### 7.11 GET /sess/{sid} - 查询会话详情
+### 7.12 GET /sess/{sid} - 查询会话详情
 
 需要携带具有 `session` 权限的 API Key，并使用请求头 `user` 声明当前用户（缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`）。
 
@@ -2300,7 +2484,7 @@ curl -X POST http://localhost:8080/chat/20260419103000523_a1b2/20260419103000523
 
 ---
 
-### 7.12 PATCH /sess/{sid} - 重命名会话
+### 7.13 PATCH /sess/{sid} - 重命名会话
 
 修改会话标题。权限点 `session`。只能重命名当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录的管理员可重命名任意会话，包括定时任务产生的归属为空的会话。
 
@@ -2404,7 +2588,7 @@ API Key 未绑定租户 → `403`：
 
 ---
 
-### 7.13 GET /sess/history - 查询会话列表
+### 7.14 GET /sess/history - 查询会话列表
 
 需要携带具有 `history` 权限的 API Key。
 
@@ -2448,7 +2632,7 @@ user: alice
 
 ---
 
-### 7.14 GET /sess/search - 搜索历史对话
+### 7.15 GET /sess/search - 搜索历史对话
 
 需要携带具有 `session` 权限的 API Key。`q` 为空时直接返回空结果，此时不校验 `user`；`q` 非空时要求请求头 `user`。
 
@@ -2506,7 +2690,7 @@ user: alice
 
 ---
 
-### 7.15 DELETE /sess/{sid} - 删除会话
+### 7.16 DELETE /sess/{sid} - 删除会话
 
 删除会话及其全部对话记录。权限点 `delete`。只能删除当前（租户，用户）自己的会话：会话不存在或归属不符返回 `404 session_not_found`，响应体与 `GET /sess/{sid}` 的 404 完全相同。要求请求头 `user`，缺失或非法返回 `400 invalid_request`，API Key 未绑定租户返回 `403 tenant_not_bound`。Web 登录的管理员可删除任意会话，包括定时任务产生的归属为空的会话。
 
@@ -2565,7 +2749,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.16 GET /web/health - 健康检查
+### 7.17 GET /web/health - 健康检查
 
 不需要认证和权限，可直接访问（`groot status` 也使用该端点）。
 
@@ -2621,13 +2805,13 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.17 GET /schedule - 列出定时任务
+### 7.18 GET /schedule - 列出定时任务
 
 需要携带具有 `schedule` 权限的 API Key。调度接口与会话无关，不要求 `user`；错误响应同样为 OpenAI 错误信封。
 
 查询所有定时任务，支持按状态过滤。
 
-> **可用性说明：** 7.17 ~ 7.23 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
+> **可用性说明：** 7.18 ~ 7.24 的调度接口只在 **Leader 实例且 `schedule.enabled: true`** 时可用，否则返回 `503 schedule_unavailable`。集群部署时请把调度管理请求发往 Leader，当前 Leader 可在 Web 界面 **设置 → 集群管理** 中查看。
 
 **Query 参数：**
 
@@ -2661,7 +2845,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.18 GET /schedule/:id - 查询任务详情
+### 7.19 GET /schedule/:id - 查询任务详情
 
 **请求参数：**
 
@@ -2669,11 +2853,11 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 |------|------|------|------|
 | `id` | string | 是 | 任务 ID（路径参数） |
 
-**响应：** 返回完整任务定义，格式同 7.17 中单条任务。
+**响应：** 返回完整任务定义，格式同 7.18 中单条任务。
 
 ---
 
-### 7.19 DELETE /schedule/:id - 删除任务
+### 7.20 DELETE /schedule/:id - 删除任务
 
 物理删除任务及关联文件。
 
@@ -2693,7 +2877,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.20 POST /schedule/:id/disable - 禁用任务
+### 7.21 POST /schedule/:id/disable - 禁用任务
 
 将任务从 `active` 移入 `disabled`，并从调度器移除。
 
@@ -2707,7 +2891,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.21 POST /schedule/:id/enable - 启用任务
+### 7.22 POST /schedule/:id/enable - 启用任务
 
 将任务从 `disabled` 移入 `active`，重新注册到调度器。
 
@@ -2721,7 +2905,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.22 POST /schedule/:id/archive - 归档任务
+### 7.23 POST /schedule/:id/archive - 归档任务
 
 将任务移入 `archive`（从任意状态）。
 
@@ -2735,7 +2919,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.23 GET /schedule/:id/history - 执行历史
+### 7.24 GET /schedule/:id/history - 执行历史
 
 查询某任务的执行记录。
 
@@ -2763,7 +2947,7 @@ curl -X DELETE http://localhost:8080/sess/20260419103000523_a1b2 \
 
 ---
 
-### 7.24 定时任务创建（通过对话）
+### 7.25 定时任务创建（通过对话）
 
 定时任务通过 Agent 对话创建，用户用自然语言描述需求，Agent 调用 `schedule_create` 工具：
 
@@ -3074,7 +3258,7 @@ export OPENAI_API_KEY="your-api-key"
 
 **说明：** 会话数据长期保留在数据库中，不做内置定时清理。
 
-- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.15](#715-delete-sesssid---删除会话)
+- 单个会话通过 `DELETE /sess/{sid}`（权限点 `delete`）删除，会话及其全部对话记录一并删除，见 [7.16](#716-delete-sesssid---删除会话)
 - 运维侧如需按时间批量清理，可直接对数据库执行 SQL（`memory_chats` 配有 `idx_started_at` 索引，`memory_sessions` 配有 `idx_updated_at` 索引）
 - SQLite 模式下数据库文件为 `{GROOT_HOME}/groot.db`
 
@@ -3244,7 +3428,7 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
 流式响应中出错时 HTTP 状态码保持 `200`，错误以 `data: {"error":{...}}\n\n` 事件下发，随后是 `data: [DONE]`。
 
-> **例外：** 请求体超过 200MB 时，由 HTTP 服务器在进入路由前直接返回 413 纯文本响应，不遵循上述错误信封。这是传输层的硬限制，客户端应在发送前自行控制请求体大小。
+> **大请求体（超过 200MB）：** 200MB 是传输层硬上限。`Content-Length` 已知且超过 200MB 的请求，在所有路由上都会在进入业务处理前返回 413 JSON 错误信封（`code=file_too_large`）。`/services/{name}` 代理路由的分块（未知长度）请求在转发过程中超过 200MB 时同样返回 413 信封；其他非代理路由的分块请求可能在 handler 读取请求体时退化为该 handler 的 400 响应。客户端仍应在发送前自行控制请求体大小。
 
 | HTTP 状态码 | `type` | `code` | 说明 |
 |------------|--------|--------|------|
@@ -3261,12 +3445,14 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 | 404 | `invalid_request_error` | `schedule_not_found` | 定时任务不存在（保留码） |
 | 409 | `invalid_request_error` | `chat_limit_exceeded` | 同一会话已有对话正在执行 |
 | 409 | `invalid_request_error` | `chat_still_running` | 会话仍在执行，暂不能删除或改名；`POST /chat/{sid}/{cid}/stop` 的对话未在本节点执行且无法广播时也返回此码 |
-| 413 | `invalid_request_error` | `file_too_large` | 上传内容超过单文件或单次合计上限（转录音频、图片附件、对话附件、`/image/understanding`） |
+| 413 | `invalid_request_error` | `file_too_large` | 上传内容超过单文件或单次合计上限（转录音频、图片附件、对话附件、`/image/understanding`、`/services/{name}` 的 50MB 上限），或请求体超过 200MB 硬上限 |
 | 429 | `rate_limit_error` | `rate_limit_exceeded` | 触发限流（QPS 或并发超限），稍后重试 |
 | 499 | `invalid_request_error` | `client_closed_request` | 调用方在拿到响应前放弃请求（连接中断、超时取消） |
 | 500 | `api_error` | `internal_error` | 服务端内部错误 |
-| 502 | `api_error` | `upstream_error` | 上游模型服务返回错误（连接失败、鉴权失败、模型拒绝），`message` 透传上游原文 |
+| 502 | `api_error` | `upstream_error` | 上游模型服务或 Python 子服务返回错误（连接失败、鉴权失败、模型拒绝、上游读写失败），`message` 透传上游原文 |
 | 503 | `api_error` | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或未开启定时任务） |
+| 503 | `api_error` | `service_unavailable` | Python 服务未就绪 / 重启中 / 已放弃重启，或该子服务加载失败（`/services/{name}`） |
+| 504 | `api_error` | `upstream_error` | 等待上游响应头超时（`request_timeout`，默认 120 秒；`/services/{name}` 及其他调用上游模型的接口） |
 
 ### E. 联系与支持
 

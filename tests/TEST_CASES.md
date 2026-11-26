@@ -495,6 +495,72 @@
 
 ---
 
+### 1.16 Python 服务宿主测试
+
+位于 `internal/pysvc/*_test.go`：`config_test.go`、`discover_test.go`、`assets_test.go`、`venv_test.go`、`supervisor_test.go`、`proxy_test.go`、`manager_test.go`。
+
+覆盖点：
+
+- 全局配置（`config_test.go`）：缺失文件用默认值；显式超时与权限；未知字段/非法时长报错；`ValidPermission` 集合；未知权限值原样保留由发现阶段回退
+- 目录发现（`discover_test.go`）：有效服务；权限来自配置；缺少 `app/__init__.py` / `app/main.py` / `requirements.txt`；忽略 `.` / `_` 开头目录；`-`/`_` 换算重名；非法权限回退 `all`；非法命名；符号链接目录按目标识别；断链记为无效；`healthz` 为保留名称
+- 嵌入资源（`assets_test.go`）：`EnsureLayout` 创建与幂等、模板内容（基础依赖含 `python-multipart`）；`ExtractSDK` 解压与重复调用；SDK 根目录权限 0755；模板 `main.py` 契约；解压结果不含 `__pycache__` / `.pyc`
+- 虚拟环境（`venv_test.go`）：解释器已存在跳过；正常创建；`.venv` 损坏或解释器为目录；`--py` 指定后不回退（`TestEnsureVenv_ExplicitPythonNoFallback`）；版本查询失败、版本输出无法解析（各自独立用例，走默认探测路径）；`.venv` 路径是文件（在存在性检查阶段即报错）；无可用解释器与版本过低；候选回落；venv 创建失败；Windows `py -3` 候选；创建后解释器缺失；基础依赖安装成功/失败尾行；PipPath 平台差异；外部命令均带超时；Windows 删除目录提示用 `rmdir /s /q`
+- 子进程监督（`supervisor_test.go`）：就绪进入 `running`；握手令牌与子服务清单；SDK 版本不一致；就绪超时；退避重启；健康运行后退避档位重置；连续快速失败后放弃；`stop` 关闭 stdin 并通过进程对象发送终止信号；不响应时升级 Kill；崩溃进程的 stderr 完整进入日志；超长日志行（含 >1MB）截断后管道继续读取；`readLines` 截断语义
+- 反向代理（`proxy_test.go`）：方法/路径/查询/请求体转发；剥离伪造 `X-Groot-*`；逐跳头双向剔除（含 `Connection` 列出的额外头）；Web 用户回退；未就绪 503；上游错误 502；响应头超时 504；20MB 流式转发；multipart 流式；未知长度响应逐块透传；`Content-Length: 0` 流式体转为 `NoBody`；请求体上限 413；客户端取消（无正文与带正文）；302 不跟随重定向且原样透传
+- Manager 编排（`manager_test.go`）：启动前发现与权限解析；启动前状态；无效服务聚合；健康状态；无服务不拉起进程；`Stop`；SDK 安装失败（root 下 skip）；`permission` 中未识别子服务名记录警告；状态 JSON 空数组；services 目录缺失或路径不是目录时的停用原因
+- 请求体上限中间件（`internal/api/middleware/bodylimit_test.go`）：已知长度超限 413；未超限通过；恰好等于上限通过；分块超限 `ErrBodyTooLarge`；非流式超限 413；handler 未读完流式请求体时不污染 keep-alive 连接（真实 TCP 连接）
+---
+
+### 1.17 Python 服务初始化命令测试
+
+位于 `internal/cmd/services_test.go`，对应实现 `internal/cmd/services.go`（命令执行器注入假实现）。
+
+- `TestParseServicesInitFlags`：`--py` 解析与缺值报错；未知 flag / 多余参数报错
+- `TestRunServicesInit_CreatesLayoutVenvAndInstallsDeps`：创建布局、虚拟环境并安装基础依赖
+- `TestRunServicesInit_CreatesHomeWhenMissing`：`{GROOT_HOME}` 缺失时一并创建
+- `TestRunServicesInit_Idempotent`：重复执行只补齐缺失项，不覆盖已有内容
+- `TestRunServicesInit_DepsFailureReturnsNil`：基础依赖安装失败仍成功退出并打印手动命令
+- `TestRunServicesInit_PythonMissingReturnsError`：无可用解释器时返回错误
+- `TestRunServicesInit_BrokenVenvReturnsError`：`.venv` 损坏时返回错误
+- `TestRunServicesInit_UsesExplicitPython`：`--py` 指定解释器时不回退自动探测
+- `TestRunServicesInit_DepsFailureWritesManualCommands`：基础依赖安装失败时打印手动安装命令
+
+`internal/cmd/init_test.go` 的 `TestRunInit_NoServicesLayout` 断言 `groot init` 不再创建 `services/`。
+
+---
+
+### 1.18 Python 服务环境进入命令测试
+
+位于 `internal/cmd/services_shell_test.go`，对应实现 `internal/cmd/services_shell.go`（交互终端检测、shell 执行与初始化均注入假实现）。
+
+覆盖点：
+
+- `TestServicesShellEnv_SetsVirtualEnvAndPrependsPath`：设置 `VIRTUAL_ENV`，把虚拟环境 `bin` 前置到 `PATH`，并替换父环境已有的 `VIRTUAL_ENV` / `PATH` 条目
+- `TestServicesShellEnv_MissingPath`：父环境没有 `PATH` 时只写入虚拟环境 `bin`
+- `TestServicesShellEnv_WindowsSeparatorAndCase`：Windows 用 `;` 分隔，`Path` 键名不区分大小写
+- `TestServicesShellEnv_PreservesEntryWithoutEquals`：不含 `=` 的环境变量条目（如 `WEIRD`）原样保留
+- `TestServicesShell_Unix`：取 `SHELL`，未设置时回退 `/bin/sh`
+- `TestServicesShell_Windows`：取 `COMSPEC`，未设置时回退 `cmd.exe`
+- `TestPromptYes`：`y` / `Y` / `yes`（含空格与大小写）确认，`n`、空行（含空行后跟其它输入）、EOF 均不确认，并输出提示文本
+- `TestServicesShellLaunch_ZshShim`：zsh 使用临时 `ZDOTDIR` 垫片，`.zshrc` 加载用户配置并激活共享虚拟环境，设置 `setopt MONITOR`、`setopt IGNORE_EOF`（Ctrl+D 不退出）、`preexec`/`precmd` 钩子与 `TRAPINT() { (( __groot_running )) || exit 130 }`（提示符处 Ctrl+C 退出、运行命令时不退出）且位于用户配置之后，`.zshenv` 加载用户 `.zshenv`，`Cleanup` 删除临时目录
+- `TestServicesShellLaunch_ZshShimUsesOriginalZDOTDIR`：父环境已有 `ZDOTDIR` 时以其为源，并在垫片中还原 `ZDOTDIR`
+- `TestServicesShellLaunch_BashRcfile`：bash 使用 `--rcfile` 垫片，先加载 `~/.bashrc`，再激活共享虚拟环境，设置 `set -o ignoreeof` 与 `trap 'exit 130' INT`
+- `TestServicesShellLaunch_OtherShellEnvOnly`：其它 shell 只做环境变量激活（无参数、环境不变、无 Cleanup）
+- `TestServicesShellLaunch_WindowsEnvOnly`：Windows 只做环境变量激活
+- `TestServicesShellLaunch_QuotesSingleQuoteInPath`：路径含单引号时按 `'\''` 转义
+- `TestRunServicesShell_NonInteractiveReturnsError`：非交互终端直接报错（含 `交互终端` 与 `groot services init`），不执行 shell、不触发初始化
+- `TestRunServicesShell_EntersActivatedVenv`：进入 `$SHELL`，工作目录为 `services`，环境含 `VIRTUAL_ENV` 与前置的 `PATH`，标准流接到注入的 reader/writer，并输出进入提示（虚拟环境路径、工作目录、`exit`）
+- `TestRunShellCommand_SignalExitReturnsOne`：shell 被信号终止时返回退出码 1（而不是负数）
+- `TestRunServicesShell_PropagatesExitCode`：shell 退出码原样返回
+- `TestRunServicesShell_RunFailureReturnsError`：shell 启动失败返回错误与退出码 1
+- `TestRunServicesShell_MissingVenvDeclined`：虚拟环境缺失且拒绝初始化时提示 `共享虚拟环境不存在` / `[y/N]`，退出码 1 并提示 `groot services init`
+- `TestRunServicesShell_MissingVenvInitialized`：确认初始化后以同一 `home` 与输出 writer 调用初始化，成功后进入 shell
+- `TestRunServicesShell_InitFailureReturnsError`：初始化失败返回错误且不进入 shell
+- `TestRunServicesShell_BrokenVenvInterpreterIsDir`：解释器为目录时报错（含 `缺少解释器` 与 `rm -rf`），不触发初始化
+- `TestRunServicesShell_InitSucceedsButInterpreterStillMissing`：初始化成功但解释器仍缺失时报错，不进入 shell
+
+---
+
 ## 二、系统测试（Python）
 
 位于 `tests/python/` 目录，使用 pytest 框架。
@@ -1018,7 +1084,47 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 
 ---
 
-## 三、手工验证（Web 界面）
+### 2.31 Python 子服务系统测试
+
+`test_python_services.py`（需要先 `go build -o dist/groot ./cmd/groot`；用户执行）：
+
+| 用例编号 | 测试内容 |
+|---------|---------|
+| TC-PY-101 | `groot services init` 在临时 `GROOT_HOME` 创建 `services/`、`.sdk/`、`_template/`、`service.yaml`、`requirements.txt`、`.venv` |
+| TC-PY-102 | `/web/health` 含 `services` 检查项；`checks.services.status` 为 `healthy` 或 `degraded`，`info.services` 为数组 |
+| TC-PY-103 | 未注册的 `GET /services/nope` 返回 404 `invalid_request` |
+| TC-PY-104 | 已注册子服务缺 API Key 返回 401 `invalid_api_key`（鉴权先于代理与就绪判断） |
+| TC-PY-105 | `groot init` 返回 0 且不创建 `services/` 目录 |
+
+---
+
+## 三、Python 子服务与 SDK 单元测试（pytest）
+
+位于 `tests/services/`，属于单元测试，与 Go 测试同级。`tests/services/conftest.py` 自动把
+`internal/pysvc/sdk` 与 `services/asr-router` 注入 `sys.path`，无需手动设置 `PYTHONPATH`。
+运行：`tests/services/.venv/bin/pytest tests/services -v`（依赖见 `tests/services/requirements.txt`）。
+
+### 3.1 SDK 测试（tests/services/sdk）
+
+| 测试文件 | 测试内容 |
+|---------|---------|
+| `test_errors.py` | 错误信封字段；`param`/`code` 缺省为 `None` |
+| `test_identity.py` | 六个 `X-Groot-*` 头映射到身份字段；缺头为空串；FastAPI 依赖注入 |
+| `test_launcher.py` | 入口契约加载；路由注册；令牌校验与 `/healthz` 放行；`/healthz` 返回各子服务就绪状态；身份依赖；`APIError` 与校验错误信封；单个子服务启动失败隔离；路由注册失败隔离为 503；逆序 `shutdown`；405 信封；就绪行与生命线；非 UTF-8 stdout 仍上报就绪行；握手令牌与清单；导入失败 503 占位路由；`--dev` 扫描跳过保留名 `healthz` |
+| `test_py39_compat.py` | AST 静态检查：SDK 所有用 `X \| None` 注解的模块都带 `from __future__ import annotations`（3.9 兼容） |
+
+### 3.2 asr-router 测试（tests/services/asr-router）
+
+| 测试文件 | 测试内容 |
+|---------|---------|
+| `test_audio.py` | 16kHz 解码；8kHz 重采样；时长下限/上限；超长音频凭文件头拒绝、不全量解码；50MB 上限；非法音频 `unsupported_type`；ffmpeg 命令带 `-t` 与 timeout；ffmpeg 超时转 400 信封 |
+| `test_labels.py` | `zh mandarin`、`en`、`zh yue`、未知标签、三字段取前二；语言为 `und` 时不带方言 |
+| `test_lid.py` | 模型目录环境变量与默认值；平台判定；缺模型报错；候选解析；特征提取在后端锁内执行；真实模型用例在无 MLX/无模型时 skip |
+| `test_main.py` | 检测成功/`und`/无候选；缺 `file`；后端未就绪 503；启动失败 503；身份透传；`shutdown` 释放后端；非音频扩展名在读取请求体前返回 400 `unsupported_type`；超限上传凭 `UploadFile.size` 在读取前返回 413 |
+
+---
+
+## 四、手工验证（Web 界面）
 
 浏览器打开 `http://localhost:8080/ui/`，逐项确认：
 
@@ -1041,7 +1147,7 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 
 ---
 
-## 四、运行测试
+## 五、运行测试
 
 ### Go 单元测试
 
@@ -1062,20 +1168,21 @@ cd tests/python && pytest test_api_endpoints.py -v
 
 ---
 
-## 五、统计汇总
+## 六、统计汇总
 
 | 测试类型 | 测试类/函数数 | 测试文件数 |
 |---------|-------------|-----------|
-| Go 单元测试 | 1014 个函数 | 117 |
-| Python 系统测试 | 414 个测试（pytest --collect-only） | 33 |
+| Go 单元测试 | 1226 个函数 | 135 |
+| Python 系统测试 | 419 个测试（pytest --collect-only） | 34 |
+| Python 子服务与 SDK 单元测试 | 51 个测试（pytest --collect-only，其中 1 个需 MLX 模型会 skip） | 7 |
 
-**总计**: 约 1428 个测试点覆盖核心功能。
+**总计**: 约 1696 个测试点覆盖核心功能。
 
 ---
 
-## 六、已知问题与修复记录
+## 七、已知问题与修复记录
 
-### 6.1 MCP 初始化阻塞等待 roots/list 问题
+### 7.1 MCP 初始化阻塞等待 roots/list 问题
 
 **发现日期**: 2026-04-24
 
@@ -1178,7 +1285,7 @@ return nil
 
 ---
 
-### 6.2 MCP Discovery Context 导致进程退出问题
+### 7.2 MCP Discovery Context 导致进程退出问题
 
 **发现日期**: 2026-04-24
 
