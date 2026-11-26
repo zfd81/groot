@@ -524,6 +524,7 @@
 - `TestRunServicesInit_BrokenVenvReturnsError`：`.venv` 损坏时返回错误
 - `TestRunServicesInit_UsesExplicitPython`：`--py` 指定解释器时不回退自动探测
 - `TestRunServicesInit_DepsFailureWritesManualCommands`：基础依赖安装失败时打印手动安装命令
+- `TestRunServicesInit_SuccessOutputHasNoSubServiceHint`：成功路径输出不含子服务业务依赖提示（无 `<子服务名>`、无 `install -r`），仍含解释器与收尾状态
 
 `internal/cmd/init_test.go` 的 `TestRunInit_NoServicesLayout` 断言 `groot init` 不再创建 `services/`。
 

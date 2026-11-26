@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -244,6 +243,35 @@ func TestRunServicesInit_Idempotent(t *testing.T) {
 	}
 }
 
+// TestRunServicesInit_SuccessOutputHasNoSubServiceHint 验证基础依赖安装成功时，
+// 输出不含子服务业务依赖提示（占位符 <子服务名>），且解释器信息与收尾状态仍在。
+func TestRunServicesInit_SuccessOutputHasNoSubServiceHint(t *testing.T) {
+	homeDir := t.TempDir()
+	runner := newServicesFakeRunner()
+
+	var out bytes.Buffer
+	if err := RunServicesInit(homeDir, ServicesInitOptions{Runner: runner, Out: &out}); err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+
+	got := out.String()
+	if strings.Contains(got, "<子服务名>") {
+		t.Errorf("输出不应包含子服务依赖提示，实际输出:\n%s", got)
+	}
+	if !strings.Contains(got, "解释器: ") {
+		t.Errorf("输出缺少解释器信息，实际输出:\n%s", got)
+	}
+	if strings.Contains(got, "install -r") {
+		t.Errorf("成功路径不应输出 pip 安装命令，实际输出:\n%s", got)
+	}
+	if !strings.Contains(got, "初始化完成") {
+		t.Errorf("输出缺少收尾状态，实际输出:\n%s", got)
+	}
+	if strings.Contains(got, "需手动安装") {
+		t.Errorf("成功路径不应出现失败分支的收尾文案，实际输出:\n%s", got)
+	}
+}
+
 func TestRunServicesInit_DepsFailureReturnsNil(t *testing.T) {
 	homeDir := t.TempDir()
 	runner := newServicesFakeRunner()
@@ -291,7 +319,6 @@ func TestRunServicesInit_DepsFailureWritesManualCommands(t *testing.T) {
 	servicesDir := filepath.Join(homeDir, "services")
 	requirements := filepath.Join(servicesDir, "requirements.txt")
 	venvPip := pysvc.VenvPipPath(servicesDir)
-	subServiceRequirements := path.Join(filepath.ToSlash(servicesDir), "<子服务名>", "requirements.txt")
 
 	for _, want := range []string{
 		"基础依赖未安装成功",
@@ -300,7 +327,6 @@ func TestRunServicesInit_DepsFailureWritesManualCommands(t *testing.T) {
 		"--no-index --find-links",
 		"apt install python3-venv",
 		"初始化完成（基础依赖需手动安装）",
-		venvPip + " install -r " + subServiceRequirements,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("输出缺少 %q，实际输出:\n%s", want, got)

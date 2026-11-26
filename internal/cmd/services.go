@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -163,7 +162,6 @@ func RunServicesInit(homeDir string, opts ServicesInitOptions) error {
 	} else {
 		fmt.Fprintf(out, "解释器: %s\n", venv.Interpreter)
 	}
-	fmt.Fprintf(out, "%s install -r %s\n", venvPip, path.Join(filepath.ToSlash(servicesDir), "<子服务名>", "requirements.txt"))
 
 	if homeCreated {
 		fmt.Fprintln(out, "工作目录其余内容由 groot init 准备（skills/mcp/subagents/logs、bootstrap.yaml、GROOT.md）")
