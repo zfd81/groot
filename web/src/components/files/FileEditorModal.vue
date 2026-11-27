@@ -70,10 +70,46 @@ async function initEditor(doc: string, path: string) {
   })
 }
 
+// Markdown 高亮样式自定义标题/行内代码/链接/引用的颜色与约定字重/装饰。
+// 自定义样式的 syntaxHighlighting 为非 fallback，会取代 basicSetup 的默认样式，
+// 因此把 defaultHighlightStyle 的规则前置合并，保证加粗/斜体/删除线等默认样式仍然生效。
+let mdExtensions: Promise<import('@codemirror/state').Extension[]> | null = null
+function markdownExtensions() {
+  if (!mdExtensions) {
+    mdExtensions = (async () => {
+      const [{ markdown }, { HighlightStyle, syntaxHighlighting, defaultHighlightStyle }, { tags }] =
+        await Promise.all([
+          import('@codemirror/lang-markdown'),
+          import('@codemirror/language'),
+          import('@lezer/highlight'),
+        ])
+      const style = HighlightStyle.define([
+        ...defaultHighlightStyle.specs,
+        {
+          tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6],
+          color: '#0550ae',
+          fontWeight: 'bold',
+          textDecoration: 'none',
+        },
+        { tag: tags.monospace, color: '#cf222e' },
+        { tag: tags.link, color: '#0969da', textDecoration: 'underline' },
+        { tag: tags.quote, color: '#57606a' },
+        { tag: tags.processingInstruction, color: '#6e7781' },
+      ])
+      return [markdown(), syntaxHighlighting(style)]
+    })()
+    mdExtensions.catch(() => {
+      mdExtensions = null
+    })
+  }
+  return mdExtensions
+}
+
 // 按扩展名动态加载语言包；未覆盖的扩展名无高亮
 async function languageFor(path: string) {
   const ext = path.split('.').pop()?.toLowerCase()
-  if (ext === 'md') return (await import('@codemirror/lang-markdown')).markdown()
+  if (ext === 'py') return (await import('@codemirror/lang-python')).python()
+  if (ext === 'md') return markdownExtensions()
   if (ext === 'yaml' || ext === 'yml') return (await import('@codemirror/lang-yaml')).yaml()
   if (ext === 'json') return (await import('@codemirror/lang-json')).json()
   return null
