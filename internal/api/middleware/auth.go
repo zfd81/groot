@@ -15,18 +15,18 @@ import (
 	"github.com/zfd81/groot/internal/repo"
 )
 
-// ServicePermissionResolver 解析子服务声明的权限点；名字不存在或子服务无效时 found 为 false。
-type ServicePermissionResolver interface {
-	ServicePermission(name string) (string, bool)
+// PluginPermissionResolver 解析插件声明的权限点；名字不存在或插件无效时 found 为 false。
+type PluginPermissionResolver interface {
+	PluginPermission(name string) (string, bool)
 }
 
 // AuthMiddleware 提供 API Key（JWT）/ Web Cookie 认证，始终开启。
 type AuthMiddleware struct {
-	config      config.SecurityConfig
-	webStore    *websession.Store
-	apiKeys     repo.APIKeyRepo
-	log         *logger.Logger
-	servicePerm ServicePermissionResolver
+	config     config.SecurityConfig
+	webStore   *websession.Store
+	apiKeys    repo.APIKeyRepo
+	log        *logger.Logger
+	pluginPerm PluginPermissionResolver
 }
 
 // NewAuthMiddleware creates a new auth middleware.
@@ -35,9 +35,9 @@ func NewAuthMiddleware(cfg config.SecurityConfig, webStore *websession.Store, ap
 	return &AuthMiddleware{config: cfg, webStore: webStore, apiKeys: apiKeys, log: log}
 }
 
-// SetServicePermissionResolver 注入子服务权限解析器；传 nil 时服务路径沿用默认权限。
-func (m *AuthMiddleware) SetServicePermissionResolver(r ServicePermissionResolver) {
-	m.servicePerm = r
+// SetPluginPermissionResolver 注入插件权限解析器；传 nil 时插件路径沿用默认权限。
+func (m *AuthMiddleware) SetPluginPermissionResolver(r PluginPermissionResolver) {
+	m.pluginPerm = r
 }
 
 // Serve returns a Hertz middleware handler
@@ -78,13 +78,13 @@ func (m *AuthMiddleware) Serve() app.HandlerFunc {
 			return
 		}
 
-		// 权限检查以数据库行为准；命中 /services/<单段> 时以子服务声明的权限点覆盖默认映射
+		// 权限检查以数据库行为准；命中 /plugins/<单段> 时以插件声明的权限点覆盖默认映射
 		path := string(rc.URI().Path())
 		method := string(rc.Method())
 		requiredPerm := getRequiredPermission(path, method)
-		if name, ok := serviceNameFromPath(path); ok && m.servicePerm != nil {
+		if name, ok := pluginNameFromPath(path); ok && m.pluginPerm != nil {
 			// 空权限点一律不接受：resolver 返回空串时沿用静态默认（all，最严格），避免绕过检查
-			if perm, found := m.servicePerm.ServicePermission(name); found && perm != "" {
+			if perm, found := m.pluginPerm.PluginPermission(name); found && perm != "" {
 				requiredPerm = perm
 			}
 		}
@@ -121,10 +121,10 @@ func writeUnauthorized(rc *app.RequestContext) {
 	errbody.Write(rc, 401, "API Key 无效或缺失", errbody.TypeAuthentication, "", errbody.CodeInvalidAPIKey)
 }
 
-// serviceNameFromPath 从 /services/<单段> 路径提取子服务名；
-// /services/、多段路径及非服务路径一律不命中。
-func serviceNameFromPath(path string) (string, bool) {
-	const prefix = "/services/"
+// pluginNameFromPath 从 /plugins/<单段> 路径提取插件名；
+// /plugins/、多段路径及非插件路径一律不命中。
+func pluginNameFromPath(path string) (string, bool) {
+	const prefix = "/plugins/"
 	if !strings.HasPrefix(path, prefix) {
 		return "", false
 	}

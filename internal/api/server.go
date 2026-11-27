@@ -21,7 +21,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/pysvc"
+	"github.com/zfd81/groot/internal/plugin"
 	"github.com/zfd81/groot/internal/ratelimit"
 	"github.com/zfd81/groot/internal/repo"
 	"github.com/zfd81/groot/internal/schedule"
@@ -56,7 +56,7 @@ func NewServer(
 	settings *setting.Settings, // 配置对象：YAML 与配置表的统一读取入口
 	clusterInst *cluster.Cluster, // 集群实例：提供本机 reg_id 与消息发送能力
 	role lifecycle.Role, // 进程角色：决定健康检查的 process_mode 与是否支持重启
-	pyMgr *pysvc.Manager, // Python 服务管理器；为 nil 时不代理子服务、健康检查不含 services 项
+	pluginMgr *plugin.Manager, // Python 插件管理器；为 nil 时不代理插件、健康检查不含 plugins 项
 ) *Server {
 	// 放宽框架自身的请求体上限，200MB 硬上限由下面的 BodyLimit 中间件统一执行并以
 	// file_too_large 错误信封拒绝（框架默认行为是纯文本 413）。取 200MB 以容纳
@@ -72,7 +72,7 @@ func NewServer(
 		server.WithHostPorts(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)),
 		server.WithMaxRequestBodySize(maxBodySize),
 		// 请求体以流方式读取，代理转发大文件时不整体读入内存。
-		// 关闭 multipart 预解析，保证转发到 Python 服务的请求体原样透传；
+		// 关闭 multipart 预解析，保证转发到 Python 插件的请求体原样透传；
 		// 需要表单的 handler（FormFile/PostForm）在访问时按需解析。
 		server.WithStreamBody(true),
 		server.WithDisablePreParseMultipartForm(true),
@@ -113,11 +113,11 @@ func NewServer(
 	sessionH := handler.NewSessionHandler(mem, runtime, canceller)
 	healthH := handler.NewHealthHandler(cfg, homeDir, skillBackend, mcpMgr, mem, runtime, models, log, role.ProcessMode())
 
-	// Python 子服务集成：权限解析器供鉴权中间件使用，状态来源供健康检查使用。
-	// manager 为 nil 时保持默认权限、健康检查不含 services 项。
-	if pyMgr != nil {
-		authMW.SetServicePermissionResolver(pyMgr)
-		healthH.SetServiceStatusProvider(pyMgr)
+	// Python 插件集成：权限解析器供鉴权中间件使用，状态来源供健康检查使用。
+	// manager 为 nil 时保持默认权限、健康检查不含 plugins 项。
+	if pluginMgr != nil {
+		authMW.SetPluginPermissionResolver(pluginMgr)
+		healthH.SetPluginStatusProvider(pluginMgr)
 	}
 	skillsH := handler.NewSkillsHandler(skillBackend, subAgentReg, log)
 	agentsH := handler.NewAgentsHandler(subAgentReg, skillBackend, homeDir, log)
@@ -159,7 +159,7 @@ func NewServer(
 	// Register routes
 	RegisterRoutes(h, authMW, rateLimitMW, webStore,
 		chatH, statusH, detailH, stopH, sessionH,
-		healthH, skillsH, agentsH, toolsH, modelsH, modelsPublicH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, imageH, settingH, pyMgr)
+		healthH, skillsH, agentsH, toolsH, modelsH, modelsPublicH, scheduleH, webAuthH, apiKeysH, clusterH, logsH, filesH, syncH, transcriptionH, speechH, imageH, settingH, pluginMgr)
 
 	return &Server{
 		hertz:  h,

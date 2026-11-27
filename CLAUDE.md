@@ -15,10 +15,10 @@ groot/
 ├── examples/               # 客户端代码示例（按语言分子目录）
 │   ├── python/             # Python 示例
 │   └── java/               # Java 示例（Maven 项目）
-├── services/               # Python 子服务源码（由 Groot 托管，如 asr-router）
+├── plugins/                # Python 插件源码（由 Groot 托管，如 asr-router）
 ├── tests/                  # 测试目录（测试相关所有内容）
 │   ├── python/             # Python 系统测试
-│   ├── services/           # Python 子服务与 SDK 的单元测试（pytest）
+│   ├── plugins/            # Python 插件与 SDK 的单元测试（pytest）
 │   ├── examples/           # 示例代码的测试
 │   │   ├── python/         # Python 示例测试
 │   │   └── java/           # Java 示例测试
@@ -36,10 +36,10 @@ groot/
 2. **用户手册**: `README.md`（根目录） - 用户使用说明，**每次更新使用手册必须修改此文件**
 3. **设计文档**: `docs/` - 设计文档、开发计划等内部文档
 4. **示例代码**: `examples/` - 客户端代码示例，按语言分子目录（`python/`、`java/` 等）
-5. **Python 子服务**: `services/` - 由 Groot 托管的 Python 子服务源码（如 `services/asr-router`）；运行时生成的 `.venv/`、模型权重与 `.sdk/` 不进入仓库
+5. **Python 插件**: `plugins/` - 由 Groot 托管的 Python 插件源码（如 `plugins/asr-router`）；运行时生成的 `.venv/`、模型权重与 `.sdk/` 不进入仓库
 6. **测试目录**: `tests/` - 所有测试代码和产物
    - 示例的测试代码放在 `tests/examples/<语言>/`，**不允许放在 examples/ 目录下**
-   - Python 子服务与 SDK 的单元测试放在 `tests/services/<子服务>/` 或 `tests/services/sdk/`（pytest），**不允许放在 `services/` 目录下**
+   - Python 插件与 SDK 的单元测试放在 `tests/plugins/<插件>/` 或 `tests/plugins/sdk/`（pytest），**不允许放在 `plugins/` 目录下**
    - 对于 Maven/Java 项目，需在 `pom.xml` 中配置 `<testSourceDirectory>` 指向 `tests/examples/java/`
 7. **编译输出**: `dist/` - 编译产物放在这里（单平台为 `dist/groot`，`make build-all` 产出三个平台的 zip 用于上传 GitHub Release），目录保留但内容被 gitignore
 
@@ -50,7 +50,7 @@ groot/
 - ❌ 不要创建 `docs/user-guide.md` - 用户手册就是根目录的 `README.md`
 - ❌ 不要创建奇怪的目录名（如 `~/`）
 - ❌ 不要在 `examples/<语言>/` 目录下创建测试文件 - 测试一律放 `tests/examples/<语言>/`
-- ❌ 不要在 `services/<子服务>/` 目录下创建测试文件 - 测试一律放 `tests/services/<子服务>/`
+- ❌ 不要在 `plugins/<插件>/` 目录下创建测试文件 - 测试一律放 `tests/plugins/<插件>/`
 
 ## 开发工具规范（Superpowers）
 
@@ -183,13 +183,13 @@ Plan → 编写/更新设计文档 → 编写代码 → 编写单元测试 → �
 - **运行命令**: `cd tests/python && pytest -v`
 - **执行时机**: 用户自行决定何时运行
 
-### Python 子服务与 SDK 单元测试（pytest）
+### Python 插件与 SDK 单元测试（pytest）
 
-- **测试对象**: `internal/pysvc/sdk`（`groot_service_sdk`）与 `services/<子服务>` 的 Python 单元测试
-- **测试工具**: Python pytest；依赖见 `tests/services/requirements.txt`
-- **目录位置**: `tests/services/`（`sdk/`、`asr-router/`）
-- **运行命令**: `tests/services/.venv/bin/pytest tests/services -v`（`tests/services/conftest.py` 自动注入 SDK 与子服务路径，无需设置 `PYTHONPATH`）
-- **环境准备**: `python3 -m venv tests/services/.venv && tests/services/.venv/bin/pip install -r tests/services/requirements.txt`
+- **测试对象**: `internal/plugin/sdk`（`groot_plugin_sdk`）与 `plugins/<插件>` 的 Python 单元测试
+- **测试工具**: Python pytest；依赖见 `tests/plugins/requirements.txt`
+- **目录位置**: `tests/plugins/`（`sdk/`、`asr-router/`）
+- **运行命令**: `tests/plugins/.venv/bin/pytest tests/plugins -v`（`tests/plugins/conftest.py` 自动注入 SDK 与插件路径，无需设置 `PYTHONPATH`）
+- **环境准备**: `python3 -m venv tests/plugins/.venv && tests/plugins/.venv/bin/pip install -r tests/plugins/requirements.txt`
 - **执行时机**: 代码完成后立即编写并运行
 
 ### 测试目录结构
@@ -197,7 +197,7 @@ Plan → 编写/更新设计文档 → 编写代码 → 编写单元测试 → �
 ```
 tests/
 ├── python/             # Python 系统测试（pytest）
-├── services/           # Python 子服务与 SDK 单元测试（pytest；asr-router/、sdk/）
+├── plugins/            # Python 插件与 SDK 单元测试（pytest；asr-router/、sdk/）
 ├── examples/           # 示例代码的测试
 │   ├── python/         # Python 示例测试
 │   └── java/           # Java 示例测试

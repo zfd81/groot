@@ -33,7 +33,7 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/pysvc"
+	"github.com/zfd81/groot/internal/plugin"
 	"github.com/zfd81/groot/internal/repo/repofactory"
 	"github.com/zfd81/groot/internal/schedule"
 	"github.com/zfd81/groot/internal/scheduler"
@@ -89,8 +89,8 @@ func main() {
 		case "user":
 			handleUserCommand(args[1:])
 			return
-		case "services":
-			handleServicesCommand(args[1:])
+		case "plugins":
+			handlePluginsCommand(args[1:])
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", command)
@@ -181,9 +181,9 @@ func handleUserCommand(args []string) {
 	}
 }
 
-func handleServicesCommand(args []string) {
+func handlePluginsCommand(args []string) {
 	if len(args) == 0 {
-		code, err := cmd.RunServicesShell(cmd.GetDefaultHome(), cmd.ServicesShellOptions{})
+		code, err := cmd.RunPluginsShell(cmd.GetDefaultHome(), cmd.PluginsShellOptions{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 			os.Exit(1)
@@ -193,22 +193,22 @@ func handleServicesCommand(args []string) {
 
 	switch args[0] {
 	case "-h", "--help":
-		cmd.PrintServicesHelp()
+		cmd.PrintPluginsHelp()
 		return
 	case "init":
-		flags, err := cmd.ParseServicesInitFlags(args[1:])
+		flags, err := cmd.ParsePluginsInitFlags(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 			os.Exit(1)
 		}
-		opts := cmd.ServicesInitOptions{Python: flags.Python}
-		if err := cmd.RunServicesInit(cmd.GetDefaultHome(), opts); err != nil {
+		opts := cmd.PluginsInitOptions{Python: flags.Python}
+		if err := cmd.RunPluginsInit(cmd.GetDefaultHome(), opts); err != nil {
 			fmt.Fprintf(os.Stderr, "错误: %s\n", err)
 			os.Exit(1)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n\n", args[0])
-		cmd.PrintServicesHelp()
+		cmd.PrintPluginsHelp()
 		os.Exit(1)
 	}
 }
@@ -521,12 +521,12 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 		zap.String("reg_id", clusterInst.RegID()),
 	)
 
-	// Python 子服务管理器：在配置组装之后、创建 API server 之前构造，
-	// 使路由注册与鉴权权限解析能看到本次启动发现的子服务。
-	pyMgr := pysvc.NewManager(pysvc.Options{HomeDir: homeDir, Log: log, LogLevel: cfg.Logging.Level})
+	// Python 插件管理器：在配置组装之后、创建 API server 之前构造，
+	// 使路由注册与鉴权权限解析能看到本次启动发现的插件。
+	pluginMgr := plugin.NewManager(plugin.Options{HomeDir: homeDir, Log: log, LogLevel: cfg.Logging.Level})
 
 	// Create API server
-	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, settings, clusterInst, role, pyMgr)
+	srv := api.NewServer(*cfg, homeDir, log, memMgr, runtimeState, skillBackend, skillMiddleware, mcpMgr, exec, subAgentReg, &scheduleMgr, repos.User, modelService, repos.APIKey, repos.Member, repos.SyncResource, settings, clusterInst, role, pluginMgr)
 
 	// 停止来源 1：操作系统信号
 	sigCh := make(chan os.Signal, 1)
@@ -574,8 +574,8 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 		// Stop server（使 srv.Start() 返回）
 		srv.Stop(ctx)
 
-		// Stop Python 服务进程（ctx 已带 30s 超时）
-		pyMgr.Stop(ctx)
+		// Stop Python 插件进程（ctx 已带 30s 超时）
+		pluginMgr.Stop(ctx)
 
 		// Close MCP clients
 		mcpMgr.Close()
@@ -593,8 +593,8 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 		zap.String("host", cfg.Server.Host),
 		zap.Int("port", cfg.Server.Port),
 	)
-	// 拉起 Python 服务进程（异步）：失败只体现在健康检查与子服务状态，不阻断主服务
-	go pyMgr.Start(context.Background())
+	// 拉起 Python 插件进程（异步）：失败只体现在健康检查与插件状态，不阻断主服务
+	go pluginMgr.Start(context.Background())
 
 	err = srv.Start()
 
@@ -610,9 +610,9 @@ func startServer(homeDir string, port int, role lifecycle.Role) {
 	}
 	if err != nil {
 		log.Error("服务启动失败", zap.Error(err))
-		// Python 服务已在异步拉起，监听失败时主动收尾，不留下靠生命线才退出的子进程。
+		// Python 插件已在异步拉起，监听失败时主动收尾，不留下靠生命线才退出的子进程。
 		stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		pyMgr.Stop(stopCtx)
+		pluginMgr.Stop(stopCtx)
 		cancel()
 		os.Exit(1)
 	}
@@ -626,7 +626,7 @@ func printHelp() {
 	fmt.Println("  status            查看运行中实例的状态")
 	fmt.Println("  tail              实时日志查看")
 	fmt.Println("  user              管理 Web 登录用户（reset）")
-	fmt.Println("  services          进入 Python 服务环境 / 子服务环境管理")
+	fmt.Println("  plugins           进入 Python 插件环境 / 插件环境管理")
 	fmt.Println()
 	fmt.Println("选项:")
 	fmt.Println("  -p, --port <port> HTTP端口 (默认配置文件值)")
@@ -644,10 +644,10 @@ func printHelp() {
 	fmt.Println("user 子命令:")
 	fmt.Println("  reset             重置 Web 登录用户（删除用户表全部数据，-y 跳过确认）")
 	fmt.Println()
-	fmt.Println("services 子命令:")
-	fmt.Println("  无子命令          进入 Python 服务环境（工作目录 {GROOT_HOME}/services，共享虚拟环境已激活）")
-	fmt.Println("  init              初始化 Python 服务环境（目录布局、共享虚拟环境、基础依赖）")
-	fmt.Println("  --py <路径>       指定 Python 解释器（services init 使用）")
+	fmt.Println("plugins 子命令:")
+	fmt.Println("  无子命令          进入 Python 插件环境（工作目录 {GROOT_HOME}/plugins，共享虚拟环境已激活）")
+	fmt.Println("  init              初始化 Python 插件环境（目录布局、共享虚拟环境、基础依赖）")
+	fmt.Println("  --py <路径>       指定 Python 解释器（plugins init 使用）")
 	fmt.Println()
 	fmt.Println("tail 子命令选项:")
 	fmt.Println("  -n <N>            显示最近 N 行日志 (默认 100)")
@@ -666,7 +666,7 @@ func printHelp() {
 	fmt.Println("  groot -p 9090                 # 指定端口启动服务")
 	fmt.Println("  groot tail                    # 显示最近 100 行日志")
 	fmt.Println("  groot tail -n 50 -l error     # 显示最近 50 行错误日志")
-	fmt.Println("  groot services                # 进入 Python 服务环境")
-	fmt.Println("  groot services init           # 初始化 Python 服务环境")
+	fmt.Println("  groot plugins                 # 进入 Python 插件环境")
+	fmt.Println("  groot plugins init            # 初始化 Python 插件环境")
 	fmt.Println("  groot --single-process        # 单进程运行，不启动监督进程")
 }

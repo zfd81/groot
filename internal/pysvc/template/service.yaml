@@ -1,5 +1,0 @@
-# Python 服务全局配置；取消注释即生效，缺省值如下。
-# startup_timeout: 180s
-# request_timeout: 120s
-# permission:
-#   asr-router: chat

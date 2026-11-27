@@ -19,12 +19,12 @@ import (
 	"github.com/zfd81/groot/internal/logger"
 	"github.com/zfd81/groot/internal/mcp"
 	"github.com/zfd81/groot/internal/memory"
-	"github.com/zfd81/groot/internal/pysvc"
+	"github.com/zfd81/groot/internal/plugin"
 )
 
-// ServiceStatusProvider 提供 Python 服务的整体状态快照（由 pysvc.Manager 实现）。
-type ServiceStatusProvider interface {
-	Status() pysvc.Status
+// PluginStatusProvider 提供 Python 插件的整体状态快照（由 plugin.Manager 实现）。
+type PluginStatusProvider interface {
+	Status() plugin.Status
 }
 
 // HealthHandler handles GET /health
@@ -39,7 +39,7 @@ type HealthHandler struct {
 	processMode   string
 	startTime     time.Time
 	logger        *logger.Logger
-	serviceStatus ServiceStatusProvider
+	pluginStatus  PluginStatusProvider
 }
 
 // NewHealthHandler creates a new health handler
@@ -68,25 +68,25 @@ func NewHealthHandler(
 	}
 }
 
-// SetServiceStatusProvider 注入 Python 服务状态来源；传 nil 时健康检查不包含 services 项。
-func (h *HealthHandler) SetServiceStatusProvider(p ServiceStatusProvider) {
-	h.serviceStatus = p
+// SetPluginStatusProvider 注入 Python 插件状态来源；传 nil 时健康检查不包含 plugins 项。
+func (h *HealthHandler) SetPluginStatusProvider(p PluginStatusProvider) {
+	h.pluginStatus = p
 }
 
-// servicesCheck 返回 Python 服务的健康检查项；未设置 provider 时 ok 为 false。
-// 状态取 Status.HealthStatus()，Info 为 pysvc.Status 值本身。
-func (h *HealthHandler) servicesCheck() (types.CheckInfo, bool) {
-	if h.serviceStatus == nil {
+// pluginsCheck 返回 Python 插件的健康检查项；未设置 provider 时 ok 为 false。
+// 状态取 Status.HealthStatus()，Info 为 plugin.Status 值本身。
+func (h *HealthHandler) pluginsCheck() (types.CheckInfo, bool) {
+	if h.pluginStatus == nil {
 		return types.CheckInfo{}, false
 	}
-	status := h.serviceStatus.Status()
+	status := h.pluginStatus.Status()
 	return types.CheckInfo{Status: status.HealthStatus(), Info: status}, true
 }
 
-// addServicesCheck 在 checks 中写入 services 项；未设置 provider 时不做任何事。
-func (h *HealthHandler) addServicesCheck(checks map[string]types.CheckInfo) {
-	if check, ok := h.servicesCheck(); ok {
-		checks["services"] = check
+// addPluginsCheck 在 checks 中写入 plugins 项；未设置 provider 时不做任何事。
+func (h *HealthHandler) addPluginsCheck(checks map[string]types.CheckInfo) {
+	if check, ok := h.pluginsCheck(); ok {
+		checks["plugins"] = check
 	}
 }
 
@@ -205,8 +205,8 @@ func (h *HealthHandler) Serve(ctx context.Context, rc *app.RequestContext) {
 		},
 	}
 
-	// Python 子服务状态：仅在设置了状态来源时加入 services 项。
-	h.addServicesCheck(resp.Checks)
+	// Python 插件状态：仅在设置了状态来源时加入 plugins 项。
+	h.addPluginsCheck(resp.Checks)
 
 	rc.JSON(200, resp)
 }

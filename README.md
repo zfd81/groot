@@ -209,13 +209,13 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 │       │   └── {mcp-name}.json
 │       └── skills/                # 子 Agent 专属 Skills（可选）
 │           └── {skill-name}/SKILL.md
-├── services/                      # Python 子服务根目录（groot services init 创建布局）
-│   ├── service.yaml               # 全局配置（启动/请求超时、子服务权限点）
+├── plugins/                       # Python 插件根目录（groot plugins init 创建布局）
+│   ├── plugin.yaml                # 全局配置（启动/请求超时、插件权限点）
 │   ├── requirements.txt           # 基础依赖（fastapi、uvicorn、python-multipart）
-│   ├── .venv/                     # 共享虚拟环境，由 groot services init 创建
+│   ├── .venv/                     # 共享虚拟环境，由 groot plugins init 创建
 │   ├── .sdk/                      # 运行时解压的 Python SDK
-│   ├── _template/                 # 新建子服务模板
-│   └── {service-name}/            # 子服务（如 asr-router）
+│   ├── _template/                 # 新建插件模板
+│   └── {plugin-name}/             # 插件（如 asr-router）
 ├── logs/                          # 日志目录
 │   └── groot-{date}.log           # 日志文件
 ```
@@ -233,7 +233,7 @@ Groot 启动时会创建一个工作目录（Home 目录），默认位置为 `~
 | `skills/` | Skills 定义目录（固定位置），支持热插拔 |
 | `mcp/` | MCP 工具配置目录（固定位置），修改需重启服务 |
 | `subagents/` | 子 Agent 定义目录（固定位置），存放各子 Agent 的 `agent.md` 与专属 mcp/skills |
-| `services/` | Python 子服务根目录（固定位置），`groot services init` 创建布局，详见 [7.8](#78-python-服务---子服务托管与-servicesname) |
+| `plugins/` | Python 插件根目录（固定位置），`groot plugins init` 创建布局，详见 [7.8](#78-python-插件---插件托管与-pluginsname) |
 
 **可配置目录（支持相对/绝对路径）：**
 
@@ -311,7 +311,7 @@ kill -SIGTERM <pid>
 groot init
 ```
 
-初始化会在 `~/.groot` 下生成 `bootstrap.yaml`（全注释模板，权限 0600）、`GROOT.md` 及资源目录（skills/mcp/subagents/logs）。JWT 签名密钥由服务首次启动时自动生成并存入数据库，init 不生成密钥。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置bootstrapyaml)。如需 Python 子服务能力，执行 `groot services init` 创建布局、共享虚拟环境并安装基础依赖（可选）。
+初始化会在 `~/.groot` 下生成 `bootstrap.yaml`（全注释模板，权限 0600）、`GROOT.md` 及资源目录（skills/mcp/subagents/logs）。JWT 签名密钥由服务首次启动时自动生成并存入数据库，init 不生成密钥。数据默认使用 SQLite 本地存储，零配置即可运行；如需 MySQL/PostgreSQL，见 [4.7 数据库配置](#47-数据库配置bootstrapyaml)。如需 Python 插件能力，执行 `groot plugins init` 创建布局、共享虚拟环境并安装基础依赖（可选）。
 
 ### 3.2 启动服务
 
@@ -1165,7 +1165,7 @@ curl -X POST http://localhost:8080/chat/completions \
 
 ## 六、CLI 命令参考
 
-Groot 提供一套命令行工具用于初始化工作目录、初始化与进入 Python 子服务环境、查看实例状态、查看日志和重置 Web 用户。
+Groot 提供一套命令行工具用于初始化工作目录、初始化与进入 Python 插件环境、查看实例状态、查看日志和重置 Web 用户。
 
 ### 6.1 命令总览
 
@@ -1173,8 +1173,8 @@ Groot 提供一套命令行工具用于初始化工作目录、初始化与进�
 |------|------|
 | `groot` | 启动 Groot 服务 |
 | `groot init` | 初始化工作目录 |
-| `groot services` | 进入 Python 子服务环境（工作目录为 `services`，共享虚拟环境已激活，`exit` 或 Ctrl+C 退出） |
-| `groot services init` | 初始化 Python 子服务环境（布局、共享虚拟环境、基础依赖） |
+| `groot plugins` | 进入 Python 插件环境（工作目录为 `plugins`，共享虚拟环境已激活，`exit` 或 Ctrl+C 退出） |
+| `groot plugins init` | 初始化 Python 插件环境（布局、共享虚拟环境、基础依赖） |
 | `groot status` | 查看运行中实例的状态 |
 | `groot tail` | 实时日志查看 |
 | `groot user reset` | 重置 Web 登录用户（删除用户表全部数据） |
@@ -1226,17 +1226,17 @@ groot init
 | `bootstrap.yaml` | 配置文件（全注释模板，权限 0600；默认全注释即 SQLite 本地模式） |
 | `GROOT.md` | 主 Agent 全局指导文件（初始为空，内容每轮作为 system 提示注入，按需填写规则、风格、目标） |
 
-> Python 子服务环境由 `groot services init` 单独初始化。
+> Python 插件环境由 `groot plugins init` 单独初始化。
 >
 > 会话、定时任务、集群等运行时数据存储在数据库中，init 不创建对应目录。init 不生成 JWT 签名密钥——密钥由服务首次启动时自动生成并存入数据库配置表。
 
-### 6.4 初始化 Python 子服务环境（groot services init）
+### 6.4 初始化 Python 插件环境（groot plugins init）
 
-创建 `{GROOT_HOME}/services/` 的固定目录布局、所有子服务共用的虚拟环境 `services/.venv`，并在该环境中安装基础依赖（fastapi、uvicorn、python-multipart）。命令幂等：已存在的目录、模板与虚拟环境跳过，不覆盖使用者维护的内容。
+创建 `{GROOT_HOME}/plugins/` 的固定目录布局、所有插件共用的虚拟环境 `plugins/.venv`，并在该环境中安装基础依赖（fastapi、uvicorn、python-multipart）。命令幂等：已存在的目录、模板与虚拟环境跳过，不覆盖使用者维护的内容。
 
 ```bash
-groot services init                             # 自动探测 Python 解释器
-groot services init --py /usr/bin/python3.12    # 指定解释器
+groot plugins init                             # 自动探测 Python 解释器
+groot plugins init --py /usr/bin/python3.12    # 指定解释器
 ```
 
 | 选项 | 说明 |
@@ -1248,49 +1248,49 @@ groot services init --py /usr/bin/python3.12    # 指定解释器
 
 | 目录/文件 | 说明 |
 |------|------|
-| `services/` | 子服务根目录 |
-| `services/service.yaml` | 全局配置模板（全注释，等价于全部默认值） |
-| `services/requirements.txt` | 基础依赖清单（fastapi、uvicorn、python-multipart） |
-| `services/_template/` | 新建子服务模板 |
-| `services/.sdk/` | Python SDK 目录（Groot 启动时解压） |
-| `services/.venv/` | 共享虚拟环境，并安装基础依赖 |
+| `plugins/` | 插件根目录 |
+| `plugins/plugin.yaml` | 全局配置模板（全注释，等价于全部默认值） |
+| `plugins/requirements.txt` | 基础依赖清单（fastapi、uvicorn、python-multipart） |
+| `plugins/_template/` | 新建插件模板 |
+| `plugins/.sdk/` | Python SDK 目录（Groot 启动时解压） |
+| `plugins/.venv/` | 共享虚拟环境，并安装基础依赖 |
 
-Python 要求 3.9+；本机没有可用解释器或版本过低时初始化失败，并打印各平台安装指引。`--py` 指定后只使用该解释器，失败直接报错、不回退。基础依赖安装失败不影响退出码：命令打印 pip 输出末尾与手动安装命令，仍以成功结束。子服务的业务依赖不在命令范围内，由使用者在复制子服务目录后安装。
+Python 要求 3.9+；本机没有可用解释器或版本过低时初始化失败，并打印各平台安装指引。`--py` 指定后只使用该解释器，失败直接报错、不回退。基础依赖安装失败不影响退出码：命令打印 pip 输出末尾与手动安装命令，仍以成功结束。插件的业务依赖不在命令范围内，由使用者在复制插件目录后安装。
 
 **退出码**：初始化成功（含基础依赖安装失败）为 0；目录布局创建失败、解释器不可用或版本过低、虚拟环境创建或校验失败为 1。
 
-### 6.5 进入 Python 子服务环境（groot services）
+### 6.5 进入 Python 插件环境（groot plugins）
 
-不带子命令时，`groot services` 在 `{GROOT_HOME}/services` 下启动交互式 shell，并激活所有子服务共用的虚拟环境：
+不带子命令时，`groot plugins` 在 `{GROOT_HOME}/plugins` 下启动交互式 shell，并激活所有插件共用的虚拟环境：
 
 ```bash
-groot services     # 进入 Python 子服务环境（exit 或 Ctrl+C 退出）
+groot plugins      # 进入 Python 插件环境（exit 或 Ctrl+C 退出）
 ```
 
 进入后的环境：
 
 | 项目 | 说明 |
 |------|------|
-| 激活变量 | `VIRTUAL_ENV` 指向 `{GROOT_HOME}/services/.venv`；其 `bin/`（Windows 为 `Scripts/`）前置到 `PATH` |
-| 工作目录 | `{GROOT_HOME}/services` |
+| 激活变量 | `VIRTUAL_ENV` 指向 `{GROOT_HOME}/plugins/.venv`；其 `bin/`（Windows 为 `Scripts/`）前置到 `PATH` |
+| 工作目录 | `{GROOT_HOME}/plugins` |
 | shell | Unix 取 `$SHELL`（未设置时用 `/bin/sh`），Windows 取 `%COMSPEC%`（未设置时用 `cmd.exe`） |
-| 退出 | 输入 `exit` 或在提示符处按 Ctrl+C 退出（退出码 130）；Ctrl+D 不退出；运行命令时 Ctrl+C 仍只中断该命令。shell 的退出码原样作为 `groot services` 的退出码 |
+| 退出 | 输入 `exit` 或在提示符处按 Ctrl+C 退出（退出码 130）；Ctrl+D 不退出；运行命令时 Ctrl+C 仍只中断该命令。shell 的退出码原样作为 `groot plugins` 的退出码 |
 
-进入的 zsh/bash 先加载用户自己的配置（`~/.zshrc`、`~/.bashrc`），再重新激活 `{GROOT_HOME}/services/.venv`，因此配置中激活的其它虚拟环境不会覆盖共享环境；其它 shell 只通过环境变量激活。
+进入的 zsh/bash 先加载用户自己的配置（`~/.zshrc`、`~/.bashrc`），再重新激活 `{GROOT_HOME}/plugins/.venv`，因此配置中激活的其它虚拟环境不会覆盖共享环境；其它 shell 只通过环境变量激活。
 
-共享虚拟环境不存在时，命令输出 `共享虚拟环境不存在: <venv>` 并询问 `是否现在初始化？[y/N]`：回答 `y` 后执行与 `groot services init` 相同的初始化，成功后再进入；其它回答以退出码 1 结束，并提示先执行 `groot services init`。`.venv` 目录存在但解释器缺失时同样走上面的确认初始化，初始化失败会给出 `rm -rf <venv>` 重建提示；解释器路径为目录（环境已损坏）时直接报错，并给出相同的 `rm -rf <venv>` 重建提示。
+共享虚拟环境不存在时，命令输出 `共享虚拟环境不存在: <venv>` 并询问 `是否现在初始化？[y/N]`：回答 `y` 后执行与 `groot plugins init` 相同的初始化，成功后再进入；其它回答以退出码 1 结束，并提示先执行 `groot plugins init`。`.venv` 目录存在但解释器缺失时同样走上面的确认初始化，初始化失败会给出 `rm -rf <venv>` 重建提示；解释器路径为目录（环境已损坏）时直接报错，并给出相同的 `rm -rf <venv>` 重建提示。
 
-该命令固定进入 `services` 根目录，不会自动进入某个子服务目录。安装子服务依赖可在进入环境后自行切换目录：
+该命令固定进入 `plugins` 根目录，不会自动进入某个插件目录。安装插件依赖可在进入环境后自行切换目录：
 
 ```bash
-groot services
+groot plugins
 pip install -r asr-router/requirements.txt
 ```
 
 命令需要在交互终端中运行；stdin 或 stdout 不是字符设备（管道、重定向、CI 等）时报错退出，退出码为 1：
 
 ```
-groot services 需要在交互终端中运行；初始化环境请执行: groot services init
+groot plugins 需要在交互终端中运行；初始化环境请执行: groot plugins init
 ```
 
 ### 6.6 查看实例状态（groot status）
@@ -1324,7 +1324,7 @@ PID:       12345
   MCP Servers:  healthy (3 个)
   Skills:       healthy (5 个)
   Memory:       healthy (12 个会话)
-  Services:     healthy (1/1 运行中, 进程 pid 1234)
+  Plugins:      healthy (1/1 运行中, 进程 pid 1234)
 
 活跃对话: 1
 ```
@@ -1380,7 +1380,7 @@ groot user reset -y   # 跳过确认直接执行
 | `/audio/transcriptions` | POST | `chat` | 音频转文字（multipart 上传） |
 | `/audio/speech` | POST | `chat` | 文本转语音（返回音频二进制） |
 | `/image/understanding` | POST | `chat` | 图片解析（Base64 上传，返回文本） |
-| `/services/{name}` | 任意（由子服务 `METHODS` 决定） | 子服务声明（默认 `all`） | 代理到 Python 子服务（如 `asr-router` 语种识别），见 7.8 |
+| `/plugins/{name}` | 任意（由插件 `METHODS` 决定） | 插件声明（默认 `all`） | 代理到 Python 插件（如 `asr-router` 语种识别），见 7.8 |
 | `/chat/status/{sid}` | GET | `status` | 查询最近一次对话状态 |
 | `/chat/{sid}` | GET | `detail` | 查询最近一次对话详情（完整步骤记录） |
 | `/chat/{sid}/{cid}` | GET | `detail` | 查询指定对话详情 |
@@ -2136,47 +2136,47 @@ curl -X POST http://localhost:8080/image/understanding \
 
 ---
 
-### 7.8 Python 服务 - 子服务托管与 /services/{name}
+### 7.8 Python 插件 - 插件托管与 /plugins/{name}
 
-Groot 可托管 Python 子服务并对外代理。`groot services init` 在 `{GROOT_HOME}/services/` 下创建固定布局：
+Groot 可托管 Python 插件并对外代理。`groot plugins init` 在 `{GROOT_HOME}/plugins/` 下创建固定布局：
 
 ```
-services/
-├── service.yaml               # 全局配置：启动/请求超时、子服务权限点（全注释模板）
-├── requirements.txt           # 基础依赖：fastapi、uvicorn、python-multipart（所有子服务共用）
+plugins/
+├── plugin.yaml                # 全局配置：启动/请求超时、插件权限点（全注释模板）
+├── requirements.txt           # 基础依赖：fastapi、uvicorn、python-multipart（所有插件共用）
 ├── .sdk/                      # 运行时解压的 Python SDK（由 Groot 维护）
-├── _template/                 # 新建子服务的模板
-└── .venv/                     # 共享虚拟环境，由 groot services init 创建
+├── _template/                 # 新建插件的模板
+└── .venv/                     # 共享虚拟环境，由 groot plugins init 创建
 ```
 
-`groot services init` **不会**创建 `services/asr-router`。仓库自带的语种识别子服务需要从源码树或发布包
-（`services/asr-router/`）复制到 `{GROOT_HOME}/services/` 后再安装依赖与模型：
+`groot plugins init` **不会**创建 `plugins/asr-router`。仓库自带的语种识别插件需要从源码树或发布包
+（`plugins/asr-router/`）复制到 `{GROOT_HOME}/plugins/` 后再安装依赖与模型：
 
 ```bash
-cp -r services/asr-router "$GROOT_HOME/services/"
+cp -r plugins/asr-router "$GROOT_HOME/plugins/"
 ```
 
-自定义子服务同样放进 `{GROOT_HOME}/services/<子服务名>/`，目录结构与 `_template/` 一致。
+自定义插件同样放进 `{GROOT_HOME}/plugins/<插件名>/`，目录结构与 `_template/` 一致。
 
-子服务通过 `/services/<子服务名>` 访问（路由接受任意方法，实际允许的方法由子服务的 `METHODS` 决定），
-复用与其它接口一致的 API Key 验签、吊销检查、权限点与限流；请求去掉 `/services` 前缀后转发给
+插件通过 `/plugins/<插件名>` 访问（路由接受任意方法，实际允许的方法由插件的 `METHODS` 决定），
+复用与其它接口一致的 API Key 验签、吊销检查、权限点与限流；请求去掉 `/plugins` 前缀后转发给
 Python 进程。Python 进程只监听本机环回地址，不直接对外。
 
 运行模型与访问边界：
 
 - **一对一**：每个 Groot 实例启动时拉起自己的 Python 进程，退出时随之结束；实例之间不共享进程、令牌与端口。受监督模式下由工作进程负责拉起，监督进程不加载业务资源。
-- **按需启用**：只有 `{GROOT_HOME}/services/` 下存在通过校验的子服务时才启动 Python 进程；没有有效子服务、或共享解释器 `.venv` 缺失时进程保持停用，`/web/health` 的 `checks.services` 与 `groot status` 显示停用原因，Groot 主服务与其它接口不受影响。
-- **共享环境**：所有子服务共用一个 `services/.venv`，运行在同一个 Python 进程中；子服务不单独创建虚拟环境，子服务目录中即使出现 `.venv` 也不参与解析，因此各子服务的依赖版本必须互相兼容。
-- **访问边界**：子服务只能通过 Groot 的 `/services/<子服务名>` 访问。Python 进程只绑定 `127.0.0.1` 上的临时端口，除 `GET /healthz` 外所有请求都要求携带每次启动随机生成、不落盘的内部令牌；外部主机无法连接，本机其他应用即使探测到端口也无法调用子服务。
+- **按需启用**：只有 `{GROOT_HOME}/plugins/` 下存在通过校验的插件时才启动 Python 进程；没有有效插件、或共享解释器 `.venv` 缺失时进程保持停用，`/web/health` 的 `checks.plugins` 与 `groot status` 显示停用原因，Groot 主服务与其它接口不受影响。
+- **共享环境**：所有插件共用一个 `plugins/.venv`，运行在同一个 Python 进程中；插件不单独创建虚拟环境，插件目录中即使出现 `.venv` 也不参与解析，因此各插件的依赖版本必须互相兼容。
+- **访问边界**：插件只能通过 Groot 的 `/plugins/<插件名>` 访问。Python 进程只绑定 `127.0.0.1` 上的临时端口，除 `GET /healthz` 外所有请求都要求携带每次启动随机生成、不落盘的内部令牌；外部主机无法连接，本机其他应用即使探测到端口也无法调用插件。
 
 #### 安装运行环境与依赖
 
-执行 `groot services init` 创建布局与共享虚拟环境，并在其中安装基础依赖（fastapi、uvicorn、python-multipart）。
-基础依赖安装失败时命令只打印 pip 输出与手动安装命令，仍以成功结束；此时先补装基础依赖，再安装子服务业务依赖，例如 asr-router：
+执行 `groot plugins init` 创建布局与共享虚拟环境，并在其中安装基础依赖（fastapi、uvicorn、python-multipart）。
+基础依赖安装失败时命令只打印 pip 输出与手动安装命令，仍以成功结束；此时先补装基础依赖，再安装插件业务依赖，例如 asr-router：
 
 ```bash
-groot services init        # 创建布局与共享虚拟环境，安装基础依赖
-groot services             # 进入已激活共享虚拟环境的 shell（工作目录为 services）
+groot plugins init        # 创建布局与共享虚拟环境，安装基础依赖
+groot plugins             # 进入已激活共享虚拟环境的 shell（工作目录为 plugins）
 pip install -r requirements.txt
 pip install -r asr-router/requirements.txt
 ```
@@ -2184,16 +2184,16 @@ pip install -r asr-router/requirements.txt
 不进入交互式 shell 时，也可以直接用绝对路径调用共享环境的 pip：
 
 ```bash
-"$GROOT_HOME/services/.venv/bin/pip" install -r "$GROOT_HOME/services/requirements.txt"
-"$GROOT_HOME/services/.venv/bin/pip" install -r "$GROOT_HOME/services/asr-router/requirements.txt"
+"$GROOT_HOME/plugins/.venv/bin/pip" install -r "$GROOT_HOME/plugins/requirements.txt"
+"$GROOT_HOME/plugins/.venv/bin/pip" install -r "$GROOT_HOME/plugins/asr-router/requirements.txt"
 ```
 
-`fastapi`、`uvicorn` 与 `python-multipart`（表单/文件上传所需）只在 `services/requirements.txt` 中声明一次；每个子服务的 `requirements.txt`
-只列业务依赖。缺少 `.venv` 时 Python 服务保持停用，停用原因提示运行 `groot services init`，Groot 主服务与其它接口不受影响。
+`fastapi`、`uvicorn` 与 `python-multipart`（表单/文件上传所需）只在 `plugins/requirements.txt` 中声明一次；每个插件的 `requirements.txt`
+只列业务依赖。缺少 `.venv` 时 Python 插件保持停用，停用原因提示运行 `groot plugins init`，Groot 主服务与其它接口不受影响。
 
-#### 配置子服务权限
+#### 配置插件权限
 
-`services/service.yaml` 是全局配置模板，默认全注释（等价于全部默认值）：
+`plugins/plugin.yaml` 是全局配置模板，默认全注释（等价于全部默认值）：
 
 ```yaml
 # startup_timeout: 180s
@@ -2202,25 +2202,25 @@ pip install -r asr-router/requirements.txt
 #   asr-router: chat
 ```
 
-取消 `permission` 两行注释即把 `asr-router` 归入 `chat` 权限点；未列出的子服务使用 `all`。改动在重启后生效。
-`/web/health` 的 `checks.services` 报告子服务整体状态（没有子服务时为 `healthy`）。
+取消 `permission` 两行注释即把 `asr-router` 归入 `chat` 权限点；未列出的插件使用 `all`。改动在重启后生效。
+`/web/health` 的 `checks.plugins` 报告插件整体状态（没有插件时为 `healthy`）。
 
 #### asr-router 语种识别
 
-`POST /services/asr-router` 接收一段音频（multipart 字段 `file`），返回 ISO 639-1 语言码、可选方言、置信度
+`POST /plugins/asr-router` 接收一段音频（multipart 字段 `file`），返回 ISO 639-1 语言码、可选方言、置信度
 与候选语种。支持 `wav`、`mp3`、`m4a`、`flac`、`ogg`、`webm`，时长 1.5–35 秒；其中 `mp3`、`m4a`、`webm`
 需要系统中的 `ffmpeg`。模型权重不随仓库发布，需按固定 revision 下载：
 
 ```bash
 huggingface-cli download aufklarer/FireRedLID-887M-MLX-8bit \
   --revision 1ae1296262c51cfd38de0f134011e6fa4b657543 \
-  --local-dir {GROOT_HOME}/services/asr-router/models
+  --local-dir {GROOT_HOME}/plugins/asr-router/models
 ```
 
-也可用环境变量 `GROOT_SERVICE_MODELS_DIR` 把模型目录指向仓库之外（如已有的 Hugging Face 缓存快照）。
+也可用环境变量 `GROOT_PLUGIN_MODELS_DIR` 把模型目录指向仓库之外（如已有的 Hugging Face 缓存快照）。
 
 ```bash
-curl -X POST http://localhost:8080/services/asr-router \
+curl -X POST http://localhost:8080/plugins/asr-router \
   -H "Authorization: Bearer 在Web界面创建的APIKey" \
   -F "file=@sample.wav"
 ```
@@ -2238,8 +2238,8 @@ curl -X POST http://localhost:8080/services/asr-router \
 ```
 
 > **平台限制：** asr-router 的推理后端为 MLX，只能在 **Apple Silicon 的 macOS** 上运行。Linux、Windows
-> 与 Intel Mac 上该子服务启动失败（`checks.services.status` 为 `degraded`），Groot 与其它子服务不受影响；
-> 如需在这些平台使用语种识别，需为子服务另加 PyTorch 后端。
+> 与 Intel Mac 上该插件启动失败（`checks.plugins.status` 为 `degraded`），Groot 与其它插件不受影响；
+> 如需在这些平台使用语种识别，需为插件另加 PyTorch 后端。
 
 ---
 
@@ -3428,7 +3428,7 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 
 流式响应中出错时 HTTP 状态码保持 `200`，错误以 `data: {"error":{...}}\n\n` 事件下发，随后是 `data: [DONE]`。
 
-> **大请求体（超过 200MB）：** 200MB 是传输层硬上限。`Content-Length` 已知且超过 200MB 的请求，在所有路由上都会在进入业务处理前返回 413 JSON 错误信封（`code=file_too_large`）。`/services/{name}` 代理路由的分块（未知长度）请求在转发过程中超过 200MB 时同样返回 413 信封；其他非代理路由的分块请求可能在 handler 读取请求体时退化为该 handler 的 400 响应。客户端仍应在发送前自行控制请求体大小。
+> **大请求体（超过 200MB）：** 200MB 是传输层硬上限。`Content-Length` 已知且超过 200MB 的请求，在所有路由上都会在进入业务处理前返回 413 JSON 错误信封（`code=file_too_large`）。`/plugins/{name}` 代理路由的分块（未知长度）请求在转发过程中超过 200MB 时同样返回 413 信封；其他非代理路由的分块请求可能在 handler 读取请求体时退化为该 handler 的 400 响应。客户端仍应在发送前自行控制请求体大小。
 
 | HTTP 状态码 | `type` | `code` | 说明 |
 |------------|--------|--------|------|
@@ -3445,14 +3445,14 @@ Groot 不内置发送渠道，通知由 LLM 调用 MCP 工具完成：
 | 404 | `invalid_request_error` | `schedule_not_found` | 定时任务不存在（保留码） |
 | 409 | `invalid_request_error` | `chat_limit_exceeded` | 同一会话已有对话正在执行 |
 | 409 | `invalid_request_error` | `chat_still_running` | 会话仍在执行，暂不能删除或改名；`POST /chat/{sid}/{cid}/stop` 的对话未在本节点执行且无法广播时也返回此码 |
-| 413 | `invalid_request_error` | `file_too_large` | 上传内容超过单文件或单次合计上限（转录音频、图片附件、对话附件、`/image/understanding`、`/services/{name}` 的 50MB 上限），或请求体超过 200MB 硬上限 |
+| 413 | `invalid_request_error` | `file_too_large` | 上传内容超过单文件或单次合计上限（转录音频、图片附件、对话附件、`/image/understanding`、`/plugins/{name}` 的 50MB 上限），或请求体超过 200MB 硬上限 |
 | 429 | `rate_limit_error` | `rate_limit_exceeded` | 触发限流（QPS 或并发超限），稍后重试 |
 | 499 | `invalid_request_error` | `client_closed_request` | 调用方在拿到响应前放弃请求（连接中断、超时取消） |
 | 500 | `api_error` | `internal_error` | 服务端内部错误 |
-| 502 | `api_error` | `upstream_error` | 上游模型服务或 Python 子服务返回错误（连接失败、鉴权失败、模型拒绝、上游读写失败），`message` 透传上游原文 |
+| 502 | `api_error` | `upstream_error` | 上游模型服务或 Python 插件返回错误（连接失败、鉴权失败、模型拒绝、上游读写失败），`message` 透传上游原文 |
 | 503 | `api_error` | `schedule_unavailable` | 调度服务不可用（非 Leader 实例或未开启定时任务） |
-| 503 | `api_error` | `service_unavailable` | Python 服务未就绪 / 重启中 / 已放弃重启，或该子服务加载失败（`/services/{name}`） |
-| 504 | `api_error` | `upstream_error` | 等待上游响应头超时（`request_timeout`，默认 120 秒；`/services/{name}` 及其他调用上游模型的接口） |
+| 503 | `api_error` | `plugin_unavailable` | Python 插件未就绪 / 重启中 / 已放弃重启，或该插件加载失败（`/plugins/{name}`） |
+| 504 | `api_error` | `upstream_error` | 等待上游响应头超时（`request_timeout`，默认 120 秒；`/plugins/{name}` 及其他调用上游模型的接口） |
 
 ### E. 联系与支持
 

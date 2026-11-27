@@ -495,70 +495,70 @@
 
 ---
 
-### 1.16 Python 服务宿主测试
+### 1.16 Python 插件宿主测试
 
-位于 `internal/pysvc/*_test.go`：`config_test.go`、`discover_test.go`、`assets_test.go`、`venv_test.go`、`supervisor_test.go`、`proxy_test.go`、`manager_test.go`。
+位于 `internal/plugin/*_test.go`：`config_test.go`、`discover_test.go`、`assets_test.go`、`venv_test.go`、`supervisor_test.go`、`proxy_test.go`、`manager_test.go`。
 
 覆盖点：
 
 - 全局配置（`config_test.go`）：缺失文件用默认值；显式超时与权限；未知字段/非法时长报错；`ValidPermission` 集合；未知权限值原样保留由发现阶段回退
-- 目录发现（`discover_test.go`）：有效服务；权限来自配置；缺少 `app/__init__.py` / `app/main.py` / `requirements.txt`；忽略 `.` / `_` 开头目录；`-`/`_` 换算重名；非法权限回退 `all`；非法命名；符号链接目录按目标识别；断链记为无效；`healthz` 为保留名称
+- 目录发现（`discover_test.go`）：有效插件；权限来自配置；缺少 `app/__init__.py` / `app/main.py` / `requirements.txt`；忽略 `.` / `_` 开头目录；`-`/`_` 换算重名；非法权限回退 `all`；非法命名；符号链接目录按目标识别；断链记为无效；`healthz` 为保留名称
 - 嵌入资源（`assets_test.go`）：`EnsureLayout` 创建与幂等、模板内容（基础依赖含 `python-multipart`）；`ExtractSDK` 解压与重复调用；SDK 根目录权限 0755；模板 `main.py` 契约；解压结果不含 `__pycache__` / `.pyc`
 - 虚拟环境（`venv_test.go`）：解释器已存在跳过；正常创建；`.venv` 损坏或解释器为目录；`--py` 指定后不回退（`TestEnsureVenv_ExplicitPythonNoFallback`）；版本查询失败、版本输出无法解析（各自独立用例，走默认探测路径）；`.venv` 路径是文件（在存在性检查阶段即报错）；无可用解释器与版本过低；候选回落；venv 创建失败；Windows `py -3` 候选；创建后解释器缺失；基础依赖安装成功/失败尾行；PipPath 平台差异；外部命令均带超时；Windows 删除目录提示用 `rmdir /s /q`
-- 子进程监督（`supervisor_test.go`）：就绪进入 `running`；握手令牌与子服务清单；SDK 版本不一致；就绪超时；退避重启；健康运行后退避档位重置；连续快速失败后放弃；`stop` 关闭 stdin 并通过进程对象发送终止信号；不响应时升级 Kill；崩溃进程的 stderr 完整进入日志；超长日志行（含 >1MB）截断后管道继续读取；`readLines` 截断语义
+- 子进程监督（`supervisor_test.go`）：就绪进入 `running`；握手令牌与插件清单；SDK 版本不一致；就绪超时；退避重启；健康运行后退避档位重置；连续快速失败后放弃；`stop` 关闭 stdin 并通过进程对象发送终止信号；不响应时升级 Kill；崩溃进程的 stderr 完整进入日志；超长日志行（含 >1MB）截断后管道继续读取；`readLines` 截断语义
 - 反向代理（`proxy_test.go`）：方法/路径/查询/请求体转发；剥离伪造 `X-Groot-*`；逐跳头双向剔除（含 `Connection` 列出的额外头）；Web 用户回退；未就绪 503；上游错误 502；响应头超时 504；20MB 流式转发；multipart 流式；未知长度响应逐块透传；`Content-Length: 0` 流式体转为 `NoBody`；请求体上限 413；客户端取消（无正文与带正文）；302 不跟随重定向且原样透传
-- Manager 编排（`manager_test.go`）：启动前发现与权限解析；启动前状态；无效服务聚合；健康状态；无服务不拉起进程；`Stop`；SDK 安装失败（root 下 skip）；`permission` 中未识别子服务名记录警告；状态 JSON 空数组；services 目录缺失或路径不是目录时的停用原因
+- Manager 编排（`manager_test.go`）：启动前发现与权限解析；启动前状态；无效插件聚合；健康状态；无插件不拉起进程；`Stop`；SDK 安装失败（root 下 skip）；`permission` 中未识别插件名记录警告；状态 JSON 空数组；plugins 目录缺失或路径不是目录时的停用原因
 - 请求体上限中间件（`internal/api/middleware/bodylimit_test.go`）：已知长度超限 413；未超限通过；恰好等于上限通过；分块超限 `ErrBodyTooLarge`；非流式超限 413；handler 未读完流式请求体时不污染 keep-alive 连接（真实 TCP 连接）
 ---
 
-### 1.17 Python 服务初始化命令测试
+### 1.17 Python 插件初始化命令测试
 
-位于 `internal/cmd/services_test.go`，对应实现 `internal/cmd/services.go`（命令执行器注入假实现）。
+位于 `internal/cmd/plugins_test.go`，对应实现 `internal/cmd/plugins.go`（命令执行器注入假实现）。
 
-- `TestParseServicesInitFlags`：`--py` 解析与缺值报错；未知 flag / 多余参数报错
-- `TestRunServicesInit_CreatesLayoutVenvAndInstallsDeps`：创建布局、虚拟环境并安装基础依赖
-- `TestRunServicesInit_CreatesHomeWhenMissing`：`{GROOT_HOME}` 缺失时一并创建
-- `TestRunServicesInit_Idempotent`：重复执行只补齐缺失项，不覆盖已有内容
-- `TestRunServicesInit_DepsFailureReturnsNil`：基础依赖安装失败仍成功退出并打印手动命令
-- `TestRunServicesInit_PythonMissingReturnsError`：无可用解释器时返回错误
-- `TestRunServicesInit_BrokenVenvReturnsError`：`.venv` 损坏时返回错误
-- `TestRunServicesInit_UsesExplicitPython`：`--py` 指定解释器时不回退自动探测
-- `TestRunServicesInit_DepsFailureWritesManualCommands`：基础依赖安装失败时打印手动安装命令
-- `TestRunServicesInit_SuccessOutputHasNoSubServiceHint`：成功路径输出不含子服务业务依赖提示（无 `<子服务名>`、无 `install -r`），仍含解释器与收尾状态
+- `TestParsePluginsInitFlags`：`--py` 解析与缺值报错；未知 flag / 多余参数报错
+- `TestRunPluginsInit_CreatesLayoutVenvAndInstallsDeps`：创建布局、虚拟环境并安装基础依赖
+- `TestRunPluginsInit_CreatesHomeWhenMissing`：`{GROOT_HOME}` 缺失时一并创建
+- `TestRunPluginsInit_Idempotent`：重复执行只补齐缺失项，不覆盖已有内容
+- `TestRunPluginsInit_DepsFailureReturnsNil`：基础依赖安装失败仍成功退出并打印手动命令
+- `TestRunPluginsInit_PythonMissingReturnsError`：无可用解释器时返回错误
+- `TestRunPluginsInit_BrokenVenvReturnsError`：`.venv` 损坏时返回错误
+- `TestRunPluginsInit_UsesExplicitPython`：`--py` 指定解释器时不回退自动探测
+- `TestRunPluginsInit_DepsFailureWritesManualCommands`：基础依赖安装失败时打印手动安装命令
+- `TestRunPluginsInit_SuccessOutputHasNoSubPluginHint`：成功路径输出不含插件业务依赖提示（无 `<插件名>`、无 `install -r`），仍含解释器与收尾状态
 
-`internal/cmd/init_test.go` 的 `TestRunInit_NoServicesLayout` 断言 `groot init` 不再创建 `services/`。
+`internal/cmd/init_test.go` 的 `TestRunInit_NoPluginsLayout` 断言 `groot init` 不再创建 `plugins/`。
 
 ---
 
-### 1.18 Python 服务环境进入命令测试
+### 1.18 Python 插件环境进入命令测试
 
-位于 `internal/cmd/services_shell_test.go`，对应实现 `internal/cmd/services_shell.go`（交互终端检测、shell 执行与初始化均注入假实现）。
+位于 `internal/cmd/plugins_shell_test.go`，对应实现 `internal/cmd/plugins_shell.go`（交互终端检测、shell 执行与初始化均注入假实现）。
 
 覆盖点：
 
-- `TestServicesShellEnv_SetsVirtualEnvAndPrependsPath`：设置 `VIRTUAL_ENV`，把虚拟环境 `bin` 前置到 `PATH`，并替换父环境已有的 `VIRTUAL_ENV` / `PATH` 条目
-- `TestServicesShellEnv_MissingPath`：父环境没有 `PATH` 时只写入虚拟环境 `bin`
-- `TestServicesShellEnv_WindowsSeparatorAndCase`：Windows 用 `;` 分隔，`Path` 键名不区分大小写
-- `TestServicesShellEnv_PreservesEntryWithoutEquals`：不含 `=` 的环境变量条目（如 `WEIRD`）原样保留
-- `TestServicesShell_Unix`：取 `SHELL`，未设置时回退 `/bin/sh`
-- `TestServicesShell_Windows`：取 `COMSPEC`，未设置时回退 `cmd.exe`
+- `TestPluginsShellEnv_SetsVirtualEnvAndPrependsPath`：设置 `VIRTUAL_ENV`，把虚拟环境 `bin` 前置到 `PATH`，并替换父环境已有的 `VIRTUAL_ENV` / `PATH` 条目
+- `TestPluginsShellEnv_MissingPath`：父环境没有 `PATH` 时只写入虚拟环境 `bin`
+- `TestPluginsShellEnv_WindowsSeparatorAndCase`：Windows 用 `;` 分隔，`Path` 键名不区分大小写
+- `TestPluginsShellEnv_PreservesEntryWithoutEquals`：不含 `=` 的环境变量条目（如 `WEIRD`）原样保留
+- `TestPluginsShell_Unix`：取 `SHELL`，未设置时回退 `/bin/sh`
+- `TestPluginsShell_Windows`：取 `COMSPEC`，未设置时回退 `cmd.exe`
 - `TestPromptYes`：`y` / `Y` / `yes`（含空格与大小写）确认，`n`、空行（含空行后跟其它输入）、EOF 均不确认，并输出提示文本
-- `TestServicesShellLaunch_ZshShim`：zsh 使用临时 `ZDOTDIR` 垫片，`.zshrc` 加载用户配置并激活共享虚拟环境，设置 `setopt MONITOR`、`setopt IGNORE_EOF`（Ctrl+D 不退出）、`preexec`/`precmd` 钩子与 `TRAPINT() { (( __groot_running )) || exit 130 }`（提示符处 Ctrl+C 退出、运行命令时不退出）且位于用户配置之后，`.zshenv` 加载用户 `.zshenv`，`Cleanup` 删除临时目录
-- `TestServicesShellLaunch_ZshShimUsesOriginalZDOTDIR`：父环境已有 `ZDOTDIR` 时以其为源，并在垫片中还原 `ZDOTDIR`
-- `TestServicesShellLaunch_BashRcfile`：bash 使用 `--rcfile` 垫片，先加载 `~/.bashrc`，再激活共享虚拟环境，设置 `set -o ignoreeof` 与 `trap 'exit 130' INT`
-- `TestServicesShellLaunch_OtherShellEnvOnly`：其它 shell 只做环境变量激活（无参数、环境不变、无 Cleanup）
-- `TestServicesShellLaunch_WindowsEnvOnly`：Windows 只做环境变量激活
-- `TestServicesShellLaunch_QuotesSingleQuoteInPath`：路径含单引号时按 `'\''` 转义
-- `TestRunServicesShell_NonInteractiveReturnsError`：非交互终端直接报错（含 `交互终端` 与 `groot services init`），不执行 shell、不触发初始化
-- `TestRunServicesShell_EntersActivatedVenv`：进入 `$SHELL`，工作目录为 `services`，环境含 `VIRTUAL_ENV` 与前置的 `PATH`，标准流接到注入的 reader/writer，并输出进入提示（虚拟环境路径、工作目录、`exit`）
+- `TestPluginsShellLaunch_ZshShim`：zsh 使用临时 `ZDOTDIR` 垫片，`.zshrc` 加载用户配置并激活共享虚拟环境，设置 `setopt MONITOR`、`setopt IGNORE_EOF`（Ctrl+D 不退出）、`preexec`/`precmd` 钩子与 `TRAPINT() { (( __groot_running )) || exit 130 }`（提示符处 Ctrl+C 退出、运行命令时不退出）且位于用户配置之后，`.zshenv` 加载用户 `.zshenv`，`Cleanup` 删除临时目录
+- `TestPluginsShellLaunch_ZshShimUsesOriginalZDOTDIR`：父环境已有 `ZDOTDIR` 时以其为源，并在垫片中还原 `ZDOTDIR`
+- `TestPluginsShellLaunch_BashRcfile`：bash 使用 `--rcfile` 垫片，先加载 `~/.bashrc`，再激活共享虚拟环境，设置 `set -o ignoreeof` 与 `trap 'exit 130' INT`
+- `TestPluginsShellLaunch_OtherShellEnvOnly`：其它 shell 只做环境变量激活（无参数、环境不变、无 Cleanup）
+- `TestPluginsShellLaunch_WindowsEnvOnly`：Windows 只做环境变量激活
+- `TestPluginsShellLaunch_QuotesSingleQuoteInPath`：路径含单引号时按 `'\''` 转义
+- `TestRunPluginsShell_NonInteractiveReturnsError`：非交互终端直接报错（含 `交互终端` 与 `groot plugins init`），不执行 shell、不触发初始化
+- `TestRunPluginsShell_EntersActivatedVenv`：进入 `$SHELL`，工作目录为 `plugins`，环境含 `VIRTUAL_ENV` 与前置的 `PATH`，标准流接到注入的 reader/writer，并输出进入提示（虚拟环境路径、工作目录、`exit`）
 - `TestRunShellCommand_SignalExitReturnsOne`：shell 被信号终止时返回退出码 1（而不是负数）
-- `TestRunServicesShell_PropagatesExitCode`：shell 退出码原样返回
-- `TestRunServicesShell_RunFailureReturnsError`：shell 启动失败返回错误与退出码 1
-- `TestRunServicesShell_MissingVenvDeclined`：虚拟环境缺失且拒绝初始化时提示 `共享虚拟环境不存在` / `[y/N]`，退出码 1 并提示 `groot services init`
-- `TestRunServicesShell_MissingVenvInitialized`：确认初始化后以同一 `home` 与输出 writer 调用初始化，成功后进入 shell
-- `TestRunServicesShell_InitFailureReturnsError`：初始化失败返回错误且不进入 shell
-- `TestRunServicesShell_BrokenVenvInterpreterIsDir`：解释器为目录时报错（含 `缺少解释器` 与 `rm -rf`），不触发初始化
-- `TestRunServicesShell_InitSucceedsButInterpreterStillMissing`：初始化成功但解释器仍缺失时报错，不进入 shell
+- `TestRunPluginsShell_PropagatesExitCode`：shell 退出码原样返回
+- `TestRunPluginsShell_RunFailureReturnsError`：shell 启动失败返回错误与退出码 1
+- `TestRunPluginsShell_MissingVenvDeclined`：虚拟环境缺失且拒绝初始化时提示 `共享虚拟环境不存在` / `[y/N]`，退出码 1 并提示 `groot plugins init`
+- `TestRunPluginsShell_MissingVenvInitialized`：确认初始化后以同一 `home` 与输出 writer 调用初始化，成功后进入 shell
+- `TestRunPluginsShell_InitFailureReturnsError`：初始化失败返回错误且不进入 shell
+- `TestRunPluginsShell_BrokenVenvInterpreterIsDir`：解释器为目录时报错（含 `缺少解释器` 与 `rm -rf`），不触发初始化
+- `TestRunPluginsShell_InitSucceedsButInterpreterStillMissing`：初始化成功但解释器仍缺失时报错，不进入 shell
 
 ---
 
@@ -1085,36 +1085,36 @@ API Key 为 JWT（HS256），元数据存数据库（`api_keys` 表），token �
 
 ---
 
-### 2.31 Python 子服务系统测试
+### 2.31 Python 插件系统测试
 
-`test_python_services.py`（需要先 `go build -o dist/groot ./cmd/groot`；用户执行）：
+`test_python_plugins.py`（需要先 `go build -o dist/groot ./cmd/groot`；用户执行）：
 
 | 用例编号 | 测试内容 |
 |---------|---------|
-| TC-PY-101 | `groot services init` 在临时 `GROOT_HOME` 创建 `services/`、`.sdk/`、`_template/`、`service.yaml`、`requirements.txt`、`.venv` |
-| TC-PY-102 | `/web/health` 含 `services` 检查项；`checks.services.status` 为 `healthy` 或 `degraded`，`info.services` 为数组 |
-| TC-PY-103 | 未注册的 `GET /services/nope` 返回 404 `invalid_request` |
-| TC-PY-104 | 已注册子服务缺 API Key 返回 401 `invalid_api_key`（鉴权先于代理与就绪判断） |
-| TC-PY-105 | `groot init` 返回 0 且不创建 `services/` 目录 |
+| TC-PY-101 | `groot plugins init` 在临时 `GROOT_HOME` 创建 `plugins/`、`.sdk/`、`_template/`、`plugin.yaml`、`requirements.txt`、`.venv` |
+| TC-PY-102 | `/web/health` 含 `plugins` 检查项；`checks.plugins.status` 为 `healthy` 或 `degraded`，`info.plugins` 为数组 |
+| TC-PY-103 | 未注册的 `GET /plugins/nope` 返回 404 `invalid_request` |
+| TC-PY-104 | 已注册插件缺 API Key 返回 401 `invalid_api_key`（鉴权先于代理与就绪判断） |
+| TC-PY-105 | `groot init` 返回 0 且不创建 `plugins/` 目录 |
 
 ---
 
-## 三、Python 子服务与 SDK 单元测试（pytest）
+## 三、Python 插件与 SDK 单元测试（pytest）
 
-位于 `tests/services/`，属于单元测试，与 Go 测试同级。`tests/services/conftest.py` 自动把
-`internal/pysvc/sdk` 与 `services/asr-router` 注入 `sys.path`，无需手动设置 `PYTHONPATH`。
-运行：`tests/services/.venv/bin/pytest tests/services -v`（依赖见 `tests/services/requirements.txt`）。
+位于 `tests/plugins/`，属于单元测试，与 Go 测试同级。`tests/plugins/conftest.py` 自动把
+`internal/plugin/sdk` 与 `plugins/asr-router` 注入 `sys.path`，无需手动设置 `PYTHONPATH`。
+运行：`tests/plugins/.venv/bin/pytest tests/plugins -v`（依赖见 `tests/plugins/requirements.txt`）。
 
-### 3.1 SDK 测试（tests/services/sdk）
+### 3.1 SDK 测试（tests/plugins/sdk）
 
 | 测试文件 | 测试内容 |
 |---------|---------|
 | `test_errors.py` | 错误信封字段；`param`/`code` 缺省为 `None` |
 | `test_identity.py` | 六个 `X-Groot-*` 头映射到身份字段；缺头为空串；FastAPI 依赖注入 |
-| `test_launcher.py` | 入口契约加载；路由注册；令牌校验与 `/healthz` 放行；`/healthz` 返回各子服务就绪状态；身份依赖；`APIError` 与校验错误信封；单个子服务启动失败隔离；路由注册失败隔离为 503；逆序 `shutdown`；405 信封；就绪行与生命线；非 UTF-8 stdout 仍上报就绪行；握手令牌与清单；导入失败 503 占位路由；`--dev` 扫描跳过保留名 `healthz` |
+| `test_launcher.py` | 入口契约加载；路由注册；令牌校验与 `/healthz` 放行；`/healthz` 返回各插件就绪状态；身份依赖；`APIError` 与校验错误信封；单个插件启动失败隔离；路由注册失败隔离为 503；逆序 `shutdown`；405 信封；就绪行与生命线；非 UTF-8 stdout 仍上报就绪行；握手令牌与清单；导入失败 503 占位路由；`--dev` 扫描跳过保留名 `healthz` |
 | `test_py39_compat.py` | AST 静态检查：SDK 所有用 `X \| None` 注解的模块都带 `from __future__ import annotations`（3.9 兼容） |
 
-### 3.2 asr-router 测试（tests/services/asr-router）
+### 3.2 asr-router 测试（tests/plugins/asr-router）
 
 | 测试文件 | 测试内容 |
 |---------|---------|
@@ -1175,7 +1175,7 @@ cd tests/python && pytest test_api_endpoints.py -v
 |---------|-------------|-----------|
 | Go 单元测试 | 1226 个函数 | 135 |
 | Python 系统测试 | 419 个测试（pytest --collect-only） | 34 |
-| Python 子服务与 SDK 单元测试 | 51 个测试（pytest --collect-only，其中 1 个需 MLX 模型会 skip） | 7 |
+| Python 插件与 SDK 单元测试 | 51 个测试（pytest --collect-only，其中 1 个需 MLX 模型会 skip） | 7 |
 
 **总计**: 约 1696 个测试点覆盖核心功能。
 

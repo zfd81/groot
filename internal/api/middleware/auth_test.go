@@ -428,10 +428,10 @@ func TestAuth_WebCookieHasNoTenant(t *testing.T) {
 	}
 }
 
-// stubServicePerms 固定返回表的服务权限解析器，用于隔离测试中间件的权限覆盖逻辑。
-type stubServicePerms map[string]string
+// stubPluginPerms 固定返回表的插件权限解析器，用于隔离测试中间件的权限覆盖逻辑。
+type stubPluginPerms map[string]string
 
-func (s stubServicePerms) ServicePermission(name string) (string, bool) {
+func (s stubPluginPerms) PluginPermission(name string) (string, bool) {
 	perm, ok := s[name]
 	return perm, ok
 }
@@ -454,44 +454,44 @@ func newKeyToken(t *testing.T, keys repo.APIKeyRepo, id, name string, perms []st
 	return token
 }
 
-// TestServiceNameFromPath 只匹配 /services/<单段>，多段、空名与非服务路径均不命中。
-func TestServiceNameFromPath(t *testing.T) {
+// TestPluginNameFromPath 只匹配 /plugins/<单段>，多段、空名与非插件路径均不命中。
+func TestPluginNameFromPath(t *testing.T) {
 	cases := []struct {
 		path   string
 		want   string
 		wantOK bool
 	}{
-		{"/services/asr-router", "asr-router", true},
-		{"/services/asr-router/detect", "", false},
-		{"/services/", "", false},
+		{"/plugins/asr-router", "asr-router", true},
+		{"/plugins/asr-router/detect", "", false},
+		{"/plugins/", "", false},
 		{"/chat", "", false},
 	}
 	for _, tc := range cases {
-		got, ok := serviceNameFromPath(tc.path)
+		got, ok := pluginNameFromPath(tc.path)
 		if got != tc.want || ok != tc.wantOK {
-			t.Errorf("serviceNameFromPath(%q) = (%q, %v), want (%q, %v)", tc.path, got, ok, tc.want, tc.wantOK)
+			t.Errorf("pluginNameFromPath(%q) = (%q, %v), want (%q, %v)", tc.path, got, ok, tc.want, tc.wantOK)
 		}
 	}
 }
 
-// TestAuth_ServicePermissionAllowsMatch 服务路径按 resolver 返回的权限点校验，持有 chat 的 Key 放行。
-func TestAuth_ServicePermissionAllowsMatch(t *testing.T) {
+// TestAuth_PluginPermissionAllowsMatch 插件路径按 resolver 返回的权限点校验，持有 chat 的 Key 放行。
+func TestAuth_PluginPermissionAllowsMatch(t *testing.T) {
 	m, _, _, token := newTestMiddleware(t) // 预置 Key 含 chat
-	m.SetServicePermissionResolver(stubServicePerms{"asr-router": "chat"})
-	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+	m.SetPluginPermissionResolver(stubPluginPerms{"asr-router": "chat"})
+	rc := serveAuth(m, consts.MethodPost, "/plugins/asr-router", func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if code := rc.Response.StatusCode(); code == 401 || code == 403 {
-		t.Fatalf("chat key should pass /services/asr-router, got %d", code)
+		t.Fatalf("chat key should pass /plugins/asr-router, got %d", code)
 	}
 }
 
-// TestAuth_ServicePermissionRejectsMismatch resolver 声明的权限与 Key 不匹配时返回 403 insufficient_permissions。
-func TestAuth_ServicePermissionRejectsMismatch(t *testing.T) {
+// TestAuth_PluginPermissionRejectsMismatch resolver 声明的权限与 Key 不匹配时返回 403 insufficient_permissions。
+func TestAuth_PluginPermissionRejectsMismatch(t *testing.T) {
 	m, keys, _, _ := newTestMiddleware(t)
 	token := newKeyToken(t, keys, "20260902120100", "status-only", []string{"status"})
-	m.SetServicePermissionResolver(stubServicePerms{"asr-router": "chat"})
-	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+	m.SetPluginPermissionResolver(stubPluginPerms{"asr-router": "chat"})
+	rc := serveAuth(m, consts.MethodPost, "/plugins/asr-router", func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if got := rc.Response.StatusCode(); got != 403 {
@@ -508,11 +508,11 @@ func TestAuth_ServicePermissionRejectsMismatch(t *testing.T) {
 	}
 }
 
-// TestAuth_ServicePermissionNilResolverFallsBackToAll 未注入 resolver 时服务路径沿用默认 all 校验。
-func TestAuth_ServicePermissionNilResolverFallsBackToAll(t *testing.T) {
+// TestAuth_PluginPermissionNilResolverFallsBackToAll 未注入 resolver 时插件路径沿用默认 all 校验。
+func TestAuth_PluginPermissionNilResolverFallsBackToAll(t *testing.T) {
 	m, keys, _, _ := newTestMiddleware(t)
 	token := newKeyToken(t, keys, "20260902120101", "chat-only", []string{"chat"})
-	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+	rc := serveAuth(m, consts.MethodPost, "/plugins/asr-router", func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if got := rc.Response.StatusCode(); got != 403 {
@@ -520,28 +520,28 @@ func TestAuth_ServicePermissionNilResolverFallsBackToAll(t *testing.T) {
 	}
 }
 
-// TestAuth_ServicePermissionUnknownNameKeepsAll resolver 返回 found=false 时沿用默认 all，chat-only Key 被拒。
-func TestAuth_ServicePermissionUnknownNameKeepsAll(t *testing.T) {
+// TestAuth_PluginPermissionUnknownNameKeepsAll resolver 返回 found=false 时沿用默认 all，chat-only Key 被拒。
+func TestAuth_PluginPermissionUnknownNameKeepsAll(t *testing.T) {
 	m, keys, _, _ := newTestMiddleware(t)
 	token := newKeyToken(t, keys, "20260902120102", "chat-only", []string{"chat"})
-	m.SetServicePermissionResolver(stubServicePerms{}) // asr-router 不在表中 → ("", false)
-	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+	m.SetPluginPermissionResolver(stubPluginPerms{}) // asr-router 不在表中 → ("", false)
+	rc := serveAuth(m, consts.MethodPost, "/plugins/asr-router", func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if got := rc.Response.StatusCode(); got != 403 {
-		t.Fatalf("unknown service should keep default all and reject, got %d", got)
+		t.Fatalf("unknown plugin should keep default all and reject, got %d", got)
 	}
 	if body := string(rc.Response.Body()); !strings.Contains(body, `"code":"insufficient_permissions"`) {
 		t.Errorf("body missing insufficient_permissions: %s", body)
 	}
 }
 
-// TestAuth_ServicePermissionEmptyPermFailsClosed resolver 返回 ("", true) 时空权限不得绕过检查，仍按默认 all 拒绝。
-func TestAuth_ServicePermissionEmptyPermFailsClosed(t *testing.T) {
+// TestAuth_PluginPermissionEmptyPermFailsClosed resolver 返回 ("", true) 时空权限不得绕过检查，仍按默认 all 拒绝。
+func TestAuth_PluginPermissionEmptyPermFailsClosed(t *testing.T) {
 	m, keys, _, _ := newTestMiddleware(t)
 	token := newKeyToken(t, keys, "20260902120103", "chat-only", []string{"chat"})
-	m.SetServicePermissionResolver(stubServicePerms{"asr-router": ""}) // ("", true)
-	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+	m.SetPluginPermissionResolver(stubPluginPerms{"asr-router": ""}) // ("", true)
+	rc := serveAuth(m, consts.MethodPost, "/plugins/asr-router", func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Authorization", "Bearer "+token)
 	})
 	if got := rc.Response.StatusCode(); got != 403 {
@@ -552,16 +552,16 @@ func TestAuth_ServicePermissionEmptyPermFailsClosed(t *testing.T) {
 	}
 }
 
-// TestAuth_CookieBypassesServicePermission Web Cookie 分支不检查权限点，服务路径直接放行。
-func TestAuth_CookieBypassesServicePermission(t *testing.T) {
+// TestAuth_CookieBypassesPluginPermission Web Cookie 分支不检查权限点，插件路径直接放行。
+func TestAuth_CookieBypassesPluginPermission(t *testing.T) {
 	m, _, _, _ := newTestMiddleware(t)
-	m.SetServicePermissionResolver(stubServicePerms{"asr-router": "all"})
+	m.SetPluginPermissionResolver(stubPluginPerms{"asr-router": "all"})
 	webToken := m.webStore.Create("u1")
-	rc := serveAuth(m, consts.MethodPost, "/services/asr-router", func(rc *app.RequestContext) {
+	rc := serveAuth(m, consts.MethodPost, "/plugins/asr-router", func(rc *app.RequestContext) {
 		rc.Request.Header.Set("Cookie", websession.CookieName+"="+webToken)
 	})
 	if code := rc.Response.StatusCode(); code == 401 || code == 403 {
-		t.Fatalf("valid cookie should bypass service permission, got %d", code)
+		t.Fatalf("valid cookie should bypass plugin permission, got %d", code)
 	}
 	if GetCaller(rc) != "web" {
 		t.Errorf("caller should be web, got %q", GetCaller(rc))

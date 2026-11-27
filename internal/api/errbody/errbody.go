@@ -53,7 +53,7 @@ const (
 	CodeInternalError           = "internal_error"
 	CodeUpstreamError           = "upstream_error"
 	CodeScheduleUnavailable     = "schedule_unavailable"
-	CodeServiceUnavailable      = "service_unavailable"
+	CodePluginUnavailable       = "plugin_unavailable"
 	CodeUnknownAgent            = "unknown_agent"
 )
 

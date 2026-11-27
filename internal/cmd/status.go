@@ -13,7 +13,7 @@ import (
 
 	"github.com/zfd81/groot/internal/api/types"
 	"github.com/zfd81/groot/internal/config"
-	"github.com/zfd81/groot/internal/pysvc"
+	"github.com/zfd81/groot/internal/plugin"
 	"gopkg.in/yaml.v3"
 )
 
@@ -228,9 +228,9 @@ func printStatusOutput(health *types.HealthResponse, port int) {
 		fmt.Printf("  %-12s %s (%d 个会话)\n", "Memory:", memCheck.Status, sessions)
 	}
 
-	// Python 子服务（旧版后端缺失 services 项时跳过）
-	if servicesCheck, ok := health.Checks["services"]; ok {
-		renderServices(os.Stdout, servicesCheck)
+	// Python 插件（旧版后端缺失 plugins 项时跳过）
+	if pluginsCheck, ok := health.Checks["plugins"]; ok {
+		renderPlugins(os.Stdout, pluginsCheck)
 	}
 
 	fmt.Println()
@@ -255,45 +255,45 @@ func processModeLabel(mode string) string {
 	}
 }
 
-// renderServices 渲染 Python 服务检查项：先输出汇总行，再逐行列出非 running 的子服务。
+// renderPlugins 渲染 Python 插件检查项：先输出汇总行，再逐行列出非 running 的插件。
 // 格式见设计文档 1.6.5。
-func renderServices(w io.Writer, check types.CheckInfo) {
-	st, ok := serviceStatusFromInfo(check.Info)
+func renderPlugins(w io.Writer, check types.CheckInfo) {
+	st, ok := pluginStatusFromInfo(check.Info)
 	if !ok {
 		// 无法解析状态时退化为一句话，避免整段缺失。
-		fmt.Fprintf(w, "  %-12s %s\n", "Services:", check.Status)
+		fmt.Fprintf(w, "  %-12s %s\n", "Plugins:", check.Status)
 		return
 	}
 
-	fmt.Fprintf(w, "  %-12s %s %s\n", "Services:", check.Status, servicesSummary(st))
-	for _, svc := range st.Services {
-		if svc.Status == "running" {
+	fmt.Fprintf(w, "  %-12s %s %s\n", "Plugins:", check.Status, pluginsSummary(st))
+	for _, p := range st.Plugins {
+		if p.Status == "running" {
 			continue
 		}
-		if svc.Error != "" {
-			fmt.Fprintf(w, "    %-12s%-11s%s\n", svc.Name, svc.Status, svc.Error)
+		if p.Error != "" {
+			fmt.Fprintf(w, "    %-12s%-11s%s\n", p.Name, p.Status, p.Error)
 		} else {
-			fmt.Fprintf(w, "    %-12s%s\n", svc.Name, svc.Status)
+			fmt.Fprintf(w, "    %-12s%s\n", p.Name, p.Status)
 		}
 	}
 }
 
-// servicesSummary 生成 Services 汇总括号内容：
-//   - 没有子服务：(0 个)
+// pluginsSummary 生成插件汇总括号内容：
+//   - 没有插件：(0 个)
 //   - 进程 running：(运行中/总数 运行中, 进程 pid <pid>)
 //   - 进程非 running：(进程 <status>: <error>, 已重启 <n> 次)
-func servicesSummary(st pysvc.Status) string {
-	if len(st.Services) == 0 {
+func pluginsSummary(st plugin.Status) string {
+	if len(st.Plugins) == 0 {
 		return "(0 个)"
 	}
 	if st.Process.Status == "running" {
 		running := 0
-		for _, svc := range st.Services {
-			if svc.Status == "running" {
+		for _, p := range st.Plugins {
+			if p.Status == "running" {
 				running++
 			}
 		}
-		return fmt.Sprintf("(%d/%d 运行中, 进程 pid %d)", running, len(st.Services), st.Process.PID)
+		return fmt.Sprintf("(%d/%d 运行中, 进程 pid %d)", running, len(st.Plugins), st.Process.PID)
 	}
 	detail := st.Process.Status
 	if st.Process.Error != "" {
@@ -302,28 +302,28 @@ func servicesSummary(st pysvc.Status) string {
 	return fmt.Sprintf("(进程 %s, 已重启 %d 次)", detail, st.Process.Restarts)
 }
 
-// serviceStatusFromInfo 把检查项的 Info 还原为 pysvc.Status。
+// pluginStatusFromInfo 把检查项的 Info 还原为 plugin.Status。
 // 直接注入时为结构体值；经 HTTP JSON 往返后为 map，需重新序列化再解析。
-func serviceStatusFromInfo(info interface{}) (pysvc.Status, bool) {
+func pluginStatusFromInfo(info interface{}) (plugin.Status, bool) {
 	switch v := info.(type) {
-	case pysvc.Status:
+	case plugin.Status:
 		return v, true
-	case *pysvc.Status:
+	case *plugin.Status:
 		if v == nil {
-			return pysvc.Status{}, false
+			return plugin.Status{}, false
 		}
 		return *v, true
 	case map[string]interface{}:
 		data, err := json.Marshal(v)
 		if err != nil {
-			return pysvc.Status{}, false
+			return plugin.Status{}, false
 		}
-		var st pysvc.Status
+		var st plugin.Status
 		if err := json.Unmarshal(data, &st); err != nil {
-			return pysvc.Status{}, false
+			return plugin.Status{}, false
 		}
 		return st, true
 	default:
-		return pysvc.Status{}, false
+		return plugin.Status{}, false
 	}
 }

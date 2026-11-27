@@ -1,1 +1,0 @@
-# 子服务的业务依赖清单；没有额外依赖时保留本注释即可（fastapi、uvicorn、python-multipart 由上级 requirements.txt 提供）。
